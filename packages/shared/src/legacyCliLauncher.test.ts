@@ -5,7 +5,6 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { expect, it } from "vite-plus/test";
-
 import { legacyCliLauncherScript } from "./legacyCliLauncher.ts";
 
 // oxlint-disable-next-line t3code/no-global-process-runtime -- This test launches a real host executable.

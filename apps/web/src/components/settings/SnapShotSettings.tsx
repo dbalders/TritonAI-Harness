@@ -9,7 +9,6 @@ import {
 } from "@t3tools/contracts";
 import { PlayIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { getDesktopSnapShotBridge } from "../../lib/desktopSnapShot";
 import {

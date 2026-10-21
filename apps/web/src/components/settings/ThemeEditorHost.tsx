@@ -1,5 +1,4 @@
 import { lazy, Suspense, useCallback, useSyncExternalStore } from "react";
-
 import { useTheme } from "../../hooks/useTheme";
 import {
   getThemeDefinition,

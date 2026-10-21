@@ -3,7 +3,6 @@ import { useState } from "react";
 import { EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
-
 import { WELCOME_WIZARD_ENABLED } from "../branding";
 import { NoProjectsHero } from "../components/NoProjectsHero";
 import { WelcomeWizard } from "../components/onboarding/WelcomeWizard";

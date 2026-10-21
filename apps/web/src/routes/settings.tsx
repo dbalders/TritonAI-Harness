@@ -3,7 +3,6 @@ import { useState, type ReactNode } from "react";
 import { RotateCcwIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
-
 import { SettingsBreadcrumb } from "../components/settings/SettingsBreadcrumb";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useNavigateToMainApp } from "../components/sidebar/mainAppLocation";
@@ -27,6 +26,7 @@ import {
   getThreadAutoSettlementSearchAvailability,
   isSettingsSearchScopeAvailable,
 } from "../components/settings/settingsSearch";
+import { settingsContentScopeKey } from "../components/settings/settingsContentScopeKey";
 
 function RestoreDeviceDefaultsButton({ onRestored }: { onRestored: () => void }) {
   const { changedSettingLabels, restoreDefaults } = useSettingsRestore(onRestored);
@@ -119,7 +119,12 @@ function SettingsContentLayout() {
   const location = useLocation();
   const navigateToMainApp = useNavigateToMainApp();
   useEscapeToGoBack(navigateToMainApp);
-  const { search } = useSettingsScope();
+  const { search, environment } = useSettingsScope();
+  const contentScopeKey = settingsContentScopeKey(
+    location.pathname,
+    search,
+    environment?.environmentId,
+  );
   const [restoreSignal, setRestoreSignal] = useState(0);
 
   return (
@@ -138,10 +143,7 @@ function SettingsContentLayout() {
           </div>
         </WorkspacePageHeader>
 
-        <div
-          key={`${JSON.stringify(search)}:${restoreSignal}`}
-          className="min-h-0 flex flex-1 flex-col"
-        >
+        <div key={`${contentScopeKey}:${restoreSignal}`} className="min-h-0 flex flex-1 flex-col">
           <SettingsScopeBoundary pathname={location.pathname}>
             <Outlet />
           </SettingsScopeBoundary>

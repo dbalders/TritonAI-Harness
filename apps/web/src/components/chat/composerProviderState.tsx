@@ -1,10 +1,11 @@
-import {
-  type ModelCapabilities,
-  type ProviderDriverKind,
-  type ProviderInstanceId,
-  type ProviderOptionSelection,
-  type ScopedThreadRef,
-  type ServerProviderModel,
+import type {
+  ModelCapabilities,
+  ModelSelection,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderOptionSelection,
+  ScopedThreadRef,
+  ServerProviderModel,
 } from "@t3tools/contracts";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
@@ -14,7 +15,6 @@ import {
   normalizeModelSlug,
 } from "@t3tools/shared/model";
 import type { ReactNode } from "react";
-
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import type { ComposerControlSize } from "./ComposerControl";
@@ -48,6 +48,7 @@ type TraitsRenderInput = {
   model: string;
   models: ReadonlyArray<ServerProviderModel>;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
+  reportedModelSelection?: ModelSelection | null | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
   planModeEnabled: boolean;
@@ -170,6 +171,7 @@ function renderTraitsControl(
     model,
     models,
     modelOptions,
+    reportedModelSelection,
     prompt,
     onPromptChange,
     planModeEnabled,
@@ -208,6 +210,7 @@ function renderTraitsControl(
       {...(draftId ? { draftId } : {})}
       model={model}
       modelOptions={resolvedModelOptions}
+      reportedModelSelection={reportedModelSelection}
       prompt={prompt}
       onPromptChange={onPromptChange}
       planModeEnabled={planModeEnabled}

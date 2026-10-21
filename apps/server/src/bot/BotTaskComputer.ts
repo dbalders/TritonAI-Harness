@@ -25,7 +25,8 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   type ModelSelection,
-  type UploadChatAttachment,
+  type ChatAttachment,
+  ChatAttachmentId,
   ProjectId,
   ProviderInstanceId,
   ServerBotTaskComputerError,
@@ -36,7 +37,10 @@ import {
   type ServerBotTaskComputerStopInput,
   ThreadId,
 } from "@t3tools/contracts";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  Architecture as HostProcessArchitecture,
+  Platform as HostProcessPlatform,
+} from "@t3tools/shared/HostProcess";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
@@ -54,14 +58,14 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 
 import {
   attachmentFileExtension,
   createPendingAttachmentId,
   resolveAttachmentPath,
 } from "../attachmentStore.ts";
-import { normalizeDispatchCommand } from "../orchestration/Normalizer.ts";
+import * as BotTaskRuntime from "./BotTaskRuntime.ts";
 import {
   claimScratchThreadFolder,
   scratchWorkspaceRootFor,
@@ -75,8 +79,6 @@ import {
   verifiedAttachmentBytes,
 } from "./botTaskFiles.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { forkParked } from "../serverActivation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import {
@@ -136,6 +138,14 @@ const AttachmentBytes = Schema.Struct({
 const decodeAttachmentMetadata = Schema.decodeUnknownEffect(AttachmentMetadata);
 const decodeAttachmentBytes = Schema.decodeUnknownEffect(AttachmentBytes);
 const ClaimedTask = Schema.Struct({
+  project: Schema.optional(
+    Schema.Struct({
+      id: Schema.String,
+      title: Schema.String,
+      workspaceRoot: Schema.String,
+      deviceId: Schema.String,
+    }),
+  ),
   taskId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/u)),
   userId: Schema.String,
   claimId: Schema.String.check(Schema.isMinLength(1)),
@@ -152,12 +162,21 @@ const FollowupOperation = Schema.Struct({
   parentTaskId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/u)),
 });
 const decodeFollowupOperation = Schema.decodeUnknownEffect(FollowupOperation);
+const encodeProjectCatalog = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Struct({ id: Schema.String, title: Schema.String, workspaceRoot: Schema.String }),
+    ),
+  ),
+);
+
 const Binding = Schema.Struct({
   taskId: Schema.String,
   claimId: Schema.String,
   threadId: Schema.String,
   deviceId: Schema.String,
   projectId: Schema.String,
+  workspaceKey: Schema.optional(Schema.String),
 });
 const BindingJson = Schema.fromJsonString(Binding);
 const decodeBinding = Schema.decodeUnknownEffect(BindingJson);
@@ -310,8 +329,8 @@ export const make = Effect.gen(function* () {
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const httpClient = yield* HttpClient.HttpClient;
-  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
-  const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const engine = yield* BotTaskRuntime.BotTaskRuntime;
+  const projections = engine;
   const settingsService = yield* ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
   const platform = yield* HostProcessPlatform;
@@ -561,7 +580,7 @@ export const make = Effect.gen(function* () {
           if (!task.started && task.assignment && stored.active) continue;
           const thread = task.started
             ? yield* projections
-                .getThreadDetailById(ThreadId.make(task.threadId), { activityKinds: [] })
+                .getThreadDetailById(ThreadId.make(task.threadId), { messageId: task.messageId })
                 .pipe(Effect.map(Option.getOrNull), Effect.option)
             : Option.some(null);
           // A failed read is not evidence the thread is gone; check again next pass.
@@ -767,7 +786,10 @@ export const make = Effect.gen(function* () {
           existing.threadId !== task.threadId ||
           existing.claimId !== task.claimId ||
           existing.deviceId !== deviceId ||
-          existing.projectId !== projectId
+          existing.projectId !== projectId ||
+          (existing.workspaceKey !== undefined &&
+            task.workspaceKey !== undefined &&
+            existing.workspaceKey !== task.workspaceKey)
         )
           return yield* failure(
             "This task is already bound to another execution. Nothing was replayed.",
@@ -780,6 +802,7 @@ export const make = Effect.gen(function* () {
         threadId: task.threadId,
         deviceId,
         projectId,
+        ...(task.workspaceKey ? { workspaceKey: task.workspaceKey } : {}),
       });
       yield* secrets.create(bindingKey(stored, task.taskId), new TextEncoder().encode(json));
     });
@@ -826,17 +849,21 @@ export const make = Effect.gen(function* () {
         claimId: task.claimId,
         ...(task.progressVersion === 1 ? { progressVersion: 1 as const } : {}),
         title: task.title,
-        threadId: yield* crypto.randomUUIDv4,
-        messageId: yield* crypto.randomUUIDv4,
+        threadId: yield* crypto.randomUUIDv4(),
+        messageId: yield* crypto.randomUUIDv4(),
         claimedAt: isoAt(now),
         started: false,
         outcome: null,
         assignment: task,
-        projectId: stored.projectId,
-        turnCommandId: yield* crypto.randomUUIDv4,
-        createCommandId: yield* crypto.randomUUIDv4,
+        projectId: task.project?.id ?? stored.projectId,
+        turnCommandId: yield* crypto.randomUUIDv4(),
+        createCommandId: yield* crypto.randomUUIDv4(),
       };
-      let reason: string | null = null;
+      let reason: string | null =
+        task.project && task.project.deviceId !== deviceId
+          ? "The selected project belongs to another task computer. Nothing ran."
+          : null;
+      let sourceWorkspaceKey: string | undefined;
       const duplicate = yield* readBinding(stored, task.taskId);
       if (duplicate) reason = "This task already has a Harness thread. Nothing was replayed.";
       if (task.operation !== undefined) {
@@ -849,6 +876,7 @@ export const make = Effect.gen(function* () {
           else if (source.deviceId !== deviceId)
             reason = "The source task belongs to another computer. Nothing ran.";
           else {
+            sourceWorkspaceKey = source.workspaceKey;
             const thread = yield* projections.getThreadShellById(ThreadId.make(source.threadId));
             if (Option.isNone(thread))
               reason = "The source task's Harness thread no longer exists. Nothing ran.";
@@ -865,6 +893,13 @@ export const make = Effect.gen(function* () {
       const project = yield* projections.getProjectShellById(ProjectId.make(held.projectId!));
       if (Option.isNone(project)) reason ??= PROJECT_GONE;
       else {
+        if (
+          task.project &&
+          normalizeProjectPathForComparison(task.project.workspaceRoot) !==
+            normalizeProjectPathForComparison(project.value.workspaceRoot)
+        )
+          reason ??=
+            "The selected project folder changed after the assignment was reviewed. Nothing ran.";
         const scratch =
           normalizeProjectPathForComparison(project.value.workspaceRoot) ===
           normalizeProjectPathForComparison(scratchWorkspaceRootFor(path, serverConfig.baseDir));
@@ -874,13 +909,16 @@ export const make = Effect.gen(function* () {
             : Option.getOrNull(yield* projections.getThreadShellById(ThreadId.make(held.threadId)));
         held = {
           ...held,
-          workspaceKey: scratch
-            ? `scratch:${held.threadId}`
-            : normalizeProjectPathForComparison(
-                thread?.worktreePath ?? project.value.workspaceRoot,
-              ),
+          workspaceKey:
+            scratch && !thread?.worktreePath
+              ? `scratch:${held.threadId}`
+              : normalizeProjectPathForComparison(
+                  thread?.worktreePath ?? project.value.workspaceRoot,
+                ),
         };
       }
+      if (sourceWorkspaceKey !== undefined && sourceWorkspaceKey !== held.workspaceKey)
+        reason ??= "The source thread folder changed since its original assignment. Nothing ran.";
       if (reason)
         held = { ...held, assignment: undefined, outcome: { status: "failed", result: reason } };
       const next = { ...stored, held: [...stored.held, held] };
@@ -917,7 +955,7 @@ export const make = Effect.gen(function* () {
         return yield* Effect.fail(WORKSPACE_CHANGED);
     });
 
-  /** Dispatch one persisted assignment. A followup retains its thread's runtime and workspace. */
+  /** Dispatch one persisted assignment. Followups retain their thread and workspace in Auto mode. */
   const startHeld = (stored: Stored, original: typeof Held.Type) =>
     Effect.gen(function* () {
       const task = original.assignment!;
@@ -937,6 +975,12 @@ export const make = Effect.gen(function* () {
         const projectId = ProjectId.make(held.projectId ?? stored.projectId);
         const project = yield* projections.getProjectShellById(projectId);
         if (Option.isNone(project)) return yield* Effect.fail(PROJECT_GONE);
+        if (
+          task.project &&
+          normalizeProjectPathForComparison(task.project.workspaceRoot) !==
+            normalizeProjectPathForComparison(project.value.workspaceRoot)
+        )
+          return yield* failure("The reviewed project folder changed. Nothing ran.");
         const resolved = resolveProjectSettings(settings, projectId, project.value).settings;
         const createdAt = isoAt(yield* Clock.currentTimeMillis);
         const followup = task.operation !== undefined;
@@ -981,7 +1025,7 @@ export const make = Effect.gen(function* () {
           held.outputId ?? held.threadId,
         );
         yield* Effect.tryPromise(() => prepareTaskOutputDirectory(outputDirectory));
-        const attachments: Array<UploadChatAttachment> = [];
+        const attachments: Array<ChatAttachment> = [];
         for (const attachment of task.attachments ?? []) {
           if (
             attachment.mimeType.startsWith("image/") &&
@@ -1009,34 +1053,26 @@ export const make = Effect.gen(function* () {
               sha256: attachment.sha256,
             }),
           );
-          if (attachment.mimeType.startsWith("image/")) {
-            attachments.push({
-              type: "image",
-              name: attachment.name,
-              mimeType: attachment.mimeType,
-              sizeBytes: attachment.size,
-              dataUrl: `data:${attachment.mimeType};base64,${downloaded.dataBase64}`,
-            });
-          } else {
-            const file = {
-              type: "file" as const,
-              id: createPendingAttachmentId(attachmentFileExtension(attachment.name)),
-              name: attachment.name,
-              mimeType: attachment.mimeType,
-              sizeBytes: attachment.size,
-            };
-            const destination = resolveAttachmentPath({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachment: file,
-            });
-            if (!destination) return yield* failure("Could not store a task document.");
-            yield* fileSystem.writeFile(destination, bytes);
-            attachments.push(file);
-          }
+          const file = {
+            type: attachment.mimeType.startsWith("image/") ? ("image" as const) : ("file" as const),
+            id: ChatAttachmentId.make(
+              createPendingAttachmentId(attachmentFileExtension(attachment.name)),
+            ),
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.size,
+          };
+          const destination = resolveAttachmentPath({
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachment: file,
+          });
+          if (!destination) return yield* failure("Could not store a task attachment.");
+          yield* fileSystem.writeFile(destination, bytes);
+          attachments.push(file);
         }
 
-        yield* bindTask(stored, held, projectId);
         yield* verifyExecutionWorkspace(held, stored.projectId);
+        yield* bindTask(stored, held, projectId);
         if (!followup)
           yield* engine.dispatch({
             type: "thread.create",
@@ -1045,31 +1081,31 @@ export const make = Effect.gen(function* () {
             projectId,
             title: taskThreadTitle(task.title),
             modelSelection,
-            runtimeMode: resolved.defaultRuntimeMode,
+            runtimeMode: "auto",
             interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
             branch: null,
             worktreePath,
-            createdAt,
+            createdBy: "agent",
+            creationSource: "server",
           });
-        const turn = yield* normalizeDispatchCommand({
-          type: "thread.turn.start",
+        if (source && source.runtimeMode !== "auto")
+          yield* engine.dispatch({
+            type: "thread.runtime-mode.set",
+            commandId: CommandId.make(`${held.turnCommandId}:mode`),
+            threadId: ThreadId.make(held.threadId),
+            runtimeMode: "auto",
+          });
+        const turn = {
+          type: "message.dispatch" as const,
           commandId: CommandId.make(held.turnCommandId!),
           threadId: ThreadId.make(held.threadId),
-          message: {
-            messageId: MessageId.make(held.messageId),
-            role: "user",
-            text: taskPrompt(task.title, task.prompt, outputDirectory),
-            attachments,
-          },
-          runtimeMode: source?.runtimeMode ?? resolved.defaultRuntimeMode,
-          interactionMode: source?.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
-          createdAt,
-        }).pipe(
-          Effect.provideService(WorkspacePaths.WorkspacePaths, workspacePaths),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-          Effect.provideService(ServerConfig, serverConfig),
-        );
+          messageId: MessageId.make(held.messageId),
+          text: taskPrompt(task.title, task.prompt, outputDirectory),
+          attachments,
+          dispatchMode: { type: "queue_after_active" as const },
+          createdBy: "agent" as const,
+          creationSource: "server" as const,
+        };
         yield* verifyExecutionWorkspace(held, stored.projectId);
         // After this durable write, never redispatch on restart: reconcile the exact message instead.
         yield* save({
@@ -1086,11 +1122,14 @@ export const make = Effect.gen(function* () {
       );
       if (started !== null && !held.started) {
         // Re-evaluate the new folder and conflicts on the next pass. No turn was requested.
-        if (Cause.squash(started) === WORKSPACE_CHANGED) return next;
+        if (Cause.squash(started) === WORKSPACE_CHANGED && task.operation === undefined)
+          return next;
         const reason =
           Cause.squash(started) === PROJECT_GONE
             ? PROJECT_GONE
-            : "Harness could not start this assignment. Nothing ran.";
+            : Cause.squash(started) === WORKSPACE_CHANGED
+              ? "The source thread's workspace changed. Nothing ran."
+              : "Harness could not start this assignment. Nothing ran.";
         yield* save({
           ...held,
           assignment: undefined,
@@ -1111,7 +1150,7 @@ export const make = Effect.gen(function* () {
           : Option.none();
         const detail = task.started
           ? yield* projections
-              .getThreadDetailSnapshot(ThreadId.make(task.threadId), { turnLimit: 2 })
+              .getThreadDetailById(ThreadId.make(task.threadId), { messageId: task.messageId })
               .pipe(Effect.orElseSucceed(() => Option.none()))
           : Option.none();
         progress.push({
@@ -1120,8 +1159,8 @@ export const make = Effect.gen(function* () {
           progress: botTaskSnapshot(
             task,
             { deviceId, projectId: task.projectId ?? stored.projectId, observedAt: isoAt(now) },
-            Option.getOrNull(shell),
-            Option.getOrNull(detail)?.thread ?? null,
+            Option.getOrNull(detail) ?? Option.getOrNull(shell),
+            Option.getOrNull(detail),
           ),
         });
       }
@@ -1138,7 +1177,9 @@ export const make = Effect.gen(function* () {
         if (!queued.assignment || queued.started || queued.outcome !== null) continue;
         const workspaceKey = yield* executionWorkspaceKey(queued, stored.projectId);
         const original =
-          workspaceKey !== null && workspaceKey !== queued.workspaceKey
+          queued.assignment.operation === undefined &&
+          workspaceKey !== null &&
+          workspaceKey !== queued.workspaceKey
             ? { ...queued, workspaceKey }
             : queued;
         if (original !== queued) {
@@ -1211,11 +1252,57 @@ export const make = Effect.gen(function* () {
             : "TritonAI Bot no longer recognizes this computer. Choose Allow to run tasks here again.",
         ).pipe(Effect.as(true));
 
+  const executionReport = (stored: Stored) =>
+    Effect.gen(function* () {
+      const projects = yield* projections.listProjects;
+      const current = projects.find((project) => project.id === stored.projectId);
+      const settings = yield* settingsService.getSettings;
+      const resolved = current
+        ? resolveProjectSettings(settings, ProjectId.make(current.id), current).settings
+        : settings;
+      const selection = resolved.defaultModelSelection ??
+        settings.defaultModelSelection ?? {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
+        };
+      const ordered = [...projects].sort(
+        (a, b) => Number(b.id === stored.projectId) - Number(a.id === stored.projectId),
+      );
+      const catalog = ordered.slice(0, 100).map((project) => ({
+        id: project.id,
+        title: project.title.slice(0, 200),
+        workspaceRoot: project.workspaceRoot,
+      }));
+      // Keep the shared pairing record below DynamoDB's item limit, including progress metadata.
+      while (Buffer.byteLength(encodeProjectCatalog(catalog)) > 64_000) catalog.pop();
+      return {
+        projects: {
+          version: 1 as const,
+          defaultProjectId: stored.projectId,
+          hasMore: projects.length > catalog.length,
+          projects: catalog,
+        },
+        readiness: {
+          version: 1 as const,
+          runtime: "desktop" as const,
+          executor: { task: true, query: false },
+          project: { required: true, present: !!current, id: stored.projectId },
+          model: {
+            configured: !!selection?.model,
+            ...(selection ? { provider: selection.instanceId, id: selection.model } : {}),
+          },
+          permissions: { task: "allow" as const, query: "deny" as const },
+          setup: { projectCreation: false },
+        },
+      };
+    });
+
   const pass = Effect.gen(function* () {
     const saved = yield* readStored;
     if (!saved) return;
     const initial = yield* migrateHeldBindings(saved);
     const now = yield* Clock.currentTimeMillis;
+    const report = yield* executionReport(initial);
     let reachable = true;
     const rejectedProgress = new Map<string, string>();
     // Publish terminal progress before final delivery removes its active journal entry.
@@ -1228,6 +1315,7 @@ export const make = Effect.gen(function* () {
       );
       const reply = yield* post(`${initial.apiUrl}/harness/heartbeat`, workerHeaders(initial), {
         capabilities: BOT_TASK_CAPABILITIES,
+        ...report,
         tasks,
       }).pipe(Effect.option);
       if (Option.isSome(reply) && (yield* handleRejection(initial, reply.value))) {
@@ -1309,6 +1397,7 @@ export const make = Effect.gen(function* () {
       const reply = yield* post(`${stored.apiUrl}/harness/tasks/claim`, workerHeaders(stored), {
         leaseSeconds: LEASE_SECONDS,
         capabilities: BOT_TASK_CAPABILITIES,
+        ...report,
       }).pipe(Effect.option);
       if (Option.isNone(reply) || (reply.value.status !== 200 && reply.value.status !== 401))
         return yield* note({ state: "error", message: "Could not reach TritonAI Bot. Retrying." });
@@ -1486,4 +1575,4 @@ export const layer = Layer.effect(
     );
     return service;
   }),
-);
+).pipe(Layer.provide(BotTaskRuntime.layer));

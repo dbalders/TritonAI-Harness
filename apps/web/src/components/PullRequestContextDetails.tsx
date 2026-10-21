@@ -1,8 +1,6 @@
 import type { PullRequestContextMetadata } from "@t3tools/contracts";
 import { ArrowRightIcon } from "lucide-react";
-
 import { cn } from "~/lib/utils";
-
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 
 export function PullRequestContextDetails({ metadata }: { metadata: PullRequestContextMetadata }) {

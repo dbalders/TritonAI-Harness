@@ -7,7 +7,10 @@ import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  Architecture as HostProcessArchitecture,
+  Platform as HostProcessPlatform,
+} from "@t3tools/shared/HostProcess";
 import {
   collectTaskOutputFiles,
   MAX_BOT_ATTACHMENT_BYTES,

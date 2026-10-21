@@ -33,6 +33,7 @@ vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }
 vi.mock("../../state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/session")>()),
   usePreparedConnection: () => ({ _tag: "Loading" }),
+  useEnvironmentScope: () => false,
 }));
 vi.mock("../../state/entities", () => ({
   readThreadShell: () => null,

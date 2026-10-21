@@ -72,7 +72,7 @@ not disconnect Microsoft or stop task running.
 When your service supports task computers, open **Settings → TritonAI Bot** on
 that computer, choose a project and select **Allow**. This authorizes that
 Harness environment to run approved bot assignments as ordinary threads in the
-chosen project, using its model and permission defaults. With **No project**, the
+selected project, using its model. Every Bot assignment runs in Auto mode. The bot can list the computer's registered projects and select one for each new assignment; this setting supplies the default. With **No project**, the
 default, each assignment gets its own new folder, so the bot can start something
 new without touching your existing projects. Every signed-in Harness
 can chat and review approvals; only the computer you allow claims new
@@ -84,6 +84,8 @@ assignment. Independent assignments can run in parallel; **Parallel assignments*
 sets how many new executions the computer starts at once. An assignment waiting
 for approval or an answer leaves room for other work. Assignments that use the
 same project folder take turns so they do not edit that folder simultaneously.
+
+Ask the bot to continue a delegated assignment to post another message in the same thread and workspace. Older Bot threads switch to Auto when continued.
 
 Ask what a delegated thread has done or why it is waiting. The bot can read its
 recent visible messages, activity, approval state, and completed result, with the

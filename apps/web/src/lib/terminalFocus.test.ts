@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-
 import { getTerminalFocusOwner, isTerminalFocused } from "./terminalFocus";
 
 class MockHTMLElement {

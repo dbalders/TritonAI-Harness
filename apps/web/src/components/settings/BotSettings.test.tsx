@@ -7,6 +7,7 @@ import { Cause } from "effect";
 
 const configuration = vi.hoisted(() => ({
   serviceUrl: "https://bot.example.test" as string | null,
+  canControlTasks: true,
   local: null as ServerBotTaskComputerStatus | null,
   localListeners: new Set<() => void>(),
   projects: [] as Array<{
@@ -19,6 +20,7 @@ const configuration = vi.hoisted(() => ({
   openScratchProject: vi.fn<(environmentId: string) => Promise<{ id: string } | null>>(),
   command: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ _tag: "Success" })),
 }));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => configuration.canControlTasks }));
 vi.mock("../dot/botService", () => ({ useBotServiceUrl: () => configuration.serviceUrl }));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
@@ -90,6 +92,7 @@ let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
+  configuration.canControlTasks = true;
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   configuration.serviceUrl = firstUrl;
@@ -727,3 +730,14 @@ it.each([
     expect(allowButton()!.disabled).toBe(false);
   },
 );
+
+it("disables task-computer controls when the paired client lacks task permission", async () => {
+  setProjectSettings("off");
+  configuration.canControlTasks = false;
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  await act(async () => root.render(<BotSettings />));
+  expect(allowButton()!.disabled).toBe(true);
+  expect(projectPicker().disabled).toBe(true);
+  await act(async () => allowButton()!.click());
+  expect(configuration.command).not.toHaveBeenCalled();
+});

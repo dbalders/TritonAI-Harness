@@ -1,12 +1,11 @@
 import { it } from "@effect/vitest";
 import {
   CommandId,
-  CorrelationId,
   EventId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-  type OrchestrationEvent,
+  type OrchestrationV2DomainEvent,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -16,7 +15,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { expect } from "vite-plus/test";
 
-import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import * as DateTime from "effect/DateTime";
 import * as AnalyticsReactor from "./AnalyticsReactor.ts";
 import { AnalyticsService } from "./AnalyticsService.ts";
 
@@ -27,9 +26,12 @@ it.effect("records canonical thread creation without identifiers", () =>
       readonly properties: Readonly<Record<string, unknown>> | undefined;
     }> = [];
     let flushCount = 0;
-    const domainEvents = yield* PubSub.unbounded<OrchestrationEvent>();
+    const domainEvents = yield* PubSub.unbounded<OrchestrationV2DomainEvent>();
 
-    const layer = AnalyticsReactor.layer.pipe(
+    const layer = Layer.effect(
+      AnalyticsReactor.AnalyticsReactor,
+      AnalyticsReactor.makeAnalyticsReactor(Stream.fromPubSub(domainEvents)),
+    ).pipe(
       Layer.provideMerge(
         Layer.succeed(
           AnalyticsService,
@@ -44,23 +46,6 @@ it.effect("records canonical thread creation without identifiers", () =>
           }),
         ),
       ),
-      Layer.provideMerge(
-        Layer.succeed(
-          OrchestrationEngineService,
-          OrchestrationEngineService.of({
-            readEvents: () => Stream.empty,
-            readThreadEvents: () => Stream.empty,
-            getThreadReplayStats: () =>
-              Effect.succeed({ eventCount: 0, payloadBytes: 0, hasCreateEvent: false }),
-            subscribeDomainEvents: PubSub.subscribe(domainEvents).pipe(
-              Effect.map(Stream.fromSubscription),
-            ),
-            dispatch: () => Effect.die("dispatch is not used by this test"),
-            latestSequence: Effect.succeed(0),
-            streamDomainEvents: Stream.fromPubSub(domainEvents),
-          }),
-        ),
-      ),
     );
     const scope = yield* Scope.make("sequential");
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
@@ -70,21 +55,20 @@ it.effect("records canonical thread creation without identifiers", () =>
       const reactor = yield* AnalyticsReactor.AnalyticsReactor;
       yield* reactor.start().pipe(Scope.provide(scope));
 
+      const now = DateTime.makeUnsafe("2026-07-17T00:00:00.000Z");
+      const threadId = ThreadId.make("thread-1");
       yield* PubSub.publish(domainEvents, {
         type: "thread.created",
-        eventId: EventId.make("event-thread-created"),
-        commandId: CommandId.make("command-thread-created"),
-        aggregateKind: "thread",
-        aggregateId: ThreadId.make("thread-1"),
-        sequence: 1,
-        occurredAt: "2026-07-17T00:00:00.000Z",
-        causationEventId: null,
-        correlationId: CorrelationId.make("command-thread-created"),
-        metadata: {},
+        id: EventId.make("event-thread-created"),
+        threadId,
+        occurredAt: now,
         payload: {
-          threadId: ThreadId.make("thread-1"),
+          id: threadId,
+          createdBy: "user",
+          creationSource: "web",
           projectId: ProjectId.make("project-1"),
           title: "Private title that must not be recorded",
+          providerInstanceId: ProviderInstanceId.make("private-provider-instance"),
           modelSelection: {
             instanceId: ProviderInstanceId.make("private-provider-instance"),
             model: "private-model-name",
@@ -93,8 +77,16 @@ it.effect("records canonical thread creation without identifiers", () =>
           interactionMode: "plan",
           branch: "private-branch",
           worktreePath: "/private/worktree",
-          createdAt: "2026-07-17T00:00:00.000Z",
-          updatedAt: "2026-07-17T00:00:00.000Z",
+          activeProviderThreadId: null,
+          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
         },
       });
       yield* Effect.yieldNow;

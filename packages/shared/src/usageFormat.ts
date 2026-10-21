@@ -5,7 +5,6 @@
  * @module usageFormat
  */
 import { UsageDay, type UsageResolution, type UsageSummaryInput } from "@t3tools/contracts";
-
 import type { UsageContractMismatch } from "./usageMerge.ts";
 
 const CURRENCY = new Intl.NumberFormat("en-US", {

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   TRITONAI_FIRST_RUN_WORKSPACE,
   isTritonAiCodeBrand,

@@ -1,5 +1,4 @@
 import { EnvironmentId } from "@t3tools/contracts";
-
 import { ProjectSettingsPanel } from "./ProjectSettingsPanel";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";

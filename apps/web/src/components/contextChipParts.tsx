@@ -7,7 +7,6 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-
 import { PULL_REQUEST_STATE_PRESENTATION } from "~/components/pullRequest/pullRequestIcons";
 import type { PullRequestContextDisplayState } from "~/lib/composerContextRecords";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
@@ -113,6 +112,7 @@ export function PullRequestChip(props: {
       aria-label={`Open ${props.kindLabel} ${props.label}: ${props.metadata.title}`}
       data-markdown-copy={props.copyMarkdown}
       onClick={(event) => props.onOpen(event, props.metadata.url)}
+      onAuxClick={(event) => props.onOpen(event, props.metadata.url)}
     >
       <StateIcon />
       <ContextChipLabel>{props.label}</ContextChipLabel>

@@ -1,7 +1,7 @@
 import Constants from "expo-constants";
 import * as Crypto from "expo-crypto";
 import { PROVIDER_SEND_TURN_MAX_FILE_BYTES } from "@t3tools/contracts";
-import * as Encoding from "effect/Encoding";
+import * as Encoding from "effect/encoding/Base64";
 import {
   clearSharedPayloads,
   getResolvedSharedPayloadsAsync,
@@ -94,7 +94,7 @@ async function readBase64(
     if (bytes.byteLength > maxBytes) {
       return null;
     }
-    return { base64: Encoding.encodeBase64(bytes), sizeBytes: bytes.byteLength };
+    return { base64: Encoding.encode(bytes), sizeBytes: bytes.byteLength };
   } finally {
     handle.close();
   }

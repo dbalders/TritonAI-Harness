@@ -5,17 +5,23 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { HttpServer } from "effect/unstable/http";
-import * as NetAddress from "effect/unstable/net/NetAddress";
+import { HttpServer } from "effect/http";
+import * as NetAddress from "effect/net/NetAddress";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-import * as McpProviderSession from "./McpProviderSession.ts";
+import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 
 export interface McpCredentialRequest {
   readonly threadId: ThreadId;
   readonly providerInstanceId: ProviderInstanceId;
-  readonly capabilities: ReadonlySet<McpInvocationContext.McpCapability>;
+  /**
+   * When false, the credential is minted without the "preview" capability so
+   * the user's choice to withhold agent browser access holds everywhere the
+   * token is honored (#7083). Defaults to full access.
+   */
+  readonly browserToolsAvailable?: boolean;
+  readonly capabilities?: ReadonlySet<McpInvocationContext.McpCapability>;
 }
 
 export interface McpIssuedCredential {
@@ -28,7 +34,7 @@ export interface McpSessionRegistryShape {
   readonly issue: (request: McpCredentialRequest) => Effect.Effect<McpIssuedCredential>;
   readonly resolve: (
     rawToken: string,
-  ) => Effect.Effect<McpInvocationContext.McpInvocationScope | undefined>;
+  ) => Effect.Effect<McpInvocationContext.McpThreadInvocationScope | undefined>;
   /**
    * Records a sign of life for every credential bound to `threadId`. Provider
    * turns call this so that a session which is plainly alive keeps its
@@ -45,11 +51,10 @@ export class McpSessionRegistry extends Context.Service<
   McpSessionRegistryShape
 >()("t3/mcp/McpSessionRegistry") {}
 
+/** Registry credentials always belong to a provider session, so their scope has a thread. */
 interface CredentialRecord {
   readonly tokenHash: string;
-  readonly scope: McpInvocationContext.McpInvocationScope & {
-    readonly expiresAt: number;
-  };
+  readonly scope: McpInvocationContext.McpThreadInvocationScope & { readonly expiresAt: number };
   readonly lastAliveAt: number;
 }
 
@@ -90,9 +95,22 @@ const DEFAULT_MAXIMUM_LIFETIME_MS = 8 * 60 * 60 * 1_000;
 // subsystem. It is deliberately not a read/write policy: individual tools remain hidden and
 // fail closed unless their curated plugin, connection, manifest capability, and provider
 // credential are active. Keeping it stable lets a user activate a plugin without restarting
-// an already-running provider session.
-export const providerSessionCapabilities = (): ReadonlySet<McpInvocationContext.McpCapability> =>
-  new Set<McpInvocationContext.McpCapability>(["preview", "integrations.invoke"]);
+// an already-running provider session. Every provider-session credential must come from here so
+// a session setup rewrite cannot silently drop plugin access. issue() also adds the baseline
+// orchestration grants; they are listed here too so this set is the whole session scope.
+export const providerSessionCapabilities = (
+  access: { readonly browser?: boolean; readonly device?: boolean } = {},
+): ReadonlySet<McpInvocationContext.McpCapability> => {
+  const capabilities = new Set<McpInvocationContext.McpCapability>([
+    "orchestration",
+    "worktree",
+    "pull-requests",
+    "integrations.invoke",
+  ]);
+  if (access.browser ?? true) capabilities.add("preview");
+  if (access.device === true) capabilities.add("device");
+  return capabilities;
+};
 
 const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -139,18 +157,25 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const issue: McpSessionRegistryShape["issue"] = Effect.fn("McpSessionRegistry.issue")(
     function* (request) {
       const issuedAt = yield* currentTimeMillis;
-      const providerSessionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+      const providerSessionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
       const expiresAt = issuedAt + maximumLifetimeMs;
+      const browserToolsAvailable = request.browserToolsAvailable ?? true;
       const scope: CredentialRecord["scope"] = {
         environmentId,
-        threadId: ThreadId.make(request.threadId),
-        providerSessionId,
-        providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
+        requestNamespace: providerSessionId,
+        thread: {
+          threadId: ThreadId.make(request.threadId),
+          providerSessionId,
+          providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
+        },
+        client: undefined,
         capabilities: new Set<McpInvocationContext.McpCapability>([
+          "orchestration",
+          "worktree",
           "pull-requests",
-          ...request.capabilities,
+          ...(request.capabilities ?? (browserToolsAvailable ? (["preview"] as const) : [])),
         ]),
         issuedAt,
         expiresAt,
@@ -163,11 +188,13 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       return {
         config: {
           environmentId,
-          threadId: scope.threadId,
+          expiresAt,
+          threadId: scope.thread.threadId,
           providerSessionId,
-          providerInstanceId: scope.providerInstanceId,
+          providerInstanceId: scope.thread.providerInstanceId,
           endpoint,
           authorizationHeader: `Bearer ${rawToken}`,
+          browserToolsAvailable: scope.capabilities.has("preview"),
           capabilities: scope.capabilities,
         },
         expiresAt,
@@ -198,7 +225,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         const current = pruneDead(records, timestamp);
         const next = new Map(current);
         for (const [tokenHash, record] of current) {
-          if (record.scope.threadId === threadId) {
+          if (record.scope.thread.threadId === threadId) {
             next.set(tokenHash, { ...record, lastAliveAt: timestamp });
           }
         }
@@ -218,11 +245,11 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     touch,
     revokeProviderSession: Effect.fn("McpSessionRegistry.revokeProviderSession")(
       function* (providerSessionId) {
-        yield* revokeWhere((record) => record.scope.providerSessionId === providerSessionId);
+        yield* revokeWhere((record) => record.scope.thread.providerSessionId === providerSessionId);
       },
     ),
     revokeThread: Effect.fn("McpSessionRegistry.revokeThread")(function* (threadId) {
-      yield* revokeWhere((record) => record.scope.threadId === threadId);
+      yield* revokeWhere((record) => record.scope.thread.threadId === threadId);
     }),
     revokeAll: SynchronizedRef.set(state, { records: new Map() }),
   });
@@ -265,10 +292,10 @@ export const issueActiveMcpCredential = (
 export const touchActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.touch(threadId) : Effect.void;
 
-export const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
+const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeThread(threadId) : Effect.void;
 
-export const revokeAllActiveMcpCredentials = (): Effect.Effect<void> =>
+const revokeAllActiveMcpCredentials = (): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeAll : Effect.void;
 
 /** Exposed for tests. */

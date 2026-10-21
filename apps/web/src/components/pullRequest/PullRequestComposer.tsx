@@ -1,17 +1,7 @@
-/**
- * The single floating control over a pull request. Commenting on the change and submitting the
- * review that carries the Code tab's line comments used to float as two buttons that crowded
- * each other and read as the same offer twice; they are two modes of one composer now.
- *
- * Opening picks the mode with work waiting in it, so a reader who has collected line comments
- * lands on the review and everyone else lands on the comment box. Either mode's draft survives
- * the toggle: they are separate texts going to separate places, and merging them would send a
- * summary as a comment or the reverse.
- */
+import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@t3tools/contracts";
 import { MessageSquareIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useRef, useState } from "react";
-
 import { Button } from "../ui/button";
 import { Popover, PopoverClose, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
@@ -23,6 +13,17 @@ import {
   usePullRequestReviewStore,
 } from "./pullRequestReviewStore";
 
+/**
+ * The single floating control over a pull request. Commenting on the change and submitting the
+ * review that carries the Code tab's line comments used to float as two buttons that crowded
+ * each other and read as the same offer twice; they are two modes of one composer now.
+ *
+ * Opening picks the mode with work waiting in it, so a reader who has collected line comments
+ * lands on the review and everyone else lands on the comment box. Either mode's draft survives
+ * the toggle: they are separate texts going to separate places, and merging them would send a
+ * summary as a comment or the reverse.
+ */
+
 export function PullRequestComposer({
   environmentId,
   reference,
@@ -31,6 +32,7 @@ export function PullRequestComposer({
   onCommentAction,
   onCommented,
   onReviewSubmitted,
+  openReviewRequest,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
@@ -42,6 +44,11 @@ export function PullRequestComposer({
   ) => Promise<{ readonly commentPosted: boolean }>;
   onCommented: () => void;
   onReviewSubmitted: () => void;
+  /**
+   * Opens the composer on the review, each time the number changes. The guide's last stop asks
+   * for it, so finishing the tour lands on the comments it collected and the verdict.
+   */
+  openReviewRequest?: number | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [reviewPending, setReviewPending] = useState(false);
@@ -57,6 +64,12 @@ export function PullRequestComposer({
     (store) => (store.summaries[reviewKey] ?? "").trim().length > 0,
   );
   const reviewStarted = pendingComments.length > 0 || summaryStarted;
+  const [answeredOpenRequest, setAnsweredOpenRequest] = useState(openReviewRequest);
+  if (openReviewRequest !== answeredOpenRequest) {
+    setAnsweredOpenRequest(openReviewRequest);
+    setRequestedMode("review");
+    setOpen(true);
+  }
 
   // What is offered is the intersection of two different questions: what this host can do at
   // all, and what this account may do on this repository. Either one saying no means a control
@@ -158,7 +171,9 @@ export function PullRequestComposer({
               environmentId={environmentId}
               reference={reference}
               verdicts={verdicts}
-              requestChangesSummaryRequired={detail.provider === "forgejo"}
+              requestChangesSummaryRequired={sourceControlClients
+                .get(detail.provider)
+                .reviewSummaryRequired("request-changes")}
               textareaRef={reviewRef}
               pending={reviewPending}
               onPendingChange={setReviewPending}

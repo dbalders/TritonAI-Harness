@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-
 import {
   EnvironmentId,
   ForwardCompatibleArray,

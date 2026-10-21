@@ -1,6 +1,5 @@
 import type { ServerConfigStreamEvent } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   createKeybindingsUpdateToastController,
   KEYBINDINGS_SUCCESS_TOAST_COOLDOWN_MS,

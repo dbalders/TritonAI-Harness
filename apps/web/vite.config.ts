@@ -9,7 +9,10 @@ import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
-import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
+import {
+  DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES,
+  DEV_PROXIED_PATH_PREFIXES,
+} from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
@@ -170,7 +173,7 @@ export default defineConfig(() => {
       // Route components load as split chunks so settings, pull-request, and
       // usage code stay out of the cold-start payload; the router prefetches
       // them on navigation intent (see getRouter's defaultPreload).
-      tanstackRouter({ autoCodeSplitting: true }),
+      tanstackRouter({ autoCodeSplitting: true, routeFileIgnorePattern: "\\.test\\.[tj]sx?$" }),
       react(),
       babel({
         // We need to be explicit about the parser options after moving to @vitejs/plugin-react v6.0.0
@@ -187,7 +190,7 @@ export default defineConfig(() => {
         "@clerk/clerk-js",
         "@clerk/react/internal",
         "@pierre/diffs",
-        "@pierre/diffs/editor",
+        "@pierre/diffs/edit",
         "@pierre/diffs/react",
         "@pierre/diffs/worker/worker.js",
         "effect/Array",
@@ -249,7 +252,7 @@ export default defineConfig(() => {
                 prefix,
                 {
                   target: devProxyTarget,
-                  changeOrigin: true,
+                  changeOrigin: !DEV_PROXIED_ORIGIN_PRESERVING_PREFIXES.has(prefix),
                   ...(prefix === "/ws" || prefix === "/api" ? { ws: true } : {}),
                 },
               ]),

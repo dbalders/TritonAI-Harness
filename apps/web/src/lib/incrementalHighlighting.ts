@@ -1,5 +1,4 @@
 import type { DiffsHighlighter } from "@pierre/diffs";
-
 import type { DiffThemeName } from "./diffRendering";
 
 function codeChildren(root: ReturnType<DiffsHighlighter["codeToHast"]>) {
@@ -18,7 +17,7 @@ export function createIncrementalHighlightedDocument(
   highlighter: DiffsHighlighter,
   language: string,
   theme: DiffThemeName,
-) {
+): (code: string) => ReturnType<DiffsHighlighter["codeToHast"]> {
   const options = { lang: language, theme };
   const newline = { type: "text" as const, value: "\n" };
   let cached:

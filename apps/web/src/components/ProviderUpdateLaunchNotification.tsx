@@ -2,7 +2,6 @@ import { useNavigate } from "@tanstack/react-router";
 import type { ProviderDriverKind } from "@t3tools/contracts";
 import { DownloadIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import { useEnvironments } from "~/state/environments";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { useDismissedProviderUpdateNotificationKeys } from "../providerUpdateDismissal";

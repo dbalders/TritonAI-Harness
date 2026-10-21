@@ -6,7 +6,7 @@ The mode is set per thread, from the mode control in the message composer. Chang
 thread does not change any other thread. A thread created from inside another thread keeps that
 thread's mode. New threads opened in the app remember the last mode you chose in the composer
 on that device, including after restarting the app. Until you choose a mode, new threads use
-your app or project default, which starts as **Supervised**. Existing threads and their explicit
+your app or project default, which starts as **Auto**. Existing threads and their explicit
 composer choices keep their mode.
 
 On web and desktop, an unsent draft also keeps the mode stored when it was created, including
@@ -17,14 +17,14 @@ specifically for that draft.
 
 ## The Modes
 
-**Supervised** (default): where supported, safe read-only work may proceed without a prompt. Commands that
+**Supervised**: where supported, safe read-only work may proceed without a prompt. Commands that
 need additional permissions, file-changing operations, and write tools pause and wait for approval.
 Exact command handling depends on the provider; work outside the workspace remains restricted.
 
 **Auto-accept edits**: auto-approve edits, ask before other actions. File changes go through
 without prompting; commands and anything else still stop for approval.
 
-**Auto**: routine actions proceed without you; risky ones still ask. How this is enforced depends
+**Auto** (default): routine actions proceed without you; risky ones still ask. How this is enforced depends
 on the provider: Codex delegates routine approvals to an AI reviewer, Claude uses its own auto
 permission mode, and providers without an equivalent (such as OpenCode) fall back to asking, like
 Supervised.
@@ -37,7 +37,7 @@ there.
 
 Choose an app or project default in **Settings > General > Permissions**. Saved overrides keep
 their selected mode and supply the fallback before you choose a composer mode. With no saved
-override or remembered choice, new threads use **Supervised**, including after an upgrade;
+override or remembered choice, new threads use **Auto**, including after an upgrade;
 existing threads are unchanged.
 
 For Grok, **Always allow this session** remembers the matching command or tool input. Other

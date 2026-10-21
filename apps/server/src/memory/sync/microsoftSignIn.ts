@@ -21,7 +21,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 
@@ -346,7 +346,7 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
         const pluginCredential = yield* decodePluginCredential(plugin.value).pipe(Effect.option);
         if (Option.isSome(pluginCredential)) {
           const token = yield* redeem(pluginCredential.value.refreshToken).pipe(
-            Effect.catchTag("MemorySyncSignInRequired", () => Effect.succeed(null)),
+            Effect.catchTags({ MemorySyncSignInRequired: () => Effect.succeed(null) }),
           );
           if (token?.refresh_token) {
             const refreshToken = token.refresh_token;
@@ -422,7 +422,7 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
         const since = yield* Ref.get(generation);
         const signedIn = yield* accessToken.pipe(
           Effect.as(true),
-          Effect.catchTag("MemorySyncSignInRequired", () => Effect.succeed(false)),
+          Effect.catchTags({ MemorySyncSignInRequired: () => Effect.succeed(false) }),
         );
         if (!signedIn) {
           return { kind: "device_code", ...(yield* startDeviceCode(since)) } satisfies SignInStart;

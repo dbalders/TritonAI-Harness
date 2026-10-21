@@ -10,8 +10,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import managedConfig from "../../../../config/tritonai-managed-config.json" with { type: "json" };
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -477,7 +477,7 @@ export const replaceTritonAiCredentials = Effect.fn("desktop.tritonAiApiKey.repl
     const crypto = yield* Crypto.Crypto;
     const overridePath = tritonAiApiKeyOverridePath(environment);
     const directory = environment.path.dirname(overridePath);
-    const suffix = yield* crypto.randomUUIDv4.pipe(
+    const suffix = yield* crypto.randomUUIDv4().pipe(
       Effect.mapError(
         (cause) =>
           new DesktopTritonAiApiKeyWriteError({

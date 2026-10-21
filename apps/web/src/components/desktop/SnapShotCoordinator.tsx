@@ -4,7 +4,6 @@ import {
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef } from "react";
-
 import {
   type DraftId,
   type PersistedComposerImageAttachment,

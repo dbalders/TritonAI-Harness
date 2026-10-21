@@ -90,8 +90,8 @@ import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as FileSystem from "effect/FileSystem";
-import { HttpClient } from "effect/unstable/http";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { HttpClient } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
 
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
@@ -99,9 +99,11 @@ import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopShutdown from "../app/DesktopShutdown.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
+import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import * as ElectronApp from "../electron/ElectronApp.ts";
 
 const { logWarning: logBackendPoolWarning, logError: logBackendPoolError } =
   DesktopObservability.makeComponentLogger("desktop-backend-pool");
@@ -181,6 +183,7 @@ export type BackendInstanceFactoryRequirements =
   | HttpClient.HttpClient
   | DesktopObservability.DesktopBackendOutputLogFactory
   | DesktopTelemetryPublisher.DesktopTelemetryPublisher
+  | DesktopBrowserHost.DesktopBrowserHost
   | DesktopWslEnvironment.DesktopWslEnvironment;
 
 interface ActiveRegisteredInstance {
@@ -214,6 +217,7 @@ export const layer = Layer.effect(
     const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
+    const electronApp = yield* ElectronApp.ElectronApp;
     const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
     const shutdown = yield* DesktopShutdown.DesktopShutdown;
     // Anchor the pool's lifetime to its layer scope so registered
@@ -323,6 +327,13 @@ export const layer = Layer.effect(
           ),
           Effect.andThen(shutdown.request),
         ),
+      onStateDirOwned: () =>
+        electronDialog
+          .showErrorBox(
+            "This Harness data directory is unavailable",
+            "Another Harness server, such as the background service, is using this data directory. Stop that server and reopen TritonAI Harness, or set a separate T3CODE_HOME and pair with the running server.",
+          )
+          .pipe(Effect.andThen(electronApp.quit)),
     });
 
     const instancesRef = yield* SynchronizedRef.make<

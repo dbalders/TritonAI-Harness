@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { isPublicFaviconHost } from "./hostClassification.ts";
 
 describe("isPublicFaviconHost", () => {

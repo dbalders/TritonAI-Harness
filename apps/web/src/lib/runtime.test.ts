@@ -1,7 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Tracer from "effect/Tracer";
-
 import * as ClientTracer from "../observability/clientTracer";
 import { runtime } from "./runtime";
 

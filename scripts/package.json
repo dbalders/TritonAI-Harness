@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc-rs --noEmit",
     "test": "vp test run --config ../vite.config.ts --dir ."
   },
   "dependencies": {
@@ -15,12 +15,14 @@
     "@t3tools/tailscale": "workspace:*",
     "effect": "catalog:",
     "extract-zip": "2.0.1",
+    "plist": "catalog:",
     "pngjs": "7.0.0",
     "sharp": "0.35.4",
     "yaml": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@types/plist": "catalog:",
     "@types/pngjs": "6.0.5",
     "typescript": "catalog:",
     "typescript-legacy": "npm:typescript@~6.0.3",

@@ -1,5 +1,4 @@
 import type { ComposerContextRecord, ElementContextDetails } from "@t3tools/contracts";
-
 import { collectComposerContextReferences } from "./composerContextReferences.ts";
 
 /**

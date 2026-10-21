@@ -2,7 +2,7 @@
 
 import { Dialog as CommandDialogPrimitive } from "@base-ui/react/dialog";
 import { SearchIcon } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 import { cn } from "~/lib/utils";
 import {
   Autocomplete,
@@ -12,6 +12,8 @@ import {
   AutocompleteInput,
   AutocompleteItem,
   AutocompleteList,
+  AutocompleteListHeading,
+  AutocompleteListVirtualized,
 } from "~/components/ui/autocomplete";
 import { DIALOG_BACKDROP_CLASS, DIALOG_POPUP_CLASS } from "~/components/ui/dialog-styles";
 import { Button } from "~/components/ui/button";
@@ -123,6 +125,29 @@ function CommandList({ className, ...props }: React.ComponentProps<typeof Autoco
   );
 }
 
+// Pair with a LegendList child; the list owns scrolling and spacing.
+function CommandListVirtualized({
+  className,
+  ...props
+}: React.ComponentProps<typeof AutocompleteListVirtualized>) {
+  return (
+    <AutocompleteListVirtualized
+      className={cn("flex max-h-[inherit] flex-col", className)}
+      data-slot="command-list"
+      {...props}
+    />
+  );
+}
+
+function CommandListHeading({
+  className,
+  ...props
+}: React.ComponentProps<typeof AutocompleteListHeading>) {
+  return (
+    <AutocompleteListHeading className={className} data-slot="command-group-label" {...props} />
+  );
+}
+
 function CommandPanel({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -229,6 +254,8 @@ export {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandListHeading,
+  CommandListVirtualized,
   CommandPanel,
   CommandShortcut,
 };

@@ -3,7 +3,6 @@ import {
   MOBILE_THEME_IDS,
   type MobileThemeId,
 } from "@t3tools/shared/themePalettes";
-
 import { SHOWCASE_SCENES, type ShowcaseScene } from "./mobile-showcase-environment.ts";
 
 export { SHOWCASE_SCENES };

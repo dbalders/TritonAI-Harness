@@ -12,7 +12,6 @@ import type {
   ReviewDiffFileContentsResult,
   ReviewDiffPreviewSourceKind,
 } from "@t3tools/contracts";
-
 import { resolveFileDiffPath } from "./diffRendering";
 
 interface GitDiffFileContentsSource {

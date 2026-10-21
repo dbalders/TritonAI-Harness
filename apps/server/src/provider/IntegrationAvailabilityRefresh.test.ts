@@ -5,7 +5,8 @@ import * as Stream from "effect/Stream";
 
 import type { RegistryRuntime } from "../integrations/IntegrationRegistry.ts";
 import { subscribeIntegrationAvailabilityRefresh } from "./IntegrationAvailabilityRefresh.ts";
-import type { ProviderRegistryShape } from "./Services/ProviderRegistry.ts";
+import type { ProviderRegistry } from "./ProviderRegistry.ts";
+type ProviderRegistryShape = ProviderRegistry["Service"];
 
 const snapshot = (instanceId: string, driver: string): ServerProvider =>
   ({

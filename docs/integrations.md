@@ -252,7 +252,7 @@ status refreshes do not recopy unchanged skill trees.
 
 Production providers use one Harness-owned Effect runtime. The released Microsoft 365 package's
 exact `4.0.0-beta.78` dependency is a narrow legacy exception; new provider packages declare the
-reviewed `>=4.0.0-beta.78 <4.0.0` peer contract instead. Composition and startup reject every other
+reviewed `>=4.0.0-beta.78 <5.0.0` peer contract instead. Composition and startup reject every other
 exact build pin, extra runtime dependencies, broader peers, and stable or next-major Effect
 versions. Package provenance, file inventory, digests, and immutable snapshots remain exact; only
 the already-verified runtime link is supplied by the host.
@@ -326,3 +326,10 @@ separate trust model are required first. Removing an included production plugin 
 explicit provider-aware retirement migration so its scoped credentials can be deleted with its
 retained state and package files. New providers should remain self-contained packages and avoid
 provider-specific branches in registry, Codex, MCP, RPC, or Plugins UI code.
+
+Effect 4 stable hosts use the same single host-owned runtime as the supported prereleases.
+The first released `4.0.0-beta.78` dependency pin and the exact older
+`>=4.0.0-beta.78 <4.0.0` peer declaration remain recognized for existing packages.
+New SDK packages declare `>=4.0.0-beta.78 <5.0.0`; arbitrary dependency pins and
+other peer contracts are rejected. Upgrade verification must load the selected
+plugin composition against the actual bundled host runtime.

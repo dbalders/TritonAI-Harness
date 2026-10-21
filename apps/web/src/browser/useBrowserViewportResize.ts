@@ -9,7 +9,6 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-
 import { commitBrowserViewportChange } from "./browserViewportActions";
 import {
   browserViewportSettingKey,

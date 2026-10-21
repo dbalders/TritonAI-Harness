@@ -8,13 +8,11 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
-
 import {
   formatInlineContextReference,
   removeInlineContextReference,
 } from "./composerContextReferences";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   asKnownContextRecord,
   attachmentContextRecord,
@@ -514,7 +512,7 @@ describe("composerContextRecords", () => {
     expect(
       isSameComposerContextPayload(base, {
         ...base,
-        elements: base.elements?.map((element) => ({
+        elements: base.elements!.map((element) => ({
           ...element,
           htmlPreview: '<button id="pay">Changed</button>',
         })),
@@ -523,7 +521,7 @@ describe("composerContextRecords", () => {
     expect(
       isSameComposerContextPayload(base, {
         ...base,
-        elements: base.elements?.map((element) => ({
+        elements: base.elements!.map((element) => ({
           ...element,
           source: {
             functionName: "Checkout",

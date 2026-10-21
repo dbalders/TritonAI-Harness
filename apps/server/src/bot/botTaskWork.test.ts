@@ -1,4 +1,5 @@
-import type { OrchestrationThread } from "@t3tools/contracts";
+import type { BotTaskThread } from "./BotTaskRuntime.ts";
+
 import { describe, expect, it } from "@effect/vitest";
 
 import { type HeldTask, normalizeBotApiUrl, START_GRACE_MS, taskProgress } from "./botTaskWork.ts";
@@ -33,7 +34,7 @@ const thread = (overrides: Partial<Record<string, unknown>> = {}) =>
       message("reply-1", "assistant", "Release 1.4 shipped."),
     ],
     ...overrides,
-  }) as unknown as OrchestrationThread;
+  }) as unknown as BotTaskThread;
 
 describe("taskProgress", () => {
   it("returns the task's reply with a pointer to its thread", () => {

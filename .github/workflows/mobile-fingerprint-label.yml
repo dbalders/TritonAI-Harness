@@ -23,7 +23,7 @@ jobs:
       actions: read
       contents: read
       issues: write
-      pull-requests: read
+      pull-requests: write
     steps:
       - name: Download fingerprint result
         uses: actions/download-artifact@v8

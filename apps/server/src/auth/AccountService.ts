@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - HMAC, encryption and constant-time credential comparisons require Node crypto.
 import * as NodeCrypto from "node:crypto";
 import { accountCallbackId } from "@t3tools/shared/accountCallback";
 

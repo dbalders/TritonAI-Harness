@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import {
-  HostProcessArchitecture,
-  HostProcessEnvironment,
-  HostProcessPlatform,
-} from "@t3tools/shared/hostProcess";
+  Architecture as HostProcessArchitecture,
+  Environment as HostProcessEnvironment,
+  Platform as HostProcessPlatform,
+} from "@t3tools/shared/HostProcess";
 import {
   resolveSpawnCommand,
   SpawnExecutableResolution,

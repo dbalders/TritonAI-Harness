@@ -5,6 +5,7 @@ import { StrictMode, act } from "react";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { UsagePage } from "./UsagePage";
 
 const state = vi.hoisted(() => ({
   presentations: new Map(),
@@ -51,6 +52,7 @@ vi.mock("../../state/usage", () => ({
       },
     ],
     isPending: false,
+    shown: null,
     isPartial: false,
     refresh: async () => undefined,
   }),
@@ -84,6 +86,7 @@ vi.mock("../WorkspaceBreadcrumb", () => ({
   WorkspaceBreadcrumb: "div",
   WorkspaceBreadcrumbItem: "div",
   WorkspaceBreadcrumbSeparator: "span",
+  WorkspaceBreadcrumbText: "span",
 }));
 vi.mock("../WorkspacePageContainer", () => ({ WorkspacePageContainer: "main" }));
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
@@ -91,9 +94,9 @@ vi.mock("./UsageProviderChart", () => ({ UsageProviderChart: "div" }));
 vi.mock("./UsagePriceOverrides", () => ({ UsagePriceOverrides: () => null }));
 vi.mock("../chat/ProviderInstanceIcon", () => ({ ProviderInstanceIcon: () => null }));
 vi.mock("../settings/RedactedSensitiveText", () => ({ RedactedSensitiveText: "span" }));
-vi.mock("../settings/providerDriverMeta", () => ({ getDriverOption: () => ({ label: "Codex" }) }));
-
-import { UsagePage } from "./UsagePage";
+vi.mock("../settings/providerDriverMeta", () => ({
+  providerClients: { get: () => ({ label: "Codex" }) },
+}));
 
 let renderer: ReactTestRenderer;
 let environmentNumber = 0;

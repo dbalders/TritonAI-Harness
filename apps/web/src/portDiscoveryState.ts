@@ -7,7 +7,6 @@ import {
 } from "@t3tools/contracts";
 import { isLoopbackHost } from "@t3tools/shared/preview";
 import { useMemo } from "react";
-
 import { previewEnvironment } from "./state/preview";
 import { useEnvironmentQuery } from "./state/query";
 

@@ -1,6 +1,7 @@
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import { isValidElement, type MouseEvent, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { SidebarUpdateReleaseNotes } from "./SidebarUpdateReleaseNotes";
 
 const testState = vi.hoisted(() => ({
   addToast: vi.fn(),
@@ -9,8 +10,6 @@ const testState = vi.hoisted(() => ({
 vi.mock("../ui/toast", () => ({
   toastManager: { add: testState.addToast },
 }));
-
-import { SidebarUpdateReleaseNotes } from "./SidebarUpdateReleaseNotes";
 
 type AnchorElement = ReactElement<{
   readonly children?: ReactNode;

@@ -1,15 +1,13 @@
+import type { BotTaskThread } from "./BotTaskRuntime.ts";
 /** Bounded public progress for the owner's Bot. Tool payloads and reasoning never cross this boundary. */
-import type {
-  BotTaskThreadProgress,
-  OrchestrationThread,
-  OrchestrationThreadShell,
-} from "@t3tools/contracts";
+import type { BotTaskThreadProgress } from "@t3tools/contracts";
 import type { HeldTask } from "./botTaskWork.ts";
 
 export const BOT_TASK_CAPABILITIES = [
   "file-attachments-v1",
   "task-progress-v1",
   "task-followup-v1",
+  "task-projects-v1",
 ] as const;
 export const MAX_HELD_TASKS = 16;
 export const MAX_CLAIMS_PER_PASS = 4;
@@ -24,7 +22,7 @@ function clipTaskText(text: string, chars: number, bytes = chars * 3): string {
   return clipped;
 }
 
-function pendingCount(thread: OrchestrationThread | null, kind: string, pending: boolean): number {
+function pendingCount(thread: BotTaskThread | null, kind: string, pending: boolean): number {
   if (!pending) return 0;
   const requests = new Set<string>();
   for (const activity of thread?.activities ?? []) {
@@ -46,8 +44,8 @@ function pendingCount(thread: OrchestrationThread | null, kind: string, pending:
 export function botTaskSnapshot(
   held: HeldTask,
   context: { readonly deviceId: string; readonly projectId: string; readonly observedAt: string },
-  shell: OrchestrationThreadShell | null,
-  thread: OrchestrationThread | null,
+  shell: BotTaskThread | null,
+  thread: BotTaskThread | null,
 ): BotTaskThreadProgress {
   const pendingApprovals = pendingCount(thread, "approval", shell?.hasPendingApprovals === true);
   const pendingUserInputs = pendingCount(thread, "user-input", shell?.hasPendingUserInput === true);

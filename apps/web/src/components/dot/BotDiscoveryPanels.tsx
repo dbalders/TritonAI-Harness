@@ -65,7 +65,7 @@ export function BotCapabilitiesPanel({
       )}
       {capabilities !== undefined && (
         <details>
-          <summary className="cursor-pointer rounded-sm text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring">
+          <summary className="cursor-pointer rounded-sm text-sm font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring">
             What I can do
           </summary>
           <div className="mt-3 max-h-64 overflow-y-auto">

@@ -1,7 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
-import * as Multipart from "effect/unstable/http/Multipart";
-
+import * as Multipart from "effect/http/Multipart";
 import { EnvironmentOrchestrationAttachmentUpload } from "./environmentHttp.ts";
 
 const decodeAttachmentUpload = Schema.decodeUnknownSync(EnvironmentOrchestrationAttachmentUpload);

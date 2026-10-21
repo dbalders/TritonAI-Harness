@@ -11,7 +11,7 @@ const DEFAULT_UPSTREAM_BRANCH = "main";
 const DEFAULT_DOWNSTREAM_REMOTE = "origin";
 const DEFAULT_DOWNSTREAM_BRANCH = "main";
 const DEFAULT_SYNC_BRANCH_PREFIX = "sync/upstream-";
-const DEFAULT_CHECKS = "vp check && vp run typecheck && vp run test";
+const DEFAULT_CHECKS = "vp run gitlinks:check && vp check && vp run typecheck && vp run test";
 const DEFAULT_SECRET_ALLOWLIST = "CODEX_HOME,TRITONAI_HOME,TRITONAI_API_KEY";
 const VALIDATION_ENV_ALLOWLIST = [
   "CI",
@@ -338,8 +338,19 @@ ${JSON.stringify(report, null, 2)}
   };
 }
 
-function createPullRequest({ branch, title, body, labels, cwd }) {
-  const args = ["pr", "create", "--head", branch, "--title", title, "--body", body];
+function createPullRequest({ branch, baseBranch, title, body, labels, cwd }) {
+  const args = [
+    "pr",
+    "create",
+    "--head",
+    branch,
+    "--base",
+    baseBranch,
+    "--title",
+    title,
+    "--body",
+    body,
+  ];
   const repo = process.env.TRITONAI_SYNC_GITHUB_REPO ?? process.env.GH_REPO;
   if (repo) {
     args.push("--repo", repo);
@@ -519,6 +530,7 @@ function main() {
     if (args.createPr) {
       createPullRequest({
         branch,
+        baseBranch: downstreamBranch,
         cwd: worktree,
         labels,
         title: `Sync upstream ${upstreamBranch} into ${downstreamBranch}`,

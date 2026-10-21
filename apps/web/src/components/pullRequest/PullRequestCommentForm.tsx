@@ -1,18 +1,17 @@
-/**
- * The comment half of the floating composer: a remark on the pull request itself, optionally
- * the one that closes or reopens it. The popover around it belongs to PullRequestComposer.
- */
+import { useAtomCommand } from "~/state/use-atom-command";
 import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@t3tools/contracts";
 import { SendIcon } from "lucide-react";
 import { useState, type RefObject } from "react";
-
-import { useAtomCommand } from "~/state/use-atom-command";
 import { pullRequestEnvironment } from "~/state/pullRequests";
-
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { PullRequestGlyph } from "./pullRequestIcons";
+
+/**
+ * The comment half of the floating composer: a remark on the pull request itself, optionally
+ * the one that closes or reopens it. The popover around it belongs to PullRequestComposer.
+ */
 
 export function PullRequestCommentForm({
   environmentId,
@@ -38,7 +37,9 @@ export function PullRequestCommentForm({
 }) {
   const [body, setBody] = useState("");
   const [submitting, setSubmitting] = useState<"comment" | "close" | "reopen" | null>(null);
-  const postComment = useAtomCommand(pullRequestEnvironment.comment, { reportFailure: false });
+  const postComment = useAtomCommand(pullRequestEnvironment.comment, {
+    reportFailure: false,
+  });
   const followUpAction =
     detail.state === "open" &&
     detail.capabilities.actions.includes("close") &&

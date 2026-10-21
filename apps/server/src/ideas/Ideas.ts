@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Deterministic synchronous idea identity uses a content digest.
 // @effect-diagnostics globalDate:off - limits and labels use the host-local day.
 /**
  * Ideas - suggestion cards on the Ideas page: things TritonAI could do next
@@ -43,7 +44,7 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
@@ -302,7 +303,7 @@ export const make = Effect.gen(function* () {
       if (row.openedMessageIdsJson !== null) {
         return sql<{ readonly found: number }>`
           SELECT EXISTS (
-            SELECT 1 FROM projection_thread_messages
+            SELECT 1 FROM harness_activity_messages
             WHERE thread_id = ${content.action.threadId}
               AND role = 'user'
               AND message_id NOT IN (SELECT value FROM json_each(${row.openedMessageIdsJson}))
@@ -311,7 +312,7 @@ export const make = Effect.gen(function* () {
       }
       return sql<{ readonly found: number }>`
         SELECT EXISTS (
-          SELECT 1 FROM projection_thread_messages
+          SELECT 1 FROM harness_activity_messages
           WHERE thread_id = ${content.action.threadId} AND role = 'user' AND created_at > ${openedAt}
         ) AS "found"
       `.pipe(Effect.map(([found]) => Boolean(found?.found)));
@@ -320,7 +321,7 @@ export const make = Effect.gen(function* () {
     if (threadIds.length > 0) {
       return sql<{ readonly found: number }>`
         SELECT EXISTS (
-          SELECT 1 FROM projection_thread_messages
+          SELECT 1 FROM harness_activity_messages
           WHERE thread_id IN (SELECT value FROM json_each(${encodeThreadIds(threadIds)}))
             AND role = 'user'
         ) AS "found"
@@ -331,7 +332,7 @@ export const make = Effect.gen(function* () {
     if (snippet.length < 12) return Effect.succeed(false);
     return sql<{ readonly found: number }>`
       SELECT EXISTS (
-        SELECT 1 FROM projection_thread_messages
+        SELECT 1 FROM harness_activity_messages
         WHERE role = 'user' AND created_at > ${openedAt} AND instr(text, ${snippet}) > 0
       ) AS "found"
     `.pipe(Effect.map(([found]) => Boolean(found?.found)));
@@ -340,7 +341,7 @@ export const make = Effect.gen(function* () {
   const threadIsGone = (threadId: string) =>
     sql<{ readonly gone: number }>`
       SELECT NOT EXISTS (
-        SELECT 1 FROM projection_threads
+        SELECT 1 FROM harness_activity_threads
         WHERE thread_id = ${threadId} AND deleted_at IS NULL AND archived_at IS NULL
       ) AS "gone"
     `.pipe(Effect.map(([row]) => Boolean(row?.gone)));
@@ -477,7 +478,7 @@ export const make = Effect.gen(function* () {
     FROM projection_projects AS p
     WHERE p.deleted_at IS NULL
     ORDER BY COALESCE(
-      (SELECT MAX(t.updated_at) FROM projection_threads AS t
+      (SELECT MAX(t.updated_at) FROM harness_activity_threads AS t
         WHERE t.project_id = p.project_id AND t.deleted_at IS NULL),
       p.updated_at
     ) DESC
@@ -504,13 +505,13 @@ export const make = Effect.gen(function* () {
         t.settled_at AS "settledAt",
         t.snoozed_until AS "snoozedUntil",
         t.pending_user_input_count + t.pending_approval_count AS "waiting",
-        (SELECT m.text FROM projection_thread_messages AS m
+        (SELECT m.text FROM harness_activity_messages AS m
           WHERE m.thread_id = t.thread_id AND m.role = 'user' AND m.is_streaming = 0
           ORDER BY m.created_at DESC LIMIT 1) AS "lastUserMessage",
-        (SELECT m.text FROM projection_thread_messages AS m
+        (SELECT m.text FROM harness_activity_messages AS m
           WHERE m.thread_id = t.thread_id AND m.role = 'assistant' AND m.is_streaming = 0
           ORDER BY m.created_at DESC LIMIT 1) AS "lastReply"
-      FROM projection_threads AS t
+      FROM harness_activity_threads AS t
       JOIN projection_projects AS p ON p.project_id = t.project_id
       WHERE t.deleted_at IS NULL
         AND t.archived_at IS NULL
@@ -979,7 +980,7 @@ export const make = Effect.gen(function* () {
 
   /** Changes when a thread message is added or finishes, so idle days skip the model. */
   const activityFingerprint = sql<{ readonly count: number; readonly latest: string | null }>`
-    SELECT COUNT(*) AS "count", MAX(updated_at) AS "latest" FROM projection_thread_messages
+    SELECT COUNT(*) AS "count", MAX(updated_at) AS "latest" FROM harness_activity_messages
     WHERE is_streaming = 0
   `.pipe(Effect.map(([row]) => `${row?.count ?? 0}:${row?.latest ?? ""}`));
 
@@ -1077,7 +1078,7 @@ export const make = Effect.gen(function* () {
         ) {
           yield* sql`
             UPDATE ideas SET opened_message_ids_json = (
-              SELECT json_group_array(message_id) FROM projection_thread_messages
+              SELECT json_group_array(message_id) FROM harness_activity_messages
               WHERE thread_id = ${content.value.action.threadId} AND role = 'user'
             )
             WHERE idea_id = ${row.ideaId} AND opened_message_ids_json IS NULL

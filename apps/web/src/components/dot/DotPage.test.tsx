@@ -858,6 +858,27 @@ it("follows a task, shows evidence separately from completion, and versions snoo
   });
 });
 
+it.each(["chat", "routine"])(
+  "keeps a completed accepted %s reply when later snapshots still omit its run",
+  async (kind) => {
+    if (kind === "routine") state = withPanels();
+    onPost = async () => Response.json({ ok: true, runId: "outside-page", status: "queued" });
+    await render();
+    if (kind === "routine") await click("Run now");
+    else {
+      await fill("Message your bot", "Check my calendar");
+      await click("Send message");
+    }
+    expect(state.runs).toEqual([]);
+    expect(container.textContent).toContain("Routine result");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(container.textContent).toContain("Routine result");
+    expect(container.querySelectorAll("#bot-run-outside-page")).toHaveLength(1);
+  },
+);
+
 it("shows sending immediately, then the real run phase, and stops claiming work after progress expires", async () => {
   const baseFetch = globalThis.fetch;
   vi.stubGlobal(
@@ -2300,6 +2321,68 @@ describe("waiting reasons", () => {
     const replies = container.querySelector('[aria-label="Replies for Quarterly budget review"]')!;
     expect(replies.textContent).toContain("Continued, then stopped: You changed the deadline.");
     expect(replies.textContent).not.toMatch(/·\s*Continued(?!,)/);
+  });
+
+  it("keeps a file recipe's opened decision outside recent approvals and Handling", async () => {
+    state = {
+      ...withPanels(),
+      enhancements: { fileRecipes: true, decisionInbox: true },
+      fileRecipes: [
+        {
+          recipeId: "fr_0123456789ab",
+          name: "Inbox summaries",
+          instructions: "Summarize each report.",
+          expectedOutput: "A summary.",
+          approval: "ask",
+          folder: { folderId: "inbox", name: "Inbox", webUrl: "" },
+          status: "active",
+          generation: 1,
+          version: 1,
+          cadence: "about every 5 minutes",
+          events: [
+            {
+              key: "0123456789abcdef01234567",
+              version: {
+                itemId: "item-1",
+                name: "report.md",
+                cTag: "c1",
+                size: 12,
+                lastModifiedDateTime: at,
+                webUrl: "",
+              },
+              status: "needs-decision",
+              approvalId: "recipe-decision",
+              seenAt: at,
+              updatedAt: at,
+              current: true,
+              startable: false,
+            },
+          ],
+          createdAt: at,
+          updatedAt: at,
+        },
+      ],
+    };
+    onApprovalRead = async () =>
+      Response.json({
+        ok: true,
+        approval: {
+          approvalId: "recipe-decision",
+          status: "pending",
+          summary: "Review the report summary",
+          action: "harness-task",
+          payload: { title: "Summarize report.md" },
+        },
+      });
+    await render();
+    await click("Open the decision");
+    expect(container.querySelector("#bot-approval-recipe-decision")).not.toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(container.querySelector("#bot-approval-recipe-decision")).not.toBeNull();
+    expect(container.textContent).toContain("Review the report summary");
+    expect(requests).toEqual([]);
   });
 
   it("opens a file's assignment outside the newest tasks through the scoped route and keeps its result", async () => {

@@ -13,14 +13,13 @@ import {
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useCallback, useEffect, useEffectEvent, useState } from "react";
 import { create } from "zustand";
-
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { newThreadId } from "../lib/utils";
 import { resolveDefaultProviderModelSelection } from "../providerInstances";
 import { buildRecordSkillPrompt, formatRecordedSteps } from "../recordSkill";
-import { readThread, useProjects, waitForThreadShell } from "../state/entities";
+import { readThreadShell, useProjects, waitForThreadShell } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { EMPTY_SERVER_PROVIDERS, environmentServerConfigsAtom } from "../state/server";
 import { threadEnvironment } from "../state/threads";
@@ -163,7 +162,7 @@ function useDeliverRecordedSkill() {
   // An existing conversation keeps the recording while it is still there.
   const sendToThread = useCallback(
     async (threadRef: ScopedThreadRef, prompt: string): Promise<boolean> => {
-      if (!readThread(threadRef)) return false;
+      if (!readThreadShell(threadRef)) return false;
       await send(threadRef, prompt);
       return true;
     },
@@ -302,7 +301,7 @@ function RecordSkillFlow({ bridge }: { bridge: RecordSkillBridge }) {
       if (sent) return;
     }
     // A conversation that can't take it falls back to a new one on the same server and project.
-    const originThread = origin?.kind === "thread" ? readThread(origin.threadRef) : null;
+    const originThread = origin?.kind === "thread" ? readThreadShell(origin.threadRef) : null;
     const projectRef =
       origin?.kind === "project"
         ? origin.projectRef

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { readImageDimensions } from "./imageDimensions.ts";
 
 function bytes(...parts: ReadonlyArray<number | string | ReadonlyArray<number>>): Uint8Array {

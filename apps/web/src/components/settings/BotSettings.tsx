@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import {
   isAtomCommandInterrupted,
@@ -70,6 +71,9 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   }, []);
   const navigate = useNavigate();
   const environmentId = usePrimaryEnvironmentId();
+  const canControlTasks = useAtomValue(
+    serverEnvironment.allowBotTaskComputer.permissionAtom(environmentId),
+  );
   const [session, setSession] = useState<DotSession | null>(() =>
     serviceUrl ? readDotSession(sessionStorage, serviceUrl) : null,
   );
@@ -114,7 +118,9 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   const thisComputer = isTaskComputer(state?.taskComputer, localForService);
   const otherComputer = state?.taskComputer && !thisComputer ? state.taskComputer.deviceName : null;
   const projectSelectionReady = Boolean(
-    local && (local.state === "off" || local.state === "replaced" || (state && session)),
+    canControlTasks &&
+    local &&
+    (local.state === "off" || local.state === "replaced" || (state && session)),
   );
 
   if (
@@ -379,14 +385,26 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
           control={
             <div className="flex gap-2">
               {local && local.state !== "off" ? (
-                <Button size="xs" variant="outline" disabled={busy} onClick={() => void stop()}>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={busy || !canControlTasks}
+                  onClick={() => void stop()}
+                >
                   Stop running tasks here
                 </Button>
               ) : null}
               {!thisComputer ? (
                 <Button
                   size="xs"
-                  disabled={busy || !serviceUrl || !session || !environmentId || !projectId}
+                  disabled={
+                    busy ||
+                    !canControlTasks ||
+                    !serviceUrl ||
+                    !session ||
+                    !environmentId ||
+                    !projectId
+                  }
                   onClick={() => void allow()}
                 >
                   Allow
@@ -469,7 +487,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
               ? "Add a project first. Task threads open in a project and use its settings."
               : projectId === NO_PROJECT
                 ? "Each task gets its own new folder, so the bot can start something from scratch."
-                : "Task threads open in this project and use its model and permission settings."
+                : "Default project when an assignment does not select another. Bot threads use Auto mode and the selected project's model."
           }
           control={
             hasProjectChoices ? (

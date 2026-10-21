@@ -1,5 +1,4 @@
 import { cva, type VariantProps } from "class-variance-authority";
-
 import { cn } from "~/lib/utils";
 
 // A skeleton's width and height are its content, so consumers size it through

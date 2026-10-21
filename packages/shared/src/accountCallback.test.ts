@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { accountCallbackId } from "./accountCallback.ts";
+
 const id = "a".repeat(43);
 describe("native account callback destinations", () => {
   it("accepts an ephemeral IPv4 loopback receiver", () => {

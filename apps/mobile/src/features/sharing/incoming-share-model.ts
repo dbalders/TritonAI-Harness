@@ -1,3 +1,4 @@
+import { estimateBase64ByteSize } from "../../lib/base64";
 import {
   clampFileAttachmentUploadBytes,
   fileAttachmentTooLargeMessage,
@@ -12,6 +13,7 @@ import * as Schema from "effect/Schema";
 import type { ResolvedSharePayload, SharePayload } from "expo-sharing";
 
 import { DraftComposerAttachmentSchema } from "../../lib/composer-image-schema";
+import { fitComposerImage } from "../../lib/composerImageFit";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
 
 export interface IncomingShareDraft {
@@ -415,13 +417,24 @@ export async function buildIncomingShareDraft(input: {
         );
         continue;
       }
-      const dataUrl = `data:${mimeType};base64,${encoded.base64}`;
+      const fitted = await fitComposerImage({
+        uri: `data:${mimeType};base64,${encoded.base64}`,
+        mimeType,
+        base64: encoded.base64,
+      });
+      const base64 = fitted?.base64 ?? encoded.base64;
+      const sizeBytes = fitted ? estimateBase64ByteSize(base64) : encoded.sizeBytes;
+      if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+        warnings.push("One shared image exceeds the 10 MB attachment limit.");
+        continue;
+      }
+      const dataUrl = `data:${mimeType};base64,${base64}`;
       attachments.push({
         id: `${input.id}:image:${index}`,
         type: "image",
         name: resolved?.originalName ?? fallbackName(uri, index, mimeType),
         mimeType,
-        sizeBytes: encoded.sizeBytes,
+        sizeBytes,
         dataUrl,
         // The share provider's file is temporary. A data-backed preview keeps
         // the composer valid after its source file and App Group entry are gone.

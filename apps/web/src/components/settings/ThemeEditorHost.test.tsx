@@ -1,6 +1,5 @@
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import {
   getThemeDefinition,
@@ -14,6 +13,7 @@ import {
   type ThemeDefinition,
 } from "../../themePalette";
 import type { ThemeEditorSession } from "./themeEditorStore";
+import { ThemeEditorHost } from "./ThemeEditorHost";
 
 const state = vi.hoisted(() => ({
   session: null as ThemeEditorSession | null,
@@ -61,8 +61,6 @@ vi.mock("../ui/toast", () => ({
   toastManager: { add: vi.fn() },
   stackedThreadToast: (value: unknown) => value,
 }));
-
-import { ThemeEditorHost } from "./ThemeEditorHost";
 
 function renderEditor() {
   hooks.beginRender();

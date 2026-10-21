@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "./diffCollapse";
 
 const FILE_KEYS = ["src/app.ts", "src/index.ts"];

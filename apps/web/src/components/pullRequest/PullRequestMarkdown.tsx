@@ -4,11 +4,9 @@ import { githubMediaFetchUrl } from "@t3tools/shared/githubMedia";
 import type { AssetResource, EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { createContext, useContext, useMemo } from "react";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
-
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { cn } from "~/lib/utils";
 import { PULL_REQUESTS_PANEL_REF } from "~/rightPanelStore";
-
 import ChatMarkdown from "../ChatMarkdown";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { remarkPullRequestAutolinks, splitPullRequestBody } from "./pullRequestMarkdown.logic";
@@ -90,11 +88,11 @@ export function PullRequestMarkdown({
       data-image-gallery
     >
       {segments.map((segment) => {
-        if (segment.kind === "markdown") {
+        if (segment.kind === "markdown" || segment.media === "image") {
           return (
             <ChatMarkdown
               key={segment.id}
-              text={segment.text}
+              text={segment.kind === "markdown" ? segment.text : `![](<${segment.url}>)`}
               cwd={cwd}
               threadRef={resolvedThreadRef}
               pullRequestPanelRef={resolvedThreadRef ?? PULL_REQUESTS_PANEL_REF}

@@ -4,7 +4,8 @@
  * testable: a task is never started twice, and a task whose thread cannot show
  * it ran is reported as not run rather than retried.
  */
-import type { BotTaskResult, OrchestrationThread } from "@t3tools/contracts";
+import type { BotTaskResult } from "@t3tools/contracts";
+import type { BotTaskThread } from "./BotTaskRuntime.ts";
 
 import { taskResultEvidence } from "./botTaskResults.ts";
 
@@ -51,7 +52,7 @@ const NOTHING_RAN =
 const MAX_RESULT_BYTES = 90_000;
 
 export function taskPrompt(title: string, prompt: string, outputDirectory?: string): string {
-  return `TritonAI Bot assignment: ${title}\n\nThe owner reviewed and approved this brief. Return the deliverable as your final reply.\n\n${prompt}\n\n${outputDirectory ? `Save downloadable deliverables directly in ${JSON.stringify(outputDirectory)} (up to 3 PNG/JPEG/WebP/PDF/DOCX/TXT/MD/CSV/JSON files, 4 MiB each). Only files in this task's output directory will be returned to the owner. Do not copy unrelated files there. Existing project and provider permissions still apply; request any required approval to write to this directory, and do not broaden permissions.\n\n` : ""}End with an optional fenced bot-result JSON block containing summary, artifacts [{label,uri,kind:"artifact"|"source"}], checks [{label,status:"reported-pass"|"reported-fail"|"not-run"}], blockers [string]. Include HTTPS sources. Clearly state unperformed checks and unresolved blockers. Your statements are reported evidence, not independent provider verification.`;
+  return `TritonAI Bot assignment: ${title}\n\nThis is the owner's Bot assignment. Return the deliverable as your final reply.\n\n${prompt}\n\n${outputDirectory ? `If the assignment requests downloadable files, save them directly in ${JSON.stringify(outputDirectory)} (up to 3 PNG/JPEG/WebP/PDF/DOCX/TXT/MD/CSV/JSON files, 4 MiB each). Text-only or read-only assignments need only a final reply: do not create files or directories for them. Only requested files in this task's output directory will be returned to the owner. Do not copy unrelated files there. Existing project and provider permissions still apply; request any required approval to write to this directory, and do not broaden permissions.\n\n` : ""}End with an optional fenced bot-result JSON block containing summary, artifacts [{label,uri,kind:"artifact"|"source"}], checks [{label,status:"reported-pass"|"reported-fail"|"not-run"}], blockers [string]. Include HTTPS sources. Clearly state unperformed checks and unresolved blockers. Your statements are reported evidence, not independent provider verification.`;
 }
 
 /** Bot task threads keep the bot's title; an empty title falls back to a generic one. */
@@ -83,7 +84,7 @@ function capResult(text: string): string {
  * task's own message, up to the owner's next message in the same thread.
  */
 export function taskProgress(
-  thread: OrchestrationThread | null,
+  thread: BotTaskThread | null,
   held: HeldTask,
   now: number,
 ): TaskProgress {
@@ -104,11 +105,11 @@ export function taskProgress(
   }
   const following = start === -1 ? [] : thread.messages.slice(start + 1);
   const next = following.findIndex((message) => message.role === "user");
-  const replies = (next === -1 ? following : following.slice(0, next)).filter(
-    (message) => message.role === "assistant",
-  );
+  const replies = (
+    thread.assignmentRunConfirmed || next === -1 ? following : following.slice(0, next)
+  ).filter((message) => message.role === "assistant");
   // Follow-up turns can supersede a running assignment. Their existence proves no terminal outcome.
-  if (next !== -1) {
+  if (next !== -1 && !thread.assignmentRunConfirmed) {
     const partial = replies
       .map((message) => message.text.trim())
       .filter(Boolean)

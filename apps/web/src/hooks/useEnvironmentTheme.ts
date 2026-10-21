@@ -2,7 +2,6 @@ import type { EnvironmentTheme } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import * as Equal from "effect/Equal";
 import { useEffect, useRef, useSyncExternalStore } from "react";
-
 import { primaryServerEnvironmentThemesAtom } from "../state/server";
 import {
   createVividThemeColors,

@@ -1,5 +1,4 @@
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
-
 import { isTerminalCloseShortcut, type ShortcutEventLike } from "../keybindings";
 
 export interface TerminalCloseShortcutEvent extends ShortcutEventLike {

@@ -1,30 +1,29 @@
 import * as Schema from "effect/Schema";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  TrimmedNonEmptyString,
   ApprovalRequestId,
   EventId,
   IsoDateTime,
-  NonNegativeInt,
   ProviderItemId,
   ThreadId,
   TurnId,
 } from "./baseSchemas.ts";
 import {
-  ChatAttachment,
-  ModelSelection,
   getProviderAttachmentLimitError,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  ChatAttachment,
+} from "./chatAttachment.ts";
+import { ModelSelection } from "./modelSelection.ts";
+import {
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
-  THREAD_GOAL_MAX_OBJECTIVE_CHARS,
-  ThreadGoalStatus,
   ProviderRequestKind,
   ProviderSandboxMode,
   ProviderUserInputAnswers,
   UserInputAttachments,
   RuntimeMode,
-} from "./orchestration.ts";
+} from "./providerPolicy.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 
 const ProviderSessionStatus = Schema.Literals([
@@ -104,21 +103,6 @@ export const ProviderStopSessionInput = Schema.Struct({
   threadId: ThreadId,
 });
 export type ProviderStopSessionInput = typeof ProviderStopSessionInput.Type;
-
-export const ProviderSetThreadGoalInput = Schema.Struct({
-  threadId: ThreadId,
-  objective: Schema.optional(
-    TrimmedNonEmptyString.check(Schema.isMaxLength(THREAD_GOAL_MAX_OBJECTIVE_CHARS)),
-  ),
-  status: Schema.optional(ThreadGoalStatus),
-  tokenBudget: Schema.optional(Schema.NullOr(NonNegativeInt)),
-});
-export type ProviderSetThreadGoalInput = typeof ProviderSetThreadGoalInput.Type;
-
-export const ProviderClearThreadGoalInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type ProviderClearThreadGoalInput = typeof ProviderClearThreadGoalInput.Type;
 
 export const ProviderRespondToRequestInput = Schema.Struct({
   threadId: ThreadId,

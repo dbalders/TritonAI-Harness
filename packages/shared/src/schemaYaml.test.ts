@@ -1,6 +1,5 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
-
 import { fromYaml, fromYamlString } from "./schemaYaml.ts";
 
 const ProjectConfig = Schema.Struct({

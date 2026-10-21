@@ -280,7 +280,10 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       };
       latestSnapshot.current = merged;
       for (const run of merged.runs) {
-        if (!isPendingDotRun(run)) acceptedRunIds.current.delete(run.runId);
+        if (!isPendingDotRun(run) && acceptedRunIds.current.has(run.runId)) {
+          runEvidence.current.set(run.runId, run);
+          acceptedRunIds.current.delete(run.runId);
+        }
       }
       const followed = new Map(
         (merged.responsibilities ?? []).map((item) => [item.source.taskId, item.sourceEvidence]),
@@ -316,9 +319,17 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         ...taskEvidence.current,
         ...merged.tasks.map((task) => [task.taskId, task] as const),
       ]);
+      const recipeApprovals = new Set(
+        (merged.fileRecipes ?? []).flatMap((recipe) =>
+          recipe.events.flatMap((event) =>
+            event.status === "needs-decision" && event.approvalId ? [event.approvalId] : [],
+          ),
+        ),
+      );
       for (const [approvalId] of approvalEvidence.current) {
         const recent = merged.approvals.find((approval) => approval.approvalId === approvalId);
         if (
+          !recipeApprovals.has(approvalId) &&
           !merged.handling?.items.some(
             (item) => item.target?.kind === "approval" && item.target.id === approvalId,
           )
@@ -330,14 +341,20 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         ...approvalEvidence.current,
         ...merged.approvals.map((approval) => [approval.approvalId, approval] as const),
       ]);
-      // A loaded older run stays in the conversation until the newest page includes it; finished runs don't change.
-      for (const [runId] of runEvidence.current)
-        if (merged.runs.some((run) => run.runId === runId)) runEvidence.current.delete(runId);
+      // Exact-run reads can be newer than the recent page. Keep terminal results across later polls.
+      for (const [runId] of runEvidence.current) {
+        const recent = merged.runs.find((run) => run.runId === runId);
+        if (recent) runEvidence.current.set(runId, recent);
+      }
+      const runs = new Map([
+        ...runEvidence.current,
+        ...merged.runs.map((run) => [run.runId, run] as const),
+      ]);
       setState({
         ...merged,
         tasks: [...tasks.values()],
         approvals: [...approvals.values()],
-        runs: [...merged.runs, ...runEvidence.current.values()],
+        runs: [...runs.values()],
       });
       setConnected(true);
     } catch (cause) {
@@ -1091,7 +1108,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         ) : (
           <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="min-h-0 flex-1 overflow-y-auto scrollbar-gutter-both">
                 <div className="mx-auto flex w-full max-w-(--chat-max-width) flex-col gap-5 px-5 pt-4 pb-6 sm:px-6">
                   {empty ? (
                     <div className="flex min-h-[50vh] flex-col items-center justify-center gap-2 text-center">

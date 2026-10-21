@@ -1,9 +1,13 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { visitElements } from "../../test/reactElementTree";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
+import { toastManager } from "../ui/toast";
+import {
+  canPickExternalProjectFavicon,
+  ProjectFaviconPickerDialog,
+} from "./ProjectFaviconPickerDialog";
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -44,12 +48,6 @@ vi.mock("../files/projectFilesQueryState", () => ({
 vi.mock("../ui/toast", () => ({
   toastManager: { add: vi.fn() },
 }));
-
-import { toastManager } from "../ui/toast";
-import {
-  canPickExternalProjectFavicon,
-  ProjectFaviconPickerDialog,
-} from "./ProjectFaviconPickerDialog";
 
 describe("ProjectFaviconPickerDialog", () => {
   beforeEach(() => {

@@ -1,3 +1,4 @@
+import { getManagedCodexSettings } from "../managedPolicy.ts";
 /**
  * DailyMemory - writes this device's daily notes into the general memory
  * vault, and keeps the Codex memory skill in step with the Memory setting.
@@ -12,7 +13,14 @@
  * at most every four hours while there is new activity. It stays partial until
  * the day ends and the final pass replaces it.
  */
-import { type ServerMemoryStatus, TextGenerationError } from "@t3tools/contracts";
+import {
+  type ServerMemoryStatus,
+  type ServerProjectMemory,
+  type ServerProjectMemoryInput,
+  ServerProjectMemoryError,
+  ThreadId,
+  TextGenerationError,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -26,7 +34,7 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
@@ -90,6 +98,9 @@ export class DailyMemory extends Context.Service<
     /** Runs one catch-up pass now. Safe to call while another pass runs; it waits. */
     readonly runCatchUp: Effect.Effect<void>;
     readonly getStatus: Effect.Effect<Omit<ServerMemoryStatus, "sync">>;
+    readonly getProjectMemory: (
+      input: ServerProjectMemoryInput,
+    ) => Effect.Effect<ServerProjectMemory, ServerProjectMemoryError>;
     /** Runs `effect` while no catch-up pass is writing to the vault. */
     readonly exclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   }
@@ -144,14 +155,10 @@ const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (range: {
       p.project_id AS "projectId",
       p.title AS "projectTitle",
       p.workspace_root AS "workspaceRoot",
-      CASE
-        WHEN json_valid(r.resume_cursor_json) THEN json_extract(r.resume_cursor_json, '$.threadId')
-      END AS "codexThreadId"
-    FROM projection_thread_messages AS m
-    JOIN projection_threads AS t ON t.thread_id = m.thread_id
+      t.codex_thread_id AS "codexThreadId"
+    FROM harness_activity_messages AS m
+    JOIN harness_activity_threads AS t ON t.thread_id = m.thread_id
     JOIN projection_projects AS p ON p.project_id = t.project_id
-    LEFT JOIN provider_session_runtime AS r
-      ON r.thread_id = t.thread_id AND r.provider_name = 'codex'
     WHERE m.created_at >= ${range.startIso}
       AND m.created_at < ${range.endIso}
       AND m.is_streaming = 0
@@ -205,7 +212,7 @@ const hasStreamingMessages = Effect.fn("memory.hasStreamingMessages")(function* 
   const sql = yield* SqlClient.SqlClient;
   const [row] = yield* sql<{ readonly streaming: number }>`
     SELECT EXISTS (
-      SELECT 1 FROM projection_thread_messages
+      SELECT 1 FROM harness_activity_messages
       WHERE created_at >= ${range.startIso}
         AND created_at < ${range.endIso}
         AND is_streaming = 1
@@ -226,8 +233,8 @@ const activityFingerprint = Effect.fn("memory.activityFingerprint")(function* (r
   const sql = yield* SqlClient.SqlClient;
   const [row] = yield* sql<{ readonly count: number; readonly latest: string | null }>`
     SELECT COUNT(*) AS "count", MAX(m.updated_at) AS "latest"
-    FROM projection_thread_messages AS m
-    JOIN projection_threads AS t ON t.thread_id = m.thread_id
+    FROM harness_activity_messages AS m
+    JOIN harness_activity_threads AS t ON t.thread_id = m.thread_id
     JOIN projection_projects AS p ON p.project_id = t.project_id
     WHERE m.created_at >= ${range.startIso}
       AND m.created_at < ${range.endIso}
@@ -709,7 +716,7 @@ export const make = Effect.gen(function* () {
   const catchUp = provide(
     Effect.gen(function* () {
       const settings = yield* settingsService.getSettings;
-      const codexHome = (yield* resolveCodexHomeLayout(settings.providers.codex).pipe(
+      const codexHome = (yield* resolveCodexHomeLayout(getManagedCodexSettings(settings)).pipe(
         Effect.provideService(Path.Path, path),
       )).sharedHomePath;
       const skillsDirectory = path.join(codexHome, "skills");
@@ -837,7 +844,112 @@ export const make = Effect.gen(function* () {
     } satisfies Omit<ServerMemoryStatus, "sync">;
   });
 
-  return DailyMemory.of({ runCatchUp, getStatus, exclusive: lock.withPermits(1) });
+  const getProjectMemory = Effect.fn("DailyMemory.getProjectMemory")(function* (
+    input: ServerProjectMemoryInput,
+  ) {
+    const projects = yield* sql<{ title: string; workspaceRoot: string }>`
+      SELECT title, workspace_root AS "workspaceRoot" FROM projection_projects
+      WHERE project_id = ${input.projectId} AND deleted_at IS NULL
+    `.pipe(
+      Effect.mapError(
+        () => new ServerProjectMemoryError({ message: "Could not read this project." }),
+      ),
+    );
+    const project = projects[0];
+    if (!project)
+      return yield* new ServerProjectMemoryError({
+        message: "This project is no longer available.",
+      });
+    const reports = yield* sql<{ threadId: string; text: string; updatedAt: string }>`
+      WITH recent_threads AS (
+        SELECT thread_id FROM harness_activity_threads
+        WHERE project_id = ${input.projectId} AND deleted_at IS NULL AND archived_at IS NULL
+        ORDER BY updated_at DESC LIMIT 16
+      )
+      SELECT m.thread_id AS "threadId", substr(m.text, 1, 600) AS text,
+        m.updated_at AS "updatedAt"
+      FROM recent_threads t JOIN harness_activity_messages m ON m.message_id = (
+        SELECT last.message_id FROM harness_activity_messages last
+        WHERE last.thread_id = t.thread_id AND last.role = 'assistant'
+          AND last.is_streaming = 0 AND trim(last.text) <> ''
+        ORDER BY last.created_at DESC, last.message_id DESC LIMIT 1
+      )
+    `.pipe(
+      Effect.mapError(
+        () => new ServerProjectMemoryError({ message: "Could not read recent project updates." }),
+      ),
+    );
+    const recentUpdates = reports.map((report) => ({
+      ...report,
+      threadId: ThreadId.make(report.threadId),
+    }));
+    const empty = (state: "disabled" | "pending"): ServerProjectMemory => ({
+      state,
+      markdown: null,
+      relativePath: null,
+      updatedAt: null,
+      recentUpdates,
+    });
+    const settings = yield* settingsService.getSettings.pipe(
+      Effect.mapError(
+        () => new ServerProjectMemoryError({ message: "Could not read memory settings." }),
+      ),
+    );
+    if (!settings.memoryEnabled) return empty("disabled");
+    const root = yield* fs.realPath(vault.projects).pipe(Effect.option);
+    if (root._tag === "None") return empty("pending");
+    const folders = yield* fs
+      .readDirectory(root.value)
+      .pipe(
+        Effect.mapError(
+          () => new ServerProjectMemoryError({ message: "Could not read project memory." }),
+        ),
+      );
+    const base = projectNoteName(project.title);
+    // Synced device notes are useful too. Match the workspace in the note,
+    // never its title alone, and retain the source's device in relativePath.
+    const candidates = [base, ...folders.filter((name) => name !== base).toSorted()].slice(0, 256);
+    let newest: { markdown: string; relativePath: string; updatedAt: string | null } | null = null;
+    for (const name of candidates) {
+      const files = yield* fs
+        .readDirectory(path.join(root.value, name))
+        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+      for (const file of files
+        .filter((file) => file.startsWith(`${name} - `) && file.endsWith(".md"))
+        .slice(0, 16)) {
+        const candidate = path.join(root.value, name, file);
+        const resolved = yield* fs.realPath(candidate).pipe(Effect.option);
+        if (resolved._tag === "None") continue;
+        const relative = path.relative(root.value, resolved.value);
+        if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative))
+          continue;
+        const info = yield* fs.stat(resolved.value).pipe(Effect.option);
+        if (info._tag === "None" || info.value.type !== "File" || info.value.size > 131_072n)
+          continue;
+        const content = yield* fs.readFileString(resolved.value).pipe(Effect.option);
+        if (
+          content._tag === "None" ||
+          projectNoteWorkspace(content.value) !== project.workspaceRoot
+        )
+          continue;
+        const match = {
+          markdown: content.value,
+          relativePath: path.relative(vault.root, resolved.value),
+          updatedAt: info.value.mtime._tag === "Some" ? info.value.mtime.value.toISOString() : null,
+        };
+        if (newest === null || (match.updatedAt ?? "") > (newest.updatedAt ?? "")) newest = match;
+      }
+    }
+    if (newest) return { state: "ready", ...newest, recentUpdates } satisfies ServerProjectMemory;
+    return empty("pending");
+  });
+
+  return DailyMemory.of({
+    runCatchUp,
+    getStatus,
+    getProjectMemory,
+    exclusive: lock.withPermits(1),
+  });
 });
 
 /** Runs catch-up after startup, every hour, and whenever Memory is switched. */

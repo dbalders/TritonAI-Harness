@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { PREVIEW_VIEWPORT_PRESETS, resolvePreviewViewport } from "./previewViewport.ts";
 
 describe("previewViewport", () => {
