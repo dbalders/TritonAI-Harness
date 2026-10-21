@@ -163,9 +163,9 @@ describe("ClientSettings rich text composer", () => {
 });
 
 describe("ServerSettings default permissions", () => {
-  it("starts supervised when no permission default was configured", () => {
-    expect(decodeServerSettings({}).defaultRuntimeMode).toBe("approval-required");
-    expect(DEFAULT_SERVER_SETTINGS.defaultRuntimeMode).toBe("approval-required");
+  it("starts in Auto when no permission default was configured", () => {
+    expect(decodeServerSettings({}).defaultRuntimeMode).toBe("auto");
+    expect(DEFAULT_SERVER_SETTINGS.defaultRuntimeMode).toBe("auto");
   });
 
   it.each(["approval-required", "auto-accept-edits", "auto", "full-access"])(
