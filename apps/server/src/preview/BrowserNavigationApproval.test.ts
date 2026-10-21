@@ -9,6 +9,7 @@ import {
   BROWSER_SESSION_SCOPE,
   browserNavigationOutcome,
   browserNavigationRequest,
+  browserNavigationTarget,
   describeBrowserNavigationForApproval,
 } from "./BrowserNavigationApproval.ts";
 
@@ -99,6 +100,33 @@ describe("browser navigation approval", () => {
       redirectedFrom: "https://short.example.test/r",
       redirectNotice: expect.stringContaining("news.example.org"),
     });
+  });
+
+  it("reports a local page forwarding to an external site without claiming approval", () => {
+    const args = { url: "localhost:5173/login" };
+    expect(browserNavigationRequest("preview_navigate", args)).toBeUndefined();
+    const target = browserNavigationTarget("preview_navigate", args)!;
+    expect(target).toMatchObject({ url: "http://localhost:5173/login", unparsed: false });
+    expect(browserNavigationOutcome(target, "http://localhost:5173/home")).toBeUndefined();
+    expect(browserNavigationOutcome(target, "http://127.0.0.1:5173/")).toBeUndefined();
+    const outcome = browserNavigationOutcome(target, "https://tracker.example.org/p?id=1");
+    expect(outcome).toMatchObject({
+      redirectedFrom: "http://localhost:5173/login",
+      redirectNotice: expect.stringContaining("different site, tracker.example.org"),
+    });
+    expect(outcome?.redirectNotice).not.toMatch(/approv(?:al|ed) covered/iu);
+    expect(outcome?.redirectNotice).toContain("not approved");
+  });
+
+  it("finds no redirect for blank, environment-port, or unparsed targets", () => {
+    expect(browserNavigationTarget("preview_open", {})).toBeUndefined();
+    expect(
+      browserNavigationTarget("preview_navigate", {
+        target: { kind: "environment-port", port: 5173 },
+      }),
+    ).toBeUndefined();
+    const unparsed = browserNavigationTarget("preview_navigate", { url: "javascript:alert(1)" })!;
+    expect(browserNavigationOutcome(unparsed, "https://a.example.org/")).toBeUndefined();
   });
 });
 

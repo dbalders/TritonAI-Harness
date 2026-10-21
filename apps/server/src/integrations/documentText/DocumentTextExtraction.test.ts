@@ -249,6 +249,158 @@ describe("DOCX text extraction", () => {
     });
   });
 
+  const WORD_MAIN = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const docxBody = (body: string, maxCharacters?: number) =>
+    extractDocumentTextInProcess({
+      format: "docx",
+      bytes: makeDocx([], { documentXml: `<?xml version="1.0" encoding="UTF-8"?>${body}` }),
+      ...(maxCharacters === undefined ? {} : { maxCharacters }),
+    });
+
+  it("recognizes WordprocessingML by namespace, not by a literal w: prefix", async () => {
+    await expect(
+      docxBody(
+        `<x:document xmlns:x="${WORD_MAIN}"><x:body><x:p><x:r><x:t>Hello</x:t><x:tab/><x:t>there</x:t></x:r></x:p><x:p><x:r><x:t>Next</x:t></x:r></x:p></x:body></x:document>`,
+      ),
+    ).resolves.toMatchObject({ status: "extracted", text: "Hello\tthere\nNext" });
+    await expect(
+      docxBody(
+        `<document xmlns="${WORD_MAIN}"><body><p><r><t>Default</t><br/><t>namespace</t></r></p></body></document>`,
+      ),
+    ).resolves.toMatchObject({ status: "extracted", text: "Default\nnamespace" });
+    await expect(
+      docxBody(
+        `<w:document xmlns:w="${WORD_MAIN}"><w:body><w:p><w:r><w:t>One</w:t></w:r></w:p><a:p xmlns:a="${WORD_MAIN}"><a:r><a:t>Two</a:t></a:r><w:r><w:t>Three</w:t></w:r></a:p></w:body></w:document>`,
+      ),
+    ).resolves.toMatchObject({ status: "extracted", text: "One\nTwoThree" });
+    await expect(
+      docxBody(
+        `<w:document xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main"><w:body><w:p><w:r><w:t>Strict</w:t></w:r></w:p></w:body></w:document>`,
+      ),
+    ).resolves.toMatchObject({ status: "extracted", text: "Strict" });
+  });
+
+  it("does not count an unrelated namespace bound to w as WordprocessingML", async () => {
+    await expect(
+      docxBody(
+        `<w:document xmlns:w="${WORD_MAIN}"><w:body><w:p><w:r><w:t>Seen</w:t></w:r><w:r xmlns:w="urn:example:other"><w:t>Hidden</w:t><w:tab/></w:r><w:r><w:t>Again</w:t></w:r></w:p></w:body></w:document>`,
+      ),
+    ).resolves.toMatchObject({ status: "extracted", text: "SeenAgain" });
+    await expect(
+      docxBody(
+        `<w:document xmlns:w="urn:example:other"><w:body><w:p><w:r><w:t>Not Word</w:t></w:r></w:p></w:body></w:document>`,
+      ),
+    ).resolves.toMatchObject({ status: "failed", reason: "no_text" });
+    await expect(
+      docxBody(
+        `<document xmlns="${WORD_MAIN}"><body><p><r xmlns=""><t>Unqualified</t></r><r><t>Word</t></r></p></body></document>`,
+      ),
+    ).resolves.toMatchObject({ status: "extracted", text: "Word" });
+  });
+
+  it("accepts only the canonical binding for the reserved xml prefix", async () => {
+    const XML_NS = "http://www.w3.org/XML/1998/namespace";
+    await expect(
+      docxBody(
+        `<w:document xmlns:w="${WORD_MAIN}" xmlns:xml="${XML_NS}"><w:body><w:p><w:r><w:t xml:space="preserve">Explicit</w:t></w:r></w:p></w:body></w:document>`,
+      ),
+    ).resolves.toMatchObject({ status: "extracted", text: "Explicit" });
+    await expect(
+      docxBody(
+        `<w:document xmlns:w="${WORD_MAIN}"><w:body><w:p xmlns:xml="${XML_NS}"><w:r><w:t>Scoped</w:t></w:r></w:p></w:body></w:document>`,
+      ),
+    ).resolves.toMatchObject({ status: "extracted", text: "Scoped" });
+    for (const declaration of [
+      'xmlns:xml="urn:example:other"',
+      `xmlns:xml="${WORD_MAIN}"`,
+      'xmlns:xml=""',
+      `xmlns:xmlns="${XML_NS}"`,
+      'xmlns:xmlns="http://www.w3.org/2000/xmlns/"',
+      `xmlns:other="${XML_NS}"`,
+      `xmlns="${XML_NS}"`,
+      'xmlns:other="http://www.w3.org/2000/xmlns/"',
+    ]) {
+      await expect(
+        docxBody(
+          `<w:document xmlns:w="${WORD_MAIN}" ${declaration}><w:body><w:p><w:r><w:t>Text</w:t></w:r></w:p></w:body></w:document>`,
+        ),
+      ).resolves.toMatchObject({ status: "failed", reason: "corrupt" });
+    }
+  });
+
+  it("emits run tabs but not paragraph tab-stop definitions", async () => {
+    const tabStops = (prefix: string) =>
+      `<${prefix}:pPr><${prefix}:tabs><${prefix}:tab ${prefix}:val="left" ${prefix}:pos="720"/><${prefix}:tab ${prefix}:val="right" ${prefix}:pos="9360"/></${prefix}:tabs></${prefix}:pPr>`;
+    const body = (prefix: string) =>
+      `<${prefix}:document xmlns:${prefix}="${WORD_MAIN}"><${prefix}:body><${prefix}:p><${prefix}:r><${prefix}:t>First</${prefix}:t></${prefix}:r></${prefix}:p><${prefix}:p>${tabStops(prefix)}<${prefix}:r><${prefix}:t>Second</${prefix}:t><${prefix}:tab/><${prefix}:t>Value</${prefix}:t></${prefix}:r></${prefix}:p></${prefix}:body></${prefix}:document>`;
+    await expect(docxBody(body("w"))).resolves.toMatchObject({
+      status: "extracted",
+      text: "First\nSecond\tValue",
+      truncated: false,
+    });
+    await expect(docxBody(body("x"))).resolves.toMatchObject({
+      status: "extracted",
+      text: "First\nSecond\tValue",
+    });
+    await expect(docxBody(body("w"), 12)).resolves.toMatchObject({
+      status: "extracted",
+      text: "First\nSecond",
+      truncated: true,
+    });
+    await expect(docxBody(body("w"), 18)).resolves.toMatchObject({
+      status: "extracted",
+      text: "First\nSecond\tValue",
+      truncated: false,
+    });
+  });
+
+  it("reads CDATA as literal text and ignores tag-like text in markup", async () => {
+    const wrap = (inner: string) =>
+      `<w:document xmlns:w="${WORD_MAIN}"><w:body><w:p><w:r>${inner}</w:r></w:p></w:body></w:document>`;
+    await expect(docxBody(wrap("<w:t><![CDATA[Hello]]></w:t>"))).resolves.toMatchObject({
+      status: "extracted",
+      text: "Hello",
+    });
+    await expect(
+      docxBody(wrap("<w:t>x <![CDATA[A < B &amp; C > D]]> &amp; y</w:t>")),
+    ).resolves.toMatchObject({ status: "extracted", text: "x A < B &amp; C > D & y" });
+    await expect(
+      docxBody(
+        wrap(
+          '<w:t>Real</w:t><!-- <w:t>Forged comment</w:t> --><?pi <w:t>Forged PI</w:t>?><w:t w:note="a > b /> &lt;w:t>">More</w:t><![CDATA[<w:t>Forged CDATA</w:t>]]>',
+        ),
+      ),
+    ).resolves.toMatchObject({ status: "extracted", text: "RealMore" });
+    await expect(docxBody(wrap("<w:t><![CDATA[Hello]]></w:t>"), 5)).resolves.toMatchObject({
+      status: "extracted",
+      text: "Hello",
+      truncated: false,
+    });
+    await expect(docxBody(wrap("<w:t><![CDATA[Hello]]></w:t>"), 3)).resolves.toMatchObject({
+      status: "extracted",
+      text: "Hel",
+      truncated: true,
+    });
+  });
+
+  it("refuses malformed markup instead of returning plausible text", async () => {
+    const wrap = (inner: string) =>
+      `<w:document xmlns:w="${WORD_MAIN}"><w:body><w:p><w:r>${inner}</w:r></w:p></w:body></w:document>`;
+    for (const body of [
+      wrap("<w:t><![CDATA[Unterminated</w:t>"),
+      wrap("<w:t>Text</w:t><!-- unterminated"),
+      wrap("<w:t>Mismatched</w:x>"),
+      wrap("<w:t>Unclosed"),
+      wrap("<q:t>Unbound prefix</q:t>"),
+      wrap('<w:t a="unterminated>Text</w:t>'),
+      wrap('<w:t a="raw <w:t> in value">Text</w:t>'),
+      wrap('<w:t xmlns:w="">Undeclared prefix</w:t>'),
+      `<w:document xmlns:w="${WORD_MAIN}"><w:body><w:p><w:r><w:t>Extra</w:t></w:r></w:p></w:body></w:document></w:document>`,
+    ]) {
+      await expect(docxBody(body)).resolves.toMatchObject({ status: "failed", reason: "corrupt" });
+    }
+  });
+
   it("refuses a body that expands far beyond its stored size", async () => {
     const bomb = makeZip([
       {

@@ -367,42 +367,179 @@ function decodeXmlText(value: string): string {
   });
 }
 
+const WORDPROCESSINGML_NAMESPACES: ReadonlySet<string> = new Set([
+  "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+  "http://purl.oclc.org/ooxml/wordprocessingml/main",
+]);
+const XML_NAMESPACE = "http://www.w3.org/XML/1998/namespace";
+const XMLNS_NAMESPACE = "http://www.w3.org/2000/xmlns/";
+
+function isAllowedNamespaceBinding(prefix: string, value: string): boolean {
+  if (prefix === "xmlns" || value === XML_NAMESPACE || value === XMLNS_NAMESPACE) return false;
+  return prefix.length === 0 || value.length > 0;
+}
+const XML_NAME = /[^\s/>=<"'!?]+/uy;
+const XML_ATTRIBUTE = /\s+([^\s/>=<"']+)\s*=\s*("[^"<]*"|'[^'<]*')/uy;
+const XML_TAG_END = /\s*(\/?)>/uy;
+const XML_END_TAG = /([^\s/>=<"'!?]+)\s*>/uy;
+
+interface XmlElement {
+  readonly qualifiedName: string;
+  readonly word: string | undefined;
+  readonly declaredPrefixes: ReadonlyArray<string>;
+}
+
+/** In-scope namespace bindings, one stack per prefix, so lookups and scope exits stay cheap. */
+class NamespaceScope {
+  readonly #bindings = new Map<string, Array<string>>();
+
+  get(prefix: string): string | undefined {
+    return this.#bindings.get(prefix)?.at(-1);
+  }
+
+  bind(prefix: string, namespace: string): void {
+    const stack = this.#bindings.get(prefix);
+    if (stack) stack.push(namespace);
+    else this.#bindings.set(prefix, [namespace]);
+  }
+
+  release(prefixes: ReadonlyArray<string>): void {
+    for (const prefix of prefixes) this.#bindings.get(prefix)?.pop();
+  }
+}
+
+function malformed(): DocxLimitError {
+  return new DocxLimitError("corrupt", "The DOCX body is not well-formed XML.");
+}
+
+function indexOrThrow(xml: string, token: string, from: number): number {
+  const index = xml.indexOf(token, from);
+  if (index < 0) throw malformed();
+  return index;
+}
+
+function matchAt(pattern: RegExp, xml: string, at: number): RegExpExecArray | null {
+  pattern.lastIndex = at;
+  return pattern.exec(xml);
+}
+
+/** The namespace a qualified name resolves to in `scope`; unbound prefixes are malformed. */
+function resolveNamespace(
+  qualifiedName: string,
+  scope: NamespaceScope,
+  isAttribute: boolean,
+): string | undefined {
+  const parts = qualifiedName.split(":");
+  if (parts.length > 2 || parts.some((part) => part.length === 0)) throw malformed();
+  if (parts.length === 1) return isAttribute ? undefined : scope.get("") || undefined;
+  const prefix = parts[0]!;
+  if (prefix === "xml") return XML_NAMESPACE;
+  const namespace = scope.get(prefix);
+  if (!namespace) throw malformed();
+  return namespace;
+}
+
 /**
- * Reads the visible text runs of WordprocessingML. Only the five predefined entities and numeric
- * character references are decoded; a document type declaration is refused, so entity expansion
- * cannot be used to multiply the output.
+ * Reads the visible text runs of WordprocessingML with a single linear scan. Elements count as
+ * WordprocessingML by their resolved namespace (transitional or strict), whatever prefix binds
+ * it. Comments, processing instructions, and attribute values are skipped whole, CDATA is
+ * literal text, and markup that is not well-formed is refused rather than read as plausible
+ * text. A tab counts as text only inside a run; a paragraph's tab-stop definitions do not. Only the five predefined entities and numeric character references are decoded; a
+ * document type declaration is refused, so entity expansion cannot multiply the output. The scan
+ * stops once the character limit is reached, so the rest of a truncated body is not checked.
  */
 function wordprocessingText(xml: string, maxCharacters: number) {
-  if (/<!DOCTYPE|<!ENTITY/iu.test(xml)) {
-    throw new DocxLimitError("corrupt", "The DOCX body declares a document type.");
-  }
   const text = new BoundedText(maxCharacters);
-  let inText = false;
-  for (const match of xml.matchAll(/<(\/?)([A-Za-z][\w:.-]*)[^>]*?(\/?)>|([^<]+)/gu)) {
-    if (text.truncated) break;
-    const [, closing, name, selfClosing, characters] = match;
-    if (characters !== undefined) {
-      if (inText) text.push(decodeXmlText(characters));
+  const stack: Array<XmlElement> = [];
+  const scope = new NamespaceScope();
+  let sawRoot = false;
+  const inTextRun = () => stack.at(-1)?.word === "t";
+  let position = 0;
+  while (position < xml.length && !text.truncated) {
+    const open = xml.indexOf("<", position);
+    const textEnd = open < 0 ? xml.length : open;
+    if (textEnd > position) {
+      const characters = xml.slice(position, textEnd);
+      if (stack.length === 0) {
+        if (/\S/u.test(characters)) throw malformed();
+      } else if (inTextRun()) {
+        text.push(decodeXmlText(characters));
+      }
+      position = textEnd;
       continue;
     }
-    switch (name) {
-      case "w:t":
-        inText = closing !== "/" && selfClosing !== "/";
-        break;
-      case "w:tab":
-        if (closing !== "/") text.push("\t");
-        break;
-      case "w:br":
-      case "w:cr":
-        if (closing !== "/") text.push("\n");
-        break;
-      case "w:p":
-        if (closing === "/") text.push("\n");
-        break;
-      default:
-        break;
+    if (xml.startsWith("<!--", position)) {
+      position = indexOrThrow(xml, "-->", position + 4) + 3;
+      continue;
     }
+    if (xml.startsWith("<?", position)) {
+      position = indexOrThrow(xml, "?>", position + 2) + 2;
+      continue;
+    }
+    if (xml.startsWith("<![CDATA[", position)) {
+      if (stack.length === 0) throw malformed();
+      const close = indexOrThrow(xml, "]]>", position + 9);
+      if (inTextRun()) text.push(xml.slice(position + 9, close));
+      position = close + 3;
+      continue;
+    }
+    if (xml.startsWith("<!", position)) {
+      throw new DocxLimitError("corrupt", "The DOCX body declares a document type.");
+    }
+    if (xml.startsWith("</", position)) {
+      const end = matchAt(XML_END_TAG, xml, position + 2);
+      const element = stack.pop();
+      if (!end || !element || end[1] !== element.qualifiedName) throw malformed();
+      scope.release(element.declaredPrefixes);
+      if (element.word === "p") text.push("\n");
+      position = XML_END_TAG.lastIndex;
+      continue;
+    }
+    const name = matchAt(XML_NAME, xml, position + 1);
+    if (!name) throw malformed();
+    position = XML_NAME.lastIndex;
+    const attributes: Array<string> = [];
+    const declaredPrefixes: Array<string> = [];
+    for (;;) {
+      const attribute = matchAt(XML_ATTRIBUTE, xml, position);
+      if (!attribute) break;
+      position = XML_ATTRIBUTE.lastIndex;
+      const attributeName = attribute[1]!;
+      const value = decodeXmlText(attribute[2]!.slice(1, -1));
+      if (attributeName === "xmlns" || attributeName.startsWith("xmlns:")) {
+        const prefix = attributeName === "xmlns" ? "" : attributeName.slice(6);
+        if (
+          prefix === "xml" ? value !== XML_NAMESPACE : !isAllowedNamespaceBinding(prefix, value)
+        ) {
+          throw malformed();
+        }
+        if (declaredPrefixes.includes(prefix)) throw malformed();
+        declaredPrefixes.push(prefix);
+        scope.bind(prefix, value);
+      } else {
+        attributes.push(attributeName);
+      }
+    }
+    const tagEnd = matchAt(XML_TAG_END, xml, position);
+    if (!tagEnd) throw malformed();
+    position = XML_TAG_END.lastIndex;
+    for (const attributeName of attributes) resolveNamespace(attributeName, scope, true);
+    if (stack.length === 0) {
+      if (sawRoot) throw malformed();
+      sawRoot = true;
+    }
+    const qualifiedName = name[0];
+    const namespace = resolveNamespace(qualifiedName, scope, false);
+    const word =
+      namespace !== undefined && WORDPROCESSINGML_NAMESPACES.has(namespace)
+        ? qualifiedName.slice(qualifiedName.indexOf(":") + 1)
+        : undefined;
+    if (word === "tab" && stack.at(-1)?.word === "r") text.push("\t");
+    if (word === "br" || word === "cr") text.push("\n");
+    if (tagEnd[1] === "/") scope.release(declaredPrefixes);
+    else stack.push({ qualifiedName, word, declaredPrefixes });
   }
+  if (!text.truncated && (stack.length > 0 || !sawRoot)) throw malformed();
   return { text: text.toString(), truncated: text.truncated };
 }
 

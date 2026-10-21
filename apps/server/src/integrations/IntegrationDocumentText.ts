@@ -33,6 +33,14 @@ export type IntegrationDocumentTextExtractor = (
 export interface DocumentTextWorkerCommand {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
+  /**
+   * How the worker's V8 limits reach it. "arguments" (the default) puts them on the command line
+   * before `args`, which node and Electron-as-node both honor; packaged Electron ignores
+   * NODE_OPTIONS. A single executable has no runtime-flag position before its own entry, so it
+   * receives them through NODE_OPTIONS. Either way the worker refuses to parse unless it can
+   * observe the limits in effect.
+   */
+  readonly limitsVia?: "arguments" | "environment";
 }
 
 const DOCUMENT_TEXT_TIMEOUT_MS = 15_000;
@@ -48,7 +56,9 @@ const MAX_QUEUED_EXTRACTIONS = 8;
  * rather than an arbitrary script.
  */
 export function resolveDocumentTextWorkerCommand(): DocumentTextWorkerCommand | null {
-  if (NodeSea.isSea()) return { command: process.execPath, args: ["__document-text"] };
+  if (NodeSea.isSea()) {
+    return { command: process.execPath, args: ["__document-text"], limitsVia: "environment" };
+  }
   const entry = process.argv[1];
   if (!entry || !/^bin\.(?:m?js|ts)$/u.test(NodePath.basename(entry))) return null;
   return { command: process.execPath, args: [entry, "__document-text"] };
@@ -64,12 +74,17 @@ function failed(
 
 // The child gets a V8 JavaScript heap cap (--max-old-space-size), no code generation from
 // strings, and none of the server's environment, so a parser bug cannot read provider credentials
-// from it. The heap cap does not bound native or total process memory (RSS); the wall-clock kill
-// is the backstop. It still runs as the same OS user and is not an operating-system sandbox.
-function workerEnvironment(heapMb: number): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {
-    NODE_OPTIONS: `--max-old-space-size=${heapMb} --disallow-code-generation-from-strings`,
-  };
+// from it. The worker checks that both limits are in effect before parsing and fails otherwise.
+// The heap cap does not bound native or total process memory (RSS); the wall-clock kill is the
+// backstop. It still runs as the same OS user and is not an operating-system sandbox.
+function workerLimitFlags(heapMb: number): Array<string> {
+  return [`--max-old-space-size=${heapMb}`, "--disallow-code-generation-from-strings"];
+}
+
+function workerEnvironment(heapMb: number, viaEnvironment: boolean): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = viaEnvironment
+    ? { NODE_OPTIONS: workerLimitFlags(heapMb).join(" ") }
+    : {};
   for (const name of ["ELECTRON_RUN_AS_NODE", "SystemRoot", "SYSTEMROOT", "windir"]) {
     const value = process.env[name];
     if (value !== undefined) environment[name] = value;
@@ -161,12 +176,19 @@ function runWorker(
       return;
     }
     signal.addEventListener("abort", onAbort, { once: true });
+    const viaEnvironment = command.limitsVia === "environment";
     try {
       child = NodeChildProcess.spawn(
         command.command,
-        [...command.args, format, String(maxCharacters)],
+        [
+          ...(viaEnvironment ? [] : workerLimitFlags(limits.heapMb)),
+          ...command.args,
+          format,
+          String(maxCharacters),
+          String(limits.heapMb),
+        ],
         {
-          env: workerEnvironment(limits.heapMb),
+          env: workerEnvironment(limits.heapMb, viaEnvironment),
           stdio: ["pipe", "pipe", "ignore"],
           windowsHide: true,
         },

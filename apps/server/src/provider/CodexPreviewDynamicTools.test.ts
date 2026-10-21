@@ -235,6 +235,19 @@ it.layer(
         "https://short.example.test/x",
       );
       expect(sameSite).not.toHaveProperty("redirectedFrom");
+      const equivalent = yield* navigate("short.example.test/r", "https://short.example.test/r");
+      expect(equivalent).not.toHaveProperty("redirectedFrom");
+      const fromLocal = yield* navigate(
+        "http://localhost:5173/login",
+        "https://tracker.example.org/p",
+      );
+      expect(fromLocal).toMatchObject({
+        url: "https://tracker.example.org/p",
+        redirectedFrom: "http://localhost:5173/login",
+        redirectNotice: expect.stringContaining("different site, tracker.example.org"),
+      });
+      const localToLocal = yield* navigate("http://localhost:5173/", "http://localhost:5173/x");
+      expect(localToLocal).not.toHaveProperty("redirectedFrom");
     }),
   );
 

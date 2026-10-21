@@ -13,10 +13,7 @@ import type {
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
-import {
-  browserNavigationOutcome,
-  browserNavigationRequest,
-} from "../preview/BrowserNavigationApproval.ts";
+import { withBrowserNavigationOutcome } from "../preview/BrowserNavigationApproval.ts";
 
 export interface CodexPreviewDynamicToolDefinition {
   readonly name: string;
@@ -189,11 +186,8 @@ export const invokeAuthorizedCodexPreviewDynamicTool = Effect.fn(
   const value =
     operation === "evaluate" ? { value: result ?? null } : sanitizePreviewToolResult(result);
   if (value === null || typeof value !== "object") return value;
-  const navigation = browserNavigationRequest(input.name, input.arguments);
-  const redirect = navigation
-    ? browserNavigationOutcome(navigation, (value as { readonly url?: unknown }).url)
-    : undefined;
-  return { ...value, ...redirect, ...(toolIcon ? { toolIcon } : {}) };
+  const reported = withBrowserNavigationOutcome(input.name, input.arguments, value);
+  return { ...reported, ...(toolIcon ? { toolIcon } : {}) };
 });
 
 export const invokeCodexPreviewDynamicTool = Effect.fn("invokeCodexPreviewDynamicTool")(

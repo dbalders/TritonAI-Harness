@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - exercises a real child process and its wall-clock limit.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -6,6 +7,7 @@ import * as NodeURL from "node:url";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 
 import { makeDocx, makePdf } from "./documentText/DocumentTextFixtures.testkit.ts";
+import { documentTextWorkerLimitsInEffect } from "./documentText/documentTextWorker.ts";
 import {
   makeDocumentTextExtractor,
   resolveDocumentTextWorkerCommand,
@@ -72,26 +74,74 @@ describe("isolated document text extraction", () => {
     ).resolves.toMatchObject({ status: "failed", reason: "corrupt" });
   }, 30_000);
 
-  it("gives the extractor a heap cap and none of the server's environment", async () => {
+  it("runs the extractor with effective heap and code-generation limits and none of the server's environment", async () => {
     process.env.TRITONAI_DOCUMENT_TEXT_TEST_SECRET = "must-not-leak";
     try {
       const extract = makeDocumentTextExtractor({
         heapMb: 96,
         resolveCommand: () =>
           scriptWorker(
-            `process.stdout.write(JSON.stringify({status:"extracted",format:"pdf",truncated:false,text:JSON.stringify(process.env)}))`,
+            `let codegen = "allowed"; try { new Function("return 1"); } catch (error) { codegen = error.name; }
+             const report = { env: process.env, execArgv: process.execArgv, codegen,
+               heapMiB: require("node:v8").getHeapStatistics().heap_size_limit / 1048576 };
+             process.stdout.write(JSON.stringify({status:"extracted",format:"pdf",truncated:false,text:JSON.stringify(report)}))`,
           ),
       });
       const result = await extract({ format: "pdf", bytes: new Uint8Array([1]) }, signal());
       expect(result.status).toBe("extracted");
-      const environment = JSON.parse(result.status === "extracted" ? result.text : "{}");
-      expect(environment.TRITONAI_DOCUMENT_TEXT_TEST_SECRET).toBeUndefined();
-      expect(environment.NODE_OPTIONS).toBe(
-        "--max-old-space-size=96 --disallow-code-generation-from-strings",
-      );
+      const report = JSON.parse(result.status === "extracted" ? result.text : "{}");
+      expect(report.env.TRITONAI_DOCUMENT_TEXT_TEST_SECRET).toBeUndefined();
+      expect(report.env.NODE_OPTIONS).toBeUndefined();
+      expect(report.execArgv.slice(0, 2)).toEqual([
+        "--max-old-space-size=96",
+        "--disallow-code-generation-from-strings",
+      ]);
+      expect(report.codegen).toBe("EvalError");
+      expect(report.heapMiB).toBeLessThan(96 + 512);
     } finally {
       delete process.env.TRITONAI_DOCUMENT_TEXT_TEST_SECRET;
     }
+  });
+
+  it("refuses to parse when the worker's limits are not in effect", async () => {
+    expect(documentTextWorkerLimitsInEffect(96)).toBe(false);
+    const run = (runtimeArgs: ReadonlyArray<string>, heapMb: string) =>
+      NodeChildProcess.spawnSync(
+        process.execPath,
+        [...runtimeArgs, serverEntry, "__document-text", "docx", "100", heapMb],
+        { input: makeDocx(["Synthetic canary 9X2-DOCX"]), encoding: "utf8", env: {} },
+      ).stdout;
+    expect(JSON.parse(run([], "96"))).toMatchObject({ status: "failed", reason: "unavailable" });
+    expect(JSON.parse(run(["--max-old-space-size=96"], "96"))).toMatchObject({
+      status: "failed",
+      reason: "unavailable",
+    });
+    expect(JSON.parse(run(["--disallow-code-generation-from-strings"], "96"))).toMatchObject({
+      status: "failed",
+      reason: "unavailable",
+    });
+    expect(
+      JSON.parse(run(["--max-old-space-size=96", "--disallow-code-generation-from-strings"], "x")),
+    ).toMatchObject({ status: "failed", reason: "unavailable" });
+    expect(
+      JSON.parse(run(["--max-old-space-size=96", "--disallow-code-generation-from-strings"], "96")),
+    ).toMatchObject({ status: "extracted", text: "Synthetic canary 9X2-DOCX" });
+  }, 30_000);
+
+  it("passes the limits through NODE_OPTIONS only for a single-executable worker", async () => {
+    const extract = makeDocumentTextExtractor({
+      heapMb: 96,
+      resolveCommand: () => ({
+        ...scriptWorker(
+          `process.stdout.write(JSON.stringify({status:"extracted",format:"pdf",truncated:false,text:JSON.stringify({options:process.env.NODE_OPTIONS,execArgv:process.execArgv})}))`,
+        ),
+        limitsVia: "environment",
+      }),
+    });
+    const result = await extract({ format: "pdf", bytes: new Uint8Array([1]) }, signal());
+    const report = JSON.parse(result.status === "extracted" ? result.text : "{}");
+    expect(report.options).toBe("--max-old-space-size=96 --disallow-code-generation-from-strings");
+    expect(report.execArgv[0]).toBe("-e");
   });
 
   it("kills a worker stuck in synchronous code when the time limit passes", async () => {

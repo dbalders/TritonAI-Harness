@@ -31,6 +31,7 @@ import * as ServerConfig from "../../../config.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
+import { withBrowserNavigationOutcome } from "../../../preview/BrowserNavigationApproval.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
 /**
@@ -197,10 +198,14 @@ const handlers = {
     invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   ),
   preview_open: McpToolAccess.actsAsCaller((input) =>
-    invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),
+    invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)).pipe(
+      Effect.map((result) => withBrowserNavigationOutcome("preview_open", input, result)),
+    ),
   ),
   preview_navigate: McpToolAccess.actsAsCaller((input) =>
-    invokeTargeted<PreviewAutomationStatus>("navigate", input, input.timeoutMs),
+    invokeTargeted<PreviewAutomationStatus>("navigate", input, input.timeoutMs).pipe(
+      Effect.map((result) => withBrowserNavigationOutcome("preview_navigate", input, result)),
+    ),
   ),
   preview_resize: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<PreviewAutomationResizeResult>("resize", input, input.timeoutMs),

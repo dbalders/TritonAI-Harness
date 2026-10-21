@@ -61,7 +61,10 @@ covers every tab and every browser profile in the thread, including profiles wit
 so choose **Approve** if you want to approve each website or profile separately.
 
 If a website forwards the browser to a different site, the agent is told afterwards that the page
-ended up somewhere else. This check happens only after the page has loaded. It does not block the
+ended up somewhere else and that the new site was not approved. This applies to Codex and Claude
+browser tools, including pages started from a local address such as `localhost:5173`. Pages
+opened through a dev-server port target are not checked. This check happens only after the page
+has loaded. It does not block the
 forwarding, and it does not stop a site or tracker from seeing your network address. Opening any
 website reveals your network address to that site.
 
