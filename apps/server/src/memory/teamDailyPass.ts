@@ -686,13 +686,13 @@ export const makeTeamDailyPass = (input: {
             stillShared,
           });
           if (result.kind === "lost") return "lost" as const;
-          if (result.kind === "held" && !result.uncertain) {
-            delete record.attempt;
-            if (record.publishedSha === null) record.storageKey = null;
-            yield* writeState(state);
-          }
-          if (result.kind === "held" && changedSharing) return "retry" as const;
           if (result.kind === "held") {
+            if (!result.uncertain) {
+              delete record.attempt;
+              if (record.publishedSha === null) record.storageKey = null;
+              yield* writeState(state);
+            }
+            if (changedSharing) return "retry" as const;
             // Uncertain content requests stay recorded until their remote outcome is known.
             // Other days and the marker still progress; definite no-send failures can retry.
             noteWaiting();
