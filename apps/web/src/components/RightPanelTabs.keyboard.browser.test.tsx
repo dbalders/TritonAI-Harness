@@ -1,5 +1,6 @@
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 import {
   compileResolvedKeybindingsConfig,
   DEFAULT_RESOLVED_KEYBINDINGS,
@@ -198,14 +199,14 @@ describe("right panel new-tab shortcut", () => {
     });
     document.body.append(input);
     using _input = { [Symbol.dispose]: () => input.remove() };
-    input.focus();
+    await userEvent.click(input);
     expect((await press("t", { metaKey: true })).defaultPrevented).toBe(false);
     await press("y", { metaKey: true });
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
     await press("Escape");
     expect(document.querySelector('[role="menu"]:not([data-closed])')).toBeNull();
-    // The menu hands focus back to its trigger once its close finishes, a few frames later.
-    // Timers are fake here, so advance them instead of polling in real time.
+    // Finish the pending close callbacks on the fake clock before checking focus.
+    await act(() => vi.runOnlyPendingTimersAsync());
     const trigger = screen.container.querySelector('[aria-label="Add panel surface"]');
     for (let frame = 0; frame < 10 && document.activeElement !== trigger; frame++) {
       await act(() => vi.advanceTimersToNextFrame());
