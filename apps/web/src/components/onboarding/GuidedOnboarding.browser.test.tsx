@@ -88,39 +88,11 @@ vi.mock("../../firstRunOnboarding", () => ({
 }));
 vi.mock("../settings/PluginsSettings", () => ({ integrationNeedsConnectionAction: () => false }));
 
-let container: HTMLElement;
-let screen: Screen | undefined;
-let stack: AsyncDisposableStack;
-async function renderSubject(node: import("react").ReactNode) {
-  if (screen) await screen.rerender(node);
-  else {
-    screen = stack.use(await renderUi(node, { router: false }));
-    container = screen.container;
-  }
-}
-
-async function click(label: string) {
-  const target = [...document.body.querySelectorAll("button, label")].find((item) =>
-    item.textContent?.includes(label),
-  ) as HTMLElement | undefined;
-  if (!target) throw new Error(`Nothing labelled "${label}"`);
-  await act(async () => target.click());
-}
-
-/** Welcome → Finance → the budget task, with no email plugin in this copy. */
-async function openBudgetFileStep() {
-  await act(async () => renderSubject(<GuidedOnboarding />));
-  await click("Get started");
-  await click("Finance & purchasing");
-  await click("Continue");
-  expect(document.body.textContent).toContain("Pick something to try first.");
-}
-
 describe("guided tour", () => {
   it("recommends the sample when no account is connected, and can't pick an unavailable one", async () => {
     await using _fixture = await setupTest();
 
-    await openBudgetFileStep();
+    await _fixture.openBudgetFileStep();
     const [email, budget] = [...document.body.querySelectorAll("main button")].filter((button) =>
       button.textContent?.includes("Uses a file")
         ? true
@@ -134,9 +106,9 @@ describe("guided tour", () => {
   it("runs the sample in a Supervised conversation, with the sample in the message itself", async () => {
     await using _fixture = await setupTest();
 
-    await openBudgetFileStep();
-    await click("Check a budget for overages");
-    await click("Check the budget with the sample");
+    await _fixture.openBudgetFileStep();
+    await _fixture.click("Check a budget for overages");
+    await _fixture.click("Check the budget with the sample");
 
     expect(mocks.startTurn).toHaveBeenCalledTimes(1);
     const { input } = mocks.startTurn.mock.calls[0]![0];
@@ -160,9 +132,9 @@ describe("guided tour", () => {
     await using _fixture = await setupTest();
 
     mocks.startTurn.mockResolvedValue({ _tag: "Failure", cause: new Error("offline") });
-    await openBudgetFileStep();
-    await click("Check a budget for overages");
-    await click("Check the budget with the sample");
+    await _fixture.openBudgetFileStep();
+    await _fixture.click("Check a budget for overages");
+    await _fixture.click("Check the budget with the sample");
 
     expect(document.body.querySelector("[role=alert]")?.textContent).toBe(
       "The assistant couldn't start. Try again.",
@@ -181,13 +153,13 @@ describe("guided tour", () => {
 
     let finishStart: (value: unknown) => void = () => {};
     mocks.startTurn.mockReturnValue(new Promise((resolve) => (finishStart = resolve)));
-    await openBudgetFileStep();
-    await click("Check a budget for overages");
-    await click("Check the budget with the sample");
+    await _fixture.openBudgetFileStep();
+    await _fixture.click("Check a budget for overages");
+    await _fixture.click("Check the budget with the sample");
     expect(mocks.startTurn).toHaveBeenCalledTimes(1);
 
     // Exit tour unmounts the route while the chat is still starting.
-    await act(async () => stack.disposeAsync());
+    await act(async () => _fixture.stack.disposeAsync());
     await act(async () => finishStart({ _tag: "Success", value: { sequence: 1 } }));
 
     expect(mocks.navigate).not.toHaveBeenCalled();
@@ -200,15 +172,15 @@ describe("guided tour", () => {
     let finishCreate: (value: unknown) => void = () => {};
     mocks.projects = [];
     mocks.createProject.mockReturnValue(new Promise((resolve) => (finishCreate = resolve)));
-    await openBudgetFileStep();
-    await click("Check a budget for overages");
+    await _fixture.openBudgetFileStep();
+    await _fixture.click("Check a budget for overages");
     const input = document.body.querySelector<HTMLInputElement>("input[type=file]")!;
     const file = new File(["Line,Budget,Actual\nTravel,1,2\n"], "Mine.csv", { type: "text/csv" });
     Object.defineProperty(input, "files", { value: [file] });
     await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
     expect(mocks.createProject).toHaveBeenCalledTimes(1);
 
-    await act(async () => stack.disposeAsync());
+    await act(async () => _fixture.stack.disposeAsync());
     await act(async () => finishCreate({ _tag: "Success", value: { sequence: 1 } }));
 
     expect(mocks.startUpload).not.toHaveBeenCalled();
@@ -220,9 +192,9 @@ describe("guided tour", () => {
 
     let finishStart: (value: unknown) => void = () => {};
     mocks.startTurn.mockReturnValue(new Promise((resolve) => (finishStart = resolve)));
-    await openBudgetFileStep();
-    await click("Check a budget for overages");
-    await click("Check the budget with the sample");
+    await _fixture.openBudgetFileStep();
+    await _fixture.click("Check a budget for overages");
+    await _fixture.click("Check the budget with the sample");
 
     // Going back and choosing something else while the first chat is still starting.
     await act(async () => updateGuidedTourState({ roleId: "it", taskId: "it-ticket" }));
@@ -259,17 +231,17 @@ describe("guided tour", () => {
         integrations: [account("microsoft-365", false), account("google-workspace", true)],
       },
     });
-    await act(async () => renderSubject(<GuidedOnboarding />));
-    await click("Get started");
-    await click("Office & admin");
-    await click("Continue");
-    await click("See what's on my calendar this week");
+    await act(async () => _fixture.renderSubject(<GuidedOnboarding />));
+    await _fixture.click("Get started");
+    await _fixture.click("Office & admin");
+    await _fixture.click("Continue");
+    await _fixture.click("See what's on my calendar this week");
 
     expect(document.body.textContent).toContain("You're connected.");
     expect(document.body.textContent).toContain("Gmail & Google");
     expect(document.body.textContent).toContain("Show my week");
 
-    await click("Use Outlook instead");
+    await _fixture.click("Use Outlook instead");
     expect(document.body.textContent).toContain("Turn on reading your calendar.");
     expect(document.body.textContent).toContain("Use Gmail instead");
   });
@@ -303,17 +275,17 @@ describe("guided tour", () => {
         ],
       },
     });
-    await act(async () => renderSubject(<GuidedOnboarding />));
-    await click("Get started");
-    await click("Office & admin");
-    await click("Continue");
+    await act(async () => _fixture.renderSubject(<GuidedOnboarding />));
+    await _fixture.click("Get started");
+    await _fixture.click("Office & admin");
+    await _fixture.click("Continue");
     expect(
       [...document.body.querySelectorAll("main button")].find((button) =>
         button.textContent?.includes("Find emails"),
       )?.textContent,
     ).toContain("Recommended");
 
-    await click("See what's on my calendar this week");
+    await _fixture.click("See what's on my calendar this week");
     expect(document.body.textContent).toContain("Turn on reading your calendar.");
     expect(document.body.textContent).not.toContain("You're connected.");
     expect(document.body.textContent).not.toContain("Show my week");
@@ -323,8 +295,8 @@ describe("guided tour", () => {
   it("leaves without changing anything", async () => {
     await using _fixture = await setupTest();
 
-    await act(async () => renderSubject(<GuidedOnboarding />));
-    await click("Exit tour");
+    await act(async () => _fixture.renderSubject(<GuidedOnboarding />));
+    await _fixture.click("Exit tour");
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/settings/general" });
     expect(mocks.startTurn).not.toHaveBeenCalled();
     expect(mocks.createProject).not.toHaveBeenCalled();
@@ -332,14 +304,64 @@ describe("guided tour", () => {
 });
 
 async function setupTest() {
-  stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+  let container: HTMLElement;
+  let screen: Screen | undefined;
+
+  async function renderSubject(node: import("react").ReactNode) {
+    if (screen) await screen.rerender(node);
+    else {
+      screen = stack.use(
+        await renderUi(node, {
+          router: false /* These subjects use mocked navigation or no routing. */,
+        }),
+      );
+      container = screen.container;
+    }
+  }
+
+  async function click(label: string) {
+    const target = [...document.body.querySelectorAll("button, label")].find((item) =>
+      item.textContent?.includes(label),
+    ) as HTMLElement | undefined;
+    if (!target) throw new Error(`Nothing labelled "${label}"`);
+    await act(async () => target.click());
+  }
+
+  /** Welcome → Finance → the budget task, with no email plugin in this copy. */
+  async function openBudgetFileStep() {
+    await act(async () => renderSubject(<GuidedOnboarding />));
+    await click("Get started");
+    await click("Finance & purchasing");
+    await click("Continue");
+    expect(document.body.textContent).toContain("Pick something to try first.");
+  }
+
   screen = undefined;
   vi.clearAllMocks();
   mocks.listIntegrations.mockResolvedValue({ _tag: "Success", value: { integrations: [] } });
   mocks.startTurn.mockResolvedValue({ _tag: "Success", value: { sequence: 1 } });
   mocks.projects = [TRITONAI_PROJECT];
   restartGuidedTour();
-
-  stack.defer(async () => {});
-  return stack;
+  return {
+    async [Symbol.asyncDispose]() {
+      await stack.disposeAsync();
+    },
+    stack,
+    get container() {
+      return container;
+    },
+    set container(value: typeof container) {
+      container = value;
+    },
+    get screen() {
+      return screen;
+    },
+    set screen(value: typeof screen) {
+      screen = value;
+    },
+    renderSubject,
+    click,
+    openBudgetFileStep,
+  };
 }

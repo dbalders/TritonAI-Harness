@@ -47,91 +47,67 @@ const outlook = (connectionState: "not_connected" | "connected") => ({
   tools: [],
 });
 
-let latest: IntegrationConnection | null = null;
-function Probe({ environmentId }: { readonly environmentId: EnvironmentId }) {
-  const connection = useIntegrationConnection("microsoft-365", environmentId);
-  useEffect(() => {
-    latest = connection;
-  });
-  return null;
-}
-
-let container: HTMLElement;
-let screen: Screen | undefined;
-let stack: AsyncDisposableStack;
-async function renderSubject(node: import("react").ReactNode) {
-  if (screen) await screen.rerender(node);
-  else {
-    screen = stack.use(await renderUi(node, { router: false }));
-    container = screen.container;
-  }
-}
-const render = async (environmentId: string) => {
-  await act(async () => renderSubject(<Probe environmentId={EnvironmentId.make(environmentId)} />));
-  await act(async () => vi.advanceTimersByTimeAsync(0));
-};
-
 describe("useIntegrationConnection", () => {
   it("lets someone try again after the plugin list couldn't be read", async () => {
     await using _fixture = await setupTest();
 
     mocks.list.mockResolvedValueOnce({ _tag: "Failure", cause: new Error("offline") });
-    await render("local");
-    expect(latest?.status).toBe("failed");
-    expect(latest?.error).toContain("Try again");
+    await _fixture.render("local");
+    expect(_fixture.latest?.status).toBe("failed");
+    expect(_fixture.latest?.error).toContain("Try again");
 
     await act(async () => {
-      await latest?.connect();
+      await _fixture.latest?.connect();
     });
     await act(async () => vi.advanceTimersByTimeAsync(0));
     expect(mocks.list).toHaveBeenCalledTimes(2);
-    expect(latest?.status).toBe("ready");
+    expect(_fixture.latest?.status).toBe("ready");
   });
 
   it("picks a sign-in back up after switching to another environment and back", async () => {
     await using _fixture = await setupTest();
 
-    await render("local");
-    expect(latest?.status).toBe("ready");
+    await _fixture.render("local");
+    expect(_fixture.latest?.status).toBe("ready");
     await act(async () => {
-      await latest?.connect();
+      await _fixture.latest?.connect();
     });
-    expect(latest?.status).toBe("waiting");
+    expect(_fixture.latest?.status).toBe("waiting");
 
-    await render("remote");
-    expect(latest?.status).toBe("ready");
-    expect(latest?.flow).toBeNull();
+    await _fixture.render("remote");
+    expect(_fixture.latest?.status).toBe("ready");
+    expect(_fixture.latest?.flow).toBeNull();
 
-    await render("local");
-    expect(latest?.status).toBe("waiting");
+    await _fixture.render("local");
+    expect(_fixture.latest?.status).toBe("waiting");
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
     expect(mocks.poll).toHaveBeenCalledWith({
       environmentId: "local",
       input: { id: "microsoft-365", flowId: "flow-1" },
     });
-    expect(latest?.status).toBe("connected");
+    expect(_fixture.latest?.status).toBe("connected");
   });
 
   it("keeps a finished sign-in when an older plugin list answers after it", async () => {
     await using _fixture = await setupTest();
 
-    await render("local");
+    await _fixture.render("local");
     await act(async () => {
-      await latest?.connect();
+      await _fixture.latest?.connect();
     });
-    await render("remote");
+    await _fixture.render("remote");
 
     // Coming back starts a fresh list that is slower than the resumed sign-in check.
     let answerList: (value: unknown) => void = () => {};
     mocks.list.mockReturnValueOnce(new Promise((resolve) => (answerList = resolve)));
-    await render("local");
+    await _fixture.render("local");
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
-    expect(latest?.status).toBe("connected");
+    expect(_fixture.latest?.status).toBe("connected");
 
     await act(async () =>
       answerList({ _tag: "Success", value: { integrations: [outlook("not_connected")] } }),
     );
-    expect(latest?.status).toBe("connected");
+    expect(_fixture.latest?.status).toBe("connected");
   });
 
   it("keeps a finished sign-in when an earlier attempt's poll answers late", async () => {
@@ -139,9 +115,9 @@ describe("useIntegrationConnection", () => {
 
     let answerFirstPoll: (value: unknown) => void = () => {};
     mocks.poll.mockReturnValueOnce(new Promise((resolve) => (answerFirstPoll = resolve)));
-    await render("local");
+    await _fixture.render("local");
     await act(async () => {
-      await latest?.connect();
+      await _fixture.latest?.connect();
     });
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
 
@@ -160,10 +136,10 @@ describe("useIntegrationConnection", () => {
       },
     });
     await act(async () => {
-      await latest?.connect();
+      await _fixture.latest?.connect();
     });
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
-    expect(latest?.status).toBe("connected");
+    expect(_fixture.latest?.status).toBe("connected");
 
     await act(async () =>
       answerFirstPoll({
@@ -176,8 +152,8 @@ describe("useIntegrationConnection", () => {
         },
       }),
     );
-    expect(latest?.status).toBe("connected");
-    expect(latest?.integration?.connectionState).toBe("connected");
+    expect(_fixture.latest?.status).toBe("connected");
+    expect(_fixture.latest?.integration?.connectionState).toBe("connected");
   });
 
   it("ignores a late answer for a sign-in that Start over replaced", async () => {
@@ -185,9 +161,9 @@ describe("useIntegrationConnection", () => {
 
     let answerFirstPoll: (value: unknown) => void = () => {};
     mocks.poll.mockReturnValueOnce(new Promise((resolve) => (answerFirstPoll = resolve)));
-    await render("local");
+    await _fixture.render("local");
     await act(async () => {
-      await latest?.connect();
+      await _fixture.latest?.connect();
     });
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
     expect(mocks.poll).toHaveBeenCalledTimes(1);
@@ -206,7 +182,7 @@ describe("useIntegrationConnection", () => {
       },
     });
     await act(async () => {
-      await latest?.connect();
+      await _fixture.latest?.connect();
     });
     await act(async () =>
       answerFirstPoll({
@@ -220,14 +196,46 @@ describe("useIntegrationConnection", () => {
       }),
     );
 
-    expect(latest?.status).toBe("waiting");
-    expect(latest?.flow?.kind === "device_code" ? latest.flow.userCode : null).toBe("WXYZ-9876");
-    expect(latest?.error).toBeNull();
+    expect(_fixture.latest?.status).toBe("waiting");
+    expect(
+      _fixture.latest?.flow?.kind === "device_code" ? _fixture.latest.flow.userCode : null,
+    ).toBe("WXYZ-9876");
+    expect(_fixture.latest?.error).toBeNull();
   });
 });
 
 async function setupTest() {
-  stack = new AsyncDisposableStack();
+  const stack = new AsyncDisposableStack();
+  let latest: IntegrationConnection | null = null;
+  function Probe({ environmentId }: { readonly environmentId: EnvironmentId }) {
+    const connection = useIntegrationConnection("microsoft-365", environmentId);
+    useEffect(() => {
+      latest = connection;
+    });
+    return null;
+  }
+
+  let container: HTMLElement;
+  let screen: Screen | undefined;
+
+  async function renderSubject(node: import("react").ReactNode) {
+    if (screen) await screen.rerender(node);
+    else {
+      screen = stack.use(
+        await renderUi(node, {
+          router: false /* These subjects use mocked navigation or no routing. */,
+        }),
+      );
+      container = screen.container;
+    }
+  }
+  const render = async (environmentId: string) => {
+    await act(async () =>
+      renderSubject(<Probe environmentId={EnvironmentId.make(environmentId)} />),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+  };
+
   screen = undefined;
   stack.use(fakeTimers());
   vi.clearAllMocks();
@@ -261,5 +269,31 @@ async function setupTest() {
   stack.defer(async () => {
     vi.useRealTimers();
   });
-  return stack;
+  return {
+    async [Symbol.asyncDispose]() {
+      await stack.disposeAsync();
+    },
+    stack,
+    get latest() {
+      return latest;
+    },
+    set latest(value: typeof latest) {
+      latest = value;
+    },
+    Probe,
+    get container() {
+      return container;
+    },
+    set container(value: typeof container) {
+      container = value;
+    },
+    get screen() {
+      return screen;
+    },
+    set screen(value: typeof screen) {
+      screen = value;
+    },
+    renderSubject,
+    render,
+  };
 }
