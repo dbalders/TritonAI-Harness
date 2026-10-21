@@ -572,7 +572,7 @@ export function buildIdeasPrompt(input: IdeasPromptInput) {
     `Return a JSON object with key ideas: a list of at most ${input.count} ideas.`,
     "Rules:",
     "- base every idea only on the context below; never invent people, files, numbers, dates, or events it does not show",
-    "- ref: exactly one reference id from the context (thread:, note:, file:, plugin:, skill:, or starter:) that the idea is mainly about",
+    "- ref: exactly one reference id from the context (thread:, note:, file:, plugin:, or skill:) that the idea is mainly about",
     "- topic: two to four lowercase words naming what the idea does, such as chart enrollment data",
     "- sources: every reference id the idea relies on, including ref",
     "- icon: one emoji that fits the task",
@@ -580,15 +580,21 @@ export function buildIdeasPrompt(input: IdeasPromptInput) {
     "- body: one or two sentences under 240 characters saying what you noticed and what you will do",
     "- action: resume-thread only when ref is a thread and the work continues in it; otherwise new-thread",
     "- projectId: the project id from the context the new thread belongs in, or an empty string when none fits",
-    "- prompt: the full message the user would send, written in first person as the user, self-contained and specific; when the user must supply something, such as text to paste, include a clear placeholder in square brackets",
+    "- prompt: the full message the user would send, written in first person as the user, self-contained and specific, naming the exact thread, file, workflow, mailbox search, or calendar range it works on",
+    "- every idea must be complete and ready to send as written: never leave a placeholder, blank, or square-bracketed part for the user to fill in, and never ask the user to paste, attach, describe, or choose something first; drop any idea that would need input the context does not contain",
     "- prefer open loops, unfinished threads, and recent files over generic ideas, and give each idea a different reference",
+    ...(input.project
+      ? []
+      : [
+          "- spread ideas across different projects and subjects; at most one idea per project, file, or workflow in a batch",
+        ]),
     "- mix ideas from the user's own work with ideas that show something TritonAI can do, following the preference weights",
-    "- use starter ideas when there is not enough personal context; you may adapt a starter to the user's projects and tools",
+    "- the kinds of help listed in the context are inspiration only: use one only when you can apply it to a real thread, note, file, or connected plugin from the context",
     "- never repeat or rephrase anything listed under Avoid",
     "- never include secrets, tokens, keys, or credentials",
     ...(input.project
       ? [
-          "For this request, the project-specific rules below take precedence over the general mix and starter rules above:",
+          "For this request, the project-specific rules below take precedence over the general mix and kinds-of-help rules above:",
           `- project: ${JSON.stringify(input.project)}; every idea must have this exact projectId`,
           "- also return description: one or two short sentences describing the project's purpose and current direction, at most 400 characters",
           "- suggest only useful next steps supported by this project's context; no starter, cross-project, or generic productivity ideas",

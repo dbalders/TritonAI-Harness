@@ -14,7 +14,7 @@ export const IDEA_SECTIONS: ReadonlyArray<IdeaSection> = [
 ];
 
 /** Sections built from the user's own threads, notes, and files. The rest are discovery. */
-export function isPersonalSection(section: IdeaSection): boolean {
+function isPersonalSection(section: IdeaSection): boolean {
   return section === "continue" || section === "projects";
 }
 
@@ -87,6 +87,51 @@ function titleWords(title: string): Set<string> {
       .split(/[^\p{L}\p{N}']+/u)
       .filter((word) => word.length > 0 && !STOP_WORDS.has(word)),
   );
+}
+
+// Blanks left for the user: `[your notes]` (but not a Markdown link), `<your file>`, `{{name}}`, `___`.
+const PLACEHOLDER = /\[[^\]\n]+\](?!\()|<[^<>\n]*\byour\b[^<>\n]*>|\{\{[^}\n]*\}\}|_{3,}/iu;
+
+/**
+ * Whether text leaves something for the user to fill in. An idea must be ready
+ * to send as written, so a card with a blank is never shown.
+ */
+export function hasPlaceholder(text: string): boolean {
+  return PLACEHOLDER.test(text);
+}
+
+/** At most this many visible ideas may be about the same project or the same tool. */
+const MAX_IDEAS_PER_SUBJECT = 2;
+
+/**
+ * What an idea is about for variety's sake: its project when it has one,
+ * otherwise what its key names without the topic, such as `plugin:n8n`.
+ */
+export function ideaSubject(key: string, projectId: string | null): string {
+  if (projectId !== null) return `project:${projectId}`;
+  const topic = key.indexOf("#");
+  return topic === -1 ? key : key.slice(0, topic);
+}
+
+/**
+ * Keeps candidates in order while no subject goes past the limit, counting the
+ * ideas already on the page, so one busy project can't fill the page.
+ */
+export function capBySubject<T extends { readonly subject: string }>(
+  candidates: ReadonlyArray<T>,
+  visibleSubjects: ReadonlyArray<string>,
+  limit: number = MAX_IDEAS_PER_SUBJECT,
+): T[] {
+  const counts = new Map<string, number>();
+  for (const subject of visibleSubjects) counts.set(subject, (counts.get(subject) ?? 0) + 1);
+  const kept: T[] = [];
+  for (const candidate of candidates) {
+    const count = counts.get(candidate.subject) ?? 0;
+    if (count >= limit) continue;
+    counts.set(candidate.subject, count + 1);
+    kept.push(candidate);
+  }
+  return kept;
 }
 
 /** Whether two titles say nearly the same thing, so a reworded repeat is caught. */

@@ -1,7 +1,15 @@
 import type { IdeaSection } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ideaKey, sectionWeights, selectByMix, similarTitles } from "./ideaRules.ts";
+import {
+  capBySubject,
+  hasPlaceholder,
+  ideaKey,
+  ideaSubject,
+  sectionWeights,
+  selectByMix,
+  similarTitles,
+} from "./ideaRules.ts";
 
 const EVEN: Record<IdeaSection, number> = {
   continue: 1,
@@ -105,5 +113,44 @@ describe("selectByMix", () => {
       { ...EVEN, continue: 2.5 },
     );
     expect(picked.filter((idea) => idea.section === "continue")).toHaveLength(4);
+  });
+});
+
+describe("hasPlaceholder", () => {
+  it("finds blanks left for the user", () => {
+    expect(hasPlaceholder("Meeting notes:\n[paste your notes here]")).toBe(true);
+    expect(hasPlaceholder("Review <your file name> for errors.")).toBe(true);
+    expect(hasPlaceholder("Email {{name}} today.")).toBe(true);
+    expect(hasPlaceholder("Due date: ____")).toBe(true);
+  });
+
+  it("allows complete prompts, including Markdown links", () => {
+    expect(hasPlaceholder("Compare course_main.csv with the October export.")).toBe(false);
+    expect(hasPlaceholder("Follow [the guide](https://example.edu/guide) to rerun it.")).toBe(
+      false,
+    );
+  });
+});
+
+describe("capBySubject", () => {
+  it("names a subject by project first, then by what the key is about", () => {
+    expect(ideaSubject("file:p1:data.csv", "p1")).toBe("project:p1");
+    expect(ideaSubject("plugin:n8n#check-runs", null)).toBe("plugin:n8n");
+    expect(ideaSubject("starter:focus-timer-page", null)).toBe("starter:focus-timer-page");
+  });
+
+  it("keeps any one subject to two visible ideas, counting what is already showing", () => {
+    const candidates = [
+      { subject: "project:p1", name: "a" },
+      { subject: "project:p1", name: "b" },
+      { subject: "plugin:n8n", name: "c" },
+      { subject: "plugin:n8n", name: "d" },
+      { subject: "plugin:n8n", name: "e" },
+    ];
+    expect(capBySubject(candidates, ["project:p1"]).map((entry) => entry.name)).toEqual([
+      "a",
+      "c",
+      "d",
+    ]);
   });
 });
