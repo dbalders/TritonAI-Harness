@@ -250,6 +250,7 @@ import {
 import * as Cause from "effect/Cause";
 import { isElectron } from "../env";
 import { desktopLocalBackendId, isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
+import { useGuidedTourChatGuide } from "./onboarding/GuidedTourChatGuide";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
@@ -7454,10 +7455,10 @@ export default function ChatView(props: ChatViewProps) {
 
   // Commands such as /compact and /goal clear run as their own turn. The draft
   // and its attachments stay local.
-  const sendStandaloneCommand = async (text: string, failureMessage: string) => {
-    if (!activeThread || !clientSettingsHydrated || sendInFlightRef.current) return;
+  const sendStandaloneCommand = async (text: string, failureMessage: string): Promise<boolean> => {
+    if (!activeThread || !clientSettingsHydrated || sendInFlightRef.current) return false;
     const context = composerRef.current?.getSendContext();
-    if (!context?.providerAvailable) return;
+    if (!context?.providerAvailable) return false;
 
     const threadId = activeThread.id;
     const messageId = newMessageId();
@@ -7511,14 +7512,18 @@ export default function ChatView(props: ChatViewProps) {
           const error = squashAtomCommandFailure(result);
           setThreadError(threadId, error instanceof Error ? error.message : failureMessage);
         }
-      } else {
-        clearUsageLimitsFor(routeThreadKey);
+        return false;
       }
+      clearUsageLimitsFor(routeThreadKey);
+      return true;
     } finally {
       sendInFlightRef.current = false;
     }
   };
   const sendStandaloneCommandStable = useStableCallback(sendStandaloneCommand);
+  const sendGuidedTourMessage = useStableCallback((text: string) =>
+    sendStandaloneCommand(text, "That didn't send. Try again, or type it below."),
+  );
   // A native /goal keeps the agent working across turns. Stop pauses a Codex
   // goal; once the thread is idle the row offers the native follow-ups.
   const [computerUseNotice, setComputerUseNotice] = useState<{
@@ -7821,12 +7826,23 @@ export default function ChatView(props: ChatViewProps) {
           },
         })
       : null;
+  const guidedTourBannerItem = useGuidedTourChatGuide({
+    environmentId,
+    threadId: activeThread?.id ?? null,
+    run: activeLatestRun,
+    isWorking,
+    hasPendingApproval: pendingApprovals.length > 0,
+    hasPendingQuestion: pendingUserInputs.length > 0,
+    timelineEntries,
+    send: sendGuidedTourMessage,
+  });
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const backgroundWorkItems = [
       childInputBannerItem,
       goalBannerItem,
       backgroundWorkBannerItem,
+      guidedTourBannerItem,
     ].filter((item) => item !== null);
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
@@ -7900,6 +7916,7 @@ export default function ChatView(props: ChatViewProps) {
     backgroundWorkBannerItem,
     childInputBannerItem,
     goalBannerItem,
+    guidedTourBannerItem,
     localCheckoutBranchMismatch,
     projectCloneBannerItem,
     showBranchMismatchBanner,
