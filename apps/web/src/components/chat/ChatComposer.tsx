@@ -2716,6 +2716,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const mobileComposerExpandReleaseFrameRef = useRef<number | null>(null);
   const mobileComposerExpandInFlightRef = useRef(false);
   const voiceRecorderRef = useRef<VoiceRecorderSession | null>(null);
+  const voiceProcessingAbortRef = useRef<AbortController | null>(null);
   const voiceVolumeUnsubscribeRef = useRef<(() => void) | null>(null);
   const voiceReadyTimeoutRef = useRef<number | null>(null);
   const voiceStartTokenRef = useRef(0);
@@ -3780,6 +3781,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useEffect(() => {
     return () => {
       voiceStartTokenRef.current += 1;
+      voiceProcessingAbortRef.current?.abort();
       voiceStartInFlightRef.current = false;
       voiceVolumeUnsubscribeRef.current?.();
       voiceVolumeUnsubscribeRef.current = null;
@@ -4622,6 +4624,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     voiceDraftTargetKeyRef.current = composerDraftKey;
     voiceStartTokenRef.current += 1;
+    voiceProcessingAbortRef.current?.abort();
+    voiceProcessingAbortRef.current = null;
     voiceStartInFlightRef.current = false;
     voiceRecordingTargetKeyRef.current = null;
     clearVoiceReadyTimeout();
@@ -4764,6 +4768,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return false;
       };
       setVoiceStatus("processing");
+      const processingAbort = new AbortController();
+      voiceProcessingAbortRef.current = processingAbort;
       setVoiceError(null);
       setVoiceElapsedSeconds(0);
       setVoiceActivityLevels(createVoiceWaveformLevels());
@@ -4782,6 +4788,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             return result.value;
           },
           voiceSettings,
+          { signal: processingAbort.signal },
         );
         if (!isCurrentVoiceTarget()) {
           return discardStaleVoiceResult();
@@ -4813,6 +4820,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         }
         showVoiceError(error);
         return false;
+      } finally {
+        if (voiceProcessingAbortRef.current === processingAbort) {
+          voiceProcessingAbortRef.current = null;
+        }
       }
     },
     [
