@@ -6,9 +6,9 @@ import {
   gateDynamicToolCall,
   dynamicToolApprovalRequired,
   dynamicToolInvocationAllowed,
+  dynamicToolApprovalPrompt,
   dynamicToolResponse,
-  dynamicToolFailureResponse,
-  dynamicToolResultResponse,
+  invokeAdmittedDynamicTool,
   reconcilePluginSkillAvailability,
   withPluginSkillLease,
   type CodexPluginSkillDefinition,
@@ -5396,7 +5396,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 nativeItemId: payload.callId,
                 nativeRequestId: payload.callId,
                 requestKind: "permission",
-                prompt: `Allow ${payload.tool} to make this change?`,
+                prompt: dynamicToolApprovalPrompt(payload),
               });
               const deferred = yield* Deferred.make<ProviderApprovalDecision>();
               yield* Ref.update(pendingRuntimeRequests, (current) =>
@@ -5436,21 +5436,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
             if (!dynamicToolInvocationAllowed(gate.definition.requiresApproval, decision))
               return dynamicToolResponse(false, "The user declined this tool call.");
-            return yield* Effect.tryPromise((signal) =>
-              catalog.options.invokeDynamicTool!({
+            return yield* invokeAdmittedDynamicTool({
+              options: catalog.options,
+              invocation: {
                 name: payload.tool,
                 arguments: payload.arguments,
-                signal,
                 ...(gate.definition.requiresApproval ? { writeApproved: true } : {}),
-              }),
-            ).pipe(
-              Effect.map(
-                (value) =>
-                  dynamicToolResultResponse(value) ??
-                  dynamicToolResponse(false, "The tool returned an invalid result."),
-              ),
-              Effect.catch((cause) => Effect.succeed(dynamicToolFailureResponse(cause))),
-            );
+              },
+            });
           }).pipe(Effect.orDie),
         );
 
