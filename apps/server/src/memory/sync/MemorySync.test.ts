@@ -483,7 +483,7 @@ const FOLDER = "teams/grant-reports-3f2a1c";
 const TEAM_NOTE = `${FOLDER}/Memory/author/device/record.md`;
 
 /** One team's folder as the Teams side would report it; tests change it between passes. */
-const fakeTeamSource = () => {
+const fakeTeamSource = (folder = FOLDER.slice("teams/".length)) => {
   const state = {
     kept: true,
     files: new Map<string, { eTag: string; text: string }>(),
@@ -498,9 +498,7 @@ const fakeTeamSource = () => {
     skippedPaths: new Set<string>(),
   };
   const source: TeamMirrorSource = {
-    teams: Effect.sync(() =>
-      state.kept ? [{ teamId: "team-1", folder: FOLDER.slice("teams/".length) }] : [],
-    ),
+    teams: Effect.sync(() => (state.kept ? [{ teamId: "team-1", folder }] : [])),
     list: () =>
       Effect.sync(() => {
         state.lists++;
@@ -1578,25 +1576,47 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
       }),
   );
 
-  it.effect.each(["files", "detached"] as const)(
-    "does not adopt or remove an unrecorded folder at the next copy's path (%s)",
-    (kind) =>
+  it.effect.each([
+    { folder: "grant-reports-3f2a1c", kind: "files" },
+    { folder: "grant-reports-3f2a1c", kind: "detached" },
+    { folder: "constructor", kind: "files" },
+    { folder: "constructor", kind: "detached" },
+  ] as const)(
+    "does not adopt or remove an unrecorded folder at the next copy's path ($folder, $kind)",
+    ({ folder, kind }) =>
       Effect.gen(function* () {
         const mac = yield* setup(new FakeOneDrive(), MAC);
-        const team = fakeTeamSource();
+        const team = fakeTeamSource(folder);
         const file = "Memory/a/d/personal.md";
-        yield* mac.write(`${FOLDER}/${file}`, "Pre-existing personal note");
+        const relative = `teams/${folder}/${file}`;
+        yield* mac.write(relative, "Pre-existing personal note");
         team.files.set(file, { eTag: "e1", text: "Team copy" });
         if (kind === "detached") team.listing = { kind: "detached" };
         const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
         yield* sync.teams.attach(team.source);
         yield* sync.teams.sync;
-        assert.strictEqual(yield* mac.read(`${FOLDER}/${file}`), "Pre-existing personal note");
+        assert.strictEqual(yield* mac.read(relative), "Pre-existing personal note");
         assert.deepInclude(team.reports.at(-1), { kind: "failed" });
         team.kept = false;
         yield* sync.teams.prune;
-        assert.strictEqual(yield* mac.read(`${FOLDER}/${file}`), "Pre-existing personal note");
+        assert.strictEqual(yield* mac.read(relative), "Pre-existing personal note");
       }),
+  );
+
+  it.effect("records and prunes a newly created copy named constructor", () =>
+    Effect.gen(function* () {
+      const mac = yield* setup(new FakeOneDrive(), MAC);
+      const team = fakeTeamSource("constructor");
+      const relative = "teams/constructor/Memory/a/d/note.md";
+      team.files.set("Memory/a/d/note.md", { eTag: "e1", text: "Recorded copy" });
+      const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+      yield* sync.teams.attach(team.source);
+      yield* sync.teams.sync;
+      assert.strictEqual(yield* mac.read(relative), "Recorded copy");
+      team.kept = false;
+      yield* sync.teams.prune;
+      assert.isNull(yield* mac.read(relative));
+    }),
   );
 
   it.effect("ignores ownership entries outside the team-copy namespace", () =>

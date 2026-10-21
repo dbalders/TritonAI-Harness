@@ -844,7 +844,7 @@ export const make = Effect.gen(function* () {
     );
 
   const removeTeamCopy = (folder: string, teams: Record<string, TeamMirrorEntry>) =>
-    teams[folder]
+    Object.hasOwn(teams, folder)
       ? fs.remove(path.join(teamsDirectory, folder), { recursive: true }).pipe(
           Effect.catchIf(isNotFound, () => Effect.void),
           Effect.mapError(
@@ -894,7 +894,10 @@ export const make = Effect.gen(function* () {
     teams: Record<string, TeamMirrorEntry>,
   ) {
     // A missing or unreadable journal cannot make existing user content ours.
-    if (!teams[team.folder] && (yield* fs.exists(path.join(teamsDirectory, team.folder)))) {
+    if (
+      !Object.hasOwn(teams, team.folder) &&
+      (yield* fs.exists(path.join(teamsDirectory, team.folder)))
+    ) {
       return yield* source.report(team.teamId, {
         kind: "failed",
         message: `A folder already exists at teams/${team.folder}, and Harness can't confirm it is a team copy. Move it somewhere safe, then choose Check again.`,
@@ -931,12 +934,14 @@ export const make = Effect.gen(function* () {
       const bytes = yield* readLocal(relativePath);
       if (bytes !== null) local.set(relativePath, { sha256: sha256Bytes(bytes) });
     }
-    const entry = teams[team.folder] ?? {
-      teamId: team.teamId,
-      synced: {},
-      skippedReads: {},
-      pendingDownloads: {},
-    };
+    const entry = Object.hasOwn(teams, team.folder)
+      ? teams[team.folder]!
+      : {
+          teamId: team.teamId,
+          synced: {},
+          skippedReads: {},
+          pendingDownloads: {},
+        };
     teams[team.folder] = entry;
     for (const [relativePath, pending] of Object.entries(entry.pendingDownloads)) {
       if (!listed(relativePath)) continue;
