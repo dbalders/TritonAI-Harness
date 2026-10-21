@@ -3,6 +3,7 @@ import Migration0068 from "./Migrations/068_ProjectBriefs.ts";
 import Migration0069 from "./Migrations/069_ProjectBriefDispatches.ts";
 import Migration0070 from "./Migrations/070_ProjectBriefArchives.ts";
 import Migration0071 from "./Migrations/071_ProjectOverviews.ts";
+import Migration0072 from "./Migrations/072_ProjectNextStepDismissals.ts";
 /**
  * Migration runner with an inline loader.
  *
@@ -174,6 +175,7 @@ export const migrationEntries = [
   [69, "ProjectBriefDispatches", Migration0069],
   [70, "ProjectBriefArchives", Migration0070],
   [71, "ProjectOverviews", Migration0071],
+  [72, "ProjectNextStepDismissals", Migration0072],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
