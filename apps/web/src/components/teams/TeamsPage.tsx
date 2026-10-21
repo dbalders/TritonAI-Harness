@@ -332,11 +332,14 @@ export function TeamWorkspace({
 }) {
   const execute = useTeamsCommand(environmentId);
   const controller = useTeamsController(environmentId, profile)!;
-  const { result, busy, error } = useSyncExternalStore(
-    controller.subscribe,
-    controller.getSnapshot,
-  );
+  const {
+    result,
+    busy: requesting,
+    error,
+    creation: creatingTeam,
+  } = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   useEffect(() => controller.activate(), [controller]);
+  const busy = requesting || creatingTeam !== null;
   const copies = useTeamMemoryCopies(environmentId);
   const { apply: applyCopies } = copies;
   const [name, setName] = useState("");
@@ -354,7 +357,15 @@ export function TeamWorkspace({
   const ready = team?.state === "ready" && !busy;
   const run = (command: TeamCommand) => {
     setCopied(null);
-    return controller.run(command);
+    const checkingCreation =
+      command.action === "create" || controller.getSnapshot().creation !== null;
+    return controller.run(command).then((ok) => {
+      if (ok && checkingCreation) {
+        setName("");
+        creation.current = null;
+      }
+      return ok;
+    });
   };
   const account = accountKey(profile);
   // Role picks are staged per team revision; only a confirmed review sends one.
@@ -464,10 +475,22 @@ export function TeamWorkspace({
         <h3 className="font-medium">Your teams</h3>
         <Button
           variant="outline"
-          disabled={busy}
-          onClick={() => void run(team ? { action: "get", teamId: team.id } : { action: "list" })}
+          disabled={requesting}
+          onClick={() =>
+            void run(
+              team && !creatingTeam ? { action: "get", teamId: team.id } : { action: "list" },
+            )
+          }
         >
-          {busy ? "Working…" : "Refresh teams"}
+          {creatingTeam
+            ? requesting
+              ? creatingTeam.phase === "creating"
+                ? "Creating…"
+                : "Checking…"
+              : "Check creation status"
+            : busy
+              ? "Working…"
+              : "Refresh teams"}
         </Button>
       </div>
       {error ? (
@@ -478,6 +501,15 @@ export function TeamWorkspace({
           {error}
         </p>
       ) : null}
+      {creatingTeam ? (
+        <p role="status" className="rounded-lg border border-border p-3 text-sm">
+          {creatingTeam.phase === "creating"
+            ? `Creating “${creatingTeam.name}”…`
+            : creatingTeam.phase === "checking"
+              ? `Setting up “${creatingTeam.name}”… We’re checking when your team is ready.`
+              : `We haven’t confirmed that “${creatingTeam.name}” is ready yet. It may still be setting up. Check its status before creating another team.`}
+        </p>
+      ) : null}
       {result ? (
         <>
           <form
@@ -485,15 +517,11 @@ export function TeamWorkspace({
             onSubmit={(event) => {
               event.preventDefault();
               const clean = name.trim();
-              if (!clean) return;
+              if (!clean || controller.getSnapshot().busy || controller.getSnapshot().creation)
+                return;
               if (creation.current?.name !== clean)
                 creation.current = { name: clean, requestId: crypto.randomUUID() };
-              void run({ action: "create", ...creation.current }).then((ok) => {
-                if (ok) {
-                  setName("");
-                  creation.current = null;
-                }
-              });
+              void run({ action: "create", ...creation.current });
             }}
           >
             <label className="min-w-48 flex-1 text-sm">
@@ -501,14 +529,19 @@ export function TeamWorkspace({
               <Input
                 className="mt-1"
                 value={name}
+                disabled={busy || creatingTeam !== null}
                 onChange={(event) => setName(event.target.value)}
                 maxLength={80}
                 placeholder="e.g. Finance Operations"
                 required
               />
             </label>
-            <Button type="submit" disabled={busy || !name.trim()}>
-              Create team
+            <Button type="submit" disabled={busy || creatingTeam !== null || !name.trim()}>
+              {creatingTeam
+                ? creatingTeam.phase === "unconfirmed"
+                  ? "Awaiting confirmation"
+                  : "Creating…"
+                : "Create team"}
             </Button>
           </form>
           {result.teams.length ? (
@@ -538,11 +571,11 @@ export function TeamWorkspace({
                 </button>
               ))}
             </div>
-          ) : (
+          ) : !busy && !creatingTeam && !error ? (
             <p className="py-3 text-sm text-muted-foreground">
               You haven’t joined a team yet. Create one or accept an invitation below.
             </p>
-          )}
+          ) : null}
           <TeamMemoryCopyList copies={copies} />
           {result.invitations.length ? (
             <section className="rounded-xl border border-border p-4">
@@ -669,6 +702,10 @@ export function TeamWorkspace({
               available in Harness, and projects linked to it were unlinked. Its files are kept
               under UC San Diego’s retention policy; ask a system administrator, with the team
               reference above, if you need them.
+            </p>
+          ) : team.state === "provisioning" ? (
+            <p role="status" className="text-sm">
+              Your team’s private folder is being set up.
             </p>
           ) : team.state !== "ready" ? (
             <p role="status" className="text-sm">

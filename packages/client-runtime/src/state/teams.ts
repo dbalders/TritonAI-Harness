@@ -9,6 +9,10 @@ export interface TeamsState {
   readonly result: TeamsResult | null;
   readonly busy: boolean;
   readonly error: string | null;
+  readonly creation: {
+    readonly name: string;
+    readonly phase: "creating" | "checking" | "unconfirmed";
+  } | null;
 }
 
 /**
@@ -17,24 +21,115 @@ export interface TeamsState {
  */
 export function createTeamsController(
   execute: (command: TeamCommand) => Promise<TeamsResult>,
-  now: () => number = Date.now,
+  // @effect-diagnostics-next-line globalDate:off -- UI recovery uses the browser clock, injectable in tests.
+  now: () => number = () => Date.now(),
 ) {
-  let state: TeamsState = { result: null, busy: false, error: null };
+  let state: TeamsState = { result: null, busy: false, error: null, creation: null };
   let generation = 0;
   let active = false;
   let users = 0;
   let workspaces = 0;
   let pendingAction: TeamCommand["action"] | null = null;
   let listedAt = -Infinity;
+  let pendingCreation: {
+    command: Extract<TeamCommand, { action: "create" }>;
+    teamId: string | null;
+  } | null = null;
+  let cancelCheck: (() => void) | null = null;
   const listeners = new Set<() => void>();
   const publish = (value: Partial<TeamsState>) => {
     state = { ...state, ...value };
     for (const listener of listeners) listener();
   };
+  const failed = (error: unknown) => {
+    pendingAction = null;
+    pendingCreation = null;
+    publish({
+      // A transport failure does not revoke the account's last confirmed data.
+      result:
+        error instanceof Error &&
+        "code" in error &&
+        ["unavailable", "conflict", "invalid_request"].includes(String(error.code))
+          ? state.result
+          : null,
+      busy: false,
+      creation: null,
+      error: error instanceof Error ? error.message : "Teams could not be reached.",
+    });
+  };
+  const checkCreation = async (request: number): Promise<boolean> => {
+    const current = () => active && generation === request;
+    const pending = pendingCreation;
+    if (!pending || !current()) return false;
+    const deadline = now() + 60_000;
+    while (current() && now() < deadline) {
+      try {
+        // Create is idempotent for this exact request ID. Its replay identifies the
+        // team even when the first response was lost; never match a team by name.
+        const result = await execute(
+          pending.teamId ? { action: "get", teamId: pending.teamId } : pending.command,
+        );
+        if (!active || generation !== request) return false;
+        if (result.team) {
+          pending.teamId = result.team.id;
+          if (result.team.state !== "provisioning") {
+            pendingCreation = null;
+            pendingAction = null;
+            publish({ result, busy: false, creation: null, error: null });
+            return true;
+          }
+          publish({ result });
+        }
+      } catch (error) {
+        if (!active || generation !== request) return false;
+        if (!(error instanceof Error && "code" in error && error.code === "unavailable")) {
+          failed(error);
+          return false;
+        }
+      }
+      if (!current()) return false;
+      publish({ creation: { name: pending.command.name, phase: "checking" } });
+      await new Promise<void>((resolve) => {
+        // @effect-diagnostics-next-line globalTimers:off -- Canceled with the owning browser account/view.
+        const timer = setTimeout(
+          () => {
+            cancelCheck = null;
+            resolve();
+          },
+          Math.min(2_000, deadline - now()),
+        );
+        cancelCheck = () => {
+          clearTimeout(timer);
+          cancelCheck = null;
+          resolve();
+        };
+      });
+    }
+    if (current()) {
+      pendingAction = null;
+      publish({ busy: false, creation: { name: pending.command.name, phase: "unconfirmed" } });
+    }
+    return false;
+  };
   const run = async (command: TeamCommand): Promise<boolean> => {
     if (!active || state.busy) return false;
+    // While an earlier creation is unconfirmed, only checking its exact request
+    // may proceed. A new request ID could create a duplicate after a lost reply.
+    if (pendingCreation && command.action !== "list") return false;
     const request = ++generation;
-    pendingAction = command.action;
+    pendingAction = pendingCreation || command.action === "create" ? "create" : command.action;
+    if (command.action === "create") pendingCreation = { command, teamId: null };
+    if (pendingCreation) {
+      publish({
+        busy: true,
+        error: null,
+        creation: {
+          name: pendingCreation.command.name,
+          phase: command.action === "create" ? "creating" : "checking",
+        },
+      });
+      return checkCreation(request);
+    }
     if (command.action === "list") listedAt = now();
     publish({ busy: true, error: null });
     try {
@@ -44,21 +139,7 @@ export function createTeamsController(
       publish({ result, busy: false });
       return true;
     } catch (error) {
-      if (active && generation === request) {
-        pendingAction = null;
-        publish({
-          // Keep the mounted editor through retryable failures; confirmed access
-          // failures and account teardown still discard all private state.
-          result:
-            error instanceof Error &&
-            "code" in error &&
-            ["unavailable", "conflict", "invalid_request"].includes(String(error.code))
-              ? state.result
-              : null,
-          busy: false,
-          error: error instanceof Error ? error.message : "Teams could not be reached.",
-        });
-      }
+      if (active && generation === request) failed(error);
       return false;
     }
   };
@@ -74,10 +155,14 @@ export function createTeamsController(
     activate(view: "workspace" | "indicator" = "workspace") {
       if (users++ === 0) {
         active = true;
-        publish({ result: null, busy: false, error: null });
+        publish({ result: null, busy: false, error: null, creation: null });
       }
       if (view === "workspace") workspaces++;
-      if (state.result === null) void run({ action: "list" });
+      if (
+        state.result === null ||
+        (view === "workspace" && state.creation?.phase === "unconfirmed")
+      )
+        void run({ action: "list" });
       let stopped = false;
       return () => {
         if (stopped) return;
@@ -91,18 +176,24 @@ export function createTeamsController(
             if (cancelRequest) {
               generation++;
               pendingAction = null;
+              cancelCheck?.();
             }
             publish({
               result: state.result && { ...state.result, team: null, invitationCode: null },
               ...(cancelRequest ? { busy: false } : {}),
+              creation: pendingCreation
+                ? { name: pendingCreation.command.name, phase: "unconfirmed" }
+                : null,
             });
           }
           return;
         }
         generation++;
         pendingAction = null;
+        cancelCheck?.();
         active = false;
-        publish({ result: null, busy: false, error: null });
+        pendingCreation = null;
+        publish({ result: null, busy: false, error: null, creation: null });
       };
     },
     /**
@@ -110,7 +201,8 @@ export function createTeamsController(
      * follow existing account checks instead of its own polling.
      */
     refreshList(maxAgeMs: number) {
-      if (state.result?.team || now() - listedAt < maxAgeMs) return Promise.resolve(false);
+      if (state.creation || state.result?.team || now() - listedAt < maxAgeMs)
+        return Promise.resolve(false);
       return run({ action: "list" });
     },
     run,

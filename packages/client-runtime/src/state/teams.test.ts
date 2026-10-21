@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { TeamsError, type TeamsResult, type TeamStorageStatus } from "@t3tools/contracts";
 import {
   createTeamsController,
@@ -19,6 +19,221 @@ const openedTeam: NonNullable<TeamsResult["team"]> = {
   invitations: [],
   storage: null,
 };
+describe("team creation recovery", () => {
+  const create = {
+    action: "create",
+    name: "Finance",
+    requestId: "11111111-2222-4333-8444-555555555555",
+  } as const;
+  const unavailable = () => new TeamsError({ code: "unavailable", message: "Request timed out" });
+  const created = (state: "provisioning" | "ready" | "needs-attention"): TeamsResult => ({
+    ...empty,
+    teams: [{ ...openedTeam, name: create.name, state }],
+    team: { ...openedTeam, name: create.name, state },
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps creation running when a sidebar indicator closes", async () => {
+    const pending = Promise.withResolvers<TeamsResult>();
+    const execute = vi.fn().mockResolvedValueOnce(empty).mockReturnValueOnce(pending.promise);
+    const controller = createTeamsController(execute);
+    const stopPage = controller.activate();
+    await Promise.resolve();
+    const stopIndicator = controller.activate("indicator");
+    const completion = controller.run(create);
+    stopIndicator();
+    expect(controller.getSnapshot()).toMatchObject({ busy: true, creation: { phase: "creating" } });
+    pending.resolve(created("ready"));
+    expect(await completion).toBe(true);
+    expect(controller.getSnapshot()).toMatchObject({
+      busy: false,
+      creation: null,
+      result: { team: { state: "ready" } },
+    });
+    stopPage();
+  });
+
+  it("keeps creation pending after a lost response, reuses its request ID, and follows that team to ready", async () => {
+    vi.useFakeTimers();
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(empty)
+      .mockRejectedValueOnce(unavailable())
+      .mockResolvedValueOnce(created("provisioning"))
+      .mockResolvedValueOnce(created("ready"));
+    const controller = createTeamsController(execute);
+    const stop = controller.activate();
+    await Promise.resolve();
+    const states: ReturnType<typeof controller.getSnapshot>[] = [];
+    controller.subscribe(() => states.push(controller.getSnapshot()));
+    const completion = controller.run(create);
+    expect(controller.getSnapshot()).toMatchObject({
+      busy: true,
+      creation: { name: "Finance", phase: "creating" },
+    });
+    expect(await controller.run(create)).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(controller.getSnapshot()).toMatchObject({
+      busy: true,
+      error: null,
+      creation: { phase: "checking" },
+      result: { team: { state: "provisioning" } },
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await completion).toBe(true);
+    expect(execute.mock.calls.map(([command]) => command)).toEqual([
+      { action: "list" },
+      create,
+      create,
+      { action: "get", teamId: openedTeam.id },
+    ]);
+    expect(states.every((state) => state.error === null)).toBe(true);
+    expect(states.slice(0, -1).every((state) => state.busy)).toBe(true);
+    expect(controller.getSnapshot()).toMatchObject({
+      busy: false,
+      creation: null,
+      result: created("ready"),
+    });
+    stop();
+  });
+
+  it("stops automatic checks after a minute without calling the creation failed or allowing duplicates", async () => {
+    vi.useFakeTimers();
+    const execute = vi.fn().mockResolvedValueOnce(empty).mockRejectedValue(unavailable());
+    const controller = createTeamsController(execute);
+    const stop = controller.activate();
+    await Promise.resolve();
+    const completion = controller.run(create);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await completion).toBe(false);
+    expect(controller.getSnapshot()).toMatchObject({
+      busy: false,
+      error: null,
+      creation: { name: "Finance", phase: "unconfirmed" },
+    });
+    const calls = execute.mock.calls.length;
+    expect(await controller.run({ ...create, requestId: "another-request" })).toBe(false);
+    expect(execute).toHaveBeenCalledTimes(calls);
+    execute.mockResolvedValueOnce(created("ready"));
+    expect(await controller.run({ action: "list" })).toBe(true);
+    expect(execute.mock.calls.at(-1)?.[0]).toEqual(create);
+    expect(controller.getSnapshot().creation).toBeNull();
+    stop();
+  });
+
+  it("cancels scheduled checks on sign-out and discards a late creation result", async () => {
+    vi.useFakeTimers();
+    const late = Promise.withResolvers<TeamsResult>();
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(empty)
+      .mockRejectedValueOnce(unavailable())
+      .mockReturnValueOnce(late.promise);
+    const controller = createTeamsController(execute);
+    const stop = controller.activate();
+    await Promise.resolve();
+    const completion = controller.run(create);
+    await vi.advanceTimersByTimeAsync(2_000);
+    stop();
+    late.resolve(created("ready"));
+    expect(await completion).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(controller.getSnapshot()).toMatchObject({
+      result: null,
+      busy: false,
+      creation: null,
+      error: null,
+    });
+  });
+
+  it("shows a confirmed validation failure without retrying it", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(empty)
+      .mockRejectedValueOnce(
+        new TeamsError({ code: "invalid_request", message: "Choose another name" }),
+      );
+    const controller = createTeamsController(execute);
+    const stop = controller.activate();
+    await Promise.resolve();
+    expect(await controller.run(create)).toBe(false);
+    expect(controller.getSnapshot()).toMatchObject({
+      busy: false,
+      creation: null,
+      error: "Choose another name",
+    });
+    expect(execute).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
+  it("keeps a confirmed team needing attention distinct from a transport failure", async () => {
+    vi.useFakeTimers();
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(empty)
+      .mockRejectedValueOnce(unavailable())
+      .mockResolvedValueOnce(created("needs-attention"));
+    const controller = createTeamsController(execute);
+    const stop = controller.activate();
+    await Promise.resolve();
+    const completion = controller.run(create);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await completion).toBe(true);
+    expect(controller.getSnapshot()).toMatchObject({
+      busy: false,
+      error: null,
+      creation: null,
+      result: { team: { state: "needs-attention" } },
+    });
+    stop();
+  });
+
+  it("cancels the recovery timer when the account closes", async () => {
+    vi.useFakeTimers();
+    const execute = vi.fn().mockResolvedValueOnce(empty).mockRejectedValueOnce(unavailable());
+    const controller = createTeamsController(execute);
+    const stop = controller.activate();
+    await Promise.resolve();
+    const completion = controller.run(create);
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+    expect(await completion).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("resumes the same pending creation when the page reopens while the sidebar keeps the account active", async () => {
+    vi.useFakeTimers();
+    const execute = vi.fn().mockResolvedValue(empty);
+    const controller = createTeamsController(execute);
+    const stopSidebar = controller.activate("indicator");
+    await Promise.resolve();
+    const stopPage = controller.activate();
+    await Promise.resolve();
+    execute.mockRejectedValueOnce(unavailable());
+    const completion = controller.run(create);
+    await vi.advanceTimersByTimeAsync(0);
+    stopPage();
+    expect(await completion).toBe(false);
+    expect(controller.getSnapshot()).toMatchObject({
+      busy: false,
+      creation: { phase: "unconfirmed" },
+    });
+    expect(await controller.refreshList(0)).toBe(false);
+    execute.mockResolvedValueOnce(created("ready"));
+    const stopReopened = controller.activate();
+    await Promise.resolve();
+    expect(execute.mock.calls.at(-1)?.[0]).toEqual(create);
+    expect(controller.getSnapshot()).toMatchObject({
+      creation: null,
+      result: { team: { state: "ready" } },
+    });
+    stopReopened();
+    stopSidebar();
+  });
+});
 describe("team account lifecycle", () => {
   it("retains the selected team through a temporary refresh failure and clears it on revocation", async () => {
     const pending = Promise.withResolvers<TeamsResult>();
@@ -61,7 +276,12 @@ describe("team account lifecycle", () => {
     stop();
     pending.resolve({ ...empty, invitationCode: "sensitive" });
     await pending.promise;
-    expect(controller.getSnapshot()).toEqual({ result: null, busy: false, error: null });
+    expect(controller.getSnapshot()).toEqual({
+      result: null,
+      busy: false,
+      error: null,
+      creation: null,
+    });
   });
   it("serializes requests and clears stale data after access errors", async () => {
     const pending = Promise.withResolvers<TeamsResult>();
@@ -81,6 +301,7 @@ describe("team account lifecycle", () => {
       result: null,
       busy: false,
       error: "Access revoked",
+      creation: null,
     });
   });
 });
@@ -180,7 +401,12 @@ describe("pending invitation count", () => {
     expect(execute).toHaveBeenCalledTimes(2);
     stopSidebar();
     stopSidebar();
-    expect(controller.getSnapshot()).toEqual({ result: opened, busy: false, error: null });
+    expect(controller.getSnapshot()).toEqual({
+      result: opened,
+      busy: false,
+      error: null,
+      creation: null,
+    });
     stopPage();
     expect(controller.getSnapshot().result).toBeNull();
   });
@@ -208,7 +434,12 @@ describe("pending invitation count", () => {
     const confirmed = { ...opened, invitationCode: "triton-team:new-code" };
     pending.resolve(confirmed);
     expect(await result).toBe(true);
-    expect(controller.getSnapshot()).toEqual({ result: confirmed, busy: false, error: null });
+    expect(controller.getSnapshot()).toEqual({
+      result: confirmed,
+      busy: false,
+      error: null,
+      creation: null,
+    });
     stopPage();
   });
 

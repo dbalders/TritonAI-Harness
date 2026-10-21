@@ -134,6 +134,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 async function renderWorkspace() {
@@ -155,6 +156,82 @@ const buttonNamed = (text: string) =>
     (entry) => entry.textContent?.trim() === text,
   );
 const press = (element: HTMLElement | undefined) => act(async () => element!.click());
+
+const createTeam = async (name: string) => {
+  const input = document.querySelector<HTMLInputElement>(
+    'input[placeholder="e.g. Finance Operations"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, name);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    input.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  return input;
+};
+
+it("keeps creation visible through a timeout and shows the ready team without a manual refresh", async () => {
+  vi.useFakeTimers();
+  mocks.reply = () => ({ teams: [], invitations: [], team: null, invitationCode: null });
+  await renderWorkspace();
+  let finish: (value: TeamsResult | TeamsError) => void = () => {};
+  const first = new Promise<TeamsResult | TeamsError>((resolve) => (finish = resolve));
+  let attempts = 0;
+  mocks.reply = (command) => {
+    if (command.action === "create") {
+      if (++attempts === 1) return first;
+      const ready = teamResult(3);
+      return {
+        ...ready,
+        teams: ready.teams.map((team) => ({ ...team, state: "provisioning" })),
+        team: { ...ready.team!, state: "provisioning" },
+      };
+    }
+    return teamResult(3);
+  };
+  const input = await createTeam("Alpha");
+  expect(input.disabled).toBe(true);
+  expect(container.textContent).toContain("Creating “Alpha”…");
+  expect(container.textContent).not.toContain("You haven’t joined a team yet");
+  expect(mocks.calls).toHaveLength(1);
+  await act(async () => finish(new TeamsError({ code: "unavailable", message: "Timed out" })));
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(container.textContent).toContain("Setting up “Alpha”…");
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+  expect(container.textContent).toContain("Your team’s private folder is being set up.");
+  expect(container.textContent).not.toContain("permissions need to be verified");
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+  expect(container.textContent).toContain("The private team folder is ready.");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(input.value).toBe("");
+  expect(input.disabled).toBe(false);
+  expect(mocks.calls[1]).toEqual(mocks.calls[0]);
+  expect(mocks.calls[2]).toEqual({ action: "get", teamId: TEAM_ID });
+});
+
+it("offers an explicit status check without an empty-state or failure message when creation stays unconfirmed", async () => {
+  vi.useFakeTimers();
+  mocks.reply = () => ({ teams: [], invitations: [], team: null, invitationCode: null });
+  await renderWorkspace();
+  mocks.reply = () => new TeamsError({ code: "unavailable", message: "Timed out" });
+  const input = await createTeam("Alpha");
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  expect(container.textContent).toContain("We haven’t confirmed that “Alpha” is ready yet.");
+  expect(container.textContent).not.toContain("You haven’t joined a team yet");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(input.disabled).toBe(true);
+  const check = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Check creation status",
+  );
+  expect(check?.disabled).toBe(false);
+  mocks.reply = () => teamResult(3);
+  await press(check);
+  expect(container.textContent).toContain("The private team folder is ready.");
+  expect(input.value).toBe("");
+  expect(input.disabled).toBe(false);
+  expect(mocks.calls.at(-1)).toEqual(mocks.calls[0]);
+});
 
 it("marks your own row, gives each action its target, and routes your removal through Leave", async () => {
   await renderWorkspace();
