@@ -57,6 +57,7 @@ import { localDayAt } from "../memory/memoryDays.ts";
 import { findMemoryDevice, generalVaultPaths } from "../memory/memoryVault.ts";
 import * as PublicSkillRepository from "../provider/publicSkillRepository.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import {
   type CandidateIdea,
@@ -102,6 +103,8 @@ const FILE_WINDOW_MS = 60 * DAY_MS;
  * Opening the page after longer away checks for new ideas then.
  */
 const VIEW_WINDOW_MS = 2 * DAY_MS;
+/** A page view this long after the previous one counts as a new visit in analytics. */
+const VISIT_GAP_MS = 30 * 60_000;
 const REFRESH_AFTER_MS = 4 * 60 * 60_000;
 const DAILY_REFRESH_MS = DAY_MS;
 const DAILY_MODEL_CALLS = 20;
@@ -274,6 +277,10 @@ export const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const environment = yield* ServerEnvironment;
   const skills = yield* Effect.serviceOption(PublicSkillRepository.PublicSkillRepository);
+  const analytics = yield* Effect.serviceOption(AnalyticsService);
+  /** Anonymous usage counts only: sections, kinds, and numbers, never what an idea says. */
+  const track = (event: string, properties: Readonly<Record<string, string | number | boolean>>) =>
+    Option.isSome(analytics) ? analytics.value.record(event, properties) : Effect.void;
   const status = yield* Ref.make<GenerationStatus>({ state: "idle", message: null });
   const setGenerationStatus = (next: GenerationStatus) => Ref.set(status, next);
   const lock = yield* Semaphore.make(1);
@@ -315,14 +322,21 @@ export const make = Effect.gen(function* () {
     sql`
       INSERT INTO idea_feedback (idea_id, section, kind, created_at)
       VALUES (${row.ideaId}, ${row.section}, ${kind}, ${nowIso})
-    `;
+    `.pipe(Effect.andThen(track("ideas.feedback", { kind, section: row.section })));
 
   /** Retires an idea the user has not acted on since it was read, leaving any newer press alone. */
   const retire = (row: IdeaRow, next: "sent" | "dismissed" | "expired", nowIso: string) =>
     sql`
       UPDATE ideas SET status = ${next}, previous_status = NULL, hidden_at = ${nowIso}, updated_at = ${nowIso}
       WHERE idea_id = ${row.ideaId} AND status = ${row.status} AND updated_at = ${row.updatedAt}
-    `;
+      RETURNING idea_id AS "ideaId"
+    `.pipe(
+      Effect.tap((updated) =>
+        next === "sent" && updated.length > 0
+          ? track("ideas.sent", { section: row.section })
+          : Effect.void,
+      ),
+    );
 
   /**
    * Whether a message was sent from an opened idea's draft, without trusting
@@ -984,11 +998,14 @@ export const make = Effect.gen(function* () {
     if (!requested && personal === 0) return null;
 
     let note: string | null = null;
+    let outcome: "generated" | "no-model" | "daily-limit" | "failed" = "generated";
     let generated: CandidateIdea[] = [];
     const generateIdeas = textGeneration.generateIdeas;
     if (!generateIdeas) {
+      outcome = "no-model";
       note = "Ideas need a Codex text generation model, so these are starter ideas.";
     } else if (!(yield* takeModelCall(nowMs))) {
+      outcome = "daily-limit";
       note = "You've reached today's limit for new suggestions, so these are starter ideas.";
     } else {
       const settings = yield* settingsService.getSettings;
@@ -1011,6 +1028,7 @@ export const make = Effect.gen(function* () {
           excludedKeys: exclusions.excludedKeys,
         });
       } else {
+        outcome = "failed";
         note = "Couldn't personalize ideas just now, so these are starter ideas.";
       }
     }
@@ -1037,6 +1055,12 @@ export const make = Effect.gen(function* () {
     yield* trim(addedAt);
     yield* writeState("last_generated_at", addedAt);
     yield* writeState("activity_fingerprint", yield* activityFingerprint);
+    yield* track("ideas.generated", {
+      requested,
+      outcome,
+      generatedCount: picked.length,
+      starterCount: fill.length,
+    });
     if (!requested) return null;
     if (added.length === 0) {
       return "You've seen every idea for now. Dismissed ideas come back after two weeks.";
@@ -1114,8 +1138,20 @@ export const make = Effect.gen(function* () {
 
   const markViewed = Effect.gen(function* () {
     const nowMs = yield* Clock.currentTimeMillis;
+    const previousView = yield* readState("last_viewed_at");
     yield* writeState("last_viewed_at", toIso(nowMs));
     const result = yield* snapshot;
+    // The page marks itself viewed again as new ideas arrive; only a return after a gap is a visit.
+    if (previousView === null || nowMs - Date.parse(previousView) >= VISIT_GAP_MS) {
+      const count = (sections: ReadonlyArray<IdeaSection>) =>
+        result.ideas.filter((idea) => sections.includes(idea.section)).length;
+      yield* track("ideas.viewed", {
+        visibleCount: result.ideas.length,
+        personalCount: count(["continue", "projects"]),
+        toolCount: count(["tools", "new"]),
+        starterCount: count(["starter"]),
+      });
+    }
     if (result.state === "generating") return result;
     // A first visit shows the starter ideas at once and personal ones as soon as they are ready.
     // A later visit to a stale page checks for new ideas then, instead of waiting for the hourly check.

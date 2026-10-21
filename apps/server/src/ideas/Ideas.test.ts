@@ -23,6 +23,7 @@ import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { layerMemory as SqlitePersistenceMemory } from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 import {
   type GeneratedIdea,
   type IdeasGenerationInput,
@@ -89,7 +90,12 @@ const makeHarness = (
     const fs = yield* FileSystem.FileSystem;
     const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ideas-test-" });
     const calls: IdeasGenerationInput[] = [];
+    const events: Array<{ readonly event: string; readonly properties: unknown }> = [];
     const layer = Layer.mergeAll(
+      Layer.mock(AnalyticsService)({
+        record: (event, properties) => Effect.sync(() => events.push({ event, properties })),
+        flush: Effect.void,
+      }),
       ServerSettings.layerTest({ memoryEnabled: false }),
       Layer.mock(ServerEnvironment)({
         getDescriptor: Effect.succeed({
@@ -109,7 +115,7 @@ const makeHarness = (
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(baseDir, baseDir)),
     );
-    return { calls, layer };
+    return { calls, events, layer };
   });
 
 const titles = (snapshot: IdeasSnapshot) => snapshot.ideas.map((idea) => idea.title);
@@ -169,6 +175,47 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
             (idea) => idea.action.kind === "resume-thread" && idea.action.threadId === "thread-v2",
           ),
         );
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("reports visits, presses, sends, and runs as anonymous counts", () =>
+    Effect.gen(function* () {
+      const { events, layer } = yield* makeHarness(() => Effect.succeed([threadIdea()]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        yield* ideas.markViewed;
+        yield* ideas.awaitIdle;
+        // Marking the page viewed again as ideas arrive is the same visit.
+        yield* ideas.markViewed;
+        const [idea] = (yield* ideas.list).ideas.filter((entry) => entry.section === "continue");
+        yield* ideas.feedback({ ideaId: idea!.id, kind: "opened" });
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-send', 'thread-1', 'user', 'Please match the rest.', 0, ${iso(NOW + 1)}, ${iso(NOW + 1)})
+        `;
+        yield* TestClock.adjust(HOUR);
+        yield* ideas.list;
+        assert.deepStrictEqual(events, [
+          {
+            event: "ideas.viewed",
+            properties: { visibleCount: 6, personalCount: 0, toolCount: 0, starterCount: 6 },
+          },
+          {
+            event: "ideas.generated",
+            properties: {
+              requested: false,
+              outcome: "generated",
+              generatedCount: 1,
+              starterCount: 0,
+            },
+          },
+          { event: "ideas.feedback", properties: { kind: "opened", section: "continue" } },
+          { event: "ideas.sent", properties: { section: "continue" } },
+        ]);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );
