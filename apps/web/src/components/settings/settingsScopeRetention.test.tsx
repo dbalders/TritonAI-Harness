@@ -112,6 +112,8 @@ it.each([
   ["/settings/diagnostics", "an implicit environment change", "0", implicitFirst, implicitSecond],
   ["/settings/providers", "an implicit environment change", "0", implicitFirst, implicitSecond],
   ["/settings/diagnostics", "a disconnect", "0", first, disconnected],
+  ["/settings/providers", "a disconnect", "1", first, disconnected],
+  ["/settings/providers", "a reconnect", "1", disconnected, first],
   ["/settings/keybindings", "another project", "0", first, otherProject],
 ])("%s after %s shows %s", async (pathname, _change, expected, before, after) => {
   state.pathname = pathname;
