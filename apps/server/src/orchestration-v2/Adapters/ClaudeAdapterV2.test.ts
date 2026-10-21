@@ -46,6 +46,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -72,6 +73,8 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
+import * as IntegrationRegistry from "../../integrations/IntegrationRegistry.ts";
+import { HOST_MCP_TOOL_NAMES } from "../../mcp/hostToolNames.ts";
 import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -574,7 +577,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     assert.deepEqual(overrides, { allowedTools: ["Read"] });
   });
 
-  it("pre-approves all t3-code tools when attaching an MCP session without an allowlist", () => {
+  it("pre-approves the Harness's own t3-code tools when attaching an MCP session", () => {
     const threadId = ThreadId.make("thread-claude-mcp-no-allowlist");
     const mcpSession = mcpSessionFor(threadId);
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
@@ -583,24 +586,53 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     });
 
     assert.deepEqual(overrides, {
-      allowedTools: [ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD],
+      allowedTools: [...ClaudeAdapterV2.claudeT3McpHostAllowedTools()],
       mcpServers: T3_MCP_SERVERS,
     });
+    assert.isFalse(overrides.allowedTools?.includes(ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD));
   });
 
-  it("extends an explicit allowlist with the t3-code wildcard", () => {
+  it("extends an explicit allowlist with the Harness's own t3-code tools", () => {
     const threadId = ThreadId.make("thread-claude-mcp-with-allowlist");
     const mcpSession = mcpSessionFor(threadId);
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
       mcpSession,
       readOnlySandbox: false,
-      allowedTools: ["Read", "mcp__t3-code__*"],
+      allowedTools: ["Read"],
     });
 
     assert.deepEqual(overrides, {
-      allowedTools: ["Read", "mcp__t3-code__*"],
+      allowedTools: ["Read", ...ClaudeAdapterV2.claudeT3McpHostAllowedTools()],
       mcpServers: T3_MCP_SERVERS,
     });
+  });
+
+  it("pre-approves plugin reads but never plugin writes", () => {
+    const threadId = ThreadId.make("thread-claude-mcp-plugin-tools");
+    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession: mcpSessionFor(threadId),
+      readOnlySandbox: false,
+      readOnlyIntegrationTools: ["microsoft365.mail.search"],
+    });
+
+    const allowedTools = overrides.allowedTools ?? [];
+    assert.include(allowedTools, "mcp__t3-code__microsoft365_mail_search");
+    assert.notInclude(allowedTools, "mcp__t3-code__microsoft365_mail_draft_reply");
+    assert.isFalse(
+      allowedTools.some((tool) => tool.endsWith("*")),
+      "a wildcard would pre-approve plugin writes",
+    );
+  });
+
+  it("pre-approves exactly the tools the Harness MCP server registers itself", () => {
+    assert.deepEqual(
+      [...ClaudeAdapterV2.claudeT3McpHostAllowedTools()].sort(),
+      HOST_MCP_TOOL_NAMES.map((name) => `mcp__t3-code__${name}`).sort(),
+    );
+    assert.include(
+      ClaudeAdapterV2.claudeT3McpHostAllowedTools(),
+      "mcp__t3-code__orchestrator_capabilities",
+    );
   });
 
   it("pre-approves only read-only t3-code tools in a read-only sandbox", () => {
@@ -731,7 +763,7 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
       allowedTools: ["Read"],
     });
     assert.deepEqual(overrides, {
-      allowedTools: ["Read", "mcp__t3-code__*"],
+      allowedTools: ["Read", ...ClaudeAdapterV2.claudeT3McpHostAllowedTools()],
       mcpServers: {
         "t3-code": {
           type: "http",
@@ -1114,6 +1146,148 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
           decision: "accept",
         });
         assert.equal((yield* Fiber.join(decision))?.behavior, "allow");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+});
+
+describe("ClaudeAdapterV2 plugin tool approvals", () => {
+  it.effect("asks before a plugin write with its change, and runs plugin reads directly", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            vi.spyOn(IntegrationRegistry, "getIntegrationRegistryOptional").mockReturnValue({
+              toolDefinitions: () => [
+                { name: "fixture.records.list", readOnly: true },
+                { name: "fixture.records.write", readOnly: false },
+              ],
+            } as unknown as IntegrationRegistry.RegistryRuntime),
+          ),
+          (spy) => Effect.sync(() => spy.mockRestore()),
+        );
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-plugin-approval-",
+        });
+        let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
+          idAllocator,
+          queryRunner: {
+            allocateSessionId: Effect.succeed("native-thread-claude-plugin-approval"),
+            open: (input) =>
+              Effect.sync(() => {
+                openedOptions = input.options;
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  applyFlagSettings: () => Effect.void,
+                  setPermissionMode: () => Effect.void,
+                  backgroundTasks: () => Effect.succeed(false),
+                  stopTask: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: "/workspace",
+        });
+        const threadId = ThreadId.make("thread-claude-plugin-approval");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-plugin-approval"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-plugin-approval"),
+            text: "Update the record.",
+            attachments: [],
+            runtimePolicy,
+          }),
+        );
+        const canUseTool = openedOptions?.canUseTool;
+        assert.isFunction(canUseTool);
+
+        const read = yield* Effect.promise(() =>
+          canUseTool!(
+            "mcp__t3-code__fixture_records_list",
+            {},
+            {
+              signal: new AbortController().signal,
+              toolUseID: "tool-plugin-read",
+              requestId: "request-plugin-read",
+            },
+          ),
+        );
+        assert.equal(read?.behavior, "allow");
+
+        // One subscription: the approval's events arrive on a single stream.
+        const approvalEvents = yield* runtime.events.pipe(
+          Stream.takeUntil(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+          ),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        const decision = yield* Effect.promise(() =>
+          canUseTool!(
+            "mcp__t3-code__fixture_records_write",
+            { summary: "Rename record 7 to Archive", recordId: "7" },
+            {
+              signal: new AbortController().signal,
+              toolUseID: "tool-plugin-write",
+              requestId: "request-plugin-write",
+              title: "Claude wants to use fixture_records_write",
+            },
+          ),
+        ).pipe(Effect.forkScoped);
+
+        const events = [...(yield* Fiber.join(approvalEvents))];
+        const item = events.at(-1);
+        assert.isTrue(
+          item?.type === "turn_item.updated" && item.turnItem.type === "approval_request",
+        );
+        if (item?.type !== "turn_item.updated" || item.turnItem.type !== "approval_request") return;
+        assert.equal(item.turnItem.prompt, "fixture.records.write\nRename record 7 to Archive");
+        const request = events.find((event) => event.type === "runtime_request.updated");
+        if (request?.type !== "runtime_request.updated") return assert.fail("no approval request");
+        yield* runtime.respondToRuntimeRequest({
+          requestId: request.runtimeRequest.id,
+          decision: "decline",
+        });
+        assert.equal((yield* Fiber.join(decision))?.behavior, "deny");
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),

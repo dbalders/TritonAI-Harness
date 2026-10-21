@@ -108,6 +108,9 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import * as Integrations from "../../integrations/IntegrationRegistry.ts";
+import { describeToolCallForApproval } from "../../integrations/IntegrationToolPreview.ts";
+import { HOST_MCP_TOOL_NAMES } from "../../mcp/hostToolNames.ts";
 import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import { planClaudeSkillDispatch } from "../../provider/Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
@@ -1205,6 +1208,33 @@ export function makeClaudeQueryOptions(input: {
 
 export const CLAUDE_T3_MCP_TOOL_WILDCARD = "mcp__t3-code__*";
 
+/** The name Claude Code gives a t3-code MCP tool; it replaces characters it does not allow. */
+export function claudeT3McpToolName(toolName: string): string {
+  return `mcp__t3-code__${toolName.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+/** Every Harness-owned t3-code tool, which Claude may use without asking outside read-only work. */
+export function claudeT3McpHostAllowedTools(): ReadonlyArray<string> {
+  return HOST_MCP_TOOL_NAMES.map(claudeT3McpToolName);
+}
+
+/** The included plugin tool behind a Claude tool name, if it is one. */
+function claudeIntegrationTool(toolName: string) {
+  if (!toolName.startsWith("mcp__t3-code__")) return undefined;
+  return Integrations.getIntegrationRegistryOptional()
+    ?.toolDefinitions()
+    .find((definition) => claudeT3McpToolName(definition.name) === toolName);
+}
+
+function claudeReadOnlyIntegrationToolNames(): ReadonlyArray<string> {
+  return (
+    Integrations.getIntegrationRegistryOptional()
+      ?.toolDefinitions()
+      .filter((definition) => definition.readOnly)
+      .map((definition) => definition.name) ?? []
+  );
+}
+
 // Must stay in sync with the Tool.Readonly annotations on OrchestratorToolkit;
 // ClaudeAdapterV2.test.ts cross-checks this list against the toolkit.
 export const CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
@@ -1237,11 +1267,13 @@ export const CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS: ReadonlyArray<string> = [
 export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 
 // The SDK's `allowedTools` only pre-approves tool calls; availability is the
-// separate `tools` option. Attaching the t3-code MCP server therefore always
-// pre-approves its tools (headless modes like `dontAsk` deny anything that is
-// not pre-approved), but read-only sandboxes pre-approve only the annotated
-// read-only orchestrator tools so a read-only session cannot silently spawn
-// threads or scheduled tasks.
+// separate `tools` option. Attaching the t3-code MCP server therefore
+// pre-approves the Harness's own tools (headless modes like `dontAsk` deny
+// anything that is not pre-approved), but read-only sandboxes pre-approve only
+// the annotated read-only orchestrator tools so a read-only session cannot
+// silently spawn threads or scheduled tasks. Plugin tools share the server, so
+// only their read-only tools are pre-approved; plugin writes stay with the
+// permission callback and the thread's approval policy, never a wildcard.
 //
 // The header carries the credential itself: the query runner sends
 // `mcpServers` over the CLI's stdin, never its argv or environment.
@@ -1250,6 +1282,8 @@ export function claudeMcpQueryOverrides(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly readOnlySandbox: boolean;
   readonly allowedTools?: ReadonlyArray<string>;
+  /** Canonical names of included read-only plugin tools. */
+  readonly readOnlyIntegrationTools?: ReadonlyArray<string>;
 }): {
   readonly allowedTools?: ReadonlyArray<string>;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
@@ -1260,7 +1294,10 @@ export function claudeMcpQueryOverrides(input: {
   }
   const mcpAllowedTools = input.readOnlySandbox
     ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
-    : [CLAUDE_T3_MCP_TOOL_WILDCARD];
+    : [
+        ...claudeT3McpHostAllowedTools(),
+        ...(input.readOnlyIntegrationTools ?? []).map(claudeT3McpToolName),
+      ];
   return {
     allowedTools: Array.from(new Set([...(input.allowedTools ?? []), ...mcpAllowedTools])),
     mcpServers: {
@@ -8277,7 +8314,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             } satisfies PermissionResult;
           }
 
-          if (!requiresClaudeApproval(context)) {
+          const integrationTool = claudeIntegrationTool(toolName);
+          if (!requiresClaudeApproval(context) || integrationTool?.readOnly === true) {
             return {
               behavior: "allow",
               updatedInput: toolInput,
@@ -8286,11 +8324,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           const requestKind = providerRequestKindFromClaudeTool(toolName);
-          const prompt =
-            callbackOptions.title ??
-            callbackOptions.description ??
-            callbackOptions.decisionReason ??
-            summarizeClaudeToolRequest(toolName, nativeToolInput);
+          // A plugin write shows the change it will make, with secret-looking arguments hidden.
+          const prompt = integrationTool
+            ? describeToolCallForApproval(integrationTool.name, toolInput)
+            : (callbackOptions.title ??
+              callbackOptions.description ??
+              callbackOptions.decisionReason ??
+              summarizeClaudeToolRequest(toolName, nativeToolInput));
           const artifacts = yield* buildApprovalRequestArtifacts({
             context,
             nativeItemId: nativeRequestId,
@@ -8472,6 +8512,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             mcpSession: yield* mcpSessions.read(turnInput.threadId),
             readOnlySandbox:
               sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
+            readOnlyIntegrationTools: claudeReadOnlyIntegrationToolNames(),
             ...(queryPolicy.allowedTools === undefined
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),
