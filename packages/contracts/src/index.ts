@@ -75,3 +75,5 @@ export * from "./rpc.ts";
 export * from "./worktreeSetup.ts";
 export * from "./secretRequest.ts";
 export * from "./clientRpcPermissions.ts";
+export * from "./projectBrief.ts";
+export * from "./projectOverview.ts";

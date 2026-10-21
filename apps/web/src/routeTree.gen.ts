@@ -35,9 +35,11 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings.conne
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
+import { Route as ProjectHomeProjectKeyRouteImport } from './routes/project-home.$projectKey'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatIdeasRouteImport } from './routes/_chat.ideas'
+import { Route as ProjectBriefEnvironmentIdProjectIdRouteImport } from './routes/project-brief.$environmentId.$projectId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
@@ -171,6 +173,11 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   path: '/projects/$projectKey',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectHomeProjectKeyRoute = ProjectHomeProjectKeyRouteImport.update({
+  id: '/project-home/$projectKey',
+  path: '/project-home/$projectKey',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
@@ -186,6 +193,12 @@ const ChatIdeasRoute = ChatIdeasRouteImport.update({
   path: '/ideas',
   getParentRoute: () => ChatRoute,
 } as any)
+const ProjectBriefEnvironmentIdProjectIdRoute =
+  ProjectBriefEnvironmentIdProjectIdRouteImport.update({
+    id: '/project-brief/$environmentId/$projectId',
+    path: '/project-brief/$environmentId/$projectId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -209,6 +222,7 @@ export interface FileRoutesByFullPath {
   '/ideas': typeof ChatIdeasRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/project-home/$projectKey': typeof ProjectHomeProjectKeyRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -229,6 +243,7 @@ export interface FileRoutesByFullPath {
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/project-brief/$environmentId/$projectId': typeof ProjectBriefEnvironmentIdProjectIdRoute
 }
 export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
@@ -240,6 +255,7 @@ export interface FileRoutesByTo {
   '/ideas': typeof ChatIdeasRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/project-home/$projectKey': typeof ProjectHomeProjectKeyRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -261,6 +277,7 @@ export interface FileRoutesByTo {
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/project-brief/$environmentId/$projectId': typeof ProjectBriefEnvironmentIdProjectIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -274,6 +291,7 @@ export interface FileRoutesById {
   '/_chat/ideas': typeof ChatIdeasRoute
   '/_chat/new': typeof ChatNewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
+  '/project-home/$projectKey': typeof ProjectHomeProjectKeyRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -295,6 +313,7 @@ export interface FileRoutesById {
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/project-brief/$environmentId/$projectId': typeof ProjectBriefEnvironmentIdProjectIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -309,6 +328,7 @@ export interface FileRouteTypes {
     | '/ideas'
     | '/new'
     | '/pull-requests'
+    | '/project-home/$projectKey'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -329,6 +349,7 @@ export interface FileRouteTypes {
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/project-brief/$environmentId/$projectId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connect'
@@ -340,6 +361,7 @@ export interface FileRouteTypes {
     | '/ideas'
     | '/new'
     | '/pull-requests'
+    | '/project-home/$projectKey'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -361,6 +383,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/project-brief/$environmentId/$projectId'
   id:
     | '__root__'
     | '/_chat'
@@ -373,6 +396,7 @@ export interface FileRouteTypes {
     | '/_chat/ideas'
     | '/_chat/new'
     | '/_chat/pull-requests'
+    | '/project-home/$projectKey'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -394,6 +418,7 @@ export interface FileRouteTypes {
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/project-brief/$environmentId/$projectId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -404,7 +429,9 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
   WelcomeRoute: typeof WelcomeRoute
+  ProjectHomeProjectKeyRoute: typeof ProjectHomeProjectKeyRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
+  ProjectBriefEnvironmentIdProjectIdRoute: typeof ProjectBriefEnvironmentIdProjectIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -591,6 +618,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/project-home/$projectKey': {
+      id: '/project-home/$projectKey'
+      path: '/project-home/$projectKey'
+      fullPath: '/project-home/$projectKey'
+      preLoaderRoute: typeof ProjectHomeProjectKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_chat/pull-requests': {
       id: '/_chat/pull-requests'
       path: '/pull-requests'
@@ -611,6 +645,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/ideas'
       preLoaderRoute: typeof ChatIdeasRouteImport
       parentRoute: typeof ChatRoute
+    }
+    '/project-brief/$environmentId/$projectId': {
+      id: '/project-brief/$environmentId/$projectId'
+      path: '/project-brief/$environmentId/$projectId'
+      fullPath: '/project-brief/$environmentId/$projectId'
+      preLoaderRoute: typeof ProjectBriefEnvironmentIdProjectIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
@@ -701,7 +742,10 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
   WelcomeRoute: WelcomeRoute,
+  ProjectHomeProjectKeyRoute: ProjectHomeProjectKeyRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
+  ProjectBriefEnvironmentIdProjectIdRoute:
+    ProjectBriefEnvironmentIdProjectIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
