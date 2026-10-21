@@ -95,9 +95,16 @@ const DEFAULT_MAXIMUM_LIFETIME_MS = 8 * 60 * 60 * 1_000;
 // subsystem. It is deliberately not a read/write policy: individual tools remain hidden and
 // fail closed unless their curated plugin, connection, manifest capability, and provider
 // credential are active. Keeping it stable lets a user activate a plugin without restarting
-// an already-running provider session.
-export const providerSessionCapabilities = (): ReadonlySet<McpInvocationContext.McpCapability> =>
-  new Set<McpInvocationContext.McpCapability>(["preview", "integrations.invoke"]);
+// an already-running provider session. Every provider-session credential must come from here so
+// a session setup rewrite cannot silently drop plugin access.
+export const providerSessionCapabilities = (
+  access: { readonly browser?: boolean; readonly device?: boolean } = {},
+): ReadonlySet<McpInvocationContext.McpCapability> => {
+  const capabilities = new Set<McpInvocationContext.McpCapability>(["integrations.invoke"]);
+  if (access.browser ?? true) capabilities.add("preview");
+  if (access.device === true) capabilities.add("device");
+  return capabilities;
+};
 
 const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");

@@ -496,13 +496,10 @@ export const layerWithOptions = (
                 // same token or the process's tool calls fail auth.
                 const { browser: browserToolsAvailable, device: deviceToolsAvailable } =
                   yield* agentAccessSettings(threadId);
-                // Plugins gate each tool on its own grant; this transport grant
-                // only lets the session reach the integration subsystem.
-                const capabilities = new Set<
-                  import("../mcp/McpInvocationContext.ts").McpCapability
-                >(["orchestration", "worktree", "pull-requests", "integrations.invoke"]);
-                if (browserToolsAvailable) capabilities.add("preview");
-                if (deviceToolsAvailable) capabilities.add("device");
+                const capabilities = McpSessionRegistry.providerSessionCapabilities({
+                  browser: browserToolsAvailable,
+                  device: deviceToolsAvailable,
+                });
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
