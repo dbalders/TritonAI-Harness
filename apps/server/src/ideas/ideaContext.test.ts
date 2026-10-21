@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { GeneratedIdea } from "../textGeneration/TextGeneration.ts";
 import { formatIdeasContext, type IdeasContext, validateGeneratedIdeas } from "./ideaContext.ts";
-import { STARTER_IDEAS } from "./starterIdeas.ts";
+import { IDEA_KINDS } from "./starterIdeas.ts";
 
 const CONTEXT: IdeasContext = {
   today: "2026-10-13",
@@ -39,7 +39,7 @@ const CONTEXT: IdeasContext = {
       isNew: true,
     },
   ],
-  starters: STARTER_IDEAS.slice(0, 3),
+  kinds: IDEA_KINDS.slice(0, 3),
   avoid: ["I can summarize a long email chain"],
 };
 
@@ -92,7 +92,7 @@ describe("validateGeneratedIdeas", () => {
     const accepted = validateGeneratedIdeas({
       ideas: [
         idea({}),
-        idea({ ref: "starter:meeting-follow-up", title: "I can summarize your long email chain" }),
+        idea({ ref: "note:2026-10-12", title: "I can summarize your long email chain" }),
         idea({ ref: "plugin:lucid", topic: "diagram", title: "I can draw your onboarding flow" }),
         idea({ ref: "plugin:lucid", topic: "diagram", title: "I can map the approval process" }),
       ],
@@ -103,7 +103,7 @@ describe("validateGeneratedIdeas", () => {
   });
 
   it("opens new work in the referenced file's project unless the model names another", () => {
-    const [fromFile, fromStarter] = validateGeneratedIdeas({
+    const [fromFile, fromPlugin] = validateGeneratedIdeas({
       ideas: [
         idea({
           ref: "file:project-1:data/FY26 budget.xlsx",
@@ -111,8 +111,9 @@ describe("validateGeneratedIdeas", () => {
           action: "resume-thread",
         }),
         idea({
-          ref: "starter:clean-spreadsheet",
-          title: "I can tidy a spreadsheet for you",
+          ref: "plugin:lucid",
+          topic: "diagram approvals",
+          title: "I can diagram your approval flow",
           action: "new-thread",
           icon: "not an emoji",
         }),
@@ -125,11 +126,46 @@ describe("validateGeneratedIdeas", () => {
       action: { kind: "new-thread", projectId: "project-1" },
       sources: [{ kind: "file", label: "File · FY26 budget.xlsx" }],
     });
-    expect(fromStarter).toMatchObject({
-      section: "starter",
-      icon: "💡",
+    expect(fromFile?.subject).toBe("project:project-1");
+    expect(fromPlugin).toMatchObject({
+      section: "tools",
+      icon: "🧰",
+      subject: "plugin:lucid",
       action: { kind: "new-thread", projectId: null },
     });
+  });
+
+  it("drops ideas that leave a blank for the user or cite a starter instead of real work", () => {
+    expect(
+      validateGeneratedIdeas({
+        ideas: [
+          idea({ prompt: "Turn these notes into an email.\n\nNotes:\n[paste your notes here]" }),
+          idea({
+            ref: "plugin:lucid",
+            topic: "diagram",
+            title: "I can diagram a process",
+            prompt: "Diagram the <your process name> process in Lucid.",
+          }),
+          idea({
+            ref: "note:2026-10-12",
+            title: "I can draft the vendor email",
+            body: "Paste the list and I'll write it.",
+            prompt: "Email {{recipient}} the vendor list.",
+          }),
+          idea({ ref: "starter:meeting-follow-up", title: "I can write a follow-up email" }),
+        ],
+        context: CONTEXT,
+        excludedKeys: new Set(),
+      }),
+    ).toEqual([]);
+    const [linked] = validateGeneratedIdeas({
+      ideas: [
+        idea({ prompt: "Match the remaining lines using [the guide](https://example.edu/guide)." }),
+      ],
+      context: CONTEXT,
+      excludedKeys: new Set(),
+    });
+    expect(linked?.title).toBe("I can finish the Q1 travel reconciliation");
   });
 
   it("files a skill new to this user under New in TritonAI", () => {
@@ -157,10 +193,11 @@ describe("formatIdeasContext", () => {
       "file:project-1:data/FY26 budget.xlsx",
       "plugin:lucid",
       "skill:ucsd-decorator",
-      "starter:meeting-follow-up",
     ]) {
       expect(text).toContain(ref);
     }
+    expect(text).not.toContain("starter:");
+    expect(text).toContain(`- ${IDEA_KINDS[0]}`);
     expect(text).toContain("- I can summarize a long email chain");
   });
 });

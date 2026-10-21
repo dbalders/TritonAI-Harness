@@ -73,6 +73,8 @@ export function projectHomeThreads(threads: ReadonlyArray<EnvironmentThreadShell
     else if (kind === "working") working.push(thread);
     else updates.push(thread);
   }
+  // Progress and tool events update updatedAt; keep working rows in fixed positions.
+  working.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
   return { recent, needsYou, working, updates };
 }
 

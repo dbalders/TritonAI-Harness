@@ -19,6 +19,15 @@ const completed = {
   assistantMessageId: null,
 };
 
+const workingRuntime = {
+  status: "running" as const,
+  activeRunId: RunId.make("current-run"),
+  providerInstanceId: makeThreadFixture().providerInstanceId,
+  providerName: "Codex",
+  lastError: null,
+  updatedAt: "2026-10-17T12:05:00Z",
+};
+
 describe("project home", () => {
   it("keeps an unanswered request out of the finished updates even after a completed run", () => {
     const waiting = makeThreadFixture({
@@ -54,6 +63,67 @@ describe("project home", () => {
     expect(projectHomeHeadline(view, true)).toBe("No pending agent requests");
     expect(projectHomeHeadline(view, false)).toBe("No saved agent requests pending");
     expect(projectHomeHeadline(projectHomeThreads([]), true)).toBe("No threads yet");
+  });
+
+  it("keeps working rows in a fixed order as progress updates arrive", () => {
+    const running = (id: string, createdAt: string, updatedAt: string) =>
+      makeThreadFixture({
+        id: ThreadId.make(id),
+        createdAt,
+        updatedAt,
+        runtime: workingRuntime,
+        latestRun: { ...completed, status: "running", completedAt: null },
+      });
+    const older = running("older", "2026-10-17T09:00:00Z", "2026-10-17T12:05:00Z");
+    const newer = running("newer", "2026-10-17T10:00:00Z", "2026-10-17T12:04:00Z");
+    expect(projectHomeThreads([older, newer]).working).toEqual([newer, older]);
+
+    const progressed = {
+      ...older,
+      updatedAt: "2026-10-17T12:06:00Z",
+      source: {
+        ...older.source,
+        latestVisibleMessage: {
+          id: MessageId.make("progress"),
+          role: "assistant" as const,
+          text: "Tests passed. Checking the next tool result.",
+          updatedAt: older.source.updatedAt,
+        },
+      },
+    };
+    const view = projectHomeThreads([newer, progressed]);
+    expect(view.working).toEqual([newer, progressed]);
+    expect(projectThreadExcerpt(view.working[1]!)).toBe(
+      "Tests passed. Checking the next tool result.",
+    );
+    expect(view.recent[0]).toBe(progressed);
+  });
+
+  it("breaks working-row ties consistently and moves completed work into latest updates", () => {
+    const first = makeThreadFixture({
+      id: ThreadId.make("a"),
+      runtime: workingRuntime,
+      latestRun: { ...completed, status: "running", completedAt: null },
+      updatedAt: "2026-10-17T12:05:00Z",
+    });
+    const second = { ...first, id: ThreadId.make("b") };
+    expect(projectHomeThreads([second, first]).working).toEqual([first, second]);
+    expect(projectHomeThreads([first, second]).working).toEqual([first, second]);
+
+    const finished = {
+      ...first,
+      runtime: null,
+      latestRun: completed,
+      updatedAt: "2026-10-17T12:06:00Z",
+    };
+    const previous = makeThreadFixture({
+      id: ThreadId.make("previous"),
+      latestRun: completed,
+      updatedAt: "2026-10-17T12:04:00Z",
+    });
+    const view = projectHomeThreads([previous, second, finished]);
+    expect(view.working).toEqual([second]);
+    expect(view.updates).toEqual([finished, previous]);
   });
 
   it("shows current work ahead of a previous failed run, while requests still take priority", () => {

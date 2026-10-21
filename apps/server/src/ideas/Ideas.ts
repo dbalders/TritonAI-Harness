@@ -9,8 +9,12 @@
  * the context it was shown, and stored with a key naming what each is about.
  * Feedback on a key decides whether it comes back: dismissed ideas return
  * after two weeks, rejected and used ones never do. When the model cannot help
- * (no context, failure, or the daily limit), starter ideas fill the batch, so
- * asking for more always adds something while any are left.
+ * (no context, failure, or the daily limit), ready-made starter ideas fill the
+ * batch, so asking for more always adds something while any are left.
+ *
+ * Every idea is ready to send as written: one that leaves a blank for the user
+ * is never shown. No more than two visible ideas share a project or tool, and
+ * generated ideas go stale after a few days, since the work they describe moves on.
  *
  * Accepting an idea opens a draft on the client. The idea stays listed until a
  * message from it is sent, which is detected here from the thread messages.
@@ -48,7 +52,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
-import { getIntegrationRegistryOptional } from "../integrations/IntegrationRegistry.ts";
+import { listEnabledIntegrations } from "../integrations/IntegrationRegistry.ts";
 import { localDayAt } from "../memory/memoryDays.ts";
 import { findMemoryDevice, generalVaultPaths } from "../memory/memoryVault.ts";
 import * as PublicSkillRepository from "../provider/publicSkillRepository.ts";
@@ -68,13 +72,15 @@ import {
   validateGeneratedIdeas,
 } from "./ideaContext.ts";
 import {
+  capBySubject,
+  needsUserInput,
   IDEA_SECTIONS,
-  isPersonalSection,
+  ideaSubject,
   type SectionFeedback,
   sectionWeights,
   selectByMix,
 } from "./ideaRules.ts";
-import { STARTER_IDEAS } from "./starterIdeas.ts";
+import { availableStarters, IDEA_KINDS, STARTER_IDEAS } from "./starterIdeas.ts";
 
 const DAY_MS = 24 * 60 * 60_000;
 /** How many ideas the page aims to hold, and the most it keeps. */
@@ -83,16 +89,19 @@ const MAX_IDEAS = 12;
 const SUGGEST_MORE_COUNT = 4;
 /** Dismissed and expired ideas can come back after this. */
 const DISMISS_COOLDOWN_MS = 14 * DAY_MS;
-/** Ideas from the user's own work go stale; an opened draft that was never sent counts as dropped. */
-const PERSONAL_TTL_MS = 3 * DAY_MS;
+/** Generated ideas go stale; an opened draft that was never sent counts as dropped. */
+const GENERATED_TTL_MS = 3 * DAY_MS;
 const OPENED_TTL_MS = 3 * DAY_MS;
 const FEEDBACK_WINDOW_MS = 90 * DAY_MS;
 const AVOID_WINDOW_MS = 60 * DAY_MS;
 const NEW_WINDOW_MS = 14 * DAY_MS;
 const THREAD_WINDOW_MS = 14 * DAY_MS;
 const FILE_WINDOW_MS = 60 * DAY_MS;
-/** Background generation only runs for someone who has opened the page lately. */
-const VIEW_WINDOW_MS = 7 * DAY_MS;
+/**
+ * Background generation only runs for someone who has opened the page lately.
+ * Opening the page after longer away checks for new ideas then.
+ */
+const VIEW_WINDOW_MS = 2 * DAY_MS;
 const REFRESH_AFTER_MS = 4 * 60 * 60_000;
 const DAILY_REFRESH_MS = DAY_MS;
 const DAILY_MODEL_CALLS = 20;
@@ -185,6 +194,30 @@ const toIso = (ms: number) => new Date(ms).toISOString();
 
 function isSection(value: string): value is IdeaSection {
   return IDEA_SECTIONS.some((section) => section === value);
+}
+
+const STARTER_KEYS = new Set(STARTER_IDEAS.map((starter) => `starter:${starter.id}`));
+/** Raise when the starter library is replaced, so pages that showed the old one are topped up once. */
+const STARTER_LIBRARY_VERSION = "2";
+
+/** Ideas that must not stay on the page: a blank to fill in, or a starter no longer offered. */
+function isOutdated(row: IdeaRow, content: IdeaContent): boolean {
+  if (row.ideaKey.startsWith("starter:") && !STARTER_KEYS.has(row.ideaKey)) return true;
+  return [content.title, content.body, content.action.prompt].some(needsUserInput);
+}
+
+interface PluginState {
+  readonly id: string;
+  readonly requiresConnection: boolean;
+  readonly connectionState?: string | undefined;
+}
+
+function connectedPluginIds(plugins: ReadonlyArray<PluginState>): ReadonlySet<string> {
+  return new Set(
+    plugins
+      .filter((plugin) => !plugin.requiresConnection || plugin.connectionState === "connected")
+      .map((plugin) => plugin.id),
+  );
 }
 
 const ThreadIdsJson = Schema.fromJsonString(Schema.Array(Schema.String));
@@ -348,7 +381,7 @@ export const make = Effect.gen(function* () {
 
   /**
    * Wakes snoozed ideas, marks opened ideas sent or dropped, and retires stale
-   * ideas from the user's own work and ideas whose thread is gone.
+   * generated ideas, outdated ones, and ideas whose thread is gone.
    */
   const tidy = Effect.fn("ideas.tidy")(function* (nowMs: number) {
     const nowIso = toIso(nowMs);
@@ -386,9 +419,9 @@ export const make = Effect.gen(function* () {
         }
         continue;
       }
-      const staleOwnWork =
-        isSection(row.section) && isPersonalSection(row.section) && nowMs - since > PERSONAL_TTL_MS;
-      if (staleOwnWork) {
+      // Any generated idea draws on the user's work or tools as they were, whatever its section.
+      const stale = row.section !== "starter" && nowMs - since > GENERATED_TTL_MS;
+      if (stale || isOutdated(row, content.value)) {
         yield* retire(row, "expired", nowIso);
       }
     }
@@ -414,16 +447,28 @@ export const make = Effect.gen(function* () {
   });
 
   /** Gives a first visit something to look at before anything has been generated. */
+  /**
+   * Gives a first visit something to look at before anything has been generated,
+   * and once tops up a page whose old starter ideas were just retired.
+   */
   const seedStarters = (nowMs: number) =>
-    // Two first requests at once must not both find the table empty.
+    // Two first requests at once must not both seed.
     seedLock.withPermits(1)(
       Effect.gen(function* () {
-        const [row] = yield* sql<{ readonly count: number }>`SELECT COUNT(*) AS "count" FROM ideas`;
-        if ((row?.count ?? 0) > 0) return;
-        yield* insertIdeas(
-          STARTER_IDEAS.slice(0, TARGET_IDEAS).map(starterCandidate),
-          toIso(nowMs),
-        );
+        if ((yield* readState("starter_library")) === STARTER_LIBRARY_VERSION) return;
+        const [row] = yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS "count" FROM ideas WHERE status IN ('active', 'opened', 'snoozed')
+        `;
+        const slots = TARGET_IDEAS - (row?.count ?? 0);
+        if (slots > 0) {
+          const connected = connectedPluginIds(yield* loadPlugins);
+          const starters = availableStarters(connected).map(starterCandidate);
+          yield* insertIdeas(
+            capBySubject(starters, yield* loadVisibleSubjects).slice(0, slots),
+            toIso(nowMs),
+          );
+        }
+        yield* writeState("starter_library", STARTER_LIBRARY_VERSION);
       }),
     );
 
@@ -652,18 +697,7 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const loadPlugins = Effect.gen(function* () {
-    const registry = getIntegrationRegistryOptional();
-    if (!registry) return [];
-    const listed = yield* Effect.tryPromise(() => registry.list()).pipe(
-      Effect.timeoutOption(Duration.seconds(5)),
-      Effect.orElseSucceed(() => Option.none()),
-    );
-    if (Option.isNone(listed)) return [];
-    return listed.value.integrations.filter(
-      (integration) => integration.installed && integration.enabled,
-    );
-  });
+  const loadPlugins = listEnabledIntegrations;
 
   const loadSkills = Effect.gen(function* () {
     if (Option.isNone(skills)) return [];
@@ -834,11 +868,37 @@ export const make = Effect.gen(function* () {
       files,
       plugins,
       skills: contextSkills,
-      starters: STARTER_IDEAS.filter(
-        (starter) => !exclusions.excludedKeys.has(`starter:${starter.id}`),
-      ),
+      kinds: IDEA_KINDS,
       avoid: exclusions.avoid,
     } satisfies IdeasContext;
+  });
+
+  /** What each visible idea is about, so a new batch can't pile onto the same project or tool. */
+  // Snoozed ideas keep their place, so waking them can't push a subject past the limit.
+  const loadVisibleSubjects = Effect.gen(function* () {
+    const rows = yield* sql<IdeaRow>`
+      SELECT ${ideaColumns(sql)} FROM ideas WHERE status IN ('active', 'opened', 'snoozed')
+    `;
+    const subjects: string[] = [];
+    for (const row of rows) {
+      const content = decodeContent(row.contentJson);
+      if (Option.isNone(content)) continue;
+      const starter = STARTER_IDEAS.find((entry) => `starter:${entry.id}` === row.ideaKey);
+      if (starter) {
+        subjects.push(starterCandidate(starter).subject);
+        continue;
+      }
+      const action = content.value.action;
+      const projectId =
+        action.kind === "new-thread"
+          ? action.projectId
+          : ((yield* sql<{ readonly projectId: string }>`
+              SELECT project_id AS "projectId" FROM harness_activity_threads
+              WHERE thread_id = ${action.threadId}
+            `)[0]?.projectId ?? null);
+      subjects.push(ideaSubject(row.ideaKey, projectId));
+    }
+    return subjects;
   });
 
   /** Counts a model call against today's limit; false when the limit is reached. */
@@ -857,9 +917,12 @@ export const make = Effect.gen(function* () {
     count: number,
     exclusions: Exclusions,
     taken: ReadonlySet<string>,
+    connected: ReadonlySet<string>,
+    subjects: ReadonlyArray<string>,
   ): CandidateIdea[] => {
     if (count <= 0) return [];
-    const fresh = STARTER_IDEAS.filter((starter) => {
+    const starters = availableStarters(connected);
+    const fresh = starters.filter((starter) => {
       const key = `starter:${starter.id}`;
       return (
         !exclusions.excludedKeys.has(key) &&
@@ -868,10 +931,10 @@ export const make = Effect.gen(function* () {
       );
     });
     const recycled = exclusions.recyclableStarterKeys.flatMap((key) => {
-      const starter = STARTER_IDEAS.find((candidate) => `starter:${candidate.id}` === key);
+      const starter = starters.find((candidate) => `starter:${candidate.id}` === key);
       return starter && !taken.has(key) ? [starter] : [];
     });
-    return [...fresh, ...recycled].slice(0, count).map(starterCandidate);
+    return capBySubject([...fresh, ...recycled].map(starterCandidate), subjects).slice(0, count);
   };
 
   /** Retires the oldest unopened ideas past the page's limit, starter ideas first. */
@@ -942,9 +1005,20 @@ export const make = Effect.gen(function* () {
       }
     }
 
-    const picked = selectByMix(generated, count, exclusions.weights);
+    const visibleSubjects = yield* loadVisibleSubjects;
+    const varied = capBySubject(generated, visibleSubjects);
+    const picked = selectByMix(varied, count, exclusions.weights);
+    const connected = new Set(
+      context.plugins.filter((plugin) => plugin.connected).map((plugin) => plugin.id),
+    );
     const fill = requested
-      ? starterFill(count - picked.length, exclusions, new Set(picked.map((idea) => idea.key)))
+      ? starterFill(
+          count - picked.length,
+          exclusions,
+          new Set(picked.map((idea) => idea.key)),
+          connected,
+          [...visibleSubjects, ...picked.map((idea) => idea.subject)],
+        )
       : [];
     const added = [...picked, ...fill];
     // Stamped after the model call, so a visit during the run doesn't hide them from the badge.
@@ -984,12 +1058,12 @@ export const make = Effect.gen(function* () {
     WHERE is_streaming = 0
   `.pipe(Effect.map(([row]) => `${row?.count ?? 0}:${row?.latest ?? ""}`));
 
-  const refresh = Effect.gen(function* () {
-    const nowMs = yield* Clock.currentTimeMillis;
-    const lastViewedAt = yield* readState("last_viewed_at");
-    if (lastViewedAt === null || nowMs - Date.parse(lastViewedAt) > VIEW_WINDOW_MS) return;
+  /** How many ideas a refresh would add now, or null when the page is fresh enough. */
+  const refreshCount = Effect.fn("ideas.refreshCount")(function* (nowMs: number) {
     const lastGeneratedAt = yield* readState("last_generated_at");
-    if (lastGeneratedAt !== null && nowMs - Date.parse(lastGeneratedAt) < REFRESH_AFTER_MS) return;
+    if (lastGeneratedAt !== null && nowMs - Date.parse(lastGeneratedAt) < REFRESH_AFTER_MS) {
+      return null;
+    }
     yield* tidy(nowMs);
     const [row] = yield* sql<{ readonly count: number }>`
       SELECT COUNT(*) AS "count" FROM ideas WHERE status IN ('active', 'opened')
@@ -999,16 +1073,24 @@ export const make = Effect.gen(function* () {
     // Thread activity is cheap to watch; files, notes, and tools are picked up at least daily.
     const dayOld =
       lastGeneratedAt === null || nowMs - Date.parse(lastGeneratedAt) >= DAILY_REFRESH_MS;
-    if (visible >= TARGET_IDEAS && !changed && !dayOld) return;
-    yield* generate(Math.max(2, TARGET_IDEAS - visible), false);
+    if (visible >= TARGET_IDEAS && !changed && !dayOld) return null;
+    return Math.max(2, TARGET_IDEAS - visible);
+  });
+
+  const refresh = Effect.gen(function* () {
+    const nowMs = yield* Clock.currentTimeMillis;
+    const lastViewedAt = yield* readState("last_viewed_at");
+    if (lastViewedAt === null || nowMs - Date.parse(lastViewedAt) > VIEW_WINDOW_MS) return;
+    const count = yield* refreshCount(nowMs);
+    if (count !== null) yield* generate(count, false);
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("idea refresh failed", { cause: Cause.pretty(cause) }),
     ),
   );
 
-  const startGeneration = (requested: boolean) =>
-    generate(SUGGEST_MORE_COUNT, requested).pipe(
+  const startGeneration = (requested: boolean, count: number = SUGGEST_MORE_COUNT) =>
+    generate(count, requested).pipe(
       Effect.forkIn(scope),
       Effect.flatMap((fiber) => Ref.set(running, fiber)),
     );
@@ -1024,13 +1106,17 @@ export const make = Effect.gen(function* () {
     const nowMs = yield* Clock.currentTimeMillis;
     yield* writeState("last_viewed_at", toIso(nowMs));
     const result = yield* snapshot;
+    if (result.state === "generating") return result;
     // A first visit shows the starter ideas at once and personal ones as soon as they are ready.
-    if ((yield* readState("last_generated_at")) === null && result.state !== "generating") {
-      yield* setGenerationStatus({ state: "generating", message: null });
-      yield* startGeneration(false);
-      return { ...result, state: "generating" as const };
-    }
-    return result;
+    // A later visit to a stale page checks for new ideas then, instead of waiting for the hourly check.
+    const count =
+      (yield* readState("last_generated_at")) === null
+        ? SUGGEST_MORE_COUNT
+        : yield* refreshCount(nowMs);
+    if (count === null) return result;
+    yield* setGenerationStatus({ state: "generating", message: null });
+    yield* startGeneration(false, count);
+    return { ...(yield* snapshot), state: "generating" as const };
   }).pipe(Effect.catch(toIdeasError("Couldn't load ideas.")));
 
   const suggestMore = Effect.gen(function* () {

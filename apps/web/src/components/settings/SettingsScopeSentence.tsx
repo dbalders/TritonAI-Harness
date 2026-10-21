@@ -33,7 +33,6 @@ export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/appearance",
   "/settings/snap-shot",
   "/settings/connections",
-  "/settings/tritonai-bot",
 ]);
 
 interface SettingsScopeMenuProps {
