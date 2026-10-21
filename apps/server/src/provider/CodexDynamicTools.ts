@@ -259,13 +259,11 @@ function serializeDynamicToolResult(value: unknown): string | undefined {
 }
 
 /** Tell the agent why a dynamic tool call failed without disclosing unsafe error details. */
-export function dynamicToolFailureResponse(
-  error: unknown,
-): EffectCodexSchema.DynamicToolCallResponse {
+function dynamicToolFailureResponse(error: unknown): EffectCodexSchema.DynamicToolCallResponse {
   return dynamicToolResponse(false, describeIntegrationToolFailure(error).text);
 }
 
-export function dynamicToolResultResponse(
+function dynamicToolResultResponse(
   value: unknown,
 ): EffectCodexSchema.DynamicToolCallResponse | undefined {
   const serialized = serializeDynamicToolResult(value);

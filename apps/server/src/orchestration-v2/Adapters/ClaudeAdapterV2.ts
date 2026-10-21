@@ -1209,7 +1209,7 @@ export function makeClaudeQueryOptions(input: {
 export const CLAUDE_T3_MCP_TOOL_WILDCARD = "mcp__t3-code__*";
 
 /** The name Claude Code gives a t3-code MCP tool; it replaces characters it does not allow. */
-export function claudeT3McpToolName(toolName: string): string {
+function claudeT3McpToolName(toolName: string): string {
   return `mcp__t3-code__${toolName.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
 

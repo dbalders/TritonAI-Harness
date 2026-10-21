@@ -96,11 +96,17 @@ const DEFAULT_MAXIMUM_LIFETIME_MS = 8 * 60 * 60 * 1_000;
 // fail closed unless their curated plugin, connection, manifest capability, and provider
 // credential are active. Keeping it stable lets a user activate a plugin without restarting
 // an already-running provider session. Every provider-session credential must come from here so
-// a session setup rewrite cannot silently drop plugin access.
+// a session setup rewrite cannot silently drop plugin access. issue() also adds the baseline
+// orchestration grants; they are listed here too so this set is the whole session scope.
 export const providerSessionCapabilities = (
   access: { readonly browser?: boolean; readonly device?: boolean } = {},
 ): ReadonlySet<McpInvocationContext.McpCapability> => {
-  const capabilities = new Set<McpInvocationContext.McpCapability>(["integrations.invoke"]);
+  const capabilities = new Set<McpInvocationContext.McpCapability>([
+    "orchestration",
+    "worktree",
+    "pull-requests",
+    "integrations.invoke",
+  ]);
   if (access.browser ?? true) capabilities.add("preview");
   if (access.device === true) capabilities.add("device");
   return capabilities;
