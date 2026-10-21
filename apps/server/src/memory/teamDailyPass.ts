@@ -455,9 +455,15 @@ export const makeTeamDailyPass = (input: {
           record.publishedSha = attempt.sha;
           record.etag = found.etag;
         } else if (found.kind === "missing") {
-          // An unanswered create can still land after this read. Keep its sections and
-          // withdrawal obligation, including across restart, rather than assuming it never ran.
-          if (attempt.sha !== null && !attempt.confirmedUnsent) return "held" as const;
+          // An old unversioned content create can still land after this read. New writes may
+          // only create empty reservations; their conditional memory updates can't recreate it.
+          if (
+            attempt.sha !== null &&
+            !attempt.confirmedUnsent &&
+            !attempt.conditional &&
+            record.etag === null
+          )
+            return "held" as const;
           confirmedChange = attempt.sha === null || record.publishedSha !== null;
           // A removal landed, or nothing was ever written.
           for (const section of Object.values(record.sections)) delete section.owesRemoval;
@@ -465,10 +471,36 @@ export const makeTeamDailyPass = (input: {
             for (const section of Object.values(record.sections)) section.publishedText = null;
           record.publishedSha = null;
           record.etag = null;
-        } else if (record.publishedSha !== null && sha256(found.text) === record.publishedSha) {
-          // Seeing the previous version once does not stop an unanswered update from landing.
-          if (!attempt.confirmedUnsent) return "held" as const;
-          record.etag = found.etag;
+        } else if (
+          (record.publishedSha !== null && sha256(found.text) === record.publishedSha) ||
+          (attempt.conditional && found.text === "")
+        ) {
+          if (attempt.confirmedUnsent) {
+            record.etag = found.etag;
+            record.publishedSha = sha256(found.text);
+          } else {
+            // Old pilot creates carried content without a version precondition. Removing their
+            // file could let them recreate it later; retain that legacy obligation.
+            if (!attempt.conditional && record.etag === null) return "held" as const;
+            // A read alone cannot fence an unanswered update. A confirmed conditional removal
+            // invalidates its old ETag, even if it arrives after this day is recreated. Preserve
+            // the local baseline so the normal render restores only still-shared work.
+            const fenced = yield* attached.write({
+              teamId,
+              author: state.author,
+              path: teamDailyPath(state.author, day, state.deviceId),
+              text: null,
+              etag: found.etag,
+              storageKey: record.storageKey ?? null,
+              freshProjects: [],
+              stillShared: Effect.succeed(true),
+            });
+            if (fenced.kind === "lost") return "lost" as const;
+            if (fenced.kind !== "written") return "held" as const;
+            record.etag = null;
+            record.publishedSha = null;
+            confirmedChange = true;
+          }
         } else {
           // Someone changed the file, so it can't be known whether the write landed. Nothing is
           // assumed published or unpublished: the day waits, with its attempt kept, until the
@@ -663,6 +695,7 @@ export const makeTeamDailyPass = (input: {
           yield* advanceMonth(team, day);
           record.attempt = {
             sha,
+            conditional: true,
             included: Object.fromEntries(rendered.included),
             generations: Object.fromEntries(
               [...rendered.included.keys()].map((threadId) => [

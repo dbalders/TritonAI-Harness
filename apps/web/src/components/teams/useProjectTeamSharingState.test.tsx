@@ -18,6 +18,7 @@ vi.mock("../../state/threads", () => ({ threadEnvironment: { setTeamSharing: "se
 vi.mock("../../state/entities", () => ({ readEnvironmentSupportsTeamSharing: () => true }));
 
 import { useProjectTeamSharing } from "./useProjectTeamSharing";
+import { emitUcsdAccountChanged } from "../../hooks/ucsdAccountEvents";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -86,7 +87,7 @@ it("clears the team on a definite answer that the project isn't shared", async (
 it("shows nothing of the previous account after the account changes, even if its check fails", async () => {
   await act(async () => root.render(<SharingNotice />));
   await act(async () => mocks.replies[0]!(shared("Alice's team")));
-  await act(async () => window.dispatchEvent(new Event("tritonai-account-changed")));
+  await act(async () => emitUcsdAccountChanged(EnvironmentId.make("env")));
   expect(container.textContent).toBe("none");
   await act(async () => mocks.replies[1]!(failed("unavailable")));
   expect(container.textContent).toBe("none");

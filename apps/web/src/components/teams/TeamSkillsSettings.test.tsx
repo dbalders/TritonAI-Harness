@@ -169,6 +169,58 @@ it("turns one skill off by its switch while the team can't be checked", async ()
   expect(mocks.calls[1]).toEqual({ action: "skill-disable", projectId, path });
 });
 
+it("shows an empty approval list's problem and recovers through Retry", async () => {
+  let available = false;
+  mocks.reply = (command) => {
+    if (command.action === "skill-enabled")
+      return available
+        ? { projects: [link], storage: null, enabledSkills: [] }
+        : { projects: [], storage: null, enabledSkills: [], problem: moved };
+    if (command.action === "skill-list")
+      return {
+        projects: [],
+        storage: {
+          status: "connected",
+          account: null,
+          flowId: null,
+          userCode: null,
+          verificationUri: null,
+          expiresAt: null,
+          retryAfterSeconds: null,
+          document: null,
+          files: [
+            {
+              id: "1",
+              path,
+              etag: "e",
+              size: 1,
+              summary: { title: "Grant summary", description: "Summaries", hidden: false },
+            },
+          ],
+        },
+      };
+    throw new Error(`Unexpected ${command.action}`);
+  };
+  await render();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(moved);
+  expect(text()).toContain("No team skills are on for you");
+  expect(text()).not.toContain("aren’t sent");
+  expect(button("Turn all off")).toBeUndefined();
+  expect(button("Retry")).toBeDefined();
+  expect(text()).not.toContain("No team skills yet");
+  available = true;
+  await press(button("Retry"));
+  expect(mocks.calls).toEqual([
+    { action: "skill-enabled", projectId },
+    { action: "skill-enabled", projectId },
+    { action: "skill-list", projectId },
+  ]);
+  expect(text()).toContain("Grant summary");
+  expect(switches()[0]?.getAttribute("aria-checked")).toBe("false");
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(button("Retry")).toBeUndefined();
+});
+
 it("doesn't call a team empty when its skills couldn't be listed", async () => {
   mocks.reply = (command) =>
     command.action === "skill-enabled"

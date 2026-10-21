@@ -384,6 +384,27 @@ export const executeDocument = (input: {
         });
       const parent = yield* locateParent(true);
       let etag = command.etag;
+      if (etag === null && isTeamDailyPath(path)) {
+        // A delayed create must never resurrect withdrawn memory after this path is removed.
+        // Reserve it without content first; every memory-bearing request then needs its ETag.
+        yield* guarded;
+        const reserved = yield* send(
+          HttpClientRequest.put(
+            `${anchoredPath}:/content?@microsoft.graph.conflictBehavior=fail`,
+          ).pipe(
+            HttpClientRequest.bodyUint8Array(new Uint8Array(), "text/markdown; charset=utf-8"),
+          ),
+        );
+        if (reserved.status === 409 || reserved.status === 412) return yield* changedElsewhere();
+        if (reserved.status !== 200 && reserved.status !== 201)
+          return yield* unavailable(
+            "The daily note could not be prepared. Harness will try again.",
+          );
+        const saved = yield* checked(yield* parse(reserved), parent, filename, false);
+        if (!saved.eTag)
+          return yield* unavailable("Shared storage did not confirm the daily note's version.");
+        etag = saved.eTag;
+      }
       for (let attempt = 0; attempt < 3; attempt++) {
         yield* guarded;
         // Without a confirmed version, only a new file is created; an existing one is left alone.

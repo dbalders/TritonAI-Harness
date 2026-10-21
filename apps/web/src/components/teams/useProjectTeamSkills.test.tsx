@@ -18,6 +18,7 @@ vi.mock("../../state/server", () => ({ serverEnvironment: { teamProjects: "teamP
 vi.mock("../settings/useSettingsProjectGroups", () => ({ useSettingsProjectGroups: () => [] }));
 
 import { useProjectTeamSkills } from "./useProjectTeamSkills";
+import { emitUcsdAccountChanged } from "../../hooks/ucsdAccountEvents";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -39,7 +40,7 @@ const reply = (title: string): { _tag: "Success"; value: TeamProjectResult } => 
     enabledSkills: [{ path: "Skills/note.md", title, version: "1".repeat(64), state: "active" }],
   },
 });
-const changed = () => act(async () => window.dispatchEvent(new Event("tritonai-account-changed")));
+const changed = () => act(async () => emitUcsdAccountChanged(environmentId));
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

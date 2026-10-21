@@ -3,6 +3,7 @@ import { TeamsError, type TeamStorageCommand } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { teamDailyPath } from "../memory/teamDaily.ts";
 import { executeDocument, type TeamDailyWriteCommand } from "./teamDocuments.ts";
 
 const actor = "a".repeat(43);
@@ -34,6 +35,7 @@ type Item = {
 };
 function fixture() {
   const items = new Map<string, Item>();
+  let nextItemId = 0;
   const requests: HttpClientRequest.HttpClientRequest[] = [];
   const downloads: HttpClientRequest.HttpClientRequest[] = [];
   let allowed = true;
@@ -95,7 +97,7 @@ function fixture() {
         const parent = resolved?.id ?? anchor!.replace(/\/$/u, "");
         if (find(parent, [body.name])) return response(409);
         const item: Item = {
-          id: `item-${items.size}`,
+          id: `item-${nextItemId++}`,
           parent,
           name: body.name,
           folder: true,
@@ -122,8 +124,9 @@ function fixture() {
         if (target && url.searchParams.get("@microsoft.graph.conflictBehavior") === "fail")
           return response(409);
         if (target && request.headers["if-match"] !== etag(target)) return response(412);
+        if (!target && request.headers["if-match"] !== undefined) return response(404);
         const item = target ?? {
-          id: `item-${items.size}`,
+          id: `item-${nextItemId++}`,
           parent: folder?.id ?? parent!,
           name: path.at(-1)!,
           folder: false,
@@ -207,6 +210,53 @@ function fixture() {
 }
 
 describe("private team document transport", () => {
+  it.effect("reserves a new daily file empty before sending version-checked memory", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const command: TeamDailyWriteCommand = {
+        action: "daily-write",
+        teamId,
+        path: teamDailyPath(actor, "2026-10-10", device),
+        text: "# Private work summary",
+        etag: null,
+        guard: Effect.void,
+      };
+      const result = yield* f.execute(command);
+      expect(result?.text).toBe(command.text);
+      const writes = f.requests.filter((request) => request.method === "PUT");
+      expect(writes).toHaveLength(2);
+      expect(writes[0]?.body).toMatchObject({ _tag: "Uint8Array", body: new Uint8Array() });
+      expect(writes[0]?.headers["if-match"]).toBeUndefined();
+      expect(writes[1]?.headers["if-match"]).toBeDefined();
+    }),
+  );
+  it.effect("sends no memory if sharing stops after reserving the daily file", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      let guards = 0;
+      const result = yield* Effect.flip(
+        f.execute({
+          action: "daily-write",
+          teamId,
+          path: teamDailyPath(actor, "2026-10-10", device),
+          text: "# Work no longer shared",
+          etag: null,
+          guard: Effect.suspend(() =>
+            ++guards === 1
+              ? Effect.void
+              : Effect.fail(new TeamsError({ code: "forbidden", message: "Sharing stopped" })),
+          ),
+        }),
+      );
+      expect(result.code).toBe("forbidden");
+      const writes = f.requests.filter((request) => request.method === "PUT");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.body).toMatchObject({ _tag: "Uint8Array", body: new Uint8Array() });
+      expect([...f.items.values()].filter((item) => !item.folder).map((item) => item.text)).toEqual(
+        [""],
+      );
+    }),
+  );
   it.effect("publishes separate actor/device records and retries without overwriting", () =>
     Effect.gen(function* () {
       const f = fixture();

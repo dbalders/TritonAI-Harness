@@ -17,7 +17,7 @@ import {
   TextGeneration,
 } from "../textGeneration/TextGeneration.ts";
 import { MAX_CATCH_UP_DAYS, PARTIAL_INTERVAL_MS, STREAMING_GRACE_HOURS } from "./DailyMemory.ts";
-import { teamDailyPath } from "./teamDaily.ts";
+import { teamDailyPath, type TeamDailyState, type Writable } from "./teamDaily.ts";
 import { makeTeamDailyPass } from "./teamDailyPass.ts";
 import type {
   TeamDailyAccount,
@@ -48,7 +48,7 @@ function fakeTeams() {
     every: (test: (write: (typeof allWrites)[number]) => boolean) => allWrites.every(test),
   };
   let version = 0;
-  const pending: Array<{ key: string; text: string | null }> = [];
+  const pending: Array<{ key: string; text: string | null; etag: string | null }> = [];
   const state = {
     account: {
       kind: "signed-in",
@@ -115,8 +115,17 @@ function fakeTeams() {
             )
               return { kind: "held", message: "A project link changed." };
           const key = `${root}/${input.teamId}/${input.path}`;
+          const daily = input.path.endsWith(".md");
+          let etag = input.etag;
+          if (daily && input.text !== null && etag === null) {
+            if (files.has(key)) return { kind: "changed", message: "Changed in SharePoint." };
+            etag = `v${++version}`;
+            files.set(key, { text: "", etag });
+          }
+          if (daily && etag !== null && files.get(key)?.etag !== etag)
+            return { kind: "changed", message: "Changed in SharePoint." };
           if (state.delayPaths?.test(input.path)) {
-            pending.push({ key, text: input.text });
+            pending.push({ key, text: input.text, etag });
             return { kind: "held", message: "No answer.", uncertain: true };
           }
           allWrites.push({ teamId: input.teamId, path: input.path, text: input.text });
@@ -127,11 +136,11 @@ function fakeTeams() {
               ? { kind: "held", message: "No answer.", uncertain: true }
               : { kind: "written", etag: null, storageKey: root };
           }
-          const etag = `v${++version}`;
-          files.set(key, { text: input.text, etag });
+          const savedEtag = `v${++version}`;
+          files.set(key, { text: input.text, etag: savedEtag });
           return lost
             ? { kind: "held", message: "No answer.", uncertain: true }
-            : { kind: "written", etag, storageKey: root };
+            : { kind: "written", etag: savedEtag, storageKey: root };
         });
       }),
     inspect: (input) =>
@@ -162,8 +171,16 @@ function fakeTeams() {
     allWrites,
     completeDelayedWrites: () => {
       for (const write of pending.splice(0)) {
+        if (write.etag !== null && files.get(write.key)?.etag !== write.etag) continue;
+        if (write.etag === null && files.has(write.key)) continue;
         if (write.text === null) files.delete(write.key);
         else files.set(write.key, { text: write.text, etag: `v${++version}` });
+      }
+    },
+    legacyPendingCreates: () => {
+      for (const write of pending) {
+        files.delete(write.key);
+        write.etag = null;
       }
     },
     state,
@@ -903,7 +920,7 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
     }),
   );
   it.effect.each([false, true])(
-    "retains an uncertain upload through missing or previous-version reads before withdrawal (previously published: %s)",
+    "fences an uncertain upload before withdrawal, even if it never arrives (previously published: %s)",
     (previouslyPublished) =>
       Effect.gen(function* () {
         const harness = yield* makeHarness({});
@@ -926,20 +943,83 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
           const device = yield* deviceIdOf(harness.baseDir);
           yield* setSharing("t-a1", false);
           yield* pass.run;
-          const warning = (yield* pass.status(TEAM_A))?.message ?? "";
+          assert.isNull(teams.file(TEAM_A, dayOf(10), device));
 
-          // A second process must retain the obligation while the earlier request can still land.
+          // Recovery completed without the original arriving, and survives another process.
           const restarted = yield* makePass(harness.baseDir);
           yield* restarted.attach(teams.source);
           yield* restarted.run;
           teams.completeDelayedWrites();
           teams.state.delayPaths = null;
-          assert.include(teams.file(TEAM_A, dayOf(10), device)!, "work later withdrawn");
+          assert.isNull(teams.file(TEAM_A, dayOf(10), device));
           yield* restarted.run;
           assert.isNull(teams.file(TEAM_A, dayOf(10), device));
-          assert.include(warning, "chose not to share");
+          assert.isNull((yield* restarted.status(TEAM_A))?.message);
         }).pipe(Effect.provide(harness.layer));
       }),
+  );
+
+  it.effect("retains legacy unversioned creates until their outcome is known", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "legacy work later withdrawn", at(10, 10));
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        teams.state.delayPaths = /2026-10-10.*\.md$/u;
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        const fs = yield* FileSystem.FileSystem;
+        const path = `${harness.baseDir}/team-daily/state.json`;
+        const state = JSON.parse(yield* fs.readFileString(path)) as Writable<TeamDailyState>;
+        delete state.teams[TEAM_A]!.days[dayOf(10)]!.attempt!.conditional;
+        yield* fs.writeFileString(path, JSON.stringify(state));
+        teams.legacyPendingCreates();
+        teams.state.delayPaths = null;
+        yield* setSharing("t-a1", false);
+        const restarted = yield* makePass(harness.baseDir);
+        yield* restarted.attach(teams.source);
+        yield* restarted.run;
+        assert.include((yield* restarted.status(TEAM_A))?.message ?? "", "chose not to share");
+        teams.completeDelayedWrites();
+        assert.include(
+          teams.file(TEAM_A, dayOf(10), state.deviceId)!,
+          "legacy work later withdrawn",
+        );
+        yield* restarted.run;
+        assert.isNull(teams.file(TEAM_A, dayOf(10), state.deviceId));
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+  it.effect("retries a journaled attempt whose request never reached storage", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "work survives an unanswered request", at(10, 10));
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        teams.state.hold = { kind: "held", message: "No response", uncertain: true };
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        const device = yield* deviceIdOf(harness.baseDir);
+        assert.isNull(teams.file(TEAM_A, dayOf(10), device));
+        teams.state.hold = null;
+        const restarted = yield* makePass(harness.baseDir);
+        yield* restarted.attach(teams.source);
+        yield* restarted.run;
+        assert.include(
+          teams.file(TEAM_A, dayOf(10), device)!,
+          "work survives an unanswered request",
+        );
+        assert.isNull((yield* restarted.status(TEAM_A))?.message);
+      }).pipe(Effect.provide(harness.layer));
+    }),
   );
 
   it.effect.each(

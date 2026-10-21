@@ -116,6 +116,8 @@ const Day = Schema.Struct({
     Schema.Struct({
       sha: Schema.NullOr(Schema.String),
       included: Schema.Record(Schema.String, Schema.String),
+      /** Only an empty reservation may be created; memory writes require an existing ETag. */
+      conditional: Schema.optionalKey(Schema.Literal(true)),
       /** The transport definitely rejected this write; inspecting it only reconciles versions. */
       confirmedUnsent: Schema.optionalKey(Schema.Literal(true)),
       /**

@@ -295,13 +295,15 @@ function ProjectTeamSkills({
         title={`Skills from ${teamName} for ${projectTitle}${environmentLabel ? ` on ${environmentLabel}` : ""}`}
         description={`Turn a skill on to have Harness add it to each message you send in ${projectTitle}. It applies to you and this project only, after you review it, and nothing is installed. If someone edits it, Harness stops adding it until you review the update.`}
       />
-      {problem && enabled.length > 0 ? (
+      {problem ? (
         <SettingsRow
           title="Team skills can’t be checked"
           description={
             <span role="alert">
-              {problem} Messages in {projectTitle} aren’t sent while these skills are on. Turn them
-              off to send without them, or try again.
+              {problem}{" "}
+              {enabled.length > 0
+                ? `Messages in ${projectTitle} aren’t sent while these skills are on. Turn them off to send without them, or try again.`
+                : "No team skills are on for you in this project. Try again to see the team’s available skills."}
             </span>
           }
           control={
@@ -309,9 +311,16 @@ function ProjectTeamSkills({
               <Button size="xs" variant="outline" disabled={busy} onClick={() => void load()}>
                 Retry
               </Button>
-              <Button size="xs" variant="outline" disabled={busy} onClick={() => void turnAllOff()}>
-                Turn all off
-              </Button>
+              {enabled.length > 0 ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => void turnAllOff()}
+                >
+                  Turn all off
+                </Button>
+              ) : null}
             </div>
           }
         />

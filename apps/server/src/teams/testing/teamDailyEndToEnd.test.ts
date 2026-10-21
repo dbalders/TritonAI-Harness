@@ -224,9 +224,13 @@ describe("Daily team memory over the synthetic world", () => {
       }),
     );
 
-    it.effect(
-      "withdraws an unanswered real-service upload after missing-file checks and restart",
-      () =>
+    it.effect.each([
+      { previouslyPublished: false, delayReservation: false },
+      { previouslyPublished: true, delayReservation: false },
+      { previouslyPublished: false, delayReservation: true },
+    ])(
+      "recovers a missing-answer upload before withdrawal and restart (previously published: $previouslyPublished, reservation: $delayReservation)",
+      ({ previouslyPublished, delayReservation }) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-late-e2e-" });
@@ -236,7 +240,7 @@ describe("Daily team memory over the synthetic world", () => {
             const world = makeSyntheticTeamsWorld();
             world.switchTo("member");
             let delayedRequest: HttpClientRequest.HttpClientRequest | null = null;
-            let delayNextDayWrite = true;
+            let delayNextDayWrite = false;
             const http = HttpClient.make((request) =>
               Effect.suspend(() => {
                 const pathname = new URL(request.url).pathname;
@@ -244,7 +248,11 @@ describe("Daily team memory over the synthetic world", () => {
                   delayNextDayWrite &&
                   request.method === "PUT" &&
                   pathname.includes("/Daily/") &&
-                  pathname.endsWith(".md:/content")
+                  pathname.endsWith(".md:/content") &&
+                  request.body._tag === "Uint8Array" &&
+                  (delayReservation
+                    ? request.body.body.byteLength === 0
+                    : request.body.body.byteLength > 0)
                 ) {
                   delayNextDayWrite = false;
                   delayedRequest = request;
@@ -275,8 +283,20 @@ describe("Daily team memory over the synthetic world", () => {
             yield* services.project.execute("s", { action: "bind", teamId: alpha, projectId });
             yield* services.connectMicrosoft;
             yield* seed;
-            yield* TestClock.setTime(new Date(2026, 9, 10, 15).getTime());
-            yield* say("late", "withdrawn", "Unanswered work later withdrawn", at(10, 12));
+            yield* say("keep", "kept", "Still shared work", at(10, 10));
+            if (previouslyPublished) {
+              yield* say(
+                "original",
+                "withdrawn",
+                "Previously shared work later withdrawn",
+                at(10, 11),
+              );
+              yield* TestClock.setTime(new Date(2026, 9, 10, 13).getTime());
+              yield* pass.run;
+            }
+            delayNextDayWrite = true;
+            yield* TestClock.setTime(new Date(2026, 9, 10, 17).getTime());
+            yield* say("late", "withdrawn", "Unanswered work later withdrawn", at(10, 14));
             yield* pass.run;
             expect(delayedRequest).not.toBeNull();
             const state = JSON.parse(
@@ -292,11 +312,18 @@ describe("Daily team memory over the synthetic world", () => {
               Effect.provideService(TeamDailyHost, TeamDailyHost.of(restarted)),
             );
             yield* restarted.run;
-            expect((yield* restarted.status(alpha))?.message).toContain("chose not to share");
-            yield* world.http.execute(delayedRequest!);
-            expect(world.readDocument("alpha", path)).toContain("Unanswered work later withdrawn");
+            // It recovers even if the abandoned request never arrives: kept work remains.
+            expect(world.readDocument("alpha", path)).toContain("Still shared work");
+            expect(world.readDocument("alpha", path)).not.toContain("work later withdrawn");
+            expect((yield* restarted.status(alpha))?.message).toBeNull();
+            if (delayReservation) expect(delayedRequest!.headers["if-match"]).toBeUndefined();
+            else expect(delayedRequest!.headers["if-match"]).toBeDefined();
+            // Completing the old request after recreation must not resurrect withdrawn work.
+            const late = yield* world.http.execute(delayedRequest!);
+            expect(delayReservation ? [409] : [404, 412]).toContain(late.status);
             yield* restarted.run;
-            expect(world.readDocument("alpha", path)).toBeUndefined();
+            expect(world.readDocument("alpha", path)).toContain("Still shared work");
+            expect(world.readDocument("alpha", path)).not.toContain("work later withdrawn");
           }).pipe(Effect.provide(layer(baseDir)));
         }),
     );

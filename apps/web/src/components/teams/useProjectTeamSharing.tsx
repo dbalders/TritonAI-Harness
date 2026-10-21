@@ -5,6 +5,7 @@ import { readEnvironmentSupportsTeamSharing } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { onUcsdAccountChanged } from "../../hooks/ucsdAccountEvents";
 
 /**
  * Whether work in a project reaches its linked team's daily memory, as the server sees it now:
@@ -23,14 +24,14 @@ export function useProjectTeamSharing(
   );
   const key = environmentId && projectId ? `${environmentId}:${projectId}:${accountChanges}` : null;
   const refresh = key === null ? null : `${key}\n${sentMessages}`;
-  useEffect(() => {
-    const changed = () => {
-      setState(null);
-      setAccountChanges((count) => count + 1);
-    };
-    window.addEventListener("tritonai-account-changed", changed);
-    return () => window.removeEventListener("tritonai-account-changed", changed);
-  }, []);
+  useEffect(
+    () =>
+      onUcsdAccountChanged(environmentId, () => {
+        setState(null);
+        setAccountChanges((count) => count + 1);
+      }),
+    [environmentId],
+  );
   useEffect(() => {
     if (!environmentId || !projectId || key === null || refresh === null) return;
     if (!readEnvironmentSupportsTeamSharing(environmentId)) return;

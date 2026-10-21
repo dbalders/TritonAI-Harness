@@ -8,12 +8,16 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { accountCallbackId } from "@t3tools/shared/accountCallback";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 
-import { reconcileDraftTeamMemoryAccount } from "../components/teams/teamMemoryDrafts";
+import {
+  draftTeamMemoryAccountRevision,
+  reconcileDraftTeamMemoryAccount,
+} from "../components/teams/teamMemoryDrafts";
 import { toastManager } from "../components/ui/toast";
 import { ensureLocalApi } from "../localApi";
 import { serverEnvironment } from "../state/server";
 import { usePreparedConnection } from "../state/session";
 import { useAtomCommand } from "../state/use-atom-command";
+import { emitUcsdAccountChanged, onUcsdAccountChanged } from "./ucsdAccountEvents";
 export function useUcsdAccount(environmentId: EnvironmentId): AccountLoginState & {
   controller: ReturnType<typeof createAccountLoginController>;
   canSignIn: boolean;
@@ -77,26 +81,30 @@ export function useUcsdAccount(environmentId: EnvironmentId): AccountLoginState 
       void controller.check();
     };
     window.addEventListener("focus", checkOnReturn);
-    window.addEventListener("tritonai-account-changed", checkOnReturn);
+    const cancelAccountChange = onUcsdAccountChanged(environmentId, checkOnReturn);
     return () => {
       window.removeEventListener("focus", checkOnReturn);
-      window.removeEventListener("tritonai-account-changed", checkOnReturn);
+      cancelAccountChange();
     };
-  }, [controller]);
+  }, [controller, environmentId]);
 
   const accountStatus = state.account?.status;
   const identity = state.account?.profile
     ? `${state.account.profile.issuer}:${state.account.profile.subject}`
     : null;
   useEffect(() => {
-    window.dispatchEvent(new Event("tritonai-account-changed"));
     if (accountStatus === undefined) return;
     // Unsent team memory and skills belong to the account that added them; sign-out or a switch
     // removes them.
+    const previousRevision = draftTeamMemoryAccountRevision(environmentId);
     const { removed, unresolved } = reconcileDraftTeamMemoryAccount(
       environmentId,
       accountStatus === "signed-in" ? identity : null,
     );
+    // Reconcile persisted drafts on the first known status too. Only an actual transition
+    // from a known account invalidates other consumers, once per environment.
+    if (previousRevision > 0 && draftTeamMemoryAccountRevision(environmentId) !== previousRevision)
+      emitUcsdAccountChanged(environmentId);
     if (unresolved > 0)
       toastManager.add({
         type: "warning",

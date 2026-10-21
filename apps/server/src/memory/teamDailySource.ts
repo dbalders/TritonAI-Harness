@@ -79,6 +79,8 @@ export interface TeamDailySource {
    * file is never written anywhere else. `stillShared` is run again immediately before each
    * request that changes the file, including retries; when it answers false the write is
    * abandoned and `held` returned.
+   * New files are reserved empty before any memory-bearing PUT, which must use If-Match.
+   * An unanswered memory write therefore cannot recreate a file after it is removed.
    */
   readonly write: (input: {
     readonly teamId: string;

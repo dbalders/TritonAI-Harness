@@ -76,6 +76,7 @@ describe("Daily team memory writes", () => {
       });
       expect(yield* team.write("# shared")).toMatchObject({ kind: "written", etag: "v1" });
       expect(team.changes()).toEqual([
+        expect.objectContaining({ method: "PUT", body: "" }),
         expect.objectContaining({ method: "PUT", body: "# shared" }),
       ]);
     }),
@@ -262,9 +263,14 @@ describe("Daily team memory writes", () => {
         expect(team.changes()).toEqual([]);
         yield* team.connect(teamA);
         expect(yield* team.write(text)).toMatchObject({ kind: "written" });
-        expect(team.changes()).toEqual([
-          expect.objectContaining({ method: kind === "first upload" ? "PUT" : "DELETE" }),
-        ]);
+        expect(team.changes()).toEqual(
+          kind === "first upload"
+            ? [
+                expect.objectContaining({ method: "PUT", body: "" }),
+                expect.objectContaining({ method: "PUT", body: "# shared" }),
+              ]
+            : [expect.objectContaining({ method: "DELETE" })],
+        );
       }),
   );
 });
