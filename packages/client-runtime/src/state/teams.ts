@@ -23,6 +23,8 @@ export function createTeamsController(
   let generation = 0;
   let active = false;
   let users = 0;
+  let workspaces = 0;
+  let pendingAction: TeamCommand["action"] | null = null;
   let listedAt = -Infinity;
   const listeners = new Set<() => void>();
   const publish = (value: Partial<TeamsState>) => {
@@ -32,15 +34,18 @@ export function createTeamsController(
   const run = async (command: TeamCommand): Promise<boolean> => {
     if (!active || state.busy) return false;
     const request = ++generation;
+    pendingAction = command.action;
     if (command.action === "list") listedAt = now();
     publish({ busy: true, error: null });
     try {
       const result = await execute(command);
       if (!active || generation !== request) return false;
+      pendingAction = null;
       publish({ result, busy: false });
       return true;
     } catch (error) {
-      if (active && generation === request)
+      if (active && generation === request) {
+        pendingAction = null;
         publish({
           // Keep the mounted editor through retryable failures; confirmed access
           // failures and account teardown still discard all private state.
@@ -53,6 +58,7 @@ export function createTeamsController(
           busy: false,
           error: error instanceof Error ? error.message : "Teams could not be reached.",
         });
+      }
       return false;
     }
   };
@@ -64,27 +70,37 @@ export function createTeamsController(
         listeners.delete(listener);
       };
     },
-    /** Each view activates while it shows the account, which rereads the list. */
-    activate() {
+    /** Indicators share the list without owning the workspace's open team or requests. */
+    activate(view: "workspace" | "indicator" = "workspace") {
       if (users++ === 0) {
         active = true;
         publish({ result: null, busy: false, error: null });
       }
-      void run({ action: "list" });
+      if (view === "workspace") workspaces++;
+      if (state.result === null) void run({ action: "list" });
       let stopped = false;
       return () => {
         if (stopped) return;
         stopped = true;
-        generation++;
+        if (view === "workspace") workspaces--;
         if (--users > 0) {
-          // The views left only need the list; the open team, any new code, and late replies
-          // close with the page.
-          publish({
-            result: state.result && { ...state.result, team: null, invitationCode: null },
-            busy: false,
-          });
+          if (view === "workspace" && workspaces === 0) {
+            // Only the last workspace closes private team details. A pending list still
+            // belongs to the remaining indicators; their lifecycle never cancels a command.
+            const cancelRequest = pendingAction !== null && pendingAction !== "list";
+            if (cancelRequest) {
+              generation++;
+              pendingAction = null;
+            }
+            publish({
+              result: state.result && { ...state.result, team: null, invitationCode: null },
+              ...(cancelRequest ? { busy: false } : {}),
+            });
+          }
           return;
         }
+        generation++;
+        pendingAction = null;
         active = false;
         publish({ result: null, busy: false, error: null });
       };

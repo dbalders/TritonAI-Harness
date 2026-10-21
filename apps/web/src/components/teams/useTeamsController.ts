@@ -55,7 +55,7 @@ export function usePendingTeamInvitationCount(
   const count = useSyncExternalStore(controller?.subscribe ?? noSubscription, () =>
     controller ? pendingTeamInvitationCount(controller.getSnapshot()) : 0,
   );
-  useEffect(() => controller?.activate(), [controller]);
+  useEffect(() => controller?.activate("indicator"), [controller]);
   useEffect(() => {
     if (checkedAt !== null) void controller?.refreshList(INVITATION_REFRESH_MS);
   }, [checkedAt, controller]);

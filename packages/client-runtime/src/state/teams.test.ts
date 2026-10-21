@@ -147,13 +147,9 @@ describe("pending invitation count", () => {
       team: openedTeam,
       invitationCode: "triton-team:secret",
     };
-    const execute = vi
-      .fn()
-      .mockResolvedValueOnce(invited("a"))
-      .mockResolvedValueOnce(invited("a"))
-      .mockResolvedValueOnce(opened);
+    const execute = vi.fn().mockResolvedValueOnce(invited("a")).mockResolvedValueOnce(opened);
     const controller = createTeamsController(execute);
-    const stopSidebar = controller.activate();
+    const stopSidebar = controller.activate("indicator");
     await vi.waitFor(() => expect(controller.getSnapshot().busy).toBe(false));
     const stopPage = controller.activate();
     await vi.waitFor(() => expect(controller.getSnapshot().busy).toBe(false));
@@ -169,6 +165,83 @@ describe("pending invitation count", () => {
     expect(pendingTeamInvitationCount(controller.getSnapshot())).toBe(1);
     stopSidebar();
     expect(controller.getSnapshot().result).toBeNull();
+  });
+
+  it("keeps an open team and invitation code when an indicator mounts and unmounts", async () => {
+    const opened = { ...invited("a"), team: openedTeam, invitationCode: "triton-team:secret" };
+    const execute = vi.fn(async (): Promise<TeamsResult> => invited("a"));
+    const controller = createTeamsController(execute);
+    const stopPage = controller.activate();
+    await vi.waitFor(() => expect(controller.getSnapshot().busy).toBe(false));
+    execute.mockResolvedValueOnce(opened);
+    await controller.run({ action: "get", teamId: "team" });
+
+    const stopSidebar = controller.activate("indicator");
+    expect(execute).toHaveBeenCalledTimes(2);
+    stopSidebar();
+    stopSidebar();
+    expect(controller.getSnapshot()).toEqual({ result: opened, busy: false, error: null });
+    stopPage();
+    expect(controller.getSnapshot().result).toBeNull();
+  });
+
+  it("accepts a confirmed membership reply when another view stops", async () => {
+    const opened = { ...invited("a"), team: openedTeam };
+    const execute = vi.fn(async (): Promise<TeamsResult> => invited("a"));
+    const controller = createTeamsController(execute);
+    const stopPage = controller.activate();
+    const stopSidebar = controller.activate("indicator");
+    await vi.waitFor(() => expect(controller.getSnapshot().busy).toBe(false));
+    execute.mockResolvedValueOnce(opened);
+    await controller.run({ action: "get", teamId: "team" });
+    const pending = Promise.withResolvers<TeamsResult>();
+    execute.mockReturnValueOnce(pending.promise);
+    const result = controller.run({
+      action: "invite",
+      teamId: "team",
+      email: "member@ucsd.edu",
+      role: "member",
+      revision: 1,
+    });
+    stopSidebar();
+    expect(controller.getSnapshot().busy).toBe(true);
+    const confirmed = { ...opened, invitationCode: "triton-team:new-code" };
+    pending.resolve(confirmed);
+    expect(await result).toBe(true);
+    expect(controller.getSnapshot()).toEqual({ result: confirmed, busy: false, error: null });
+    stopPage();
+  });
+
+  it("keeps an indicator's pending list when the workspace leaves", async () => {
+    const pending = Promise.withResolvers<TeamsResult>();
+    const execute = vi.fn(() => pending.promise);
+    const controller = createTeamsController(execute);
+    const stopSidebar = controller.activate("indicator");
+    const stopPage = controller.activate();
+    stopPage();
+    expect(controller.getSnapshot().busy).toBe(true);
+    pending.resolve(invited("a"));
+    await pending.promise;
+    expect(pendingTeamInvitationCount(controller.getSnapshot())).toBe(1);
+    expect(controller.getSnapshot().busy).toBe(false);
+    stopSidebar();
+  });
+
+  it("retains the open team until the last workspace leaves", async () => {
+    const opened = { ...invited("a"), team: openedTeam };
+    const execute = vi.fn(async (): Promise<TeamsResult> => invited("a"));
+    const controller = createTeamsController(execute);
+    const stopSidebar = controller.activate("indicator");
+    const stopFirstPage = controller.activate();
+    const stopSecondPage = controller.activate();
+    await vi.waitFor(() => expect(controller.getSnapshot().busy).toBe(false));
+    execute.mockResolvedValueOnce(opened);
+    await controller.run({ action: "get", teamId: "team" });
+    stopFirstPage();
+    expect(controller.getSnapshot().result).toBe(opened);
+    stopSecondPage();
+    expect(controller.getSnapshot().result).toEqual(invited("a"));
+    stopSidebar();
   });
 
   it("refreshes on account checks only when stale and no team is open", async () => {

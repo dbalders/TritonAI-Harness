@@ -11810,7 +11810,7 @@ export default function ChatView(props: ChatViewProps) {
             }
           />
         </header>
-        {isServerThread && activeProject ? (
+        {teamDialogsAvailable && activeProject ? (
           <>
             <ShareToTeamDialog
               environmentId={activeThread.environmentId}
@@ -11916,7 +11916,7 @@ export default function ChatView(props: ChatViewProps) {
                   ? {
                       onCiteAssistantText: citeAssistantTextStable,
                       ...(activeProject ? { onRunShellCommand: runShellCommandStable } : {}),
-                      ...(isServerThread && activeProject
+                      ...(teamDialogsAvailable
                         ? {
                             onShareAssistantText: (text: string) =>
                               setTeamDialog({ kind: "share", threadId: activeThread.id, text }),
