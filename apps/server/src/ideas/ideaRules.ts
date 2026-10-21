@@ -89,8 +89,10 @@ function titleWords(title: string): Set<string> {
   );
 }
 
-// Blanks left for the user: `[your notes]` (but not a Markdown link), `<your file>`, `{{name}}`, `___`.
-const PLACEHOLDER = /\[[^\]\n]+\](?!\()|<[^<>\n]*\byour\b[^<>\n]*>|\{\{[^}\n]*\}\}|_{3,}/iu;
+// Blanks left for the user: `[your notes]`, `<your file>`, `{{name}}`, `___`. A bracket attached to
+// a word or path, such as `values[0]` or `app/[id]/page.tsx`, is code, and a Markdown link is a link.
+const PLACEHOLDER =
+  /(?<![\w/.\][-])\[[^\]\n]+\](?!\()|<[^<>\n]*\byour\b[^<>\n]*>|\{\{[^}\n]*\}\}|_{3,}/iu;
 // Asking the user to supply something first. Asking before changing anything stays allowed.
 const ASKS_FOR_INPUT =
   /\bpaste\b|\bask me (?:for|which|what|a few|some|to (?:paste|share|send|provide|describe|choose|pick|upload|attach|list))\b/iu;

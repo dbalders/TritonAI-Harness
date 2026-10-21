@@ -132,6 +132,9 @@ describe("needsUserInput", () => {
 
   it("allows complete prompts, including Markdown links", () => {
     expect(needsUserInput("Draft the fix, but ask me before changing anything.")).toBe(false);
+    expect(needsUserInput("Review app/[id]/page.tsx for errors.")).toBe(false);
+    expect(needsUserInput("Fix the values[0] access in report.ts.")).toBe(false);
+    expect(needsUserInput("Check matrix[i + 1] bounds in grid.py.")).toBe(false);
     expect(needsUserInput("Compare course_main.csv with the October export.")).toBe(false);
     expect(needsUserInput("Follow [the guide](https://example.edu/guide) to rerun it.")).toBe(
       false,
