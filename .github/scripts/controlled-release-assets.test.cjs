@@ -321,7 +321,7 @@ test("stable drafts require both hosted platforms with matching configuration", 
     assert.equal(prepare.env[key], windows.env[key]);
   }
   const sign = mac.steps.find((step) => step.name === "Sign, notarize, and verify packaged app");
-  assert.match(sign.run, /local-release-mac\.cjs/);
+  assert.match(sign.run, /finalize-macos-release\.cjs/);
   assert.match(sign.run, /verify-macos-update-zip\.cjs/);
   assert.equal(sign.env.RELEASE_VERSION, "${{ needs.preflight.outputs.version }}");
   const upload = mac.steps.find((step) => step.name === "Upload verified Mac artifacts");
