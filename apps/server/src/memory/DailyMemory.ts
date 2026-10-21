@@ -48,6 +48,7 @@ import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { hasStreamingMessages, loadDayActivity } from "./memoryActivity.ts";
+import { auxiliaryMessageCondition } from "../teams/teamActivity.ts";
 import { makeTeamDailyPass } from "./teamDailyPass.ts";
 import { TeamDailyHost } from "./teamDailySource.ts";
 import { addLocalDays, localDayAt, localDayRange, pendingMemoryDays } from "./memoryDays.ts";
@@ -133,6 +134,7 @@ const activityFingerprint = Effect.fn("memory.activityFingerprint")(function* (r
       AND m.created_at < ${range.endIso}
       AND m.is_streaming = 0
       AND m.role IN ('user', 'assistant')
+      AND ${auxiliaryMessageCondition(sql)}
       AND t.deleted_at IS NULL
       AND p.deleted_at IS NULL
   `;

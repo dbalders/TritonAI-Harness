@@ -20,7 +20,10 @@ import { TeamDocuments } from "./TeamDocuments";
 const retryable = (cause: unknown) =>
   cause instanceof Error &&
   "code" in cause &&
-  (cause.code === "conflict" || cause.code === "unavailable" || cause.code === "invalid_request");
+  (cause.code === "conflict" ||
+    cause.code === "unavailable" ||
+    cause.code === "invalid_request" ||
+    cause.code === "sign_in_required");
 
 /** One request at a time; a newer mount or unmount discards late answers. */
 export function useTeamProjectRequest(environmentId: EnvironmentId) {
@@ -378,6 +381,13 @@ function TeamProjectDocuments({
         if (!retryable(result.error)) {
           setState(null);
           setEditorState(null);
+        } else if (
+          result.error instanceof Error &&
+          "code" in result.error &&
+          result.error.code === "sign_in_required"
+        ) {
+          // Campus identity changes unmount the parent; a Microsoft reconnect must keep drafts.
+          setState(null);
         }
         return null;
       }

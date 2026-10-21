@@ -91,6 +91,32 @@ const harness = (
   });
 
 it.layer(NodeServices.layer)("ProjectOverview", (it) => {
+  it.effect(
+    "omits protected queued context from project suggestions without acceptance evidence",
+    () =>
+      Effect.gen(function* () {
+        const { calls, layer } = yield* harness(() => Effect.succeed(result()));
+        yield* Effect.gen(function* () {
+          yield* seed;
+          const secret = "UNSENT_PROTECTED_PROJECT_CONTEXT";
+          yield* seedV2Activity({
+            threadId: "thread-1",
+            projectId,
+            title: "Pilot work",
+            at: "2026-10-17T13:00:00.000Z",
+            messages: [{ id: "protected-project-message", role: "user", text: secret }],
+          });
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO teams_message_contexts (context_key, message_id, payload_json) VALUES ('protected-project-context', 'protected-project-message', '{}')`;
+          const service = yield* ProjectOverview.make;
+          yield* service.ensure(input);
+          yield* service.awaitIdle(projectId);
+          assert.lengthOf(calls, 1);
+          assert.notInclude(calls[0]!.context, secret);
+          assert.include(calls[0]!.context, "Prepare a pilot checklist for review.");
+        }).pipe(Effect.scoped, Effect.provide(layer));
+      }),
+  );
   it.effect("persists the result and reuses unchanged context across service restarts", () =>
     Effect.gen(function* () {
       const { calls, layer } = yield* harness(() => Effect.succeed(result()));

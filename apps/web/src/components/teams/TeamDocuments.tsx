@@ -1,6 +1,7 @@
 // @effect-diagnostics cryptoRandomUUID:off - Browser-generated request/device IDs; this component does not run in an Effect runtime.
 import {
   hasHiddenTeamText,
+  MAX_TEAM_DOCUMENT_BYTES,
   type TeamDocument,
   type TeamStorageCommand,
   type TeamStorageStatus,
@@ -260,7 +261,7 @@ export function TeamDocuments({
               readOnly={!canWrite}
               disabled={busy}
               onChange={(event) => setEdit(event.target.value)}
-              maxLength={60000}
+              maxLength={MAX_TEAM_DOCUMENT_BYTES}
             />
           </label>
           {canWrite ? (

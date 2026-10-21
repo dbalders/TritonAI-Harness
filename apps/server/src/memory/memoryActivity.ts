@@ -7,6 +7,7 @@
  */
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import { auxiliaryMessageCondition } from "../teams/teamActivity.ts";
 
 import {
   type MemoryActivityMessage,
@@ -117,6 +118,7 @@ export const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (
       AND m.created_at < ${range.endIso}
       AND m.is_streaming = 0
       AND m.role IN ('user', 'assistant')
+      AND ${auxiliaryMessageCondition(sql)}
       AND t.deleted_at IS NULL
       AND p.deleted_at IS NULL
       ${scope ? teamScopeCondition(sql, scope) : sql``}

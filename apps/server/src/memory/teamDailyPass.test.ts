@@ -117,20 +117,20 @@ function fakeTeams() {
           const key = `${root}/${input.teamId}/${input.path}`;
           if (state.delayPaths?.test(input.path)) {
             pending.push({ key, text: input.text });
-            return { kind: "held", message: "No answer." };
+            return { kind: "held", message: "No answer.", uncertain: true };
           }
           allWrites.push({ teamId: input.teamId, path: input.path, text: input.text });
           const lost = state.landThenLose?.test(input.path) ?? false;
           if (input.text === null) {
             files.delete(key);
             return lost
-              ? { kind: "held", message: "No answer." }
+              ? { kind: "held", message: "No answer.", uncertain: true }
               : { kind: "written", etag: null, storageKey: root };
           }
           const etag = `v${++version}`;
           files.set(key, { text: input.text, etag });
           return lost
-            ? { kind: "held", message: "No answer." }
+            ? { kind: "held", message: "No answer.", uncertain: true }
             : { kind: "written", etag, storageKey: root };
         });
       }),
@@ -902,6 +902,46 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
       }).pipe(Effect.provide(harness.layer));
     }),
   );
+  it.effect.each([false, true])(
+    "retains an uncertain upload through missing or previous-version reads before withdrawal (previously published: %s)",
+    (previouslyPublished) =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "work later withdrawn", at(10, 10));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          if (previouslyPublished) {
+            yield* pass.run;
+            yield* say("t-a1", "new work later withdrawn", at(10, 12));
+            yield* TestClock.setTime(new Date(2026, 9, 10, 16).getTime());
+          }
+          teams.state.delayPaths = /2026-10-10.*\.md$/u;
+          yield* pass.run;
+          teams.state.delayPaths = null;
+          const device = yield* deviceIdOf(harness.baseDir);
+          yield* setSharing("t-a1", false);
+          yield* pass.run;
+          const warning = (yield* pass.status(TEAM_A))?.message ?? "";
+
+          // A second process must retain the obligation while the earlier request can still land.
+          const restarted = yield* makePass(harness.baseDir);
+          yield* restarted.attach(teams.source);
+          yield* restarted.run;
+          teams.completeDelayedWrites();
+          teams.state.delayPaths = null;
+          assert.include(teams.file(TEAM_A, dayOf(10), device)!, "work later withdrawn");
+          yield* restarted.run;
+          assert.isNull(teams.file(TEAM_A, dayOf(10), device));
+          assert.include(warning, "chose not to share");
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
   it.effect.each(
     [true, false].map((passWhileOff) => ({
       passWhileOff,

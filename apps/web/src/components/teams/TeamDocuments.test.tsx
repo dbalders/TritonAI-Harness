@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import type { TeamStorageCommand, TeamStorageStatus } from "@t3tools/contracts";
+import { formatTeamNote, TeamStorageCommand, type TeamStorageStatus } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
@@ -116,4 +117,39 @@ it("keeps an unsaved edit when a refresh returns a new object for the same docum
   });
   await render({ ...current, lastChange: { ...editor } }, true);
   expect(content.value).toBe("My unsaved edit");
+});
+
+it("can edit and save a formatted document accepted at the publishing body limit", async () => {
+  const published: Extract<TeamStorageCommand, { action: "publish" }> = {
+    action: "publish",
+    teamId,
+    recordId: teamId,
+    deviceId: teamId,
+    kind: "memory",
+    title: "Pilot findings",
+    project: "Pilot project",
+    text: "x".repeat(60_000),
+  };
+  const isCommand = Schema.is(TeamStorageCommand);
+  expect(isCommand(published)).toBe(true);
+  const saved = formatTeamNote(published);
+  expect(saved.length).toBeGreaterThan(60_000);
+  await render({ ...current, text: saved }, true);
+  const content = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="Shared document content"]',
+  )!;
+  const edited = `${saved}\nReviewed.`;
+  expect(content.maxLength).toBeGreaterThanOrEqual(edited.length);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      content,
+      edited,
+    );
+    content.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await press("Save changes");
+  expect(calls).toEqual([
+    { action: "update-file", teamId, path, etag: current.etag, text: edited },
+  ]);
+  expect(isCommand(calls[0])).toBe(true);
 });

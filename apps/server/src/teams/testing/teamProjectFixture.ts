@@ -342,33 +342,36 @@ export function teamProjectFixture() {
     run: Effect.sync(() => void daily.runs++),
     status: () => Effect.succeed(null),
   });
-  const make = Effect.gen(function* () {
-    const storageService = yield* TeamStorage.make(config).pipe(
-      Effect.provideService(AccountService, account),
-      Effect.provideService(ServerSecretStore, secrets),
-      Effect.provideService(HttpClient.HttpClient, http),
-    );
-    const gate = yield* TeamMessageGate.TeamMessageGate.pipe(Effect.provide(gateLayer));
-    const service = yield* TeamProject.make.pipe(
-      Effect.provideService(AccountService, account),
-      Effect.provideService(ServerSecretStore, secrets),
-      Effect.provideService(ProjectService, projectService),
-      Effect.provideService(ProjectionStoreV2, query),
-      Effect.provideService(TeamMessageGate.TeamMessageGate, gate),
-      Effect.provideService(TeamStorage.TeamStorageService, storageService),
-      Effect.provideService(TeamMirrorHost, mirrorHost),
-      Effect.provideService(TeamDailyHost, dailyHost),
-    );
-    // Microsoft connection is per campus identity, as in the Teams page.
-    const connect = (teamId: string) =>
-      Effect.gen(function* () {
-        const flow = yield* storageService.execute("s", { action: "connect", teamId });
-        yield* storageService.execute("s", { action: "poll", teamId, flowId: flow.flowId! });
-      });
-    return { service, connect, account, storage: storageService, gate };
-  });
+  const makeWithGate = (sharedGate?: TeamMessageGate.TeamMessageGate["Service"]) =>
+    Effect.gen(function* () {
+      const storageService = yield* TeamStorage.make(config).pipe(
+        Effect.provideService(AccountService, account),
+        Effect.provideService(ServerSecretStore, secrets),
+        Effect.provideService(HttpClient.HttpClient, http),
+      );
+      const gate =
+        sharedGate ?? (yield* TeamMessageGate.TeamMessageGate.pipe(Effect.provide(gateLayer)));
+      const service = yield* TeamProject.make.pipe(
+        Effect.provideService(AccountService, account),
+        Effect.provideService(ServerSecretStore, secrets),
+        Effect.provideService(ProjectService, projectService),
+        Effect.provideService(ProjectionStoreV2, query),
+        Effect.provideService(TeamMessageGate.TeamMessageGate, gate),
+        Effect.provideService(TeamStorage.TeamStorageService, storageService),
+        Effect.provideService(TeamMirrorHost, mirrorHost),
+        Effect.provideService(TeamDailyHost, dailyHost),
+      );
+      // Microsoft connection is per campus identity, as in the Teams page.
+      const connect = (teamId: string) =>
+        Effect.gen(function* () {
+          const flow = yield* storageService.execute("s", { action: "connect", teamId });
+          yield* storageService.execute("s", { action: "poll", teamId, flowId: flow.flowId! });
+        });
+      return { service, connect, account, storage: storageService, gate };
+    });
   return {
-    make,
+    make: makeWithGate(),
+    makeWithGate,
     queuedMessages,
     gateValues,
     mirror,

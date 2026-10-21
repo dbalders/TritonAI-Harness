@@ -1,5 +1,6 @@
 import {
   type TeamDocument,
+  MAX_TEAM_DOCUMENT_BYTES,
   type TeamDocumentChange,
   type TeamDocumentVersion,
   type TeamStorage,
@@ -24,7 +25,7 @@ import {
   type HttpClientResponse,
 } from "effect/http";
 
-const MAX_BYTES = 64 * 1024;
+const MAX_BYTES = MAX_TEAM_DOCUMENT_BYTES;
 const roots = { memory: "Memory", sop: "SOPs", skill: "Skills" } as const;
 const uuid = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
 const documentPath = new RegExp(
@@ -170,6 +171,8 @@ export interface TeamDailyWriteCommand {
   readonly etag: string | null;
   /** Runs immediately before each request that changes the file; failing abandons the write. */
   readonly guard: Effect.Effect<void, TeamsError>;
+  /** Only content PUT/DELETE requests, after the final guard and token refresh. */
+  readonly observeMutation?: (state: "sent" | "rejected") => Effect.Effect<void>;
   /**
    * Replace the file even if it isn't the version last written. Only for change markers, which
    * hold no memory; a daily file someone changed is never overwritten or removed.

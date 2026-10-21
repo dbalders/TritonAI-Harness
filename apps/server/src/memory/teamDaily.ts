@@ -116,6 +116,8 @@ const Day = Schema.Struct({
     Schema.Struct({
       sha: Schema.NullOr(Schema.String),
       included: Schema.Record(Schema.String, Schema.String),
+      /** The transport definitely rejected this write; inspecting it only reconciles versions. */
+      confirmedUnsent: Schema.optionalKey(Schema.Literal(true)),
       /**
        * Each included thread's sharing generation (`sharing`) when the write was made. Text that
        * landed counts as published only for a section still of that generation.

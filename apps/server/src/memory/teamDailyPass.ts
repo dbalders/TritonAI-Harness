@@ -455,6 +455,9 @@ export const makeTeamDailyPass = (input: {
           record.publishedSha = attempt.sha;
           record.etag = found.etag;
         } else if (found.kind === "missing") {
+          // An unanswered create can still land after this read. Keep its sections and
+          // withdrawal obligation, including across restart, rather than assuming it never ran.
+          if (attempt.sha !== null && !attempt.confirmedUnsent) return "held" as const;
           confirmedChange = attempt.sha === null || record.publishedSha !== null;
           // A removal landed, or nothing was ever written.
           for (const section of Object.values(record.sections)) delete section.owesRemoval;
@@ -463,7 +466,8 @@ export const makeTeamDailyPass = (input: {
           record.publishedSha = null;
           record.etag = null;
         } else if (record.publishedSha !== null && sha256(found.text) === record.publishedSha) {
-          // The write didn't land: the version last confirmed is still there.
+          // Seeing the previous version once does not stop an unanswered update from landing.
+          if (!attempt.confirmedUnsent) return "held" as const;
           record.etag = found.etag;
         } else {
           // Someone changed the file, so it can't be known whether the write landed. Nothing is
@@ -682,16 +686,23 @@ export const makeTeamDailyPass = (input: {
             stillShared,
           });
           if (result.kind === "lost") return "lost" as const;
+          if (result.kind === "held" && !result.uncertain) {
+            delete record.attempt;
+            if (record.publishedSha === null) record.storageKey = null;
+            yield* writeState(state);
+          }
           if (result.kind === "held" && changedSharing) return "retry" as const;
           if (result.kind === "held") {
-            // The attempt stays recorded: the next pass learns whether it landed. Other days, and
-            // the marker, are still written; each write checks the account and access again.
+            // Uncertain content requests stay recorded until their remote outcome is known.
+            // Other days and the marker still progress; definite no-send failures can retry.
             noteWaiting();
             problems.push(withRemoval(`${day}: ${result.message}`));
             continue;
           }
           if (result.kind === "changed") {
-            // Kept: the next pass reads the file to learn what it holds before doing anything.
+            // Nothing was sent, but inspect the conflicting file before adopting a new version.
+            record.attempt.confirmedUnsent = true;
+            yield* writeState(state);
             noteWaiting();
             problems.push(withRemoval(`${day}: ${result.message}`));
             continue;

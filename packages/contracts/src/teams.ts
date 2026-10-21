@@ -7,12 +7,20 @@ export const MAX_TEAM_MEMORY_REFERENCES = 50;
 export const MAX_TEAM_PROJECT_SKILLS = 5;
 /** Carried references include up to five project skills added by the server. */
 export const MAX_TEAM_MESSAGE_REFERENCES = MAX_TEAM_MEMORY_REFERENCES + MAX_TEAM_PROJECT_SKILLS;
+/** Storage applies this UTF-8 byte limit to the full document, including its formatted header. */
+export const MAX_TEAM_DOCUMENT_BYTES = 64 * 1024;
 
 const Id = Schema.String.check(
   Schema.isPattern(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u),
 );
 const Identity = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{43}$/u));
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(80));
+// Updates contain the full formatted document. Every string that fits the storage byte
+// limit also fits this character bound; the transport still enforces UTF-8 bytes.
+const StoredDocumentText = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_TEAM_DOCUMENT_BYTES),
+);
 const Email = Schema.String.check(
   Schema.isMaxLength(254),
   Schema.isPattern(/^[^\s@]+@ucsd\.edu$/iu),
@@ -198,7 +206,7 @@ export const TeamStorageCommand = Schema.Union([
     teamId: Id,
     path: Schema.String.check(Schema.isMaxLength(512)),
     etag: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-    text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(60_000)),
+    text: StoredDocumentText,
   }),
   Schema.Struct({
     action: Schema.Literal("delete-file"),
@@ -561,7 +569,7 @@ export const TeamProjectCommand = Schema.Union([
     projectId: ProjectId,
     path: SkillPath,
     etag: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-    text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(60_000)),
+    text: StoredDocumentText,
   }),
   Schema.Struct({
     action: Schema.Literal("skill-delete"),
@@ -574,7 +582,7 @@ export const TeamProjectCommand = Schema.Union([
     projectId: ProjectId,
     path: MemoryPath,
     etag: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
-    text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(60_000)),
+    text: StoredDocumentText,
   }),
   Schema.Struct({
     action: Schema.Literal("memory-delete"),

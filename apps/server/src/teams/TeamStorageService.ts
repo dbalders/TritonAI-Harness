@@ -430,12 +430,22 @@ export const make = (
                   yield* verifyAuthorized(true);
                   if (command.action === "daily-write") yield* command.guard;
                 }
+                const mutation =
+                  command.action === "daily-write" &&
+                  (request.method === "PUT" || request.method === "DELETE")
+                    ? command.observeMutation
+                    : undefined;
+                if (mutation) yield* mutation("sent");
                 const response = yield* http
                   .execute(request.pipe(HttpClientRequest.bearerToken(token)))
                   .pipe(
                     Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
                     Effect.mapError(() => failure("Shared storage could not be reached.")),
                   );
+                // A 5xx or timeout can follow a committed mutation; only a definite client
+                // rejection proves that no content write is still outstanding.
+                if (mutation && [400, 401, 403, 404, 409, 412, 413, 429].includes(response.status))
+                  yield* mutation("rejected");
                 if (response.status === 401) {
                   yield* signIn.invalidateAccessToken;
                   return yield* new TeamsError({

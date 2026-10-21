@@ -38,6 +38,8 @@ export interface DraftTeamMemory extends TeamMemoryReference {
   readonly identity: string;
   /** The user edited protected text; missing wrapper lines no longer prove its removal. */
   readonly edited?: boolean;
+  /** A reattachment replaced an entry whose edited text had already lost its boundaries. */
+  readonly detached?: boolean;
 }
 
 interface DraftTeamMemoryState {
@@ -164,7 +166,9 @@ function presenceIn(
     presence.set(
       entry,
       unresolved.includes(entry.block) ||
-        (entry.edited && prompt.trim().length > 0 && !prompt.includes(header(entry.block)))
+        (entry.edited &&
+          prompt.trim().length > 0 &&
+          (entry.detached || !prompt.includes(header(entry.block))))
         ? "unresolved"
         : prompt.includes(header(entry.block))
           ? "tracked"
@@ -321,11 +325,24 @@ export function addDraftTeamMemory(
   insertText: () => boolean,
 ): "added" | "full" | "not-inserted" {
   const key = draftKey(entry.thread);
-  const live = liveEntries(useDraftTeamMemoryStore.getState().entries).filter(
-    (existing) =>
-      existing.id !== entry.id &&
-      !(draftKey(existing.thread) === key && header(existing.block) === header(entry.block)),
+  const current = liveEntries(useDraftTeamMemoryStore.getState().entries);
+  const replacing = (existing: DraftTeamMemory) =>
+    existing.id === entry.id ||
+    (draftKey(existing.thread) === key && header(existing.block) === header(entry.block));
+  const previous = current.filter(
+    (existing) => draftKey(existing.thread) === key && replacing(existing),
   );
+  const live = current.filter((existing) => !replacing(existing));
+  const nextEntry = previous.some((existing) => existing.edited)
+    ? {
+        ...entry,
+        edited: true,
+        detached: previous.some(
+          (existing) =>
+            existing.detached || !draftPrompt(entry.thread).includes(header(existing.block)),
+        ),
+      }
+    : entry;
   const inheritedIds =
     useDraftTeamMemoryStore.getState().inheritedReferences[key]?.references ?? [];
   const messageIds = new Set([
@@ -334,11 +351,11 @@ export function addDraftTeamMemory(
     entry.id,
   ]);
   if (live.length >= MAX_DRAFT_TEAM_MEMORY || messageIds.size > MAX_TEAM_MESSAGE_REFERENCES) {
-    useDraftTeamMemoryStore.setState({ entries: live });
+    useDraftTeamMemoryStore.setState({ entries: current });
     return "full";
   }
   if (!insertText()) return "not-inserted";
-  useDraftTeamMemoryStore.setState({ entries: [...live, entry] });
+  useDraftTeamMemoryStore.setState({ entries: [...live, nextEntry] });
   return "added";
 }
 
@@ -383,7 +400,11 @@ function removeEntries(matches: (entry: DraftTeamMemory) => boolean): {
     );
     const unresolved = new Set(result.unresolved);
     for (const entry of group) {
-      if (entry.edited && result.prompt.trim().length > 0 && !prompt.includes(header(entry.block)))
+      if (
+        entry.edited &&
+        result.prompt.trim().length > 0 &&
+        (entry.detached || !prompt.includes(header(entry.block)))
+      )
         unresolved.add(entry.block);
     }
     if (result.prompt !== prompt) {
@@ -553,7 +574,7 @@ useComposerDraftStore.subscribe((next, previous) => {
       return [];
     }
     const hadWrapper = before.includes(header(entry.block));
-    if (hadWrapper) {
+    if (hadWrapper && !entry.detached) {
       const removed = removeTeamMemoryBlocks(before, [entry.block]);
       if (
         removed.unresolved.length === 0 &&

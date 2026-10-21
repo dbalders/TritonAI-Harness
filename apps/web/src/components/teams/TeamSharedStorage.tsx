@@ -52,11 +52,20 @@ export function TeamSharedStorage({
               "code" in cause &&
               (cause.code === "conflict" ||
                 cause.code === "unavailable" ||
-                cause.code === "invalid_request")
+                cause.code === "invalid_request" ||
+                cause.code === "sign_in_required")
             )
           ) {
             setState(null);
             setEditorState(null);
+          } else if (
+            cause instanceof Error &&
+            "code" in cause &&
+            cause.code === "sign_in_required"
+          ) {
+            // The account-keyed parent clears drafts on a campus account switch. Microsoft
+            // reauthentication keeps this editor mounted, but disables storage actions.
+            setState(null);
           }
           setError(cause instanceof Error ? cause.message : "Shared storage is unavailable.");
         }

@@ -192,7 +192,12 @@ export const makeTeamDailySource = (input: {
 
   const write: TeamDailySource["write"] = (request) =>
     Effect.gen(function* () {
-      const held = (message: string): TeamDailyWrite => ({ kind: "held", message });
+      let mutationUncertain = false;
+      const held = (message: string): TeamDailyWrite => ({
+        kind: "held",
+        message,
+        ...(mutationUncertain ? { uncertain: true } : {}),
+      });
       const ready = yield* acting(request);
       if (ready.kind !== "ready") return ready;
       const { session, folder } = ready;
@@ -242,6 +247,10 @@ export const makeTeamDailySource = (input: {
             text: request.text,
             etag: request.etag,
             guard,
+            observeMutation: (state) =>
+              Effect.sync(() => {
+                mutationUncertain = state === "sent";
+              }),
             // A change marker holds no memory, so a stale one is simply replaced.
             replaceChanged: teamDailyMarkerAuthor(request.path) !== null,
           },

@@ -310,6 +310,31 @@ describe("team memory in drafts", () => {
     },
   );
 
+  it.each(["sign-out", "remove", "delete the reattached block"] as const)(
+    "keeps rewritten skill provenance after reattachment and %s",
+    (action) => {
+      insert(skillReference("original"));
+      setPrompt(thread, "Run the grant checklist before filing. Then file it with the office.");
+      const rewritten = "My rewritten instructions: validate the award, then send it to finance.";
+      setPrompt(thread, rewritten);
+      expect(useDraftTeamMemoryStore.getState().entries[0]?.edited).toBe(true);
+      expect(insert(skillReference("reattached")).result).toBe("added");
+      expect(draftTeamReferenceIds(thread, prompt())).toEqual(["reattached"]);
+      if (action === "sign-out") {
+        expect(reconcileDraftTeamMemoryAccount(environmentA, null)).toEqual({
+          removed: 1,
+          unresolved: 1,
+        });
+      } else if (action === "remove") removeDraftTeamMemory(thread);
+      else setPrompt(thread, rewritten);
+      expect(prompt()).toBe(rewritten);
+      settleDraftTeamMemory();
+      expect(draftTeamReferenceIds(thread, prompt())).toEqual(["reattached"]);
+      clearDraftTeamReferenceText(thread);
+      expect(draftTeamReferenceIds(thread, prompt())).toEqual([]);
+    },
+  );
+
   it("preserves a queued message's references when a dirty edit returns to the draft", () => {
     const edit = DraftId.make("queued-edit:a");
     setPrompt(edit, "A heavily rewritten team note with my own additions");

@@ -42,10 +42,10 @@ export type TeamDailyAccount =
 export type TeamDailyWrite =
   | { readonly kind: "written"; readonly etag: string | null; readonly storageKey: string }
   /**
-   * Couldn't write now (signed out of Microsoft, offline, a project link changed), and the file
-   * may or may not have changed: try later.
+   * Couldn't write now. With `uncertain`, a content mutation was sent and may still land, so its
+   * obligation survives until the remote version is known. Otherwise nothing was sent.
    */
-  | { readonly kind: "held"; readonly message: string }
+  | { readonly kind: "held"; readonly message: string; readonly uncertain?: true }
   /** Nothing was sent, and this exact write can never succeed (too large, folder changed). */
   | { readonly kind: "rejected"; readonly message: string }
   /**

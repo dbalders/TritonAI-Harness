@@ -6,13 +6,16 @@ import {
   type TeamProjectCommand,
   type TeamStorageCommand,
   type TeamStorageStatus,
+  TeamsError,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
   calls: [] as Array<TeamProjectCommand | TeamStorageCommand>,
   disconnected: false,
   reconnect: false,
+  failureCode: null as TeamsError["code"] | null,
 }));
 vi.mock("../../state/server", () => ({
   serverEnvironment: { teamProjects: "projects", teamStorage: "storage" },
@@ -40,7 +43,16 @@ const status = (state: TeamStorageStatus["status"] = "connected"): TeamStorageSt
 });
 const storageRequest = async ({ input }: { input: TeamStorageCommand }) => {
   mocks.calls.push(input);
-  if (input.action === "update-file" || input.action === "publish") mocks.disconnected = true;
+  if (input.action === "update-file" || input.action === "publish") {
+    mocks.disconnected = true;
+    if (mocks.failureCode)
+      return {
+        _tag: "Failure",
+        cause: Cause.fail(
+          new TeamsError({ code: mocks.failureCode, message: "Reconnect Microsoft to continue." }),
+        ),
+      };
+  }
   const next =
     input.action === "connect"
       ? status("pending")
@@ -58,8 +70,16 @@ const link = {
 };
 const projectRequest = async ({ input }: { input: TeamProjectCommand }) => {
   mocks.calls.push(input);
-  if (input.action === "memory-update" || input.action === "memory-publish")
+  if (input.action === "memory-update" || input.action === "memory-publish") {
     mocks.disconnected = true;
+    if (mocks.failureCode)
+      return {
+        _tag: "Failure",
+        cause: Cause.fail(
+          new TeamsError({ code: mocks.failureCode, message: "Reconnect Microsoft to continue." }),
+        ),
+      };
+  }
   const storage =
     input.action === "list"
       ? null
@@ -73,6 +93,7 @@ beforeEach(() => {
   mocks.calls = [];
   mocks.disconnected = false;
   mocks.reconnect = false;
+  mocks.failureCode = null;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -155,3 +176,77 @@ it("retains linked-project document drafts when a save needs Microsoft reconnect
   expectDrafts();
   expect(field("Shared document content").disabled).toBe(false);
 });
+
+it("retains shared-storage drafts after the Graph sign_in_required error and reconnects", async () => {
+  vi.useFakeTimers();
+  mocks.failureCode = "sign_in_required";
+  await act(async () =>
+    root.render(
+      <TeamSharedStorage environmentId={EnvironmentId.make("env")} teamId={teamId} canWrite />,
+    ),
+  );
+  await edit();
+  await press("Save changes");
+  expectDrafts();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Reconnect Microsoft");
+  expect(field("Shared document content").disabled).toBe(true);
+  await press("Retry storage connection");
+  await press("Connect Microsoft");
+  expectDrafts();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1000);
+  });
+  expectDrafts();
+  expect(field("Shared document content").disabled).toBe(false);
+});
+
+it("retains linked-project drafts after the Graph sign_in_required error", async () => {
+  mocks.failureCode = "sign_in_required";
+  await act(async () =>
+    root.render(
+      <TeamProjects
+        environmentId={EnvironmentId.make("env")}
+        teamId={teamId}
+        linkProjectId={null}
+        canWrite
+      />,
+    ),
+  );
+  await press("Open team memory");
+  await edit();
+  await press("Save changes");
+  expectDrafts();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Reconnect Microsoft");
+  expect(field("Shared document content").disabled).toBe(true);
+  mocks.reconnect = true;
+  await press("Refresh team memory");
+  expectDrafts();
+  expect(field("Shared document content").disabled).toBe(false);
+});
+
+it.each(["shared storage", "linked project"] as const)(
+  "clears %s document drafts after confirmed team access loss",
+  async (surface) => {
+    mocks.failureCode = "not_found";
+    await act(async () =>
+      root.render(
+        surface === "shared storage" ? (
+          <TeamSharedStorage environmentId={EnvironmentId.make("env")} teamId={teamId} canWrite />
+        ) : (
+          <TeamProjects
+            environmentId={EnvironmentId.make("env")}
+            teamId={teamId}
+            linkProjectId={null}
+            canWrite
+          />
+        ),
+      ),
+    );
+    if (surface === "linked project") await press("Open team memory");
+    await edit();
+    await press("Save changes");
+    expect(field("Document title")).toBeNull();
+    expect(field("Shared document content")).toBeNull();
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  },
+);
