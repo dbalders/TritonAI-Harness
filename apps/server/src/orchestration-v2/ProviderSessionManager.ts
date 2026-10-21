@@ -496,11 +496,10 @@ export const layerWithOptions = (
                 // same token or the process's tool calls fail auth.
                 const { browser: browserToolsAvailable, device: deviceToolsAvailable } =
                   yield* agentAccessSettings(threadId);
-                const capabilities = new Set<
-                  import("../mcp/McpInvocationContext.ts").McpCapability
-                >(["orchestration", "worktree", "pull-requests"]);
-                if (browserToolsAvailable) capabilities.add("preview");
-                if (deviceToolsAvailable) capabilities.add("device");
+                const capabilities = McpSessionRegistry.providerSessionCapabilities({
+                  browser: browserToolsAvailable,
+                  device: deviceToolsAvailable,
+                });
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
                   // Reserve before the async resolve so a release cannot
@@ -524,6 +523,7 @@ export const layerWithOptions = (
                     resolved.thread.providerInstanceId === providerInstanceId &&
                     // A flipped browser-access setting must not survive through
                     // credential reuse: rotate so the new scope reflects it.
+                    resolved.capabilities.has("integrations.invoke") &&
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
                     resolved.capabilities.has("device") === deviceToolsAvailable
                   ) {

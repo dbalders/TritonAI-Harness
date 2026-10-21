@@ -2,6 +2,7 @@ import * as Cause from "effect/Cause";
 import { vi } from "vite-plus/test";
 import * as Clock from "effect/Clock";
 import * as IntegrationRegistry from "../../integrations/IntegrationRegistry.ts";
+import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import type { IntegrationManifest } from "../../integrations/manifest.ts";
 import { EmptyIntegrationToolInput } from "../../integrations/IntegrationTool.ts";
 import { tritonAiCommonsDynamicToolDefinition } from "../../mcp/TritonAiCommonsTool.ts";
@@ -2284,7 +2285,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             endpoint: "http://127.0.0.1:1234/mcp",
             authorizationHeader: "Bearer synthetic-fixture-token",
             browserToolsAvailable: false,
-            capabilities: new Set(["integrations.invoke"]),
+            // The production grant, so dropping plugin access from it fails this test.
+            capabilities: McpSessionRegistry.providerSessionCapabilities({ browser: false }),
             expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
           };
           yield* sessions.set(credential);

@@ -1,12 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off - the persisted tool catalog fingerprint must be synchronous and deterministic.
 import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
+import * as Data from "effect/Data";
 import type { ThreadId, ProviderApprovalDecision, RuntimeMode } from "@t3tools/contracts";
 import type * as EffectCodexSchema from "effect-codex-app-server/schema";
 import {
   describeIntegrationToolFailure,
   describeUnavailableIntegrationTool,
+  IntegrationToolUnavailableError,
 } from "../integrations/IntegrationToolFailure.ts";
+import { describeToolCallForApproval } from "../integrations/IntegrationToolPreview.ts";
 export interface CodexDynamicToolOptions {
   readonly threadId: ThreadId;
   readonly dynamicTools?: ReadonlyArray<CodexDynamicToolDefinition>;
@@ -256,18 +259,66 @@ function serializeDynamicToolResult(value: unknown): string | undefined {
 }
 
 /** Tell the agent why a dynamic tool call failed without disclosing unsafe error details. */
-export function dynamicToolFailureResponse(
-  error: unknown,
-): EffectCodexSchema.DynamicToolCallResponse {
+function dynamicToolFailureResponse(error: unknown): EffectCodexSchema.DynamicToolCallResponse {
   return dynamicToolResponse(false, describeIntegrationToolFailure(error).text);
 }
 
-export function dynamicToolResultResponse(
+function dynamicToolResultResponse(
   value: unknown,
 ): EffectCodexSchema.DynamicToolCallResponse | undefined {
   const serialized = serializeDynamicToolResult(value);
   return serialized === undefined ? undefined : dynamicToolResponse(true, serialized);
 }
+
+/** What the user approves: the tool and the change it will make, never a bare tool name. */
+export function dynamicToolApprovalPrompt(
+  payload: Pick<EffectCodexSchema.DynamicToolCallParams, "tool" | "arguments">,
+): string {
+  return describeToolCallForApproval(payload.tool, payload.arguments);
+}
+
+class CodexDynamicToolInvocationError extends Data.TaggedError("CodexDynamicToolInvocationError")<{
+  readonly cause: unknown;
+}> {}
+
+/**
+ * Runs a dynamic tool call the gate admitted. The original failure reaches
+ * dynamicToolFailureResponse, so the agent learns why the call failed (reconnect,
+ * validation, a public provider message), and refusals found at invoke time are traced.
+ */
+export const invokeAdmittedDynamicTool = (input: {
+  readonly options: Pick<CodexDynamicToolOptions, "threadId" | "invokeDynamicTool">;
+  readonly invocation: Omit<CodexDynamicToolInvocation, "signal">;
+}): Effect.Effect<EffectCodexSchema.DynamicToolCallResponse> => {
+  const invoke = input.options.invokeDynamicTool;
+  if (!invoke)
+    return Effect.succeed(dynamicToolResponse(false, "This tool is unavailable in this session."));
+  return Effect.tryPromise({
+    try: (signal) => invoke({ ...input.invocation, signal }),
+    catch: (cause) => new CodexDynamicToolInvocationError({ cause }),
+  }).pipe(
+    Effect.matchEffect({
+      onFailure: ({ cause }) =>
+        (cause instanceof IntegrationToolUnavailableError && cause.details
+          ? traceDynamicToolRejection({
+              threadId: input.options.threadId,
+              toolName: input.invocation.name,
+              canonicalName: cause.details.toolName,
+              reason: cause.details.reason,
+              detail: cause.details.detail,
+            })
+          : Effect.logWarning("dynamic tool invocation failed", {
+              toolName: input.invocation.name,
+            }).pipe(Effect.withSpan("integrations.dynamic-tool.failed"))
+        ).pipe(Effect.as(dynamicToolFailureResponse(cause))),
+      onSuccess: (value) =>
+        Effect.succeed(
+          dynamicToolResultResponse(value) ??
+            dynamicToolResponse(false, "The tool returned an invalid result."),
+        ),
+    }),
+  );
+};
 
 export interface CodexPluginSkillDefinition {
   readonly name: string;
