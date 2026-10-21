@@ -937,17 +937,11 @@ async function finalizeMacRelease({
   // Staple the app itself before packaging. The Installer copies it out of a DMG mounted with
   // hdiutil (which never ingests the DMG's ticket), and the updater ZIP has no DMG at all, so an
   // unstapled app needs Apple's online lookup on first launch and fails Gatekeeper offline.
-  const appSubmission = path.join(stageRoot, "notarize-app.zip");
-  fs.rmSync(appSubmission, { force: true });
-  exec("/usr/bin/ditto", ["-c", "-k", "--keepParent", signedApp, appSubmission], {
-    label: "Archive signed app for notarization",
-  });
-  let appReceipt;
-  try {
-    appReceipt = notarize(appSubmission, "signed app", notary, exec);
-  } finally {
-    fs.rmSync(appSubmission, { force: true });
-  }
+  // Electron Builder must still build its ZIP (it only writes app-update.yml for ZIP or DMG
+  // targets), so submit that archive of the signed app instead of compressing it again. Apple
+  // notarizes code hashes: stapling the app below fails if this ZIP held different code.
+  const appSubmission = regularFile(path.join(dist, zipName));
+  const appReceipt = notarize(appSubmission, "signed app", notary, exec);
   fs.writeFileSync(
     path.join(stageRoot, "notarization-app.json"),
     `${JSON.stringify(appReceipt, null, 2)}\n`,
