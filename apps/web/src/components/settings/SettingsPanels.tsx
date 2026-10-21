@@ -2050,25 +2050,25 @@ function AutoSettleDaysInput({
   );
 }
 
-// The legacy rows sit behind the fold, so a settings-search jump has to
-// expand the section before its target can mount and scroll.
-const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
-  "legacy-plan-mode",
-  "legacy-context-window-indicator",
-  "legacy-sidebar",
-]);
-
 /**
- * Retired features kept only for users who still depend on them. Collapsed by
- * default so they stay out of the everyday settings path; a settings-search
- * jump to one of the rows unfolds the section.
+ * A settings section folded behind its title, closed by default so its rows stay out of
+ * the everyday settings path. Rows sit behind the fold, so a settings-search jump to one
+ * of `targetIds` unfolds the section before its target can mount and scroll.
  */
-function LegacyFeaturesSection() {
-  const settings = useScopedSettings();
-  const updateSettings = useUpdateScopedSettings();
+function CollapsedFeaturesSection({
+  id,
+  title,
+  targetIds,
+  children,
+}: {
+  readonly id: string;
+  readonly title: string;
+  readonly targetIds: ReadonlySet<string>;
+  readonly children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const searchTargetId = useSettingsSearchTargetId();
-  const targetRef = useSettingsSearchTarget<HTMLElement>("legacy-features");
+  const targetRef = useSettingsSearchTarget<HTMLElement>(id);
   // Unfold once per search jump; tracking the handled id lets the user fold
   // the section back up without the still-set target immediately reopening it.
   const lastExpandedTargetRef = useRef<string | null>(null);
@@ -2079,68 +2079,89 @@ function LegacyFeaturesSection() {
       lastExpandedTargetRef.current = null;
       return;
     }
-    if (!LEGACY_FEATURE_TARGET_IDS.has(searchTargetId)) return;
+    if (!targetIds.has(searchTargetId)) return;
     if (lastExpandedTargetRef.current === searchTargetId) return;
     lastExpandedTargetRef.current = searchTargetId;
     setOpen(true);
-  }, [searchTargetId]);
+  }, [searchTargetId, targetIds]);
 
   return (
-    <section id="legacy-features" ref={targetRef} tabIndex={-1} className="space-y-2.5">
+    <section id={id} ref={targetRef} tabIndex={-1} className="space-y-2.5">
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="group flex min-h-8 w-full items-center gap-2 px-3 sm:px-4">
           <h2 className="text-sm font-normal text-foreground/70 transition-colors group-hover:text-foreground">
-            Legacy features
+            {title}
           </h2>
           <ChevronRightIcon className="size-4 text-muted-foreground transition-transform duration-200 group-data-panel-open:rotate-90" />
         </CollapsibleTrigger>
         <CollapsiblePanel>
-          <SettingsGroup>
-            <SettingsRow
-              {...searchableSetting("legacy-plan-mode")}
-              description="Restore Build/Plan, /plan, /default, and Shift+Tab. Off uses build mode."
-              control={
-                <Switch
-                  checked={settings.planModeEnabled}
-                  onCheckedChange={(checked) => {
-                    updateSettings({ planModeEnabled: Boolean(checked) });
-                  }}
-                  aria-label="Plan mode (legacy)"
-                />
-              }
-            />
-            <SettingsRow
-              {...searchableSetting("legacy-context-window-indicator")}
-              description="Shows context window usage as a circular indicator in the composer."
-              control={
-                <Switch
-                  checked={settings.contextWindowMeterEnabled}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ contextWindowMeterEnabled: Boolean(checked) })
-                  }
-                  aria-label="Context window indicator (legacy)"
-                />
-              }
-            />
-            <SettingsRow
-              {...searchableSetting("legacy-sidebar")}
-              description="Restore per-project thread trees instead of the default flat sidebar."
-              control={
-                <Switch
-                  checked={settings.legacySidebarEnabled}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ legacySidebarEnabled: Boolean(checked) })
-                  }
-                  aria-label="Sidebar (legacy)"
-                />
-              }
-            />
-          </SettingsGroup>
+          <SettingsGroup>{children}</SettingsGroup>
         </CollapsiblePanel>
       </Collapsible>
     </section>
   );
 }
+
+const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
+  "legacy-plan-mode",
+  "legacy-context-window-indicator",
+  "legacy-sidebar",
+]);
+
+/** Retired features kept only for users who still depend on them. */
+function LegacyFeaturesSection() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <CollapsedFeaturesSection
+      id="legacy-features"
+      title="Legacy features"
+      targetIds={LEGACY_FEATURE_TARGET_IDS}
+    >
+      <SettingsRow
+        {...searchableSetting("legacy-plan-mode")}
+        description="Restore Build/Plan, /plan, /default, and Shift+Tab. Off uses build mode."
+        control={
+          <Switch
+            checked={settings.planModeEnabled}
+            onCheckedChange={(checked) => {
+              updateSettings({ planModeEnabled: Boolean(checked) });
+            }}
+            aria-label="Plan mode (legacy)"
+          />
+        }
+      />
+      <SettingsRow
+        {...searchableSetting("legacy-context-window-indicator")}
+        description="Shows context window usage as a circular indicator in the composer."
+        control={
+          <Switch
+            checked={settings.contextWindowMeterEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings({ contextWindowMeterEnabled: Boolean(checked) })
+            }
+            aria-label="Context window indicator (legacy)"
+          />
+        }
+      />
+      <SettingsRow
+        {...searchableSetting("legacy-sidebar")}
+        description="Restore per-project thread trees instead of the default flat sidebar."
+        control={
+          <Switch
+            checked={settings.legacySidebarEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings({ legacySidebarEnabled: Boolean(checked) })
+            }
+            aria-label="Sidebar (legacy)"
+          />
+        }
+      />
+    </CollapsedFeaturesSection>
+  );
+}
+
+const EXPERIMENTAL_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set(["experimental-guided-tour"]);
 
 /**
  * Features still being tried out. Each stays off, with no other entry point, until it is
@@ -2152,7 +2173,11 @@ function ExperimentalFeaturesSection() {
   const navigate = useNavigate();
   const guidedTourEnabled = settings.experimentalGuidedTourEnabled;
   return (
-    <SettingsSection title="Experimental">
+    <CollapsedFeaturesSection
+      id="experimental-features"
+      title="Experimental"
+      targetIds={EXPERIMENTAL_FEATURE_TARGET_IDS}
+    >
       <SettingsRow
         {...searchableSetting("experimental-guided-tour")}
         description="A short walkthrough for people new to AI: it does one real task with you, then continues in a chat with suggestions. Turn it on to show Start tour."
@@ -2180,7 +2205,7 @@ function ExperimentalFeaturesSection() {
           </div>
         }
       />
-    </SettingsSection>
+    </CollapsedFeaturesSection>
   );
 }
 
