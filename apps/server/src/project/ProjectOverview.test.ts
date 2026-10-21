@@ -281,7 +281,17 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
 
   it.effect("hides dismissed steps, avoids them in later suggestions, and restores them", () =>
     Effect.gen(function* () {
-      const { calls, layer } = yield* harness(() => Effect.succeed(result()));
+      let obeyAvoid = false;
+      const { calls, layer } = yield* harness(() =>
+        Effect.sync(() =>
+          obeyAvoid
+            ? {
+                ...result(),
+                ideas: [{ ...result().ideas[0]!, topic: "other", title: "Schedule the pilot" }],
+              }
+            : result(),
+        ),
+      );
       yield* Effect.gen(function* () {
         yield* seed;
         const service = yield* ProjectOverview.make;
@@ -311,6 +321,23 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
         const all = yield* service.restore(input);
         assert.equal(all.dismissedCount, 0);
         assert.lengthOf(all.overview!.nextSteps, 1);
+        assert.lengthOf(calls, 2);
+
+        // When a regeneration honored the avoid list, Restore asks again without it.
+        yield* service.dismiss({ ...input, stepId: step.id, kind: "done" });
+        obeyAvoid = true;
+        yield* service.ensure({ ...input, force: true });
+        yield* service.awaitIdle(projectId);
+        assert.deepStrictEqual(
+          (yield* service.get(input)).overview!.nextSteps.map((next) => next.title),
+          ["Schedule the pilot"],
+        );
+        obeyAvoid = false;
+        yield* service.restore({ ...input, stepId: step.id });
+        yield* service.awaitIdle(projectId);
+        assert.lengthOf(calls, 4);
+        assert.notInclude(calls[3]!.context, '"because"');
+        assert.deepStrictEqual((yield* service.get(input)).overview!.nextSteps, [step]);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );

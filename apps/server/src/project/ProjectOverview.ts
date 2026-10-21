@@ -445,7 +445,10 @@ export const make = Effect.gen(function* () {
   const restore = Effect.fn("ProjectOverview.restore")(function* (
     input: ProjectOverviewRestoreInput,
   ) {
-    yield* projectFor(input.projectId);
+    const project = yield* projectFor(input.projectId);
+    const restored = (yield* dismissals(input.projectId)).filter(
+      (row) => input.stepId === undefined || row.stepId === input.stepId,
+    );
     yield* (
       input.stepId === undefined
         ? sql`DELETE FROM project_next_step_dismissals WHERE project_id=${input.projectId}`
@@ -453,7 +456,12 @@ export const make = Effect.gen(function* () {
             WHERE project_id=${input.projectId} AND step_id=${input.stepId}`
     ).pipe(Effect.mapError(unavailable));
     yield* PubSub.publish(changes, input.projectId);
-    return yield* get(input);
+    // A regeneration that honored the avoid list never stored the step, so ask again without it.
+    const cached = (yield* stored(input.projectId, project.workspaceRoot))?.nextSteps ?? [];
+    const missing = restored.some(
+      (row) => !cached.some((step) => step.id === row.stepId || sameTitle(step.title, row.title)),
+    );
+    return yield* missing ? ensure({ projectId: input.projectId, force: true }) : get(input);
   });
 
   // Archiving, restoring or deleting a cited thread changes what get() may show.
