@@ -164,12 +164,12 @@ it.layer(NodeServices.layer)("managed server settings", (it) => {
     }).pipe(Effect.scoped, Effect.provide(makeManagedServerSettingsLayer())),
   );
 
-  it.effect("starts a fresh managed installation in supervised mode", () =>
+  it.effect("starts a fresh managed installation in Auto mode", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const settings = yield* serverSettings.getSettings;
 
-      assert.equal(settings.defaultRuntimeMode, "approval-required");
+      assert.equal(settings.defaultRuntimeMode, "auto");
     }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
   );
 
