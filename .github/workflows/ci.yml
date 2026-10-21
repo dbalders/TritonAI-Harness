@@ -104,6 +104,9 @@ jobs:
       - name: Test nightly release checks
         run: node --test .github/scripts/check-nightly-release.test.cjs
 
+      - name: Install Chromium for web browser tests
+        run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
+
       - name: Test
         run: vp run preflight:tests
 
