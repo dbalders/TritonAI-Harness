@@ -1,5 +1,5 @@
-import * as ServerConfig from "../src/config.ts";
 // @effect-diagnostics nodeBuiltinImport:off - Measures real local HTTP/WebSocket sockets.
+import * as ServerConfig from "../src/config.ts";
 import * as NodeHttp from "node:http";
 import { assert, it } from "@effect/vitest";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -78,8 +78,6 @@ const layerPersistence = EventSink.layer.pipe(
   Layer.provideMerge(OrchestrationEventStore.layer),
   Layer.provideMerge(SqlitePersistence.layerMemory),
 );
-// The facade's import/command paths are outside this measurement. Its reads and
-// stream delegate to the real SQL projection and event sink, as the runtime does.
 const layerManagement = Layer.unwrap(
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -112,7 +110,6 @@ const layerEnrichment = Layer.unwrap(
     });
   }),
 );
-// The transfer history has no project events, so shell streams never read a project shell.
 const layerServices = layerManagement.pipe(
   Layer.provideMerge(
     Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
@@ -317,7 +314,6 @@ it.live(
               secondBefore,
             );
             const measuredTurnSqlStatements = counter.count() - sqlBefore;
-            // Verify large output is retained durably even though the transport omits it.
             const durable = yield* projection.getThreadProjection(THREAD_ID);
             assert.isTrue(
               durable.turnItems.some(
@@ -335,7 +331,7 @@ it.live(
             const shellMode = yield* synchronized(rsq);
             const reconnectThread = { ...resumedThread.recorder.totals(), mode: threadMode };
             const reconnectShell = { ...resumedShell.recorder.totals(), mode: shellMode };
-            assert.equal(threadMode, "snapshot"); // retained MCP payload exceeds raw replay budget
+            assert.equal(threadMode, "snapshot");
             return {
               provider,
               threadSnapshot,

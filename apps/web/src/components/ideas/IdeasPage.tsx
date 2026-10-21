@@ -70,18 +70,12 @@ export function IdeasPage() {
     readonly loadedAt: number | null;
     readonly ids: ReadonlySet<string>;
   }>(() => ({ loadedAt: null, ids: new Set() }));
-  const hidden = useMemo(
-    () => (hiddenPresses.loadedAt === dataUpdatedAt ? hiddenPresses.ids : new Set<string>()),
-    [dataUpdatedAt, hiddenPresses],
-  );
-  const setHidden = useCallback(
-    (update: (ids: ReadonlySet<string>) => ReadonlySet<string>) =>
-      setHiddenPresses((previous) => ({
-        loadedAt: dataUpdatedAt,
-        ids: update(previous.loadedAt === dataUpdatedAt ? previous.ids : new Set()),
-      })),
-    [dataUpdatedAt],
-  );
+  const hidden = hiddenPresses.loadedAt === dataUpdatedAt ? hiddenPresses.ids : new Set<string>();
+  const setHidden = (update: (ids: ReadonlySet<string>) => ReadonlySet<string>) =>
+    setHiddenPresses((previous) => ({
+      loadedAt: dataUpdatedAt,
+      ids: update(previous.loadedAt === dataUpdatedAt ? previous.ids : new Set()),
+    }));
   const [requesting, setRequesting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -110,96 +104,87 @@ export function IdeasPage() {
     return () => clearTimeout(timer);
   }, [data, refresh]);
 
-  const runFeedback = useCallback(
-    async (
-      idea: Idea,
-      kind: IdeaFeedbackKind,
-      extra: Pick<IdeasFeedbackInput, "snoozedUntil" | "draftThreadId"> = {},
-    ): Promise<boolean> => {
-      if (environmentId === null) return false;
-      const hides = kind !== "opened" && kind !== "restored";
-      if (hides) setHidden((ids) => new Set(ids).add(idea.id));
-      const result = await sendFeedback({
-        environmentId,
-        input: {
-          ideaId: idea.id,
-          kind,
-          ...extra,
-        },
-      });
-      if (result._tag === "Failure") {
-        if (hides) {
-          setHidden((ids) => {
-            const next = new Set(ids);
-            next.delete(idea.id);
-            return next;
-          });
-        }
-        if (!isAtomCommandInterrupted(result)) {
-          setActionError(failureMessage(result, "Couldn't save that change."));
-        }
-        return false;
+  const runFeedback = async (
+    idea: Idea,
+    kind: IdeaFeedbackKind,
+    extra: Pick<IdeasFeedbackInput, "snoozedUntil" | "draftThreadId"> = {},
+  ): Promise<boolean> => {
+    if (environmentId === null) return false;
+    const hides = kind !== "opened" && kind !== "restored";
+    if (hides) setHidden((ids) => new Set(ids).add(idea.id));
+    const result = await sendFeedback({
+      environmentId,
+      input: {
+        ideaId: idea.id,
+        kind,
+        ...extra,
+      },
+    });
+    if (result._tag === "Failure") {
+      if (hides) {
+        setHidden((ids) => {
+          const next = new Set(ids);
+          next.delete(idea.id);
+          return next;
+        });
       }
-      setActionError(null);
-      refresh();
-      return true;
-    },
-    [environmentId, refresh, sendFeedback, setHidden],
-  );
+      if (!isAtomCommandInterrupted(result)) {
+        setActionError(failureMessage(result, "Couldn't save that change."));
+      }
+      return false;
+    }
+    setActionError(null);
+    refresh();
+    return true;
+  };
 
-  const hideIdea = useCallback(
-    async (idea: Idea, kind: HideKind, snoozedUntil?: string) => {
-      if (!(await runFeedback(idea, kind, snoozedUntil === undefined ? {} : { snoozedUntil }))) {
-        return;
-      }
-      const title =
-        kind === "snoozed" && snoozedUntil !== undefined
-          ? `Snoozed until ${snoozeWakeDescription(snoozedUntil, new Date(), timestampFormat)}`
-          : kind === "rejected"
-            ? "We won't suggest that again"
-            : kind === "less-like-this"
-              ? "You'll see fewer ideas like this"
-              : "Idea dismissed";
-      toastManager.add({
-        type: "success",
-        title,
-        ...(kind === "dismissed"
-          ? { description: "It can come back in a couple of weeks if it still fits." }
-          : {}),
-        actionProps: {
-          children: "Undo",
-          onClick: () => void runFeedback(idea, "restored"),
-        },
-      });
-    },
-    [runFeedback, timestampFormat],
-  );
+  const hideIdea = async (idea: Idea, kind: HideKind, snoozedUntil?: string) => {
+    if (!(await runFeedback(idea, kind, snoozedUntil === undefined ? {} : { snoozedUntil }))) {
+      return;
+    }
+    const title =
+      kind === "snoozed" && snoozedUntil !== undefined
+        ? `Snoozed until ${snoozeWakeDescription(snoozedUntil, new Date(), timestampFormat)}`
+        : kind === "rejected"
+          ? "We won't suggest that again"
+          : kind === "less-like-this"
+            ? "You'll see fewer ideas like this"
+            : "Idea dismissed";
+    toastManager.add({
+      type: "success",
+      title,
+      ...(kind === "dismissed"
+        ? { description: "It can come back in a couple of weeks if it still fits." }
+        : {}),
+      actionProps: {
+        children: "Undo",
+        onClick: () => void runFeedback(idea, "restored"),
+      },
+    });
+  };
 
-  const handleOpen = useCallback(
-    async (idea: Idea) => {
-      setActionError(null);
-      // An existing thread's message identities are the baseline for noticing the send, so the
-      // open is recorded before its composer can send anything.
-      if (idea.action.kind === "resume-thread") {
-        if (!(await runFeedback(idea, "opened"))) return;
-        await openDraft(idea);
-        return;
-      }
-      const opened = await openDraft(idea);
-      if (!opened) {
-        setActionError("Add a project first, then open this idea.");
-        return;
-      }
-      void runFeedback(
-        idea,
-        "opened",
-        opened.draftThreadId === null ? {} : { draftThreadId: opened.draftThreadId },
-      );
-    },
-    [openDraft, runFeedback],
-  );
+  const handleOpen = async (idea: Idea) => {
+    setActionError(null);
+    // An existing thread's message identities are the baseline for noticing the send, so the
+    // open is recorded before its composer can send anything.
+    if (idea.action.kind === "resume-thread") {
+      if (!(await runFeedback(idea, "opened"))) return;
+      await openDraft(idea);
+      return;
+    }
+    const opened = await openDraft(idea);
+    if (!opened) {
+      setActionError("Add a project first, then open this idea.");
+      return;
+    }
+    void runFeedback(
+      idea,
+      "opened",
+      opened.draftThreadId === null ? {} : { draftThreadId: opened.draftThreadId },
+    );
+  };
 
-  const handleSuggestMore = useCallback(async () => {
+  const handleSuggestMore = async () => {
     if (environmentId === null) return;
     setRequesting(true);
     setActionError(null);
@@ -209,16 +194,10 @@ export function IdeasPage() {
       setActionError(failureMessage(result, "Couldn't load more ideas."));
     }
     refresh();
-  }, [environmentId, refresh, suggestMore]);
+  };
 
-  const visible = useMemo(
-    () => (data?.ideas ?? []).filter((idea) => !hidden.has(idea.id)),
-    [data, hidden],
-  );
-  const snoozed = useMemo(
-    () => (data?.snoozed ?? []).filter((idea) => !hidden.has(idea.id)),
-    [data, hidden],
-  );
+  const visible = (data?.ideas ?? []).filter((idea) => !hidden.has(idea.id));
+  const snoozed = (data?.snoozed ?? []).filter((idea) => !hidden.has(idea.id));
   const generating = requesting || data?.state === "generating";
 
   let content;
@@ -398,10 +377,7 @@ function IdeaSnoozeMenu({
 }) {
   const [open, setOpen] = useState(false);
   // Resolved when the menu opens, so "In 1 hour" counts from the click.
-  const presets = useMemo(
-    () => (open ? resolveSnoozePresets(new Date(), timestampFormat) : []),
-    [open, timestampFormat],
-  );
+  const presets = open ? resolveSnoozePresets(new Date(), timestampFormat) : [];
   return (
     <Menu open={open} onOpenChange={setOpen}>
       <MenuTrigger render={<Button size="xs" variant="ghost" />}>

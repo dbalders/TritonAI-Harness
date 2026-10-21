@@ -42,6 +42,11 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [65, "PullRequestReviewGuides"],
   [66, "ThreadFailureLookupIndex"],
   [67, "HarnessActivityViews"],
+  [68, "DropUnusedV1Projections"],
+  [69, "CanonicalizeThreadPullRequestLinks"],
+  [70, "CodexUsageNativeTurnIndex"],
+  [71, "RepairClientSettlementTimestamps"],
+  [72, "WebhookDedupe"],
 ];
 
 it("keeps the migration registry unique and preserves shipped downstream identities", () => {

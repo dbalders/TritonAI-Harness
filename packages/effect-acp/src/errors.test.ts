@@ -2,7 +2,6 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as RpcClientError from "effect/rpc/RpcClientError";
-
 import * as AcpSchema from "./_generated/schema.gen.ts";
 import { callRpc, runHandler } from "./_internal/shared.ts";
 import * as AcpError from "./errors.ts";
@@ -162,8 +161,6 @@ describe("effect-acp errors", () => {
     }),
   );
 
-  // The summary goes into logs, so it names where a payload broke its schema
-  // and never copies a value, including a record key the agent chose.
   it.effect("summarizes schema issues by path without payload values", () =>
     Effect.gen(function* () {
       const secret = "acp-summary-secret";

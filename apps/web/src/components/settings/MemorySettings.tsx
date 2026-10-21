@@ -85,7 +85,7 @@ function MemorySyncRow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const turnOn = useCallback(async () => {
+  const turnOn = async () => {
     setBusy(true);
     setError(null);
     const result = await startSync({ environmentId, input: {} });
@@ -97,7 +97,7 @@ function MemorySyncRow({
     }
     if (result.value.kind === "device_code") setFlow(result.value);
     refreshStatus();
-  }, [environmentId, refreshStatus, startSync]);
+  };
 
   // Poll the pending sign-in at the interval Microsoft asked for.
   useEffect(() => {

@@ -7,6 +7,7 @@ import { assert, it } from "@effect/vitest";
 import type { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -265,7 +266,8 @@ class FakeOneDrive {
             ]),
           );
           const url = new URL(request.url);
-          for (const [key, value] of request.urlParams) url.searchParams.append(key, value);
+          for (const [key, value] of request.urlParams)
+            url.searchParams.append(key, typeof value === "string" ? value : Redacted.value(value));
           const held = this.hold?.(url, new URLSearchParams(new TextDecoder().decode(body)));
           if (held) yield* held;
           const reply = this.handle(request.method, url, headers, body);
