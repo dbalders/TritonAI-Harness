@@ -49,14 +49,13 @@ The workflow:
 2. verifies the controlled release is still a draft;
 3. runs `vp check`, typecheck, and the full test suite;
 4. builds a Linux `node-pty` binary for the packaged Windows WSL backend;
-5. validates the pinned Installer composition-producer commit;
-6. asks that Installer commit to resolve and prepare its reviewed, digest-bound production
-   managed-plugin catalog;
+5. validates the reviewed plugin catalog from the exact Harness source;
+6. prepares that digest-bound production composition with the Harness-owned producer;
 7. aligns package versions in the isolated build checkout;
 8. authenticates the Windows runner through GitHub OIDC;
 9. builds and signs the Windows x64 NSIS Harness artifact, then verifies its publisher and timestamp;
 10. builds, signs, notarizes, and boot-verifies macOS arm64 on a hosted Mac runner using the
-    same pinned Installer finalizer and immutable plugin composition as Windows;
+    finalizer from the same Harness source and the same immutable plugin composition as Windows;
 11. finalizes the managed-plugin composition proofs;
 12. uploads the Mac DMG/updater ZIP, Windows installer, blockmaps, updater metadata, and
     composition proofs;
@@ -74,8 +73,8 @@ separate `nightly.yml` workflow cannot publish a stable release or update stable
 
 The Installer repository's `release:local` command supports `--scope harness` for Harness-only
 candidates and defaults to `--scope full` for Harness plus Installer. Harness-only preparation
-still consumes the pinned Installer-owned plugin catalog and composition producer, but skips
-Installer dependencies, app compilation, tests, packaging, and secure skills checkout.
+uses the frozen Harness source's catalog, producer, and Mac finalizer. It does not select or check
+out Installer and skips Installer dependencies, app compilation, tests, packaging, and secure skills.
 
 On macOS that runner invokes this repository's artifact builder with `--platform mac --target zip
 --arch arm64 --keep-stage --stage-only`. This prepares source and runtime dependencies plus the
@@ -90,8 +89,7 @@ source-preparation command. Normal artifact builds retain their existing behavio
 Harness and Installer revisions when adopting this split.
 
 Harness has a separate nightly workflow. Installer remains a full-release-only product. The
-local release runner still defaults to full stable releases; nightly CI reuses its pinned Mac
-finalizer without invoking Installer app packaging.
+local release runner still defaults to full stable releases; nightly CI uses the finalizer from its exact Harness source.
 
 ## Nightly identity and artwork
 
@@ -148,7 +146,7 @@ in-app download, quit, installation, and relaunch test.
 
 Manual dispatch of the stable release workflow rejects Nightly versions. The dedicated hosted
 workflow below owns scheduling and nightly publication. The current
-local Installer runner still accepts stable versions only; its Mac finalizer separately accepts
+local Installer runner still accepts stable versions only; the Harness Mac finalizer separately accepts
 dated nightly versions for use by CI.
 
 ## Hosted nightly workflow
@@ -191,11 +189,12 @@ example, stable `v0.3.3` produces `v0.3.4-nightly.20260912.42`, never stable `v0
 
 ### Nightly inputs
 
-The workflow pins its Installer-owned composition producer and Mac finalizer with the exact
-`NIGHTLY_INSTALLER_COMMIT` constant. That commit's reviewed plugin catalog supplies package IDs,
-versions, and digests. Preparation happens before provider validation; validation runs on a
-separate runner without signing or publication credentials. Packaging consumes that immutable
-snapshot and its validation receipt. This does not change stable release repository variables.
+The exact Harness source commit owns the nightly plugin catalog at
+`config/managed-plugin-catalog.nightly.json`, the composition producer, and Mac finalizer.
+The stable workflow reads `config/managed-plugin-catalog.json`. Each reviewed catalog pins the
+Plugins ref, commit, package IDs, versions, and digests. Preparation happens before provider
+validation; validation runs on a separate runner without signing or publication credentials.
+Packaging consumes that immutable snapshot and its validation receipt.
 
 Required repository secrets (values are never committed):
 
@@ -263,7 +262,7 @@ modifying the vendored source or retaining checkout credentials.
 ## Draft-first publication sequence
 
 1. Freeze the intended Harness commit and artifact contract.
-2. Confirm the signing credentials, managed configuration, and pinned Installer commit.
+2. Confirm the signing credentials, managed configuration, and reviewed Harness catalog.
 3. Create an unpublished GitHub draft targeting the frozen commit.
 4. Push the exact tag or create it through the GitHub API after the draft exists.
 5. Dispatch the workflow for that version if tag creation did not already start it.
@@ -315,14 +314,14 @@ That run rebuilds both platforms, validates the complete asset set, publishes, f
 announces. It is not the promotion command for files already tested. Draft mode uses the same
 signing and validation gates as immediate publication.
 
-## Required downstream release pins
+## Managed plugin composition
 
-Repository variables:
+Harness owns plugin selection for both release tracks. Installer pins a published Harness
+version and verifies its artifact-bound composition proof; it does not select plugins or
+supply source to Harness builds. Catalog changes therefore land in Harness before a release,
+then Installer can consume that published release without a second plugin pin.
 
-- `TRITONAI_INSTALLER_COMPOSITION_COMMIT`: exact 40-character Installer commit that produces the
-  managed-plugin composition. Its reviewed catalog supplies the exact Plugins ref, commit, package
-  selection, versions, and digests.
-  Shared stable/nightly repository secrets:
+Shared stable/nightly repository secrets:
 
 - `NIGHTLY_PLUGIN_CONFIGURATION_JSON`: bounded JSON object keyed by every package ID in the selected
   composition. Each plugin owns and validates its opaque configuration object.
@@ -332,10 +331,11 @@ Repository variables:
 - `NIGHTLY_APPLE_API_KEY`, `NIGHTLY_APPLE_API_KEY_ID`, and `NIGHTLY_APPLE_API_ISSUER`: notarization
   credentials. The historical secret names are shared; they do not select the runtime release track.
 
-For promotion from a tested nightly, pin `TRITONAI_INSTALLER_COMPOSITION_COMMIT` to that nightly’s
-`NIGHTLY_INSTALLER_COMMIT` so both platform builds use the same catalog and Mac finalizer.
+To promote a tested nightly composition, update the stable catalog to those exact reviewed
+Plugins source and package digests. Stable builds still use their own exact Harness source,
+including its finalizer, and run all release gates.
 
-The pinned Installer catalog is the only production plugin selection authority. Its preparation
+The reviewed Harness catalog is the production plugin selection authority. Its preparation
 step verifies that the catalog's Plugins ref resolves to the catalog's exact commit before staging
 the approved bytes. A preparation job uploads that exact composition before any provider code
 executes. A second, credential-free runner validates the immutable composition and emits a receipt
@@ -422,7 +422,7 @@ Before declaring the Harness release ready for Installer consumption:
    For macOS, inspect both the main app and `TritonAI Harness Helper.app` with
    `codesign -d --entitlements :-` and require
    `com.apple.security.device.audio-input=true` before notarization.
-4. Confirm the managed-plugin proof names the expected Installer and plugin commits.
+4. Confirm the managed-plugin proof matches the Harness catalog's exact Plugins commit, package selection, and file digests.
 5. Run packaged-app regression with an isolated profile, including first launch, provider startup,
    preview tools, managed plugins, and update presentation.
 6. Confirm version-skew UI never offers a remote public-package update action.
@@ -434,8 +434,8 @@ Only after these checks should the Installer vendor and publish the Harness asse
 
 - **Draft gate fails:** confirm the exact tag has an existing unpublished release and that nobody
   published it early.
-- **Plugin pin check fails:** verify the Installer composition commit is exact and that its catalog
-  Plugins ref still resolves to the catalog's stated commit.
+- **Plugin pin check fails:** verify the selected Harness catalog's Plugins ref still resolves
+  to its stated commit and the staged package digests match.
 - **Windows signing fails:** verify every Azure value and the expected publisher Common Name.
 - **WSL backend artifact is missing:** rerun the Linux `node-pty` prerequisite and do not bypass the
   Windows build dependency.

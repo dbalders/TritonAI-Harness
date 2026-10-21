@@ -545,13 +545,18 @@ try {
   );
   assertContains(
     releaseWorkflow,
-    "prepare-plugins-vendor.js --production",
-    "Harness releases must use the pinned Installer catalog as the production plugin authority.",
+    "prepare-managed-plugins.cjs --production",
+    "Harness releases must use their own reviewed catalog as the production plugin authority.",
+  );
+  assertDoesNotMatch(
+    releaseWorkflow,
+    /TRITONAI_INSTALLER_COMPOSITION_COMMIT|dbalders\/TritonAI-Installer/u,
+    "Harness composition and finalization must not depend on Installer source.",
   );
   assertDoesNotMatch(
     releaseWorkflow,
     /vars\.TRITONAI_PLUGINS_(?:REF|COMMIT)/u,
-    "Harness releases must not override the pinned Installer plugin catalog with duplicate repository variables.",
+    "Harness releases must not override the reviewed Harness plugin catalog with duplicate repository variables.",
   );
   assertContains(
     releaseWorkflow,
