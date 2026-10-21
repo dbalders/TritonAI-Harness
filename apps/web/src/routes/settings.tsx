@@ -26,6 +26,7 @@ import {
   getThreadAutoSettlementSearchAvailability,
   isSettingsSearchScopeAvailable,
 } from "../components/settings/settingsSearch";
+import { settingsContentScopeKey } from "../components/settings/settingsContentScopeKey";
 
 function RestoreDeviceDefaultsButton({ onRestored }: { onRestored: () => void }) {
   const { changedSettingLabels, restoreDefaults } = useSettingsRestore(onRestored);
@@ -119,10 +120,11 @@ function SettingsContentLayout() {
   const navigateToMainApp = useNavigateToMainApp();
   useEscapeToGoBack(navigateToMainApp);
   const { search, environment } = useSettingsScope();
-  const contentScopeKey =
-    location.pathname === "/settings/diagnostics" || location.pathname === "/settings/providers"
-      ? environment?.environmentId
-      : JSON.stringify(search);
+  const contentScopeKey = settingsContentScopeKey(
+    location.pathname,
+    search,
+    environment?.environmentId,
+  );
   const [restoreSignal, setRestoreSignal] = useState(0);
 
   return (
