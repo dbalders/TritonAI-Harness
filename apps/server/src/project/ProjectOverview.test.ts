@@ -301,13 +301,16 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
         assert.equal(restored.dismissedCount, 0);
 
         yield* service.dismiss({ ...input, stepId: step.id, kind: "not-relevant" });
-        // The model repeats the dismissed step; it is told to avoid it and filtered anyway.
+        // The model repeats the dismissed step; it is told to avoid it and hidden anyway.
         yield* service.ensure({ ...input, force: true });
         yield* service.awaitIdle(projectId);
         assert.include(calls[1]!.context, '"title":"Review the pilot checklist"');
         assert.include(calls[1]!.context, '"because":"not relevant"');
         assert.lengthOf((yield* service.get(input)).overview!.nextSteps, 0);
-        assert.equal((yield* service.restore(input)).dismissedCount, 0);
+        // Restoring after that regeneration still brings the step back.
+        const all = yield* service.restore(input);
+        assert.equal(all.dismissedCount, 0);
+        assert.lengthOf(all.overview!.nextSteps, 1);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );

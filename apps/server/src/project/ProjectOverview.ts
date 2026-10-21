@@ -160,13 +160,16 @@ export const make = Effect.gen(function* () {
     const project = yield* projectFor(input.projectId);
     const overview = yield* stored(input.projectId, project.workspaceRoot);
     const dismissed = yield* dismissals(input.projectId);
-    const hidden = new Set(dismissed.map((row) => row.stepId));
     const run = runs.get(input.projectId);
     return {
       projectId: input.projectId,
+      // Hidden at read time rather than dropped when generated, so Restore can bring a step back.
       overview: overview && {
         ...overview,
-        nextSteps: overview.nextSteps.filter((step) => !hidden.has(step.id)),
+        nextSteps: overview.nextSteps.filter(
+          (step) =>
+            !dismissed.some((row) => row.stepId === step.id || sameTitle(row.title, step.title)),
+        ),
       },
       contextAvailable: run?.contextAvailable ?? overview !== null,
       generation: { state: run?.state ?? "idle", message: run?.message ?? null },
@@ -349,7 +352,6 @@ export const make = Effect.gen(function* () {
             ),
           );
           const knownRefs = new Set(sources.map((source) => source.ref));
-          const hidden = new Set(dismissed.map((row) => row.stepId));
           const nextSteps = result.ideas
             .flatMap((idea) => {
               if (idea.projectId !== input.projectId || !knownRefs.has(idea.ref)) return [];
@@ -362,9 +364,7 @@ export const make = Effect.gen(function* () {
                 prompt: idea.prompt.trim().slice(0, 4_000),
                 sources: refs.slice(0, 5),
               };
-              const repeated =
-                hidden.has(step.id) || dismissed.some((row) => sameTitle(row.title, step.title));
-              return step.title && step.reason && step.prompt && !repeated ? [step] : [];
+              return step.title && step.reason && step.prompt ? [step] : [];
             })
             .slice(0, 4);
           const generatedAt = DateTime.formatIso(
