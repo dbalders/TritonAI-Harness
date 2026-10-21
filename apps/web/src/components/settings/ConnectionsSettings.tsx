@@ -92,7 +92,6 @@ import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
 import { UcsdAccountSettings } from "./UcsdAccountSettings";
-import { TritonAiBotSettings } from "./TritonAiBotSettings";
 import { Input } from "../ui/input";
 import { CommandShortcut } from "../ui/command";
 import {
@@ -4076,7 +4075,6 @@ export function ConnectionsSettings() {
     <SettingsPageContainer>
       {primarySettings}
       <UcsdAccountSettings environmentId={primaryEnvironmentId} />
-      <TritonAiBotSettings />
       <SettingsSection
         {...searchableSetting("remote-environments")}
         title="Environments"

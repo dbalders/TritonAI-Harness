@@ -1,10 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Cache identity is a deterministic content digest.
 import * as NodeCrypto from "node:crypto";
 import {
+  type IntegrationSummary,
   ProjectOverview as Overview,
+  type ProjectOverviewDismissInput,
   ProjectOverviewError,
   type ProjectOverviewEnsureInput,
   type ProjectOverviewGetInput,
+  type ProjectOverviewRestoreInput,
   type ProjectOverviewSnapshot,
   type ProjectOverviewSource,
   type ProjectId,
@@ -22,6 +25,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
+import { listEnabledIntegrations } from "../integrations/IntegrationRegistry.ts";
 import * as DailyMemory from "../memory/DailyMemory.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -36,6 +40,37 @@ const unavailable = () =>
 const decodeOverview = Schema.decodeUnknownEffect(Overview);
 const decodeStored = Schema.decodeUnknownEffect(Schema.fromJsonString(Overview));
 const encodeStored = Schema.encodeSync(Schema.fromJsonString(Overview));
+const sameTitle = (left: string, right: string) =>
+  left.trim().toLowerCase() === right.trim().toLowerCase();
+
+/** What TritonAI can already do here, so suggestions do not ask to build or ship it again. */
+export const formatPluginSource = (
+  integrations: ReadonlyArray<IntegrationSummary>,
+): ProjectOverviewSource | null => {
+  if (!integrations.length) return null;
+  const lines = integrations
+    .toSorted((left, right) => left.id.localeCompare(right.id))
+    .map((integration) => {
+      const tools = integration.tools
+        .filter((tool) => tool.available)
+        .map((tool) => tool.displayName)
+        .join(", ");
+      const signIn =
+        integration.requiresConnection && integration.connectionState !== "connected"
+          ? " (needs sign-in)"
+          : "";
+      return `- ${integration.name} ${integration.version}${signIn}: ${tools || "no tools available"}`.slice(
+        0,
+        600,
+      );
+    });
+  return {
+    ref: "plugin:enabled",
+    title: "Plugins turned on in TritonAI",
+    threadId: null,
+    text: ["Installed and turned on now:", ...lines].join("\n").slice(0, 4_000),
+  };
+};
 
 interface Run {
   state: "generating" | "idle" | "error";
@@ -58,6 +93,14 @@ export class ProjectOverview extends Context.Service<
     /** Checks the current project context, joining an existing run or reusing an unchanged cache. */
     readonly ensure: (
       input: ProjectOverviewEnsureInput,
+    ) => Effect.Effect<ProjectOverviewSnapshot, ProjectOverviewError>;
+    /** Hides a suggested step and keeps future suggestions from repeating it. */
+    readonly dismiss: (
+      input: ProjectOverviewDismissInput,
+    ) => Effect.Effect<ProjectOverviewSnapshot, ProjectOverviewError>;
+    /** Brings back one dismissed step, or all of them, so suggestions may include them again. */
+    readonly restore: (
+      input: ProjectOverviewRestoreInput,
     ) => Effect.Effect<ProjectOverviewSnapshot, ProjectOverviewError>;
     readonly awaitIdle: (projectId: ProjectId) => Effect.Effect<void>;
   }
@@ -107,15 +150,30 @@ export const make = Effect.gen(function* () {
         : null;
     });
 
+  const dismissals = (projectId: ProjectId) =>
+    sql<{ stepId: string; title: string; kind: string }>`
+      SELECT step_id AS "stepId", title, kind FROM project_next_step_dismissals
+      WHERE project_id=${projectId} ORDER BY created_at DESC, step_id
+    `.pipe(Effect.mapError(unavailable));
+
   const get = Effect.fn("ProjectOverview.get")(function* (input: ProjectOverviewGetInput) {
     const project = yield* projectFor(input.projectId);
     const overview = yield* stored(input.projectId, project.workspaceRoot);
+    const dismissed = yield* dismissals(input.projectId);
     const run = runs.get(input.projectId);
     return {
       projectId: input.projectId,
-      overview,
+      // Hidden at read time rather than dropped when generated, so Restore can bring a step back.
+      overview: overview && {
+        ...overview,
+        nextSteps: overview.nextSteps.filter(
+          (step) =>
+            !dismissed.some((row) => row.stepId === step.id || sameTitle(row.title, step.title)),
+        ),
+      },
       contextAvailable: run?.contextAvailable ?? overview !== null,
       generation: { state: run?.state ?? "idle", message: run?.message ?? null },
+      dismissedCount: dismissed.length,
     } satisfies ProjectOverviewSnapshot;
   });
 
@@ -124,13 +182,17 @@ export const make = Effect.gen(function* () {
     const rows = yield* sql<{
       threadId: string;
       title: string;
+      settledAt: string | null;
+      snoozedUntil: string | null;
+      lastMessageAt: string;
       userId: string | null;
       userText: string | null;
       assistantId: string | null;
       assistantText: string | null;
     }>`
       WITH recent AS (
-        SELECT t.thread_id, t.title FROM harness_activity_threads t
+        SELECT t.thread_id, t.title, t.settled_at, t.snoozed_until
+        FROM harness_activity_threads t
         WHERE t.project_id=${projectId} AND t.deleted_at IS NULL AND t.archived_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM orchestration_v2_projection_threads v
@@ -140,6 +202,8 @@ export const make = Effect.gen(function* () {
         ORDER BY t.updated_at DESC, t.thread_id LIMIT 20
       )
       SELECT t.thread_id AS "threadId", t.title,
+        t.settled_at AS "settledAt", t.snoozed_until AS "snoozedUntil",
+        max(coalesce(u.created_at,''),coalesce(a.created_at,'')) AS "lastMessageAt",
         u.message_id AS "userId", substr(u.text,1,1200) AS "userText",
         a.message_id AS "assistantId", substr(a.text,1,2000) AS "assistantText"
       FROM recent t
@@ -158,6 +222,7 @@ export const make = Effect.gen(function* () {
     const projectMemory = yield* memory
       .getProjectMemory({ projectId })
       .pipe(Effect.mapError(unavailable));
+    const nowIso = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
     const sources: ProjectOverviewSource[] = rows
       .filter((row) => row.userText || row.assistantText)
       .map((row) => ({
@@ -165,6 +230,14 @@ export const make = Effect.gen(function* () {
         title: row.title.slice(0, 300) || "Project thread",
         threadId: ThreadId.make(row.threadId),
         text: [
+          // Dated by the excerpted messages, so only new messages or a status change refresh the cache.
+          `Thread status: ${
+            row.settledAt !== null
+              ? "settled (the user marked it handled)"
+              : row.snoozedUntil !== null && row.snoozedUntil > nowIso
+                ? "snoozed"
+                : "active"
+          }; last message ${row.lastMessageAt.slice(0, 10)}.`,
           row.userText ? `User request:\n${row.userText}` : "",
           row.assistantText
             ? `Agent's own report (not owner acceptance):\n${row.assistantText}`
@@ -188,10 +261,6 @@ export const make = Effect.gen(function* () {
       sources,
       modelSelection,
       digest: digest({ project, sources, modelSelection }),
-      context: encodeJson({
-        project: { id: projectId, title: project.title },
-        sources,
-      }),
     };
   });
 
@@ -247,10 +316,23 @@ export const make = Effect.gen(function* () {
             return yield* new ProjectOverviewError({
               message: "Choose a supported text generation model to suggest project next steps.",
             });
+          // Plugins and dismissals stay out of the digest: reading plugin status is slow, and a
+          // dismissal hides its step immediately, so neither should force a model call on open.
+          const plugins = formatPluginSource(yield* listEnabledIntegrations);
+          const sources = plugins ? [...context.sources, plugins] : context.sources;
+          const dismissed = yield* dismissals(input.projectId);
           const result = yield* generate({
             cwd: config.stateDir,
             count: 3,
-            context: context.context,
+            context: encodeJson({
+              today: DateTime.formatIso(DateTime.makeUnsafe(now)).slice(0, 10),
+              project: { id: input.projectId, title: context.project.title },
+              sources,
+              avoid: dismissed.slice(0, 40).map((row) => ({
+                title: row.title,
+                because: row.kind === "done" ? "already done" : "not relevant",
+              })),
+            }),
             project: { id: input.projectId, title: context.project.title },
             modelSelection: context.modelSelection,
           }).pipe(
@@ -269,7 +351,7 @@ export const make = Effect.gen(function* () {
                 }),
             ),
           );
-          const knownRefs = new Set(context.sources.map((source) => source.ref));
+          const knownRefs = new Set(sources.map((source) => source.ref));
           const nextSteps = result.ideas
             .flatMap((idea) => {
               if (idea.projectId !== input.projectId || !knownRefs.has(idea.ref)) return [];
@@ -291,7 +373,7 @@ export const make = Effect.gen(function* () {
           const overview = yield* decodeOverview({
             description: result.description?.trim(),
             nextSteps,
-            sources: context.sources,
+            sources,
             sourceDigest: context.digest,
             generatedAt,
             modelSelection: context.modelSelection,
@@ -339,6 +421,49 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const dismiss = Effect.fn("ProjectOverview.dismiss")(function* (
+    input: ProjectOverviewDismissInput,
+  ) {
+    const project = yield* projectFor(input.projectId);
+    const step = (yield* stored(input.projectId, project.workspaceRoot))?.nextSteps.find(
+      (candidate) => candidate.id === input.stepId,
+    );
+    if (!step)
+      return yield* new ProjectOverviewError({
+        message: "This suggestion is no longer available. Refresh next steps.",
+      });
+    const createdAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+    yield* sql`
+      INSERT INTO project_next_step_dismissals (project_id,step_id,title,kind,created_at)
+      VALUES (${input.projectId},${step.id},${step.title},${input.kind},${createdAt})
+      ON CONFLICT(project_id,step_id) DO UPDATE SET kind=excluded.kind,created_at=excluded.created_at
+    `.pipe(Effect.mapError(unavailable));
+    yield* PubSub.publish(changes, input.projectId);
+    return yield* get(input);
+  });
+
+  const restore = Effect.fn("ProjectOverview.restore")(function* (
+    input: ProjectOverviewRestoreInput,
+  ) {
+    const project = yield* projectFor(input.projectId);
+    const restored = (yield* dismissals(input.projectId)).filter(
+      (row) => input.stepId === undefined || row.stepId === input.stepId,
+    );
+    yield* (
+      input.stepId === undefined
+        ? sql`DELETE FROM project_next_step_dismissals WHERE project_id=${input.projectId}`
+        : sql`DELETE FROM project_next_step_dismissals
+            WHERE project_id=${input.projectId} AND step_id=${input.stepId}`
+    ).pipe(Effect.mapError(unavailable));
+    yield* PubSub.publish(changes, input.projectId);
+    // A regeneration that honored the avoid list never stored the step, so ask again without it.
+    const cached = (yield* stored(input.projectId, project.workspaceRoot))?.nextSteps ?? [];
+    const missing = restored.some(
+      (row) => !cached.some((step) => step.id === row.stepId || sameTitle(step.title, row.title)),
+    );
+    return yield* missing ? ensure({ projectId: input.projectId, force: true }) : get(input);
+  });
+
   // Archiving, restoring or deleting a cited thread changes what get() may show.
   yield* forkParked(
     orchestrator.streamDomainEvents.pipe(
@@ -364,6 +489,8 @@ export const make = Effect.gen(function* () {
   return ProjectOverview.of({
     get,
     ensure,
+    dismiss,
+    restore,
     subscribe: (input) =>
       Stream.unwrap(
         Effect.gen(function* () {

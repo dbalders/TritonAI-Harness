@@ -52,7 +52,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
-import { getIntegrationRegistryOptional } from "../integrations/IntegrationRegistry.ts";
+import { listEnabledIntegrations } from "../integrations/IntegrationRegistry.ts";
 import { localDayAt } from "../memory/memoryDays.ts";
 import { findMemoryDevice, generalVaultPaths } from "../memory/memoryVault.ts";
 import * as PublicSkillRepository from "../provider/publicSkillRepository.ts";
@@ -711,18 +711,7 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const loadPlugins = Effect.gen(function* () {
-    const registry = getIntegrationRegistryOptional();
-    if (!registry) return [];
-    const listed = yield* Effect.tryPromise(() => registry.list()).pipe(
-      Effect.timeoutOption(Duration.seconds(5)),
-      Effect.orElseSucceed(() => Option.none()),
-    );
-    if (Option.isNone(listed)) return [];
-    return listed.value.integrations.filter(
-      (integration) => integration.installed && integration.enabled,
-    );
-  });
+  const loadPlugins = listEnabledIntegrations;
 
   const loadSkills = Effect.gen(function* () {
     if (Option.isNone(skills)) return [];
