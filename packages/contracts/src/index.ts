@@ -20,7 +20,6 @@ export * from "./tritonai.ts";
 export * from "./tritonaiManagedConfig.ts";
 export * from "./tritonaiUsage.ts";
 export * from "./memory.ts";
-export * from "./botTaskComputer.ts";
 export * from "./ideas.ts";
 export * from "./provider.ts";
 export * from "./providerInstance.ts";
