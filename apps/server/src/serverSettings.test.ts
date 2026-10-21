@@ -22,6 +22,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -303,26 +304,50 @@ it.layer(NodeServices.layer)("server settings", (it) => {
   it.effect("reloads when a dangling settings link gets its destination", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const config = yield* ServerConfig.ServerConfig;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const service = yield* ServerSettingsModule.ServerSettingsService;
         const dotfiles = yield* fs.makeTempDirectoryScoped({ prefix: "t3-settings-dotfiles-" });
         const linkedSettingsPath = path.join(dotfiles, "not-yet", "settings.json");
-        yield* fs.remove(config.settingsPath, { force: true });
-        yield* fs.symlink(linkedSettingsPath, config.settingsPath);
-        yield* service.start;
-        const changes = yield* service.subscribeChanges;
-
-        yield* writeFileStringAtomically({
-          filePath: linkedSettingsPath,
-          contents: `{ "responseStreamingMode": "paragraph" }`,
+        const targetEvents = yield* Queue.unbounded<FileSystem.WatchEvent>();
+        const targetWatchStarted = yield* Deferred.make<void>();
+        const observedFs = FileSystem.FileSystem.of({
+          ...fs,
+          // Native symlink notifications are covered above. Control this event so
+          // creating the missing target cannot race the native watch's async setup.
+          watch: (directory, options) =>
+            directory === path.dirname(linkedSettingsPath)
+              ? Stream.fromQueue(targetEvents).pipe(
+                  Stream.onStart(Deferred.succeed(targetWatchStarted, undefined)),
+                )
+              : fs.watch(directory, options),
         });
 
-        const change = yield* changes.pipe(Stream.runHead, Effect.timeout("2 seconds"));
-        assert.equal(Option.getOrUndefined(change)?.responseStreamingMode, "paragraph");
+        yield* Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          const service = yield* ServerSettingsModule.ServerSettingsService;
+          yield* fs.remove(config.settingsPath, { force: true });
+          yield* fs.symlink(linkedSettingsPath, config.settingsPath);
+          yield* service.start;
+          yield* Deferred.await(targetWatchStarted);
+          const changes = yield* service.subscribeChanges;
+
+          yield* writeFileStringAtomically({
+            filePath: linkedSettingsPath,
+            contents: `{ "responseStreamingMode": "paragraph" }`,
+          });
+          yield* Queue.offer(targetEvents, { _tag: "Create", path: "settings.json" });
+
+          const change = yield* changes.pipe(Stream.runHead, Effect.timeout("2 seconds"));
+          assert.equal(Option.getOrUndefined(change)?.responseStreamingMode, "paragraph");
+        }).pipe(
+          Effect.provide(
+            layerServerSettings().pipe(
+              Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, observedFs)),
+            ),
+          ),
+        );
       }),
-    ).pipe(TestClock.withLive, Effect.provide(layerServerSettings())),
+    ).pipe(TestClock.withLive),
   );
 
   it.effect("preserves context when reading a provider environment secret fails", () => {

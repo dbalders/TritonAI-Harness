@@ -1,5 +1,42 @@
 # Settings and project overrides
 
+## Project briefs
+
+On web and desktop, choose **Open project brief** in the command palette, or the brief icon
+beside a project in the sidebar's project picker. Briefs belong to one project on one environment.
+
+Choose project text files, a selected Harness message, or a pasted excerpt, then generate a brief
+with your chosen agent. A pasted excerpt's URL is a reference, not an imported page. Review the
+supporting quotes before accepting, editing or dismissing a proposed decision or next step.
+Changed sources require a new proposal before work can start.
+
+Accepting a next step does not start work. **Review & start thread** lets you inspect the action,
+completion criteria and evidence before launching it. Returned results stay open until you review
+them and mark them complete. You can reopen that review or revise a finished next step without
+removing its earlier result. **Refresh sources & work** checks the selected sources and current
+thread status.
+
+If a thread finishes without a verified result, the brief shows **Result missing**. Inspect its
+thread and use **Prepare revision** to propose another attempt; it is not marked complete.
+If stopping work is interrupted, **Retry stop** retries that same stop request.
+
+For work whose startup is pending or uncertain, **Withdraw tracking** lets you explicitly retire
+the brief's tracking of that attempt after Harness checks for active work. Inspect the original
+thread first: withdrawal does not confirm that it has stopped, and late results will no longer
+update the brief. The work record and thread stay available. Once no tracked work is active, you
+can archive the brief and start fresh.
+
+An unfinished or failed brief generation can be discarded before generating a replacement.
+Discarding prevents its late results from changing the brief, but does not confirm that its agent
+thread has stopped. Open the original thread to inspect or stop it.
+
+Use **Archive & start fresh** to save the current brief, its source versions, proposals and results
+before clearing the current brief. Finish or stop active work first. Unreviewed results remain
+unreviewed in the read-only archive. This also makes room when the current brief's history fills.
+The page lists the latest 20 saved briefs; a saved brief's URL can be bookmarked to reopen it later.
+
+## Settings scope
+
 On web and desktop, the "Applying settings for …" sentence at the top of Settings pages picks
 the project and environment a change applies to. Pages that only hold device preferences, such as
 Appearance, don't show it. They start at **All projects** and **All environments**

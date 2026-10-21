@@ -84,6 +84,7 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
+  BotIcon,
   ArrowRightLeftIcon,
   CheckIcon,
   CircleAlertIcon,
@@ -101,6 +102,7 @@ import {
   PinOffIcon,
   PlusIcon,
   SettingsIcon,
+  NotebookPenIcon,
   ShieldQuestionIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -121,8 +123,9 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { useParams, useRouter } from "@tanstack/react-router";
+import { Link, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { useRightPanelStore } from "../rightPanelStore";
+import { useBotServiceUrl } from "./dot/botService";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -170,6 +173,7 @@ import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { useFocusComposerAfterNewThread } from "../composerHandleContext";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
+import { ProjectFolderHeading } from "./projectHome/ProjectFolderHeading";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -296,7 +300,7 @@ import {
   ComboboxTrigger,
   useComboboxFilter,
 } from "./ui/combobox";
-import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
+import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
@@ -2587,6 +2591,10 @@ export default function Sidebar() {
   const threads = useThreadShells();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
+  const isDotRouteActive = useRouterState({
+    select: (state) => state.location.pathname === "/dot",
+  });
+  const botServiceUrl = useBotServiceUrl();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -5490,6 +5498,30 @@ export default function Sidebar() {
                                 size="icon-xs"
                                 variant="ghost-muted"
                                 tabIndex={-1}
+                                title={`Open project brief for ${project.displayName}`}
+                                aria-label={`Open project brief for ${project.displayName}`}
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  if (isMobile) setOpenMobile(false);
+                                  void router.navigate({
+                                    to: "/project-brief/$environmentId/$projectId",
+                                    params: {
+                                      environmentId: project.environmentId,
+                                      projectId: project.id,
+                                    },
+                                  });
+                                }}
+                              >
+                                <NotebookPenIcon className="size-3.5" />
+                              </Button>
+                            ) : null}
+                            {project ? (
+                              <Button
+                                size="icon-xs"
+                                variant="ghost-muted"
+                                tabIndex={-1}
                                 aria-hidden="true"
                                 title={`Project settings for ${project.displayName}`}
                                 className="ml-auto"
@@ -5614,6 +5646,16 @@ export default function Sidebar() {
               closeDelay={0}
               timeout={400}
             >
+              {botServiceUrl ? (
+                <SidebarMenuButton
+                  isActive={isDotRouteActive}
+                  render={<Link to="/dot" />}
+                  tooltip="TritonAI Bot"
+                >
+                  <BotIcon />
+                  <span>TritonAI Bot</span>
+                </SidebarMenuButton>
+              ) : null}
               <DndContext
                 sensors={dndSensors}
                 autoScroll={!isContextDrag}
@@ -5911,49 +5953,67 @@ export default function Sidebar() {
                                                   isExpanded && "pb-0",
                                                 )}
                                               >
-                                                <button
-                                                  type="button"
-                                                  aria-expanded={isExpanded}
-                                                  aria-label={`${isExpanded ? "Collapse" : "Expand"} ${project?.displayName ?? "Other threads"}`}
-                                                  onClick={() =>
-                                                    setCollapsedProjectKeys((keys) =>
-                                                      keys.includes(groupKey)
-                                                        ? keys.filter((key) => key !== groupKey)
-                                                        : [...keys, groupKey],
-                                                    )
-                                                  }
-                                                  className={cn(
-                                                    "flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                                                    handle === null && "cursor-pointer",
-                                                  )}
-                                                >
-                                                  {isExpanded ? (
-                                                    <FolderOpenIcon
-                                                      aria-hidden
-                                                      className="size-4 shrink-0 text-sidebar-muted-foreground"
-                                                    />
-                                                  ) : (
-                                                    <FolderIcon
-                                                      aria-hidden
-                                                      className="size-4 shrink-0 text-sidebar-muted-foreground"
-                                                    />
-                                                  )}
-                                                  <span className="min-w-0 truncate text-sm font-medium text-sidebar-muted-foreground">
-                                                    {project?.displayName ?? "Other threads"}
-                                                  </span>
-                                                  {/* Same-named folders on two machines differ only
+                                                {project ? (
+                                                  <ProjectFolderHeading
+                                                    title={project.displayName}
+                                                    projectKey={project.projectKey}
+                                                    expanded={isExpanded}
+                                                    canReorder={
+                                                      handle !== null && optimisticDrop === null
+                                                    }
+                                                    onOpen={() => {
+                                                      clearSelection();
+                                                      if (isMobile) setOpenMobile(false);
+                                                    }}
+                                                    onToggle={() =>
+                                                      setCollapsedProjectKeys((keys) =>
+                                                        keys.includes(groupKey)
+                                                          ? keys.filter((key) => key !== groupKey)
+                                                          : [...keys, groupKey],
+                                                      )
+                                                    }
+                                                  >
+                                                    {/* Same-named folders on two machines differ only
                                                       by where they live; the icon says which. */}
-                                                  {project && showProjectEnvironments ? (
-                                                    <ProjectEnvironmentBadge
-                                                      group={project}
-                                                      primaryEnvironmentId={primaryEnvironmentId}
-                                                      machineByEnvironmentId={
-                                                        environmentMachineById
-                                                      }
-                                                      className="ml-0 text-sidebar-muted-foreground"
-                                                    />
-                                                  ) : null}
-                                                </button>
+                                                    {project && showProjectEnvironments ? (
+                                                      <ProjectEnvironmentBadge
+                                                        group={project}
+                                                        primaryEnvironmentId={primaryEnvironmentId}
+                                                        machineByEnvironmentId={
+                                                          environmentMachineById
+                                                        }
+                                                        className="ml-0 text-sidebar-muted-foreground"
+                                                      />
+                                                    ) : null}
+                                                  </ProjectFolderHeading>
+                                                ) : (
+                                                  <button
+                                                    type="button"
+                                                    aria-expanded={isExpanded}
+                                                    aria-label={`${isExpanded ? "Collapse" : "Expand"} Other threads`}
+                                                    onClick={() =>
+                                                      setCollapsedProjectKeys((keys) =>
+                                                        keys.includes(groupKey)
+                                                          ? keys.filter((key) => key !== groupKey)
+                                                          : [...keys, groupKey],
+                                                      )
+                                                    }
+                                                    className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left text-sm font-medium text-sidebar-muted-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                                                  >
+                                                    {isExpanded ? (
+                                                      <FolderOpenIcon
+                                                        aria-hidden
+                                                        className="size-4 shrink-0"
+                                                      />
+                                                    ) : (
+                                                      <FolderIcon
+                                                        aria-hidden
+                                                        className="size-4 shrink-0"
+                                                      />
+                                                    )}
+                                                    Other threads
+                                                  </button>
+                                                )}
                                                 {project ? (
                                                   <button
                                                     type="button"

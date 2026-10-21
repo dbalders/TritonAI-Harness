@@ -1,4 +1,11 @@
 import {
+  ServerBotTaskComputerAllowInput,
+  ServerBotTaskComputerError,
+  ServerBotTaskComputerProjectInput,
+  ServerBotTaskComputerStatus,
+  ServerBotTaskComputerStopInput,
+} from "./botTaskComputer.ts";
+import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -351,12 +358,29 @@ import {
 import { ServerTritonAiUsageError, ServerTritonAiUsageSnapshot } from "./tritonaiUsage.ts";
 import {
   ServerMemoryStatus,
+  ServerProjectMemory,
+  ServerProjectMemoryInput,
+  ServerProjectMemoryError,
   ServerMemorySyncError,
   ServerMemorySyncPollInput,
   ServerMemorySyncPollResult,
   ServerMemorySyncStartResult,
 } from "./memory.ts";
 import { IdeasError, IdeasFeedbackInput, IdeasSnapshot } from "./ideas.ts";
+import {
+  ProjectBriefArchive,
+  ProjectBriefArchiveGetInput,
+  ProjectBriefCommand,
+  ProjectBriefError,
+  ProjectBriefGetInput,
+  ProjectBriefState,
+} from "./projectBrief.ts";
+import {
+  ProjectOverviewError,
+  ProjectOverviewGetInput,
+  ProjectOverviewEnsureInput,
+  ProjectOverviewSnapshot,
+} from "./projectOverview.ts";
 import {
   StorageCleanupReport,
   ServerSettings,
@@ -534,7 +558,12 @@ export const WS_METHODS = {
   serverUpdateSettings: "server.updateSettings",
   serverTranscribeVoice: "server.transcribeVoice",
   serverGetTritonAiUsage: "server.getTritonAiUsage",
+  serverGetBotTaskComputer: "server.getBotTaskComputer",
+  serverAllowBotTaskComputer: "server.allowBotTaskComputer",
+  serverStopBotTaskComputer: "server.stopBotTaskComputer",
+  serverSetBotTaskProject: "server.setBotTaskProject",
   serverGetMemoryStatus: "server.getMemoryStatus",
+  serverGetProjectMemory: "server.getProjectMemory",
   serverStartMemorySync: "server.startMemorySync",
   serverPollMemorySync: "server.pollMemorySync",
   serverSyncMemoryNow: "server.syncMemoryNow",
@@ -587,6 +616,14 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+
+  projectBriefGet: "projectBrief.get",
+  projectBriefArchiveGet: "projectBrief.archiveGet",
+  projectBriefSubscribe: "projectBrief.subscribe",
+  projectBriefExecute: "projectBrief.execute",
+  projectOverviewGet: "projectOverview.get",
+  projectOverviewSubscribe: "projectOverview.subscribe",
+  projectOverviewEnsure: "projectOverview.ensure",
 
   // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
@@ -891,10 +928,40 @@ const WsServerGetTritonAiUsageRpc = Rpc.make(WS_METHODS.serverGetTritonAiUsage, 
   error: Schema.Union([ServerTritonAiUsageError, EnvironmentAuthorizationError]),
 });
 
+const WsServerGetBotTaskComputerRpc = Rpc.make(WS_METHODS.serverGetBotTaskComputer, {
+  payload: Schema.Struct({}),
+  success: ServerBotTaskComputerStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerAllowBotTaskComputerRpc = Rpc.make(WS_METHODS.serverAllowBotTaskComputer, {
+  payload: ServerBotTaskComputerAllowInput,
+  success: ServerBotTaskComputerStatus,
+  error: Schema.Union([ServerBotTaskComputerError, EnvironmentAuthorizationError]),
+});
+
+const WsServerStopBotTaskComputerRpc = Rpc.make(WS_METHODS.serverStopBotTaskComputer, {
+  payload: ServerBotTaskComputerStopInput,
+  success: ServerBotTaskComputerStatus,
+  error: Schema.Union([ServerBotTaskComputerError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSetBotTaskProjectRpc = Rpc.make(WS_METHODS.serverSetBotTaskProject, {
+  payload: ServerBotTaskComputerProjectInput,
+  success: ServerBotTaskComputerStatus,
+  error: Schema.Union([ServerBotTaskComputerError, EnvironmentAuthorizationError]),
+});
+
 const WsServerGetMemoryStatusRpc = Rpc.make(WS_METHODS.serverGetMemoryStatus, {
   payload: Schema.Struct({}),
   success: ServerMemoryStatus,
   error: EnvironmentAuthorizationError,
+});
+
+const WsServerGetProjectMemoryRpc = Rpc.make(WS_METHODS.serverGetProjectMemory, {
+  payload: ServerProjectMemoryInput,
+  success: ServerProjectMemory,
+  error: Schema.Union([ServerProjectMemoryError, EnvironmentAuthorizationError]),
 });
 
 const WsServerStartMemorySyncRpc = Rpc.make(WS_METHODS.serverStartMemorySync, {
@@ -2067,6 +2134,48 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsProjectBriefGetRpc = Rpc.make(WS_METHODS.projectBriefGet, {
+  payload: ProjectBriefGetInput,
+  success: ProjectBriefState,
+  error: Schema.Union([ProjectBriefError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectBriefSubscribeRpc = Rpc.make(WS_METHODS.projectBriefSubscribe, {
+  payload: ProjectBriefGetInput,
+  success: ProjectBriefState,
+  error: Schema.Union([ProjectBriefError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsProjectBriefArchiveGetRpc = Rpc.make(WS_METHODS.projectBriefArchiveGet, {
+  payload: ProjectBriefArchiveGetInput,
+  success: ProjectBriefArchive,
+  error: Schema.Union([ProjectBriefError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectBriefExecuteRpc = Rpc.make(WS_METHODS.projectBriefExecute, {
+  payload: ProjectBriefCommand,
+  success: ProjectBriefState,
+  error: Schema.Union([ProjectBriefError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectOverviewGetRpc = Rpc.make(WS_METHODS.projectOverviewGet, {
+  payload: ProjectOverviewGetInput,
+  success: ProjectOverviewSnapshot,
+  error: Schema.Union([ProjectOverviewError, EnvironmentAuthorizationError]),
+});
+const WsProjectOverviewSubscribeRpc = Rpc.make(WS_METHODS.projectOverviewSubscribe, {
+  payload: ProjectOverviewGetInput,
+  success: ProjectOverviewSnapshot,
+  error: Schema.Union([ProjectOverviewError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const WsProjectOverviewEnsureRpc = Rpc.make(WS_METHODS.projectOverviewEnsure, {
+  payload: ProjectOverviewEnsureInput,
+  success: ProjectOverviewSnapshot,
+  error: Schema.Union([ProjectOverviewError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -2203,7 +2312,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateSettingsRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGetTritonAiUsageRpc,
+  WsServerGetBotTaskComputerRpc,
+  WsServerAllowBotTaskComputerRpc,
+  WsServerStopBotTaskComputerRpc,
+  WsServerSetBotTaskProjectRpc,
   WsServerGetMemoryStatusRpc,
+  WsServerGetProjectMemoryRpc,
   WsServerStartMemorySyncRpc,
   WsServerPollMemorySyncRpc,
   WsServerSyncMemoryNowRpc,
@@ -2253,6 +2367,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsIntegrationsConnectRpc,
   WsIntegrationsPollRpc,
   WsIntegrationsDisconnectRpc,
+  WsProjectBriefGetRpc,
+  WsProjectBriefArchiveGetRpc,
+  WsProjectBriefSubscribeRpc,
+  WsProjectBriefExecuteRpc,
+  WsProjectOverviewGetRpc,
+  WsProjectOverviewSubscribeRpc,
+  WsProjectOverviewEnsureRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,

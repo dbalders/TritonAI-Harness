@@ -67,7 +67,6 @@ import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
-import { IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import {
   canCheckForUpdate,
@@ -148,6 +147,7 @@ import {
 } from "../ui/number-field";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { restartGuidedTour } from "../../onboarding/guidedTourState";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -295,9 +295,6 @@ function HarnessVersionSection() {
   const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
   const selectedUpdateChannel = updateState?.channel ?? "latest";
   const selectedHostedAppChannel = hasDesktopBridge ? null : HOSTED_APP_CHANNEL;
-  // Show the beta app links as soon as someone picks Nightly, before the update installs.
-  const showNightlyMobileBeta =
-    IS_NIGHTLY_BUILD || (hasDesktopBridge && selectedUpdateChannel === "nightly");
 
   const handleButtonClick = useCallback(async () => {
     const bridge = window.desktopBridge;
@@ -467,7 +464,6 @@ function HarnessVersionSection() {
           }
         />
       ) : null}
-      {showNightlyMobileBeta ? <NightlyMobileBetaRow /> : null}
       {hasDesktopBridge ? <CliCommandSettingsRow /> : null}
     </>
   );
@@ -2049,25 +2045,25 @@ function AutoSettleDaysInput({
   );
 }
 
-// The legacy rows sit behind the fold, so a settings-search jump has to
-// expand the section before its target can mount and scroll.
-const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
-  "legacy-plan-mode",
-  "legacy-context-window-indicator",
-  "legacy-sidebar",
-]);
-
 /**
- * Retired features kept only for users who still depend on them. Collapsed by
- * default so they stay out of the everyday settings path; a settings-search
- * jump to one of the rows unfolds the section.
+ * A settings section folded behind its title, closed by default so its rows stay out of
+ * the everyday settings path. Rows sit behind the fold, so a settings-search jump to one
+ * of `targetIds` unfolds the section before its target can mount and scroll.
  */
-function LegacyFeaturesSection() {
-  const settings = useScopedSettings();
-  const updateSettings = useUpdateScopedSettings();
+function CollapsedFeaturesSection({
+  id,
+  title,
+  targetIds,
+  children,
+}: {
+  readonly id: string;
+  readonly title: string;
+  readonly targetIds: ReadonlySet<string>;
+  readonly children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const searchTargetId = useSettingsSearchTargetId();
-  const targetRef = useSettingsSearchTarget<HTMLElement>("legacy-features");
+  const targetRef = useSettingsSearchTarget<HTMLElement>(id);
   // Unfold once per search jump; tracking the handled id lets the user fold
   // the section back up without the still-set target immediately reopening it.
   const lastExpandedTargetRef = useRef<string | null>(null);
@@ -2078,66 +2074,133 @@ function LegacyFeaturesSection() {
       lastExpandedTargetRef.current = null;
       return;
     }
-    if (!LEGACY_FEATURE_TARGET_IDS.has(searchTargetId)) return;
+    if (!targetIds.has(searchTargetId)) return;
     if (lastExpandedTargetRef.current === searchTargetId) return;
     lastExpandedTargetRef.current = searchTargetId;
     setOpen(true);
-  }, [searchTargetId]);
+  }, [searchTargetId, targetIds]);
 
   return (
-    <section id="legacy-features" ref={targetRef} tabIndex={-1} className="space-y-2.5">
+    <section id={id} ref={targetRef} tabIndex={-1} className="space-y-2.5">
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="group flex min-h-8 w-full items-center gap-2 px-3 sm:px-4">
           <h2 className="text-sm font-normal text-foreground/70 transition-colors group-hover:text-foreground">
-            Legacy features
+            {title}
           </h2>
           <ChevronRightIcon className="size-4 text-muted-foreground transition-transform duration-200 group-data-panel-open:rotate-90" />
         </CollapsibleTrigger>
         <CollapsiblePanel>
-          <SettingsGroup>
-            <SettingsRow
-              {...searchableSetting("legacy-plan-mode")}
-              description="Restore Build/Plan, /plan, /default, and Shift+Tab. Off uses build mode."
-              control={
-                <Switch
-                  checked={settings.planModeEnabled}
-                  onCheckedChange={(checked) => {
-                    updateSettings({ planModeEnabled: Boolean(checked) });
-                  }}
-                  aria-label="Plan mode (legacy)"
-                />
-              }
-            />
-            <SettingsRow
-              {...searchableSetting("legacy-context-window-indicator")}
-              description="Shows context window usage as a circular indicator in the composer."
-              control={
-                <Switch
-                  checked={settings.contextWindowMeterEnabled}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ contextWindowMeterEnabled: Boolean(checked) })
-                  }
-                  aria-label="Context window indicator (legacy)"
-                />
-              }
-            />
-            <SettingsRow
-              {...searchableSetting("legacy-sidebar")}
-              description="Restore per-project thread trees instead of the default flat sidebar."
-              control={
-                <Switch
-                  checked={settings.legacySidebarEnabled}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ legacySidebarEnabled: Boolean(checked) })
-                  }
-                  aria-label="Sidebar (legacy)"
-                />
-              }
-            />
-          </SettingsGroup>
+          <SettingsGroup>{children}</SettingsGroup>
         </CollapsiblePanel>
       </Collapsible>
     </section>
+  );
+}
+
+const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
+  "legacy-plan-mode",
+  "legacy-context-window-indicator",
+  "legacy-sidebar",
+]);
+
+/** Retired features kept only for users who still depend on them. */
+function LegacyFeaturesSection() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <CollapsedFeaturesSection
+      id="legacy-features"
+      title="Legacy features"
+      targetIds={LEGACY_FEATURE_TARGET_IDS}
+    >
+      <SettingsRow
+        {...searchableSetting("legacy-plan-mode")}
+        description="Restore Build/Plan, /plan, /default, and Shift+Tab. Off uses build mode."
+        control={
+          <Switch
+            checked={settings.planModeEnabled}
+            onCheckedChange={(checked) => {
+              updateSettings({ planModeEnabled: Boolean(checked) });
+            }}
+            aria-label="Plan mode (legacy)"
+          />
+        }
+      />
+      <SettingsRow
+        {...searchableSetting("legacy-context-window-indicator")}
+        description="Shows context window usage as a circular indicator in the composer."
+        control={
+          <Switch
+            checked={settings.contextWindowMeterEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings({ contextWindowMeterEnabled: Boolean(checked) })
+            }
+            aria-label="Context window indicator (legacy)"
+          />
+        }
+      />
+      <SettingsRow
+        {...searchableSetting("legacy-sidebar")}
+        description="Restore per-project thread trees instead of the default flat sidebar."
+        control={
+          <Switch
+            checked={settings.legacySidebarEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings({ legacySidebarEnabled: Boolean(checked) })
+            }
+            aria-label="Sidebar (legacy)"
+          />
+        }
+      />
+    </CollapsedFeaturesSection>
+  );
+}
+
+const EXPERIMENTAL_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set(["experimental-guided-tour"]);
+
+/**
+ * Features still being tried out. Each stays off, with no other entry point, until it is
+ * turned on here.
+ */
+function ExperimentalFeaturesSection() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const navigate = useNavigate();
+  const guidedTourEnabled = settings.experimentalGuidedTourEnabled;
+  return (
+    <CollapsedFeaturesSection
+      id="experimental-features"
+      title="Experimental"
+      targetIds={EXPERIMENTAL_FEATURE_TARGET_IDS}
+    >
+      <SettingsRow
+        {...searchableSetting("experimental-guided-tour")}
+        description="A short walkthrough for people new to AI: it does one real task with you, then continues in a chat with suggestions. Turn it on to show Start tour."
+        control={
+          <div className="flex items-center gap-2">
+            {guidedTourEnabled ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  restartGuidedTour();
+                  void navigate({ to: "/guided-tour" });
+                }}
+              >
+                Start tour
+              </Button>
+            ) : null}
+            <Switch
+              checked={guidedTourEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ experimentalGuidedTourEnabled: Boolean(checked) })
+              }
+              aria-label="Guided tour (experimental)"
+            />
+          </div>
+        }
+      />
+    </CollapsedFeaturesSection>
   );
 }
 
@@ -3342,14 +3405,11 @@ export function GeneralSettingsPanel() {
         {isElectron || HOSTED_APP_CHANNEL ? (
           <HarnessVersionSection />
         ) : (
-          <>
-            <SettingsRow
-              id={searchableSetting("app-version").id}
-              title={<AboutVersionTitle />}
-              description="Current version of the application."
-            />
-            {IS_NIGHTLY_BUILD ? <NightlyMobileBetaRow /> : null}
-          </>
+          <SettingsRow
+            id={searchableSetting("app-version").id}
+            title={<AboutVersionTitle />}
+            description="Current version of the application."
+          />
         )}
         <SettingsRow
           {...searchableSetting("privacy-policy")}
@@ -3399,6 +3459,8 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <ExperimentalFeaturesSection />
 
       <LegacyFeaturesSection />
     </SettingsPageContainer>

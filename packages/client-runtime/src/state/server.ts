@@ -1117,11 +1117,58 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:memory-sync-sign-out",
       tag: WS_METHODS.serverSignOutMemorySync,
     }),
+    botTaskComputer: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:bot-task-computer",
+      tag: WS_METHODS.serverGetBotTaskComputer,
+      // Check-ins and task progress happen in the background.
+      refreshIntervalMs: 15_000,
+    }),
+    allowBotTaskComputer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:bot-task-computer-allow",
+      tag: WS_METHODS.serverAllowBotTaskComputer,
+    }),
+    stopBotTaskComputer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:bot-task-computer-stop",
+      tag: WS_METHODS.serverStopBotTaskComputer,
+    }),
+    setBotTaskProject: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:bot-task-project",
+      tag: WS_METHODS.serverSetBotTaskProject,
+    }),
     memoryStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:memory-status",
       tag: WS_METHODS.serverGetMemoryStatus,
       // Summaries finish in the background, so an open settings page catches up.
       refreshIntervalMs: 30_000,
+    }),
+    projectMemory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:project-memory",
+      tag: WS_METHODS.serverGetProjectMemory,
+      refreshIntervalMs: 60_000,
+    }),
+    projectOverview: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:project-overview:live",
+      tag: WS_METHODS.projectOverviewSubscribe,
+    }),
+    ensureProjectOverview: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:project-overview:ensure",
+      tag: WS_METHODS.projectOverviewEnsure,
+    }),
+    projectBrief: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:project-brief:get",
+      tag: WS_METHODS.projectBriefGet,
+    }),
+    projectBriefLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:project-brief:live",
+      tag: WS_METHODS.projectBriefSubscribe,
+    }),
+    projectBriefArchive: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:project-brief:archive",
+      tag: WS_METHODS.projectBriefArchiveGet,
+    }),
+    executeProjectBrief: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:project-brief:execute",
+      tag: WS_METHODS.projectBriefExecute,
     }),
     ideas: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:ideas:list",

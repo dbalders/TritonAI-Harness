@@ -7,6 +7,7 @@ import { getManagedPolicyDiagnostics, managedPolicyDiagnosticsChanges } from "./
 import { transcribeVoice } from "./voiceTranscription.ts";
 import { fetchTritonAiUsage } from "./tritonAiUsage.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
+import * as DailyMemory from "./memory/DailyMemory.ts";
 import * as Ideas from "./ideas/Ideas.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -133,6 +134,8 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as ProjectBrief from "./projectBrief/ProjectBriefService.ts";
+import * as ProjectOverview from "./project/ProjectOverview.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -246,6 +249,7 @@ import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReact
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as BotTaskComputer from "./bot/BotTaskComputer.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -1284,6 +1288,8 @@ const layerWsRpc = (
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const projectBrief = yield* ProjectBrief.ProjectBriefService;
+      const projectOverview = yield* ProjectOverview.ProjectOverview;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
@@ -1341,6 +1347,7 @@ const layerWsRpc = (
       const providerInstallation = yield* makeProviderInstallation();
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
+      const botTaskComputer = yield* BotTaskComputer.BotTaskComputer;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -1879,6 +1886,7 @@ const layerWsRpc = (
 
       const account = yield* Account.AccountService;
       const memorySync = yield* MemorySync.MemorySync;
+      const dailyMemory = yield* DailyMemory.DailyMemory;
       const ideas = yield* Ideas.Ideas;
       const handlers = ServerWsRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
@@ -2114,6 +2122,13 @@ const layerWsRpc = (
               Effect.andThen(subscribeOrchestrationV2Thread(input)),
             ),
           ),
+        [WS_METHODS.projectBriefGet]: (input) => projectBrief.get(input),
+        [WS_METHODS.projectBriefArchiveGet]: (input) => projectBrief.archiveGet(input),
+        [WS_METHODS.projectBriefSubscribe]: (input) => projectBrief.subscribe(input),
+        [WS_METHODS.projectBriefExecute]: (input) => projectBrief.execute(input),
+        [WS_METHODS.projectOverviewGet]: (input) => projectOverview.get(input),
+        [WS_METHODS.projectOverviewSubscribe]: (input) => projectOverview.subscribe(input),
+        [WS_METHODS.projectOverviewEnsure]: (input) => projectOverview.ensure(input),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
@@ -3219,7 +3234,12 @@ const layerWsRpc = (
           account.startLogin(currentSessionId, input),
         [WS_METHODS.serverPollAccountLogin]: (input) => account.pollLogin(currentSessionId, input),
         [WS_METHODS.serverSignOutAccount]: (_input) => account.signOut(currentSessionId),
+        [WS_METHODS.serverGetBotTaskComputer]: (_input) => botTaskComputer.getStatus,
+        [WS_METHODS.serverAllowBotTaskComputer]: (input) => botTaskComputer.allow(input),
+        [WS_METHODS.serverStopBotTaskComputer]: (input) => botTaskComputer.stop(input),
+        [WS_METHODS.serverSetBotTaskProject]: (input) => botTaskComputer.setProject(input),
         [WS_METHODS.serverGetMemoryStatus]: (_input) => memorySync.getStatus,
+        [WS_METHODS.serverGetProjectMemory]: (input) => dailyMemory.getProjectMemory(input),
         [WS_METHODS.serverStartMemorySync]: (_input) => memorySync.start,
         [WS_METHODS.serverPollMemorySync]: ({ flowId }) => memorySync.poll(flowId),
         [WS_METHODS.serverSyncMemoryNow]: (_input) =>

@@ -1,6 +1,6 @@
 import { describe } from "vite-plus/test";
 import { seedV2Activity } from "../persistence/HarnessActivity.testkit.ts";
-import { ProviderInstanceId, ProviderDriverKind } from "@t3tools/contracts";
+import { ProviderInstanceId, ProviderDriverKind, ProjectId } from "@t3tools/contracts";
 // @effect-diagnostics globalDate:off - fixtures are built from host-local times.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -155,6 +155,60 @@ const makeHarness = (options: {
   });
 
 it.layer(NodeServices.layer)("DailyMemory", (it) => {
+  it.effect(
+    "serves captured project memory and bounded original updates, without crossing workspaces",
+    () =>
+      Effect.gen(function* () {
+        const { layer } = yield* makeHarness({ memoryEnabled: true });
+        yield* TestClock.setTime(NOW);
+        yield* Effect.gen(function* () {
+          yield* seed;
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+          VALUES ('other-project', 'Acme App', '/code/other', '[]', ${localIso(20, 9)}, ${localIso(20, 9)})`;
+          const memory = yield* DailyMemory.make;
+          yield* memory.runCatchUp;
+          const own = yield* memory.getProjectMemory({ projectId: ProjectId.make("project-1") });
+          assert.strictEqual(own.state, "ready");
+          assert.include(own.markdown!, "Progress");
+          assert.isTrue(
+            own.recentUpdates.some((report) => report.text === "Fixed and opened PR 12."),
+          );
+          const other = yield* memory.getProjectMemory({
+            projectId: ProjectId.make("other-project"),
+          });
+          assert.strictEqual(other.state, "pending");
+          assert.deepStrictEqual(other.recentUpdates, []);
+          yield* sql`UPDATE projection_projects SET title = 'Renamed app' WHERE project_id = 'project-1'`;
+          const renamed = yield* memory.getProjectMemory({
+            projectId: ProjectId.make("project-1"),
+          });
+          assert.strictEqual(renamed.markdown, own.markdown);
+          yield* sql`UPDATE projection_projects SET deleted_at = ${localIso(29, 9)} WHERE project_id = 'project-1'`;
+          const deleted = yield* memory
+            .getProjectMemory({ projectId: ProjectId.make("project-1") })
+            .pipe(Effect.flip);
+          assert.strictEqual(deleted._tag, "ServerProjectMemoryError");
+        }).pipe(Effect.provide(layer));
+      }),
+  );
+
+  it.effect(
+    "does not read notes while memory is disabled, but keeps original thread updates available",
+    () =>
+      Effect.gen(function* () {
+        const { layer } = yield* makeHarness({ memoryEnabled: false });
+        yield* Effect.gen(function* () {
+          yield* seed;
+          const memory = yield* DailyMemory.make;
+          const result = yield* memory.getProjectMemory({ projectId: ProjectId.make("project-1") });
+          assert.strictEqual(result.state, "disabled");
+          assert.isNull(result.markdown);
+          assert.isTrue(result.recentUpdates.length > 0);
+        }).pipe(Effect.provide(layer));
+      }),
+  );
+
   it.effect("summarizes new V2 activity once alongside retained history", () =>
     Effect.gen(function* () {
       const captured: DailyMemoryGenerationInput[] = [];

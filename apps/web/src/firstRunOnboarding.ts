@@ -102,7 +102,7 @@ function useComposerDraftStoreHydrated(): boolean {
   return hydrated;
 }
 
-function waitForProject(input: {
+export function waitForProject(input: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
   timeoutMs: number;

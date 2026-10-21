@@ -13,11 +13,14 @@ import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
+import { Route as GuidedTourRouteImport } from './routes/guided-tour'
+import { Route as DotRouteImport } from './routes/dot'
 import { Route as ConnectAgentRouteImport } from './routes/connect-agent'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
+import { Route as SettingsTritonaiBotRouteImport } from './routes/settings.tritonai-bot'
 import { Route as SettingsStorageRouteImport } from './routes/settings.storage'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-shot'
@@ -35,9 +38,11 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings.conne
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
+import { Route as ProjectHomeProjectKeyRouteImport } from './routes/project-home.$projectKey'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatNewRouteImport } from './routes/_chat.new'
 import { Route as ChatIdeasRouteImport } from './routes/_chat.ideas'
+import { Route as ProjectBriefEnvironmentIdProjectIdRouteImport } from './routes/project-brief.$environmentId.$projectId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
@@ -59,6 +64,16 @@ const SettingsRoute = SettingsRouteImport.update({
 const PairRoute = PairRouteImport.update({
   id: '/pair',
   path: '/pair',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GuidedTourRoute = GuidedTourRouteImport.update({
+  id: '/guided-tour',
+  path: '/guided-tour',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DotRoute = DotRouteImport.update({
+  id: '/dot',
+  path: '/dot',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectAgentRoute = ConnectAgentRouteImport.update({
@@ -83,6 +98,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
 const SettingsUsageRoute = SettingsUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsTritonaiBotRoute = SettingsTritonaiBotRouteImport.update({
+  id: '/tritonai-bot',
+  path: '/tritonai-bot',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsStorageRoute = SettingsStorageRouteImport.update({
@@ -171,6 +191,11 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   path: '/projects/$projectKey',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectHomeProjectKeyRoute = ProjectHomeProjectKeyRouteImport.update({
+  id: '/project-home/$projectKey',
+  path: '/project-home/$projectKey',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
@@ -186,6 +211,12 @@ const ChatIdeasRoute = ChatIdeasRouteImport.update({
   path: '/ideas',
   getParentRoute: () => ChatRoute,
 } as any)
+const ProjectBriefEnvironmentIdProjectIdRoute =
+  ProjectBriefEnvironmentIdProjectIdRouteImport.update({
+    id: '/project-brief/$environmentId/$projectId',
+    path: '/project-brief/$environmentId/$projectId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -202,6 +233,8 @@ export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
+  '/dot': typeof DotRoute
+  '/guided-tour': typeof GuidedTourRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -209,6 +242,7 @@ export interface FileRoutesByFullPath {
   '/ideas': typeof ChatIdeasRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/project-home/$projectKey': typeof ProjectHomeProjectKeyRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -226,13 +260,17 @@ export interface FileRoutesByFullPath {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/project-brief/$environmentId/$projectId': typeof ProjectBriefEnvironmentIdProjectIdRoute
 }
 export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
+  '/dot': typeof DotRoute
+  '/guided-tour': typeof GuidedTourRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -240,6 +278,7 @@ export interface FileRoutesByTo {
   '/ideas': typeof ChatIdeasRoute
   '/new': typeof ChatNewRoute
   '/pull-requests': typeof ChatPullRequestsRoute
+  '/project-home/$projectKey': typeof ProjectHomeProjectKeyRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -257,16 +296,20 @@ export interface FileRoutesByTo {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/project-brief/$environmentId/$projectId': typeof ProjectBriefEnvironmentIdProjectIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
+  '/dot': typeof DotRoute
+  '/guided-tour': typeof GuidedTourRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -274,6 +317,7 @@ export interface FileRoutesById {
   '/_chat/ideas': typeof ChatIdeasRoute
   '/_chat/new': typeof ChatNewRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
+  '/project-home/$projectKey': typeof ProjectHomeProjectKeyRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -291,10 +335,12 @@ export interface FileRoutesById {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
+  '/project-brief/$environmentId/$projectId': typeof ProjectBriefEnvironmentIdProjectIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -302,6 +348,8 @@ export interface FileRouteTypes {
     | '/'
     | '/connect'
     | '/connect-agent'
+    | '/dot'
+    | '/guided-tour'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -309,6 +357,7 @@ export interface FileRouteTypes {
     | '/ideas'
     | '/new'
     | '/pull-requests'
+    | '/project-home/$projectKey'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -326,13 +375,17 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/project-brief/$environmentId/$projectId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connect'
     | '/connect-agent'
+    | '/dot'
+    | '/guided-tour'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -340,6 +393,7 @@ export interface FileRouteTypes {
     | '/ideas'
     | '/new'
     | '/pull-requests'
+    | '/project-home/$projectKey'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -357,15 +411,19 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
+    | '/project-brief/$environmentId/$projectId'
   id:
     | '__root__'
     | '/_chat'
     | '/connect'
     | '/connect-agent'
+    | '/dot'
+    | '/guided-tour'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -373,6 +431,7 @@ export interface FileRouteTypes {
     | '/_chat/ideas'
     | '/_chat/new'
     | '/_chat/pull-requests'
+    | '/project-home/$projectKey'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -390,21 +449,27 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
+    | '/project-brief/$environmentId/$projectId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
   ConnectRoute: typeof ConnectRoute
   ConnectAgentRoute: typeof ConnectAgentRoute
+  DotRoute: typeof DotRoute
+  GuidedTourRoute: typeof GuidedTourRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
   WelcomeRoute: typeof WelcomeRoute
+  ProjectHomeProjectKeyRoute: typeof ProjectHomeProjectKeyRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
+  ProjectBriefEnvironmentIdProjectIdRoute: typeof ProjectBriefEnvironmentIdProjectIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -435,6 +500,20 @@ declare module '@tanstack/react-router' {
       path: '/pair'
       fullPath: '/pair'
       preLoaderRoute: typeof PairRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/guided-tour': {
+      id: '/guided-tour'
+      path: '/guided-tour'
+      fullPath: '/guided-tour'
+      preLoaderRoute: typeof GuidedTourRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dot': {
+      id: '/dot'
+      path: '/dot'
+      fullPath: '/dot'
+      preLoaderRoute: typeof DotRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connect-agent': {
@@ -470,6 +549,13 @@ declare module '@tanstack/react-router' {
       path: '/usage'
       fullPath: '/settings/usage'
       preLoaderRoute: typeof SettingsUsageRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/tritonai-bot': {
+      id: '/settings/tritonai-bot'
+      path: '/tritonai-bot'
+      fullPath: '/settings/tritonai-bot'
+      preLoaderRoute: typeof SettingsTritonaiBotRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/storage': {
@@ -591,6 +677,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/project-home/$projectKey': {
+      id: '/project-home/$projectKey'
+      path: '/project-home/$projectKey'
+      fullPath: '/project-home/$projectKey'
+      preLoaderRoute: typeof ProjectHomeProjectKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_chat/pull-requests': {
       id: '/_chat/pull-requests'
       path: '/pull-requests'
@@ -611,6 +704,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/ideas'
       preLoaderRoute: typeof ChatIdeasRouteImport
       parentRoute: typeof ChatRoute
+    }
+    '/project-brief/$environmentId/$projectId': {
+      id: '/project-brief/$environmentId/$projectId'
+      path: '/project-brief/$environmentId/$projectId'
+      fullPath: '/project-brief/$environmentId/$projectId'
+      preLoaderRoute: typeof ProjectBriefEnvironmentIdProjectIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
@@ -666,6 +766,7 @@ interface SettingsRouteChildren {
   SettingsSnapShotRoute: typeof SettingsSnapShotRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsStorageRoute: typeof SettingsStorageRoute
+  SettingsTritonaiBotRoute: typeof SettingsTritonaiBotRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
 }
 
@@ -686,6 +787,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsSnapShotRoute: SettingsSnapShotRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsStorageRoute: SettingsStorageRoute,
+  SettingsTritonaiBotRoute: SettingsTritonaiBotRoute,
   SettingsUsageRoute: SettingsUsageRoute,
 }
 
@@ -697,11 +799,16 @@ const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
   ConnectRoute: ConnectRoute,
   ConnectAgentRoute: ConnectAgentRoute,
+  DotRoute: DotRoute,
+  GuidedTourRoute: GuidedTourRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
   WelcomeRoute: WelcomeRoute,
+  ProjectHomeProjectKeyRoute: ProjectHomeProjectKeyRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
+  ProjectBriefEnvironmentIdProjectIdRoute:
+    ProjectBriefEnvironmentIdProjectIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

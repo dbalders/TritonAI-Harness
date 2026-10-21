@@ -31,6 +31,7 @@ export type SettingsPath =
   | "/settings/source-control"
   | "/settings/storage"
   | "/settings/connections"
+  | "/settings/tritonai-bot"
   | "/settings/archived";
 
 /**
@@ -113,6 +114,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
   "/settings/connections": "Connections",
+  "/settings/tritonai-bot": "TritonAI Bot",
   "/settings/archived": "Archive",
 };
 
@@ -627,6 +629,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "experimental-guided-tour",
+    title: "Guided tour (experimental)",
+    to: "/settings/general",
+    searchTerms: ["onboarding getting started tutorial walkthrough first run beta experimental"],
+  },
+  {
     id: "legacy-plan-mode",
     title: "Plan mode (legacy)",
     to: "/settings/general",
@@ -1009,6 +1017,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["ucsd sign in login account sso identity connection sign out"],
   },
   {
+    id: "tritonai-bot",
+    title: "TritonAI Bot",
+    to: "/settings/connections",
+    searchTerms: ["personal bot dot service address url endpoint assistant sign in turn off"],
+  },
+  {
     id: "remote-environments",
     title: "Environments",
     to: "/settings/connections",
@@ -1034,6 +1048,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/archived",
     searchTerms: ["restore reopen deleted history projects"],
   },
+  {
+    id: "tritonai-bot-task-computer",
+    title: "TritonAI Bot task computer",
+    to: "/settings/tritonai-bot",
+    searchTerms: ["allow this computer run approved harness tasks bot pairing offline warning"],
+  },
+  {
+    id: "tritonai-bot-developer",
+    title: "TritonAI Bot diagnostics",
+    to: "/settings/tritonai-bot",
+    searchTerms: [
+      "developer debug diagnostics decision inbox memory routines file inbox panels bot",
+    ],
+  },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;
 
 export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
@@ -1056,6 +1084,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/source-control": "environment-defaults",
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",
+  "/settings/tritonai-bot": null,
   "/settings/scheduled-tasks": null,
   "/settings/archived": "project-defaults",
 };

@@ -44,6 +44,12 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  */
 export const RPC_REQUIRED_SCOPES = {
   ...CLIENT_GUARDED_RPC_SCOPES,
+  [WS_METHODS.projectOverviewGet]: AuthOrchestrationReadScope,
+  [WS_METHODS.projectOverviewSubscribe]: AuthOrchestrationReadScope,
+  [WS_METHODS.projectBriefGet]: AuthOrchestrationReadScope,
+  [WS_METHODS.serverGetProjectMemory]: AuthOrchestrationReadScope,
+  [WS_METHODS.projectBriefArchiveGet]: AuthOrchestrationReadScope,
+  [WS_METHODS.projectBriefSubscribe]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
@@ -92,6 +98,10 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverSignOutAccount]: AuthProvidersManageScope,
   [WS_METHODS.serverTranscribeVoice]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetTritonAiUsage]: AuthOrchestrationReadScope,
+  [WS_METHODS.serverGetBotTaskComputer]: AuthOrchestrationReadScope,
+  [WS_METHODS.serverAllowBotTaskComputer]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverStopBotTaskComputer]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverSetBotTaskProject]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetMemoryStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.serverStartMemorySync]: AuthProvidersManageScope,
   [WS_METHODS.serverPollMemorySync]: AuthProvidersManageScope,
@@ -287,6 +297,16 @@ const requiredScopesForRpcCall = (
   method: string,
   payload: unknown,
 ): ReadonlyArray<AuthEnvironmentScope> => {
+  if (
+    method === WS_METHODS.projectOverviewGet ||
+    method === WS_METHODS.projectOverviewSubscribe ||
+    method === WS_METHODS.projectBriefGet ||
+    method === WS_METHODS.serverGetProjectMemory ||
+    method === WS_METHODS.projectBriefSubscribe ||
+    method === WS_METHODS.projectBriefArchiveGet
+  ) {
+    return [AuthOrchestrationReadScope, AuthFilesystemReadScope];
+  }
   if (method === WS_METHODS.serverRetryResourceTelemetry) {
     return [AuthEnvironmentMaintainScope, AuthDiagnosticsReadScope];
   }

@@ -30,6 +30,8 @@ import { EnvironmentToolkit } from "./toolkits/environment/tools.ts";
 import * as EnvironmentHandlers from "./toolkits/environment/handlers.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import * as ProjectHandlers from "./toolkits/project/handlers.ts";
+import { ProjectBriefToolkit } from "./toolkits/projectBrief/tools.ts";
+import * as ProjectBriefHandlers from "./toolkits/projectBrief/handlers.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
 import * as AttachmentHandlers from "./toolkits/attachment/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
@@ -837,6 +839,10 @@ export const layerEnvironmentToolkit = toolkitRegistration(
 ).pipe(Layer.provide(ThreadCommandExecutor.layer));
 
 const layerProjectRegistration = toolkitRegistration(ProjectToolkit, ProjectHandlers.layer);
+const layerProjectBriefRegistration = toolkitRegistration(
+  ProjectBriefToolkit,
+  ProjectBriefHandlers.layer,
+);
 
 export const layerAttachmentToolkit = toolkitRegistration(
   AttachmentToolkit,
@@ -961,6 +967,7 @@ export const makeLayer = (
       ThreadToolkit,
       AttachmentToolkit,
       ProjectToolkit,
+      ProjectBriefToolkit,
       EnvironmentToolkit,
       PreviewControlsToolkit,
       WorktreeToolkit,
@@ -981,6 +988,7 @@ export const makeLayer = (
     layerThreadToolkit,
     layerAttachmentToolkit,
     layerProjectRegistration,
+    layerProjectBriefRegistration,
     layerEnvironmentToolkit,
     layerPreviewControlsRegistration,
     layerWorktreeToolkitRegistration,
