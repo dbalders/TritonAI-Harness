@@ -84,6 +84,7 @@ import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
   AlarmClockOffIcon,
+  BotIcon,
   ArrowRightLeftIcon,
   CheckIcon,
   CircleAlertIcon,
@@ -122,8 +123,9 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { useParams, useRouter } from "@tanstack/react-router";
+import { Link, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { useRightPanelStore } from "../rightPanelStore";
+import { useBotServiceUrl } from "./dot/botService";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -298,7 +300,7 @@ import {
   ComboboxTrigger,
   useComboboxFilter,
 } from "./ui/combobox";
-import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
+import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "./ui/menu";
@@ -2589,6 +2591,10 @@ export default function Sidebar() {
   const threads = useThreadShells();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
+  const isDotRouteActive = useRouterState({
+    select: (state) => state.location.pathname === "/dot",
+  });
+  const botServiceUrl = useBotServiceUrl();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -5640,6 +5646,16 @@ export default function Sidebar() {
               closeDelay={0}
               timeout={400}
             >
+              {botServiceUrl ? (
+                <SidebarMenuButton
+                  isActive={isDotRouteActive}
+                  render={<Link to="/dot" />}
+                  tooltip="TritonAI Bot"
+                >
+                  <BotIcon />
+                  <span>TritonAI Bot</span>
+                </SidebarMenuButton>
+              ) : null}
               <DndContext
                 sensors={dndSensors}
                 autoScroll={!isContextDrag}
