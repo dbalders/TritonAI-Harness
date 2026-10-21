@@ -25,8 +25,14 @@ function start(label) {
       `[timing] ${record.completedAt} ${stage}: ${label} ${status} (${(record.durationMs / 1000).toFixed(2)}s)`,
     );
     if (file) {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.appendFileSync(file, JSON.stringify(record) + "\n", { mode: 0o600 });
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.appendFileSync(file, JSON.stringify(record) + "\n", { mode: 0o600 });
+      } catch {
+        // Timing is diagnostic and must not replace the action's result or error.
+        // Paths and filesystem error details may contain private release inputs.
+        console.warn("[timing] Could not record release timing; continuing without timing output.");
+      }
     }
   };
 }

@@ -1207,6 +1207,75 @@ test("rejected notarization cannot emit successful proof or updater metadata", a
   assert(!mock.calls.some((call) => call.args.includes("--artifact")));
 });
 
+test("notarization deadline aborts finalization before successful metadata or proof", async (t) => {
+  const f = fixture(t),
+    mock = packagingMocks(f);
+  const timeout = Object.assign(new Error("fixture: notarization deadline"), { code: "ETIMEDOUT" });
+  await assert.rejects(
+    finalizeMacRelease({
+      harnessRoot: f.root,
+      stageRoot: f.stageRoot,
+      version: f.version,
+      outputDir: f.release,
+      env: f.env,
+      platform: "darwin",
+      packagingTools: mock.tools,
+      runCommand: (program, args, options) => {
+        if (program === "xcrun" && args[0] === "notarytool") {
+          assert(args.includes("--wait"));
+          assert.equal(args[args.indexOf("--timeout") + 1], "45m");
+          assert(options.timeout > 45 * 60 * 1000);
+          assert(options.timeout <= 50 * 60 * 1000);
+          assert.equal(options.killSignal, "SIGKILL");
+          throw timeout;
+        }
+        return mock.command(program, args, options);
+      },
+    }),
+    (error) => error === timeout,
+  );
+  assert(!fs.existsSync(path.join(f.release, "latest-mac.yml")));
+  assert(!fs.existsSync(path.join(f.release, "harness-mac-verification.json")));
+  assert(!mock.calls.some((call) => call.args.includes("--artifact")));
+});
+
+for (const version of ["0.3.4", "0.3.4-nightly.20260912.42"]) {
+  for (const failure of ["command", "binding"]) {
+    test(`${version} ${failure} proof failure cannot emit updater or success metadata`, async (t) => {
+      const f = fixture(t, version),
+        mock = packagingMocks(f);
+      await assert.rejects(
+        finalizeMacRelease({
+          harnessRoot: f.root,
+          stageRoot: f.stageRoot,
+          version,
+          outputDir: f.release,
+          env: f.env,
+          platform: "darwin",
+          packagingTools: mock.tools,
+          verifyBoot: async () => ({ healthyForMs: 5000 }),
+          runCommand: (program, args, options) => {
+            if (program === process.execPath && args.includes("--artifact")) {
+              if (failure === "command") throw new Error("fixture: proof command failed");
+              const result = mock.command(program, args, options);
+              const proofPath = path.join(f.release, "tritonai-plugin-composition-mac-arm64.json");
+              const proof = JSON.parse(fs.readFileSync(proofPath, "utf8"));
+              proof.artifacts[0].size += 1;
+              fs.writeFileSync(proofPath, JSON.stringify(proof));
+              return result;
+            }
+            return mock.command(program, args, options);
+          },
+        }),
+        failure === "command" ? /proof command failed/ : /not bound to the exact/,
+      );
+      assert(!fs.existsSync(path.join(f.release, "latest-mac.yml")));
+      assert(!fs.existsSync(path.join(f.release, "nightly-mac.yml")));
+      assert(!fs.existsSync(path.join(f.release, "harness-mac-verification.json")));
+    });
+  }
+}
+
 test("signed payload validation failure stops before ZIP copying, notarization, or success proof", async (t) => {
   const f = fixture(t),
     mock = packagingMocks(f);

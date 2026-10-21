@@ -168,10 +168,17 @@ function notarize(file, label, notary, exec) {
       "--issuer",
       notary.issuer,
       "--wait",
+      "--timeout",
+      "45m",
       "--output-format",
       "json",
     ],
-    { capture: true, label: `Notarize ${label} and wait for Apple` },
+    {
+      capture: true,
+      timeout: 50 * 60 * 1000,
+      killSignal: "SIGKILL",
+      label: `Notarize ${label} and wait for Apple`,
+    },
   );
   let receipt;
   try {
@@ -1032,7 +1039,6 @@ async function finalizeMacRelease({
   await tools.buildBlockMap(dmg, "gzip", `${dmg}.blockmap`);
   const [zipInfo, dmgInfo] = await Promise.all([fileInfo(zip), fileInfo(dmg)]);
   const latest = `version: ${version}\nfiles:\n  - url: ${zipInfo.fileName}\n    sha512: ${zipInfo.sha512}\n    size: ${zipInfo.size}\n  - url: ${dmgInfo.fileName}\n    sha512: ${dmgInfo.sha512}\n    size: ${dmgInfo.size}\npath: ${zipInfo.fileName}\nsha512: ${zipInfo.sha512}\nreleaseDate: '${new Date().toISOString()}'\n`;
-  fs.writeFileSync(path.join(output, updaterFile), latest);
   exec(
     process.execPath,
     [
@@ -1059,6 +1065,7 @@ async function finalizeMacRelease({
     throw new Error("Final plugin proof is not bound to the exact verified candidate DMG.");
   }
   regularFile(`${dmg}.blockmap`);
+  fs.writeFileSync(path.join(output, updaterFile), latest);
   const report = {
     schemaVersion: 1,
     version,
