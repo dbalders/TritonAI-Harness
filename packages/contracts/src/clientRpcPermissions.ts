@@ -16,6 +16,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.serverStopBotTaskComputer]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverSetBotTaskProject]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectOverviewEnsure]: AuthOrchestrationOperateScope,
+  [WS_METHODS.projectOverviewDismiss]: AuthOrchestrationOperateScope,
+  [WS_METHODS.projectOverviewRestore]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectBriefExecute]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   // Endpoint checks exist to configure exports, so they need the same grant as saving them.
@@ -62,7 +64,13 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
-  if (method === WS_METHODS.projectBriefExecute || method === WS_METHODS.projectOverviewEnsure) {
+  // Project overview snapshots carry thread excerpts, so every mutation that returns one reads them.
+  if (
+    method === WS_METHODS.projectBriefExecute ||
+    method === WS_METHODS.projectOverviewEnsure ||
+    method === WS_METHODS.projectOverviewDismiss ||
+    method === WS_METHODS.projectOverviewRestore
+  ) {
     return [AuthOrchestrationOperateScope, AuthFilesystemReadScope];
   }
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {

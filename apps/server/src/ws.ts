@@ -2129,6 +2129,8 @@ const layerWsRpc = (
         [WS_METHODS.projectOverviewGet]: (input) => projectOverview.get(input),
         [WS_METHODS.projectOverviewSubscribe]: (input) => projectOverview.subscribe(input),
         [WS_METHODS.projectOverviewEnsure]: (input) => projectOverview.ensure(input),
+        [WS_METHODS.projectOverviewDismiss]: (input) => projectOverview.dismiss(input),
+        [WS_METHODS.projectOverviewRestore]: (input) => projectOverview.restore(input),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>

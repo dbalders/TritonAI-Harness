@@ -64,6 +64,11 @@ Choose **Open in new thread** on a suggestion to prepare a short request in that
 project. Its source conversations are attached as thread references so the agent can
 read their history when needed. Review or edit the draft, then send it when ready.
 
+Suggestions skip work in threads you have settled, and they take into account the plugins you
+have turned on. If a suggestion is stale anyway, choose **Already done** or **Not relevant**.
+It disappears, and the project stops suggesting it. **Restore** below the list brings back
+hidden suggestions.
+
 Use the folder icon to expand or collapse its threads without leaving the overview.
 Thread activity updates live. Memory notes appear as the background summarizer
 processes your conversations; their source and last update are available on the page.

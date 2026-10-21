@@ -12,8 +12,10 @@ import {
   type IntegrationsListResult,
 } from "@t3tools/contracts";
 import { compareSemverVersions } from "@t3tools/shared/semver";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as NodeCrypto from "node:crypto";
@@ -3640,6 +3642,23 @@ export function getIntegrationRegistry(): RegistryRuntime {
 export function getIntegrationRegistryOptional(): RegistryRuntime | null {
   return activeRegistry;
 }
+
+/** Installed, enabled integrations; empty when the registry is not running or does not answer in time. */
+export const listEnabledIntegrations = Effect.suspend(() => {
+  const registry = activeRegistry;
+  if (!registry) return Effect.succeed<ReadonlyArray<IntegrationSummary>>([]);
+  return Effect.tryPromise(() => registry.list()).pipe(
+    Effect.timeoutOption(Duration.seconds(5)),
+    Effect.map(
+      Option.match({
+        onNone: (): ReadonlyArray<IntegrationSummary> => [],
+        onSome: (listed) =>
+          listed.integrations.filter((integration) => integration.installed && integration.enabled),
+      }),
+    ),
+    Effect.orElseSucceed((): ReadonlyArray<IntegrationSummary> => []),
+  );
+});
 
 export function awaitIntegrationRegistry(): Promise<RegistryRuntime> {
   if (activeRegistry) return Promise.resolve(activeRegistry);
