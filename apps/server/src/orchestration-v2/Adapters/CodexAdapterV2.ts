@@ -6,9 +6,9 @@ import {
   gateDynamicToolCall,
   dynamicToolApprovalRequired,
   dynamicToolInvocationAllowed,
-  dynamicToolApprovalPrompt,
   dynamicToolResponse,
   invokeAdmittedDynamicTool,
+  planDynamicToolApproval,
   reconcilePluginSkillAvailability,
   withPluginSkillLease,
   type CodexPluginSkillDefinition,
@@ -5380,14 +5380,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               approvals = { runtimeMode, names: new Set() };
               flatToolApprovals.set(payload.threadId, approvals);
             }
+            const approval = planDynamicToolApproval({
+              requiresApproval: gate.definition.requiresApproval,
+              payload,
+            });
             let decision: ProviderApprovalDecision | undefined =
-              runtimeMode === "full-access" || approvals.names.has(payload.tool)
+              runtimeMode === "full-access" || approvals.names.has(approval.grantKey)
                 ? "accept"
                 : undefined;
             if (
               dynamicToolApprovalRequired(
-                gate.definition.requiresApproval,
-                approvals.names.has(payload.tool),
+                approval.requiresApproval,
+                approvals.names.has(approval.grantKey),
                 runtimeMode,
               )
             ) {
@@ -5396,7 +5400,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 nativeItemId: payload.callId,
                 nativeRequestId: payload.callId,
                 requestKind: "permission",
-                prompt: dynamicToolApprovalPrompt(payload),
+                prompt: approval.prompt,
               });
               const deferred = yield* Deferred.make<ProviderApprovalDecision>();
               yield* Ref.update(pendingRuntimeRequests, (current) =>
@@ -5432,9 +5436,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ),
               );
-              if (decision === "acceptForSession") approvals.names.add(payload.tool);
+              if (decision === "acceptForSession") approvals.names.add(approval.grantKey);
             }
-            if (!dynamicToolInvocationAllowed(gate.definition.requiresApproval, decision))
+            if (!dynamicToolInvocationAllowed(approval.requiresApproval, decision))
               return dynamicToolResponse(false, "The user declined this tool call.");
             return yield* invokeAdmittedDynamicTool({
               options: catalog.options,

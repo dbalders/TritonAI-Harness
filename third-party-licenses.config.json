@@ -802,6 +802,24 @@
         "licenseId": "MIT",
         "copyrights": ["Copyright (c) 2019-present Fabio Spampinato, Andrew Maney"]
       }
+    },
+    {
+      "license": "MIT AND Apache-2.0",
+      "name": "unpdf",
+      "sourceUrl": "https://github.com/unjs/unpdf",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2023-PRESENT Johann Schopplich"]
+        },
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright Mozilla Foundation"],
+          "preamble": [
+            "Includes a bundled build of PDF.js, which is licensed under the Apache License 2.0: https://github.com/mozilla/pdf.js"
+          ]
+        }
+      ]
     }
   ]
 }

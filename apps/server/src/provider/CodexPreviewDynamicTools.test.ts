@@ -212,6 +212,32 @@ it.layer(
     });
   });
 
+  it.effect("tells the agent when navigation ended on a different site", () =>
+    Effect.gen(function* () {
+      const navigate = (url: string, reached: string) =>
+        invokeAuthorizedCodexPreviewDynamicTool({
+          name: "preview_navigate",
+          arguments: { url },
+          invocationScope,
+          broker: makeBroker({ ...status, url: reached }).broker,
+        });
+      const redirected = yield* navigate(
+        "https://short.example.test/r",
+        "https://news.example.org/",
+      );
+      expect(redirected).toMatchObject({
+        url: "https://news.example.org/",
+        redirectedFrom: "https://short.example.test/r",
+        redirectNotice: expect.stringContaining("different site, news.example.org"),
+      });
+      const sameSite = yield* navigate(
+        "https://short.example.test/r",
+        "https://short.example.test/x",
+      );
+      expect(sameSite).not.toHaveProperty("redirectedFrom");
+    }),
+  );
+
   it.effect("uses the current provider session and rejects it after replacement", () =>
     Effect.gen(function* () {
       const { broker, invokeCalls } = makeBroker(status);
