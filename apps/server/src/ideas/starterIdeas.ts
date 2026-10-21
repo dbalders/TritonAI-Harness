@@ -1,8 +1,8 @@
 /**
- * Ideas for people who do not know yet what to use TritonAI for. They need no
- * project, file, or plugin: each prompt asks for what it needs in square
- * brackets. The first few fill a new user's page, so they cover different kinds
- * of work and end with one that learns about the user.
+ * Ready-made ideas for when there is not enough of the user's own work to go
+ * on. Each prompt is complete: it can be sent as written, with nothing to fill
+ * in and nothing the agent has to ask for first. An idea that needs a plugin
+ * names it and is only offered once that plugin is connected.
  */
 export interface StarterIdea {
   readonly id: string;
@@ -10,335 +10,208 @@ export interface StarterIdea {
   readonly title: string;
   readonly body: string;
   readonly prompt: string;
+  /** A plugin id that must be connected before this idea can run. */
+  readonly requires?: string;
 }
 
+// Plugin ideas come first, so a user with connected tools sees those before the general ones.
 export const STARTER_IDEAS: ReadonlyArray<StarterIdea> = [
   {
-    id: "meeting-follow-up",
-    icon: "📝",
-    title: "I can turn meeting notes into a follow-up email",
-    body: "Paste your notes and I'll draft a short email with the decisions, who owns each next step, and the deadlines.",
-    prompt:
-      "Turn these meeting notes into a short follow-up email. List the decisions, who owns each next step, and any deadlines. Keep it friendly and under 200 words.\n\nMeeting notes:\n[paste your notes here]",
-  },
-  {
-    id: "clean-spreadsheet",
-    icon: "📊",
-    title: "I can clean up a messy spreadsheet and explain it",
-    body: "Put a CSV or Excel file in a project and I'll fix the formatting, flag problems, and tell you what the data shows.",
-    prompt:
-      "Look at the spreadsheet [file name] in this project. Clean it up: fix inconsistent dates and names, remove duplicate rows, and flag anything that looks wrong. Save the cleaned copy next to the original, then tell me in plain language what the data shows.",
-  },
-  {
-    id: "document-questions",
-    icon: "📄",
-    title: "Ask me questions about a long document",
-    body: "Give me a policy, contract, or report and I'll answer your questions, quoting the parts I relied on.",
-    prompt:
-      "Read [document name, or paste the text below] and answer my questions about it. Quote the exact passage you relied on for each answer, and tell me when the document doesn't say.\n\nMy first question: [your question]",
-  },
-  {
-    id: "weekly-plan",
-    icon: "🗓️",
-    title: "Tell me what's on your plate and I'll make a plan",
-    body: "List your tasks, meetings, and deadlines. I'll turn them into a realistic day-by-day plan and point out what won't fit.",
-    prompt:
-      "Here's everything on my plate this week: [list your tasks, meetings, and deadlines]. Turn it into a realistic day-by-day plan. Put the most important and time-sensitive work first, and point out anything that won't fit.",
-  },
-  {
-    id: "automate-task",
-    icon: "🛠️",
-    title: "Describe a repetitive task and I'll help automate it",
-    body: "Tell me the steps you repeat. I'll suggest ways to automate them, simplest first, and build one with you.",
-    prompt:
-      "I do this task regularly: [describe the steps, how often, and which files or websites are involved]. Suggest how it could be automated, from the simplest option to the most complete. Then build the simplest version with me step by step.",
-  },
-  {
-    id: "about-my-work",
-    icon: "💬",
-    title: "Tell me about your work so I can suggest better ideas",
-    body: "Answer a few quick questions about your role and tasks. Your next ideas will be based on what you tell me.",
-    prompt:
-      "Help me get more out of TritonAI. Ask me a few short questions, one at a time, about my role, my team, and the tasks I spend the most time on. Then suggest five specific ways you could help me, starting with the one that would save me the most time.",
-  },
-  {
-    id: "rewrite-email",
-    icon: "✉️",
-    title: "I can make a tricky email clearer and kinder",
-    body: "Paste a draft you're unsure about. I'll tighten it, keep your meaning, and point out anything that could be misread.",
-    prompt:
-      "Rewrite this email so it's clear, polite, and to the point. Keep my meaning, and point out anything that could be misread.\n\nEmail:\n[paste your draft]",
-  },
-  {
-    id: "summarize-email-thread",
+    id: "m365-inbox-sort",
+    requires: "microsoft-365",
     icon: "📬",
-    title: "I can summarize a long email chain",
-    body: "Paste the thread and I'll tell you what was decided, what's still open, and what you need to do.",
+    title: "I can sort your recent email into what needs a reply",
+    body: "I'll read the last three days of your Microsoft 365 mail and split it into needs a reply, waiting on others, and FYI. Nothing gets moved or sent.",
     prompt:
-      "Summarize this email thread. Tell me what was decided, what's still open, and what (if anything) I need to do.\n\nThread:\n[paste the email thread]",
+      "Look through my Microsoft 365 email from the last three days. Group it into three lists: needs my reply, waiting on someone else, and FYI. For each item give the sender, a one-line summary, and any deadline it mentions. Don't reply to, move, or change anything.",
   },
   {
-    id: "meeting-agenda",
-    icon: "📋",
-    title: "I can draft an agenda for your next meeting",
-    body: "Tell me the goal, who's coming, and how long you have. I'll time each item and end with the decision you need.",
+    id: "m365-next-meeting-brief",
+    requires: "microsoft-365",
+    icon: "🗓️",
+    title: "I can prepare a brief for your next meeting",
+    body: "I'll find your next meeting, read its details and related email, and write a one-page brief with open questions and points to raise.",
     prompt:
-      "Draft a meeting agenda for [meeting name] with [who's attending]. The goal is [goal]. We have [length] minutes. Include time for each item and the decision we need at the end.",
+      "Find my next meeting on my Microsoft 365 calendar. Read its description and attachments, and search my email from the last month for messages from its attendees on the same subject. Then write a one-page brief: the meeting's purpose, what has been said so far, open questions, and three points I could raise. Don't contact anyone or change the event.",
   },
   {
-    id: "chart-data",
-    icon: "📈",
-    title: "I can turn a table of numbers into a chart",
-    body: "Paste a table or name a file. I'll pick the right chart, save it as an image, and explain what it shows.",
+    id: "m365-week-ahead",
+    requires: "microsoft-365",
+    icon: "📆",
+    title: "I can look over your week and flag conflicts",
+    body: "I'll check the next seven days of your calendar for double-bookings, back-to-back days, and meetings with no agenda, then point out your best focus time.",
     prompt:
-      "Make a clear chart from this data and save it as an image in this project. Pick the chart type that fits best and explain why. Then write two or three sentences on what it shows.\n\nData:\n[paste a table or name a file]",
+      "Review my Microsoft 365 calendar for the next seven days. Point out double-bookings, days with no break longer than 30 minutes, and meetings with no description or agenda. Then tell me which open blocks are best for focused work. Don't change any events.",
   },
   {
-    id: "spreadsheet-formula",
-    icon: "🧮",
-    title: "I can write the spreadsheet formula you need",
-    body: "Describe your columns and what you want to calculate. You'll get the formula for Excel and Google Sheets, explained.",
+    id: "github-open-work",
+    requires: "github",
+    icon: "🐙",
+    title: "I can summarize what's waiting on you in GitHub",
+    body: "I'll list your open pull requests and assigned issues, and put the ones waiting on you first: review requests, failing checks, and unanswered comments.",
     prompt:
-      "I need a spreadsheet formula. My data looks like this: [describe the columns]. I want to [what you want to calculate]. Give me the formula for Excel and Google Sheets, and explain how it works.",
+      "Using my connected GitHub account, list my open pull requests and the open issues assigned to me. For each one, say what it is about, when it last changed, and whether it is waiting on me because of a review request, failing checks, or an unanswered comment. Put the ones waiting on me first. Don't change anything.",
   },
   {
-    id: "compare-options",
-    icon: "⚖️",
-    title: "I can compare your options side by side",
-    body: "List the choices and what matters to you. I'll build a comparison table and give you a recommendation.",
+    id: "jira-my-tickets",
+    requires: "jira-data-center",
+    icon: "🎫",
+    title: "I can summarize your open Jira tickets",
+    body: "I'll gather the UC San Diego Jira issues assigned to you, flag overdue or quiet ones, and suggest the three to work on first.",
     prompt:
-      "Help me decide between these options: [list them]. What matters most to me: [your priorities]. Make a side-by-side comparison table, then give me your recommendation and the main risk of each option.",
+      "Using UC San Diego Jira, find the open issues assigned to me. Group them by status, flag any that are overdue or haven't been updated in two weeks, and suggest which three to work on first and why. Don't change any issues.",
   },
   {
-    id: "presentation-outline",
-    icon: "🖼️",
-    title: "I can outline a presentation for you",
-    body: "Give me the topic and audience. Each slide gets a title, three bullets, and a speaker note.",
+    id: "n8n-recent-failures",
+    requires: "n8n",
+    icon: "🔧",
+    title: "I can check your n8n workflows for recent failures",
+    body: "I'll look at the last week of workflow runs and explain any failures in plain language, with a likely fix for each. Nothing gets changed or rerun.",
     prompt:
-      "Outline a [number]-slide presentation on [topic] for [audience]. Give each slide a title, three short bullet points, and a speaker note. Keep the language plain.",
+      "Using my connected n8n, look at workflow executions from the last seven days. List any workflows that failed, with when it happened, the step that failed, and the error in plain language. Suggest a likely fix for each, but don't change or rerun any workflow.",
   },
   {
-    id: "job-description",
-    icon: "🧑‍💼",
-    title: "I can draft or refresh a job description",
-    body: "Tell me the role and main duties. I'll write an inclusive, readable description and flag what to check with HR.",
-    prompt:
-      "Draft a job description for a [job title] in [department]. Main duties: [list]. Required skills: [list]. Keep it inclusive and easy to read, and flag anything I should check with HR.",
-  },
-  {
-    id: "survey-themes",
-    icon: "🗳️",
-    title: "I can find the themes in survey responses",
-    body: "Paste open-ended responses or name a file. I'll group them into themes, count them, and suggest actions.",
-    prompt:
-      "Here are open-ended survey responses: [paste them or name a file]. Group them into themes, count how many responses fit each, quote one typical response per theme, and suggest three actions.",
-  },
-  {
-    id: "process-instructions",
-    icon: "🧭",
-    title: "I can write step-by-step instructions for a process",
-    body: "Describe how something gets done today. I'll write numbered steps and a short troubleshooting section.",
-    prompt:
-      "Write clear step-by-step instructions for [process]. The reader is [who will use it]. Here's how it works today: [describe the steps]. Number the steps and add a short troubleshooting section.",
-  },
-  {
-    id: "explain-topic",
-    icon: "🎓",
-    title: "I can explain a confusing topic in plain language",
-    body: "Name the topic. You'll get an everyday example and the three things that matter most.",
-    prompt:
-      "Explain [topic] to me in plain language, as if I'm new to it. Use an everyday example, then list the three things I most need to remember.",
-  },
-  {
-    id: "proofread",
-    icon: "✍️",
-    title: "I can proofread a document and explain the fixes",
-    body: "Paste your text. I'll fix spelling, grammar, and unclear sentences, then list the changes that matter.",
-    prompt:
-      "Proofread this text. Fix spelling, grammar, and unclear sentences, then list the most important changes you made and why.\n\nText:\n[paste your text]",
-  },
-  {
-    id: "translate-message",
-    icon: "🌐",
-    title: "I can translate a message and keep its tone",
-    body: "Pick a language and a tone. I'll translate it and point out phrases that don't carry over cleanly.",
-    prompt:
-      "Translate this message into [language]. Keep the tone [formal or friendly], and point out any phrase that doesn't translate cleanly.\n\nMessage:\n[paste your message]",
-  },
-  {
-    id: "simple-web-page",
-    icon: "🧩",
-    title: "I can build a simple web page or form",
-    body: "Tell me what it's for. I'll build one accessible HTML file in UC San Diego colors and show you how to open it.",
-    prompt:
-      "Build a simple, accessible web page in this project for [purpose]. It should include [what it needs]. Use UC San Diego colors, keep it to one HTML file, and tell me how to open it.",
-  },
-  {
-    id: "organize-folder",
+    id: "google-drive-catch-up",
+    requires: "google-workspace",
     icon: "🗂️",
-    title: "I can sort out a messy folder of files",
-    body: "Point me at a folder. I'll propose clearer folders and file names and wait for your OK before moving anything.",
+    title: "I can catch you up on recent Google Drive changes",
+    body: "I'll find the documents, sheets, and slides changed in the last week and summarize each in a line. Nothing gets edited or shared.",
     prompt:
-      "Look at the files in [folder] in this project. Suggest a clearer folder structure and file naming scheme, and show me the plan before you move or rename anything.",
+      "Search my Google Drive for documents, spreadsheets, and slide decks changed in the last seven days. For each, say what it is, who changed it if Drive shows that, and a one-line summary of its contents. Don't edit, move, or share anything.",
   },
   {
-    id: "data-question",
-    icon: "🔎",
-    title: "Ask me a question about your data",
-    body: "Name a file and ask. I'll answer, show how I got there, and tell you if the data can't fully answer it.",
+    id: "tour-of-my-setup",
+    icon: "🧭",
+    title: "I can show you five things I can do with your setup",
+    body: "I'll look at your projects, plugins, and skills, then show five tasks I could do for you right now, each written as a request you can send.",
     prompt:
-      "Using the file [file name] in this project, answer this question: [your question]. Show how you got the answer, and tell me if the data can't fully answer it.",
+      "Give me a short tour of what you can do for me in TritonAI. Look at the projects I have and the plugins and skills that are turned on, then show me five specific tasks you could do right now, each written as a request I could send you. Keep it friendly and under 300 words.",
   },
   {
-    id: "procedure-checklist",
-    icon: "✅",
-    title: "I can turn a long procedure into a checklist",
-    body: "Paste the procedure. I'll group the steps and mark the ones that are easy to miss.",
+    id: "better-requests",
+    icon: "✍️",
+    title: "I can show you how to get better answers from me",
+    body: "Five short before-and-after examples of a vague request rewritten into a clear one, covering email, documents, spreadsheets, planning, and research.",
     prompt:
-      "Turn this procedure into a short checklist I can follow each time. Group the steps by phase and mark the ones that are easy to miss.\n\nProcedure:\n[paste it]",
+      "Teach me how to get better results from TritonAI. Show five short before-and-after examples of a vague request rewritten into a clear one, covering email, documents, spreadsheets, planning, and research. After each, explain in one sentence what made the rewrite better.",
   },
   {
-    id: "reply-to-feedback",
-    icon: "🤝",
-    title: "I can help you reply to feedback or a complaint",
-    body: "Paste what they wrote and what you can offer. I'll draft a reply that's professional and warm.",
+    id: "sample-data-charts",
+    icon: "📊",
+    title: "I can show you what I can do with a spreadsheet",
+    body: "I'll make a small sample dataset, chart it two ways, and explain how you'd ask for the same thing with your own data.",
     prompt:
-      "Help me reply to this feedback. I want to acknowledge the concern, explain what we can do, and keep it professional and warm.\n\nFeedback:\n[paste it]\n\nWhat we can offer: [details]",
+      "Create a small sample dataset of twelve months of made-up help desk tickets by category and save it as a CSV file in this project. Then make two charts from it, tickets per month and the share by category, and save them next to it. Explain what each chart shows and how I would ask you for the same thing with my own spreadsheet.",
   },
   {
-    id: "brainstorm",
-    icon: "🧠",
-    title: "Brainstorm with me",
-    body: "Tell me the goal. I'll suggest fifteen ideas, safe and bold, and pick the three best.",
+    id: "focus-timer-page",
+    icon: "⏱️",
+    title: "I can build a focus timer you can open in your browser",
+    body: "A single web page with a 25-minute timer, breaks, and large readable controls that work with a keyboard and screen reader.",
     prompt:
-      "Brainstorm 15 ideas for [goal]. Mix safe ideas with bold ones, then pick the three best and explain why.",
+      "Build a simple 25-minute focus timer as a single web page I can open in my browser. Include start, pause, and reset buttons, a five-minute break after each session, and large, readable text that works with a keyboard and a screen reader. Save it in this project and tell me how to open it.",
   },
   {
-    id: "report-summary",
-    icon: "📑",
-    title: "I can summarize a report for busy readers",
-    body: "Name the report and audience. You'll get a three-sentence summary, the key numbers, and recommended actions.",
-    prompt:
-      "Summarize [report name, or paste the text below] for [audience]. Start with a three-sentence summary, then the key numbers, then recommended actions.",
-  },
-  {
-    id: "combine-spreadsheets",
-    icon: "🔗",
-    title: "I can combine two spreadsheets",
-    body: "Name the files and the column they share. I'll merge them and tell you which rows didn't match.",
-    prompt:
-      "Combine [first file] and [second file] in this project using [the column they share]. Tell me which rows didn't match, then save the combined file next to the originals.",
-  },
-  {
-    id: "accessibility-check",
-    icon: "♿",
-    title: "I can check a document or page for accessibility",
-    body: "Point me at it. I'll check headings, link text, contrast, alt text, and plain language, and list fixes.",
-    prompt:
-      "Review [document, page, or file] for accessibility problems: headings, link text, color contrast, alt text, and plain language. List each problem with a fix, most important first.",
-  },
-  {
-    id: "project-timeline",
-    icon: "⏰",
-    title: "I can plan a project timeline",
-    body: "Give me the deadline and the main pieces. I'll work backwards, show dependencies, and flag the riskiest step.",
-    prompt:
-      "Make a timeline for [project]. It must be done by [deadline]. The main pieces are [list]. Work backwards from the deadline, show dependencies, and flag the riskiest step.",
-  },
-  {
-    id: "tritonai-tour",
-    icon: "🧑‍🏫",
-    title: "Learn what TritonAI can do in five minutes",
-    body: "Tell me your job and I'll show three short examples that fit it, then one you can try right away.",
-    prompt:
-      "Give me a five-minute tour of what you can do in TritonAI. Show three short examples relevant to [my job or team], then suggest one I could try right now.",
-  },
-  {
-    id: "small-script",
-    icon: "🐍",
-    title: "I can write a small script to save you time",
-    body: "Describe the chore. I'll write the script, explain each step, and try it on a copy first.",
-    prompt:
-      "Write a small script that [what it should do] with the files in this project. Explain each step in plain language, run it on a copy first, and show me the result.",
-  },
-  {
-    id: "interview-questions",
-    icon: "🎤",
-    title: "I can prepare interview questions",
-    body: "Name the role and the skills to assess. Each question comes with what a strong answer looks like.",
-    prompt:
-      "Write interview questions for a [job title] candidate. Cover [skills to assess]. Include what a strong answer looks like for each.",
-  },
-  {
-    id: "team-newsletter",
-    icon: "📰",
-    title: "I can draft a team newsletter",
-    body: "Paste the updates. I'll write a friendly newsletter with short sections and a closing reminder.",
-    prompt:
-      "Draft a short team newsletter from these updates: [paste updates]. Give it a friendly opening, short sections with headings, and a closing reminder.",
-  },
-  {
-    id: "faq",
-    icon: "🙋",
-    title: "I can turn common questions into an FAQ",
-    body: "Paste the questions you keep answering. I'll group them and keep each answer short.",
-    prompt:
-      "Turn these common questions into a clear FAQ with short answers: [paste the questions and what you usually answer]. Group related questions and keep each answer under 80 words.",
-  },
-  {
-    id: "pdf-table",
-    icon: "🧾",
-    title: "I can pull a table out of a PDF",
-    body: "Name the PDF. I'll copy the table into a spreadsheet, check the totals, and flag rows I wasn't sure about.",
-    prompt:
-      "Extract the table from [PDF name] in this project into a spreadsheet. Keep the column headings, check the totals, and tell me about any rows you weren't sure about.",
-  },
-  {
-    id: "decision-memo",
+    id: "status-report-template",
     icon: "🗒️",
-    title: "I can write a one-page decision memo",
-    body: "Tell me the topic and what you know. You'll get background, options, a recommendation, and the cost of waiting.",
+    title: "I can make you a reusable weekly status report",
+    body: "A one-page template with highlights, progress, blockers, help needed, and next week's priorities, filled in with an example so it's easy to copy.",
     prompt:
-      "Write a one-page memo asking for a decision on [topic]. Include the background, the options, my recommendation, and what happens if we wait. Here's what I know: [details].",
+      "Create a one-page weekly status report template and save it as a document in this project. Include sections for highlights, progress on goals, risks or blockers, help needed, and next week's priorities, with a one-line hint under each heading. Below the template, add a filled-in example for a made-up campus IT project so I can see how each section is used.",
   },
   {
-    id: "thank-you-note",
-    icon: "🙏",
-    title: "I can write a thank-you note that sounds like you",
-    body: "Tell me who and why. I'll make it specific and warm instead of generic.",
+    id: "email-templates",
+    icon: "✉️",
+    title: "I can write five email templates you'll reuse",
+    body: "Short, friendly drafts for following up, declining a meeting, asking for more time, introducing two people, and saying thanks.",
     prompt:
-      "Write a short thank-you note to [person] for [what they did]. Make it specific and warm, not generic. Here's some detail: [what made it matter].",
+      "Write five short, friendly email templates I can reuse at work: following up on an unanswered request, politely declining a meeting, asking for a deadline extension, introducing two colleagues, and thanking someone for their help. Keep each under 120 words and use a clearly marked name or date wherever I would personalize it.",
   },
   {
-    id: "review-code",
-    icon: "🐞",
-    title: "I can review code for bugs and confusing parts",
-    body: "Point me at a file or folder. I'll explain each problem in plain language, most serious first, without changing anything.",
+    id: "project-plan-example",
+    icon: "🗺️",
+    title: "I can set up a simple project plan you can copy",
+    body: "A one-page brief, a task list with owners and dates, and a risks list, filled in with an example so you can see how each part works.",
     prompt:
-      "Review the code in [file or folder] for bugs and confusing parts. Explain each problem in plain language and suggest a fix, most serious first. Don't change anything yet.",
+      "Create a simple project plan in this project: a one-page brief with the goal, scope, people involved, and how we'll know it worked; a task list with owners and due dates; and a short list of risks. Fill it in with a realistic example for planning a department open house so I can see how each part is used.",
   },
   {
-    id: "project-readme",
-    icon: "📘",
-    title: "I can explain what a project folder contains",
-    body: "I'll look through the folder and write a short README: what's there, how it fits together, how to start.",
+    id: "how-ai-works",
+    icon: "💡",
+    title: "I can explain what I'm good at and where I slip up",
+    body: "A plain-language guide to how AI assistants work, when to trust them, and how to check their work, with a short list of do's and don'ts.",
     prompt:
-      "Look through this project folder and write a short README explaining what's in it, how the pieces fit together, and how to get started.",
+      "Explain in plain language how an AI assistant like you works: what you're good at, where you make mistakes, why you can sound confident when you're wrong, and how I should check your work. Keep it under 400 words and end with a short list of do's and don'ts.",
   },
   {
-    id: "image-alt-text",
-    icon: "🏞️",
-    title: "I can write alt text for your images",
-    body: "Attach or name the images. Each gets concise alt text that describes what matters to the reader.",
+    id: "accessible-documents",
+    icon: "♿",
+    title: "I can show you how to make documents accessible",
+    body: "A one-page guide to headings, alt text, link text, color contrast, and reading order, with an example for each and a checklist.",
     prompt:
-      "Write concise, descriptive alt text for these images: [attach or name the images]. Keep each under 125 characters and describe what matters for the reader.",
+      "Write a one-page guide to making a Word document or slide deck accessible. Cover headings, alt text, link text, color contrast, and reading order, with one quick example for each, and end with a five-item checklist I can use before sharing a file.",
   },
   {
-    id: "plain-language",
-    icon: "🗣️",
-    title: "I can replace jargon with plain words",
-    body: "Paste the text. I'll rewrite it for a general audience, keep it accurate, and keep it about the same length.",
+    id: "workshop-signup-page",
+    icon: "📝",
+    title: "I can build a sign-up form page in a few minutes",
+    body: "A sample sign-up page for a campus workshop with clear labels and a confirmation message, so you can see how quickly a form comes together.",
     prompt:
-      "Rewrite this text in plain language for a general audience. Replace jargon and acronyms, keep it accurate, and keep it about the same length.\n\nText:\n[paste it]",
+      "Build a simple sign-up form web page for a made-up campus workshop with fields for name, email, department, and dietary needs, clear labels, helpful error messages, and a confirmation message. It doesn't need to send data anywhere. Save it in this project and tell me how to open it.",
   },
+  {
+    id: "office-tasks-to-hand-off",
+    icon: "🤝",
+    title: "I can list office tasks you could hand off to me",
+    body: "Ten everyday campus office tasks I can help with, each with a ready-to-send example request.",
+    prompt:
+      "List ten everyday tasks in a university department office that you can help with, such as summarizing email, preparing meeting briefs, or cleaning up spreadsheets. For each, give one sentence on how you would help and an example request I could send you.",
+  },
+];
+
+/** The ready-made ideas the user can run now: general ones, plus those whose plugin is connected. */
+export function availableStarters(
+  connectedPluginIds: ReadonlySet<string>,
+): ReadonlyArray<StarterIdea> {
+  return STARTER_IDEAS.filter(
+    (starter) => starter.requires === undefined || connectedPluginIds.has(starter.requires),
+  );
+}
+
+/**
+ * Kinds of help the generator can draw on. They are not cards: the model must
+ * turn one into an idea about a real thread, note, file, or connected tool.
+ */
+export const IDEA_KINDS: ReadonlyArray<string> = [
+  "turn meeting notes into a follow-up email",
+  "clean up a messy spreadsheet and explain it",
+  "answer questions about a long document",
+  "turn a list of tasks into a realistic plan",
+  "automate a repetitive task",
+  "make a tricky email clearer and kinder",
+  "summarize a long email chain",
+  "draft an agenda for an upcoming meeting",
+  "turn a table of numbers into a chart",
+  "write a spreadsheet formula",
+  "compare options side by side",
+  "outline a presentation",
+  "find the themes in survey responses",
+  "write step-by-step instructions for a process",
+  "explain a confusing topic in plain language",
+  "proofread a document and explain the fixes",
+  "build a simple web page or form",
+  "index or tidy a folder of files",
+  "answer a question about a data file",
+  "turn a long procedure into a checklist",
+  "summarize a report for busy readers",
+  "combine two spreadsheets",
+  "check a document or page for accessibility",
+  "plan a project timeline",
+  "turn common questions into an FAQ",
+  "pull a table out of a PDF",
+  "write a one-page decision memo",
+  "review code for bugs and confusing parts",
+  "explain what a project folder contains",
+  "write alt text for images",
+  "replace jargon with plain words",
 ];
