@@ -73,7 +73,7 @@ import {
 } from "./ideaContext.ts";
 import {
   capBySubject,
-  hasPlaceholder,
+  needsUserInput,
   IDEA_SECTIONS,
   ideaSubject,
   type SectionFeedback,
@@ -203,7 +203,7 @@ const STARTER_LIBRARY_VERSION = "2";
 /** Ideas that must not stay on the page: a blank to fill in, or a starter no longer offered. */
 function isOutdated(row: IdeaRow, content: IdeaContent): boolean {
   if (row.ideaKey.startsWith("starter:") && !STARTER_KEYS.has(row.ideaKey)) return true;
-  return [content.title, content.body, content.action.prompt].some(hasPlaceholder);
+  return [content.title, content.body, content.action.prompt].some(needsUserInput);
 }
 
 interface PluginState {
@@ -462,8 +462,9 @@ export const make = Effect.gen(function* () {
         const slots = TARGET_IDEAS - (row?.count ?? 0);
         if (slots > 0) {
           const connected = connectedPluginIds(yield* loadPlugins);
+          const starters = availableStarters(connected).map(starterCandidate);
           yield* insertIdeas(
-            availableStarters(connected).slice(0, slots).map(starterCandidate),
+            capBySubject(starters, yield* loadVisibleSubjects).slice(0, slots),
             toIso(nowMs),
           );
         }
@@ -892,6 +893,11 @@ export const make = Effect.gen(function* () {
     for (const row of rows) {
       const content = decodeContent(row.contentJson);
       if (Option.isNone(content)) continue;
+      const starter = STARTER_IDEAS.find((entry) => `starter:${entry.id}` === row.ideaKey);
+      if (starter) {
+        subjects.push(starterCandidate(starter).subject);
+        continue;
+      }
       const action = content.value.action;
       const projectId =
         action.kind === "new-thread"
@@ -922,6 +928,7 @@ export const make = Effect.gen(function* () {
     exclusions: Exclusions,
     taken: ReadonlySet<string>,
     connected: ReadonlySet<string>,
+    subjects: ReadonlyArray<string>,
   ): CandidateIdea[] => {
     if (count <= 0) return [];
     const starters = availableStarters(connected);
@@ -937,7 +944,7 @@ export const make = Effect.gen(function* () {
       const starter = starters.find((candidate) => `starter:${candidate.id}` === key);
       return starter && !taken.has(key) ? [starter] : [];
     });
-    return [...fresh, ...recycled].slice(0, count).map(starterCandidate);
+    return capBySubject([...fresh, ...recycled].map(starterCandidate), subjects).slice(0, count);
   };
 
   /** Retires the oldest unopened ideas past the page's limit, starter ideas first. */
@@ -1008,7 +1015,8 @@ export const make = Effect.gen(function* () {
       }
     }
 
-    const varied = capBySubject(generated, yield* loadVisibleSubjects);
+    const visibleSubjects = yield* loadVisibleSubjects;
+    const varied = capBySubject(generated, visibleSubjects);
     const picked = selectByMix(varied, count, exclusions.weights);
     const connected = new Set(
       context.plugins.filter((plugin) => plugin.connected).map((plugin) => plugin.id),
@@ -1019,6 +1027,7 @@ export const make = Effect.gen(function* () {
           exclusions,
           new Set(picked.map((idea) => idea.key)),
           connected,
+          [...visibleSubjects, ...picked.map((idea) => idea.subject)],
         )
       : [];
     const added = [...picked, ...fill];

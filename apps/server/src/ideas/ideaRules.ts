@@ -91,13 +91,17 @@ function titleWords(title: string): Set<string> {
 
 // Blanks left for the user: `[your notes]` (but not a Markdown link), `<your file>`, `{{name}}`, `___`.
 const PLACEHOLDER = /\[[^\]\n]+\](?!\()|<[^<>\n]*\byour\b[^<>\n]*>|\{\{[^}\n]*\}\}|_{3,}/iu;
+// Asking the user to supply something first. Asking before changing anything stays allowed.
+const ASKS_FOR_INPUT =
+  /\bpaste\b|\bask me (?:for|which|what|a few|some|to (?:paste|share|send|provide|describe|choose|pick|upload|attach|list))\b/iu;
 
 /**
- * Whether text leaves something for the user to fill in. An idea must be ready
- * to send as written, so a card with a blank is never shown.
+ * Whether text needs something from the user before it can run: a blank to
+ * fill in, or a request to paste, share, or choose something first. An idea
+ * must be ready to send as written, so such a card is never shown.
  */
-export function hasPlaceholder(text: string): boolean {
-  return PLACEHOLDER.test(text);
+export function needsUserInput(text: string): boolean {
+  return PLACEHOLDER.test(text) || ASKS_FOR_INPUT.test(text);
 }
 
 /** At most this many visible ideas may be about the same project or the same tool. */

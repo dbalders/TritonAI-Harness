@@ -18,7 +18,7 @@ import {
 } from "@t3tools/contracts";
 
 import type { GeneratedIdea } from "../textGeneration/TextGeneration.ts";
-import { hasPlaceholder, ideaKey, ideaSubject, refKind, similarTitles } from "./ideaRules.ts";
+import { needsUserInput, ideaKey, ideaSubject, refKind, similarTitles } from "./ideaRules.ts";
 import type { StarterIdea } from "./starterIdeas.ts";
 
 export interface ContextProject {
@@ -259,12 +259,12 @@ function isEmoji(icon: string): boolean {
   return icon.length > 0 && icon.length <= 16 && /\p{Extended_Pictographic}/u.test(icon);
 }
 
-/** A ready-made starter idea as a card, word for word. */
+/** A ready-made starter idea as a card, word for word. One that needs a plugin is about that plugin. */
 export function starterCandidate(starter: StarterIdea): CandidateIdea {
   const key = `starter:${starter.id}`;
   return {
     key,
-    subject: ideaSubject(key, null),
+    subject: starter.requires === undefined ? key : `plugin:${starter.requires}`,
     section: "starter",
     icon: starter.icon,
     title: starter.title,
@@ -297,7 +297,7 @@ export function validateGeneratedIdeas(input: {
     const body = clip(idea.body, 300);
     const prompt = idea.prompt.trim().slice(0, 4_000);
     if (title.length === 0 || body.length === 0 || prompt.length === 0) continue;
-    if ([title, body, prompt].some(hasPlaceholder)) continue;
+    if ([title, body, prompt].some(needsUserInput)) continue;
     const key = ideaKey(idea.ref, idea.topic);
     if (keys.has(key) || titles.some((other) => similarTitles(other, title))) continue;
 

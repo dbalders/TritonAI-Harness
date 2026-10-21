@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { hasPlaceholder } from "./ideaRules.ts";
+import { starterCandidate } from "./ideaContext.ts";
+import { capBySubject, needsUserInput } from "./ideaRules.ts";
 import { availableStarters, STARTER_IDEAS } from "./starterIdeas.ts";
 
 describe("starter ideas", () => {
   it("can all be sent as written", () => {
     for (const starter of STARTER_IDEAS) {
-      expect(hasPlaceholder(starter.prompt), starter.id).toBe(false);
-      expect(hasPlaceholder(starter.body), starter.id).toBe(false);
+      expect(needsUserInput(starter.prompt), starter.id).toBe(false);
+      expect(needsUserInput(starter.body), starter.id).toBe(false);
       expect(starter.prompt, starter.id).not.toMatch(/\bpaste\b/iu);
     }
     expect(new Set(STARTER_IDEAS.map((starter) => starter.id)).size).toBe(STARTER_IDEAS.length);
@@ -21,5 +22,15 @@ describe("starter ideas", () => {
     const withMail = availableStarters(new Set(["microsoft-365"]));
     expect(withMail[0]?.requires).toBe("microsoft-365");
     expect(withMail.some((starter) => starter.requires === "github")).toBe(false);
+  });
+
+  it("never seeds more than two ideas for one plugin", () => {
+    const seeded = capBySubject(
+      availableStarters(new Set(["microsoft-365", "github"])).map(starterCandidate),
+      [],
+    ).slice(0, 6);
+    expect(seeded).toHaveLength(6);
+    const mail = seeded.filter((idea) => idea.subject === "plugin:microsoft-365");
+    expect(mail).toHaveLength(2);
   });
 });

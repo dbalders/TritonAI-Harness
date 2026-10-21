@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   capBySubject,
-  hasPlaceholder,
+  needsUserInput,
   ideaKey,
   ideaSubject,
   sectionWeights,
@@ -116,17 +116,24 @@ describe("selectByMix", () => {
   });
 });
 
-describe("hasPlaceholder", () => {
+describe("needsUserInput", () => {
   it("finds blanks left for the user", () => {
-    expect(hasPlaceholder("Meeting notes:\n[paste your notes here]")).toBe(true);
-    expect(hasPlaceholder("Review <your file name> for errors.")).toBe(true);
-    expect(hasPlaceholder("Email {{name}} today.")).toBe(true);
-    expect(hasPlaceholder("Due date: ____")).toBe(true);
+    expect(needsUserInput("Meeting notes:\n[paste your notes here]")).toBe(true);
+    expect(needsUserInput("Review <your file name> for errors.")).toBe(true);
+    expect(needsUserInput("Email {{name}} today.")).toBe(true);
+    expect(needsUserInput("Due date: ____")).toBe(true);
+  });
+
+  it("finds requests for input that use no placeholder", () => {
+    expect(needsUserInput("Ask me to paste the meeting notes, then summarize them.")).toBe(true);
+    expect(needsUserInput("Paste the list and I'll write the email.")).toBe(true);
+    expect(needsUserInput("If there isn't enough detail, ask me for three topics.")).toBe(true);
   });
 
   it("allows complete prompts, including Markdown links", () => {
-    expect(hasPlaceholder("Compare course_main.csv with the October export.")).toBe(false);
-    expect(hasPlaceholder("Follow [the guide](https://example.edu/guide) to rerun it.")).toBe(
+    expect(needsUserInput("Draft the fix, but ask me before changing anything.")).toBe(false);
+    expect(needsUserInput("Compare course_main.csv with the October export.")).toBe(false);
+    expect(needsUserInput("Follow [the guide](https://example.edu/guide) to rerun it.")).toBe(
       false,
     );
   });
