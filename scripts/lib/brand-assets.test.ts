@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   BRAND_ASSET_PATHS,
   DEVELOPMENT_ICON_OVERRIDES,

@@ -1,6 +1,5 @@
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import type {
   SidebarProjectGroupMember,
   SidebarProjectSnapshot,

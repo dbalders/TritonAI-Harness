@@ -1,9 +1,8 @@
 import type { AdvertisedEndpoint, DesktopServerExposureState } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
-import { AtomRegistry } from "effect/unstable/reactivity";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
+import { AtomRegistry } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import { createDesktopNetworkAccessStateAtom } from "./desktopNetworkAccess";
 
 const serverExposureState: DesktopServerExposureState = {

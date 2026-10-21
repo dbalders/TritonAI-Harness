@@ -1,8 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off - Synchronous SHA-256 document fingerprints and campus identity keys use Node crypto.
 import {
   type AccountStatus,
   ProjectId,
   ThreadId,
-  type OrchestrationThreadShell,
+  type Project,
+  type OrchestrationV2ThreadShell,
   type TeamMemberRole,
   type TeamStorage as TeamStorageRecord,
   TeamsError,
@@ -11,12 +13,14 @@ import {
 import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { AccountService } from "../../auth/AccountService.ts";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { TeamMirrorHost, type TeamMirrorSource } from "../../memory/sync/teamMirror.ts";
 import { TeamDailyHost, type TeamDailySource } from "../../memory/teamDailySource.ts";
-import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectService } from "../../project/ProjectService.ts";
+import { ProjectionStoreV2 } from "../../orchestration-v2/ProjectionStore.ts";
+import * as TeamMessageGate from "../TeamMessageGate.ts";
 import * as TeamProject from "../TeamProjectService.ts";
 import * as TeamStorage from "../TeamStorageService.ts";
 
@@ -176,42 +180,50 @@ export function teamProjectFixture() {
     updatedAt: "2026-10-08T00:00:00.000Z",
   });
   const unused = () => Effect.die("unused");
-  const query = ProjectionSnapshotQuery.of({
-    getUserInputActivity: unused,
-    listActivitiesByKind: unused,
-    getCommandReadModel: unused,
-    getSnapshot: unused,
-    getShellSnapshot: unused,
-    getDeletedWorktreeThreads: unused,
-    listThreadsWithPullRequests: unused,
-    getArchivedShellSnapshot: unused,
-    getSnapshotSequence: unused,
-    getCounts: unused,
-    getEventReplayStats: unused,
-    getActiveProjectByWorkspaceRoot: unused,
-    getProjectShells: unused,
-    getProjectShellById: (id) =>
+  const projectService = ProjectService.of({
+    create: unused,
+    bootstrap: unused,
+    update: unused,
+    delete: unused,
+    getById: (id) =>
       Effect.sync(() => {
         const title = projects.get(id);
-        return title ? Option.some(shell(id, title)) : Option.none();
+        return title ? Option.some(shell(id, title) as unknown as Project) : Option.none();
       }),
-    getFirstActiveThreadIdByProjectId: unused,
-    getImportedAgentSessionSources: unused,
-    getThreadCheckpointContext: unused,
-    getFullThreadDiffContext: unused,
-    getThreadRuntimeContext: unused,
-    getTurnStartMessage: unused,
-    getThreadShellById: (id) =>
+    getByWorkspaceRoot: unused,
+    snapshot: Effect.die("unused"),
+    getShell: unused,
+    listShells: unused,
+  });
+  const queuedMessages = new Map<
+    string,
+    {
+      messageId: import("@t3tools/contracts").MessageId;
+      threadId: import("@t3tools/contracts").ThreadId;
+      text: string;
+    }
+  >();
+  // The domain fixture only reads these projection fields; full projection behavior has its own tests.
+  const query = ProjectionStoreV2.of({
+    getThreadShell: (id: import("@t3tools/contracts").ThreadId) =>
       Effect.sync(() => {
         const owner = threads.get(id);
-        return owner
-          ? Option.some({ id, projectId: owner } as unknown as OrchestrationThreadShell)
-          : Option.none();
+        return owner ? ({ id, projectId: owner } as unknown as OrchestrationV2ThreadShell) : null;
       }),
-    getThreadDetailById: unused,
-    getThreadDetailSnapshot: unused,
-    searchThreads: unused,
-  });
+    getThreadRecords: () =>
+      Effect.sync(() => ({
+        runs: [...queuedMessages].map(([id, message]) => ({
+          id,
+          userMessageId: message.messageId,
+        })),
+        messages: [...queuedMessages.values()].map((message) => ({
+          id: message.messageId,
+          text: message.text,
+        })),
+      })),
+  } as unknown as ProjectionStoreV2["Service"]);
+  const gateValues = new Map<string, string>();
+  const gateLayer = TeamMessageGate.layerMemory(gateValues);
   const isFile = (name: string) => name.endsWith(".md") || name.endsWith(".json");
   // Synthetic Graph: every item id is "<root>:<path>", so a response always names its own root.
   const graphPath =
@@ -336,10 +348,13 @@ export function teamProjectFixture() {
       Effect.provideService(ServerSecretStore, secrets),
       Effect.provideService(HttpClient.HttpClient, http),
     );
+    const gate = yield* TeamMessageGate.TeamMessageGate.pipe(Effect.provide(gateLayer));
     const service = yield* TeamProject.make.pipe(
       Effect.provideService(AccountService, account),
       Effect.provideService(ServerSecretStore, secrets),
-      Effect.provideService(ProjectionSnapshotQuery, query),
+      Effect.provideService(ProjectService, projectService),
+      Effect.provideService(ProjectionStoreV2, query),
+      Effect.provideService(TeamMessageGate.TeamMessageGate, gate),
       Effect.provideService(TeamStorage.TeamStorageService, storageService),
       Effect.provideService(TeamMirrorHost, mirrorHost),
       Effect.provideService(TeamDailyHost, dailyHost),
@@ -350,10 +365,12 @@ export function teamProjectFixture() {
         const flow = yield* storageService.execute("s", { action: "connect", teamId });
         yield* storageService.execute("s", { action: "poll", teamId, flowId: flow.flowId! });
       });
-    return { service, connect, account, storage: storageService };
+    return { service, connect, account, storage: storageService, gate };
   });
   return {
     make,
+    queuedMessages,
+    gateValues,
     mirror,
     daily,
     graph,

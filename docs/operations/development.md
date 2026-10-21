@@ -106,6 +106,32 @@ vp lint <files>
 vp run --filter <package> typecheck
 ```
 
+Before handoff, run `vp run preflight`: the shared CI checks (including unused code),
+then the workspace test suites. It uses the same commands as CI so each package keeps its
+test setup, including the server's serial execution and longer timeout budget. Running
+`vp test` at the repository root bypasses that configuration. Run `vp check --fix` to apply
+formatting/lint fixes and rerun preflight. `vp run preflight:checks` runs only the shared
+checks; `preflight:tests` and `preflight:server` run the non-server and server suites separately.
+Desktop build changes also
+need `vp run preflight:desktop`. CI retains additional release, Rust, and platform lanes;
+see [ci.yml](../../.github/workflows/ci.yml) for their setup and prerequisites.
+
+Use `vp run lint:mobile` for native mobile changes. The
+[Windows lane](../../.github/workflows/windows-tests.yml) automatically runs focused shared
+path/shell, server filesystem/process/terminal, and desktop Windows/WSL tests when those
+surfaces or their shared configuration change. Server and desktop triggers cover their whole
+workspace so transitive source changes cannot silently bypass the focused suites.
+This includes a real PowerShell quoting test;
+the desktop native interfaces are mocked, so it does not prove packaged-app behavior.
+Manual dispatch still accepts a package and optional test files for broader investigation.
+
+TypeScript workspaces typecheck with tsc-rs, which has Effect diagnostics built in.
+Keep `typescript`, `@effect/tsgo`, and the `effect-tsgo patch` prepare step: editors
+still use them for Effect quick fixes and refactors. Keep `@effect/tsgo` on the
+effect-tsgo version that tsc-rs ports (see the tsc-rs README), or the two disagree
+on rule names.
+Marketing keeps `astro check` for Astro files.
+
 Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
 [ci.yml](../../.github/workflows/ci.yml) for its current jobs.
 The [manual Windows lane](../../.github/workflows/windows-tests.yml) is available for focused

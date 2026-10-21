@@ -52,6 +52,14 @@ vi.mock("./useSettings", () => ({
   }),
 }));
 vi.mock("../state/entities", () => ({
+  readProject: () => ({
+    id: "project",
+    environmentId: "env",
+    workspaceRoot: "/tmp/project",
+    defaultModelSelection: harness.projectDefault,
+  }),
+  readThreadShells: () => [],
+  useThreadShell: () => null,
   readProjects: () => [
     {
       id: "project",

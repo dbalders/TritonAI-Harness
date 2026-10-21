@@ -12,6 +12,12 @@ import {
 } from "./methods/connectionCatalog.ts";
 import { getComputerUseState, setComputerUseEnabled } from "./methods/computerUse.ts";
 import {
+  cancelSkillRecording,
+  requestSkillRecordingPermission,
+  startSkillRecording,
+  stopSkillRecording,
+} from "./methods/skillRecording.ts";
+import {
   getLocalEnvironmentEnabled,
   setLocalEnvironmentEnabled,
 } from "./methods/localEnvironment.ts";
@@ -79,7 +85,17 @@ import {
 } from "./methods/snapShot.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
+import * as WebLinksIpc from "./methods/webLinks.ts";
+import {
+  completeLegacyLocalStorage,
+  takeLegacyLocalStorage,
+} from "./methods/legacyLocalStorage.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
+import {
+  getCliCommandState,
+  installCliCommand,
+  uninstallCliCommand,
+} from "./methods/cliCommand.ts";
 
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
@@ -89,7 +105,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
 
   yield* ipc.handle(AppActivationIpc.setReady);
   yield* ipc.handle(AppActivationIpc.complete);
+  yield* ipc.handle(WebLinksIpc.setReady);
 
+  yield* ipc.handleSync(takeLegacyLocalStorage);
+  yield* ipc.handle(completeLegacyLocalStorage);
   yield* ipc.handleSync(getAppBranding);
   yield* ipc.handleSync(getSystemLocale);
   yield* ipc.handleSync(getWindowFullscreenState);
@@ -136,6 +155,11 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getComputerUseState);
   yield* ipc.handle(setComputerUseEnabled);
 
+  yield* ipc.handle(requestSkillRecordingPermission);
+  yield* ipc.handle(startSkillRecording);
+  yield* ipc.handle(stopSkillRecording);
+  yield* ipc.handle(cancelSkillRecording);
+
   yield* ipc.handle(getWslState);
   yield* ipc.handle(setWslBackendEnabled);
   yield* ipc.handle(setWslDistro);
@@ -161,6 +185,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getInstallerUpdateState);
   yield* ipc.handle(checkInstallerUpdate);
   yield* ipc.handle(openInstallerUpdate);
+  yield* ipc.handle(getCliCommandState);
+  yield* ipc.handle(installCliCommand);
+  yield* ipc.handle(uninstallCliCommand);
   for (const previewMethod of PreviewIpc.methods) {
     yield* ipc.handle(previewMethod);
   }

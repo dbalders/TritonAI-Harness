@@ -4,7 +4,6 @@ import {
   type HighlighterTypes,
   type SupportedLanguages,
 } from "@pierre/diffs";
-
 import { resolveDiffThemeName } from "./diffRendering";
 
 /**

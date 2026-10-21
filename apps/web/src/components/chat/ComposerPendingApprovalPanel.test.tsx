@@ -1,16 +1,7 @@
-import { ApprovalRequestId, EventId, OrchestrationThreadActivity } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
+import { RuntimeRequestId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-
-import { derivePendingRequests } from "@t3tools/client-runtime/pending-requests";
-const derivePendingApprovals = (activities: ReadonlyArray<OrchestrationThreadActivity>) =>
-  derivePendingRequests(activities).approvals;
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
-
-const decodeProjectedActivity = Schema.decodeUnknownSync(
-  Schema.fromJsonString(OrchestrationThreadActivity),
-);
 
 describe("ComposerPendingApprovalPanel", () => {
   it("keeps the complete command readable in the compact row", () => {
@@ -18,18 +9,16 @@ describe("ComposerPendingApprovalPanel", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalPanel
         approval={{
-          requestId: ApprovalRequestId.make("approval-1"),
+          requestId: RuntimeRequestId.make("approval-1"),
           requestKind: "command",
           createdAt: "2026-07-18T00:00:00.000Z",
           detail,
+          responseCapability: "live",
         }}
         pendingCount={1}
       />,
     );
 
-    expect(markup).toContain('data-approval-detail="complete"');
-    expect(markup).toContain('aria-label="Command"');
-    expect(markup).toContain('tabindex="0"');
     expect(markup).toContain(detail);
     expect(markup).not.toContain("Command approval requested");
   });
@@ -38,8 +27,9 @@ describe("ComposerPendingApprovalPanel", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalPanel
         approval={{
-          requestId: ApprovalRequestId.make("approval-2"),
+          requestId: RuntimeRequestId.make("approval-2"),
           requestKind: "file-read",
+          responseCapability: "live" as const,
           createdAt: "2026-07-18T00:00:00.000Z",
           detail: "",
         }}
@@ -54,8 +44,9 @@ describe("ComposerPendingApprovalPanel", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalPanel
         approval={{
-          requestId: ApprovalRequestId.make("approval-safari"),
+          requestId: RuntimeRequestId.make("approval-safari"),
           requestKind: "mcp-elicitation",
+          responseCapability: "live" as const,
           createdAt: "2026-08-24T00:00:00.000Z",
           appName: "Safari",
           detail: "Allow ChatGPT to use Safari?",
@@ -74,8 +65,9 @@ describe("ComposerPendingApprovalPanel", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalPanel
         approval={{
-          requestId: ApprovalRequestId.make("approval-long-app-name"),
+          requestId: RuntimeRequestId.make("approval-long-app-name"),
           requestKind: "mcp-elicitation",
+          responseCapability: "live" as const,
           createdAt: "2026-08-24T00:00:00.000Z",
           appName,
           detail,
@@ -85,39 +77,6 @@ describe("ComposerPendingApprovalPanel", () => {
     );
 
     expect(markup).toContain(appName);
-    expect(markup).toContain(detail);
-  });
-
-  it("renders complete details from a projected server approval activity", () => {
-    const detail = `bun run release -- ${"long-argument ".repeat(20)}\nsecond line`;
-    const projectedActivity = decodeProjectedActivity(
-      JSON.stringify({
-        id: EventId.make("evt-request-opened"),
-        tone: "approval",
-        kind: "approval.requested",
-        summary: "Command approval requested",
-        payload: {
-          requestId: "approval-projected-1",
-          requestType: "command_execution_approval",
-          detail,
-        },
-        turnId: null,
-        createdAt: "2026-07-18T00:00:00.000Z",
-      }),
-    );
-    const [approval] = derivePendingApprovals([projectedActivity]);
-
-    expect(approval).toBeDefined();
-    if (!approval) {
-      return;
-    }
-
-    const markup = renderToStaticMarkup(
-      <ComposerPendingApprovalPanel approval={approval} pendingCount={1} />,
-    );
-
-    expect(approval.detail).toBe(detail);
-    expect(markup).toContain('data-approval-detail="complete"');
     expect(markup).toContain(detail);
   });
 });

@@ -136,11 +136,27 @@ const TeamMirrorState = Schema.fromJsonString(
           Schema.String,
           Schema.Struct({ sha256: Schema.String, eTag: Schema.String }),
         ),
+        skippedReads: Schema.Record(Schema.String, Schema.String).pipe(
+          Schema.withDecodingDefault(Effect.succeed({})),
+        ),
+        pendingDownloads: Schema.Record(
+          Schema.String,
+          Schema.Struct({
+            sha256: Schema.String,
+            eTag: Schema.String,
+            previousSha256: Schema.NullOr(Schema.String),
+          }),
+        ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
       }),
     ),
   }),
 );
-type TeamMirrorEntry = { teamId: string; synced: Record<string, { sha256: string; eTag: string }> };
+type TeamMirrorEntry = {
+  teamId: string;
+  synced: Record<string, { sha256: string; eTag: string }>;
+  skippedReads: Record<string, string>;
+  pendingDownloads: Record<string, { sha256: string; eTag: string; previousSha256: string | null }>;
+};
 const decodeTeamMirrorState = Schema.decodeUnknownEffect(TeamMirrorState);
 const encodeTeamMirrorState = Schema.encodeEffect(TeamMirrorState);
 /**
@@ -798,14 +814,19 @@ export const make = Effect.gen(function* () {
   const teamsDirectory = path.join(vault.root, "teams");
   const teamStateFile = path.join(vault.root, ".sync", "teams.json");
 
-  // A missing or unreadable record only costs downloading the copies again.
+  // Without a readable ownership record, existing local files remain unmanaged.
   const readTeamState = fs.readFileString(teamStateFile).pipe(
     Effect.flatMap((raw) => decodeTeamMirrorState(raw)),
     Effect.map((state): Record<string, TeamMirrorEntry> =>
       Object.fromEntries(
         Object.entries(state.teams).map(([folder, entry]) => [
           folder,
-          { teamId: entry.teamId, synced: { ...entry.synced } },
+          {
+            teamId: entry.teamId,
+            synced: { ...entry.synced },
+            skippedReads: { ...entry.skippedReads },
+            pendingDownloads: { ...entry.pendingDownloads },
+          },
         ]),
       ),
     ),
@@ -906,9 +927,26 @@ export const make = Effect.gen(function* () {
       const bytes = yield* readLocal(relativePath);
       if (bytes !== null) local.set(relativePath, { sha256: sha256Bytes(bytes) });
     }
-    const entry = teams[team.folder] ?? { teamId: team.teamId, synced: {} };
+    const entry = teams[team.folder] ?? {
+      teamId: team.teamId,
+      synced: {},
+      skippedReads: {},
+      pendingDownloads: {},
+    };
     teams[team.folder] = entry;
-    // Recorded before the first download, so a copy cut short is still known.
+    for (const [relativePath, pending] of Object.entries(entry.pendingDownloads)) {
+      if (!listed(relativePath)) continue;
+      // Recover an installed copy whose final state save never happened. Bytes that already
+      // existed unmanaged before the attempt cannot prove that installation completed.
+      if (
+        local.get(relativePath)?.sha256 === pending.sha256 &&
+        (entry.synced[relativePath] !== undefined || pending.previousSha256 !== pending.sha256)
+      )
+        entry.synced[relativePath] = { sha256: pending.sha256, eTag: pending.eTag };
+      delete entry.pendingDownloads[relativePath];
+    }
+    for (const relativePath of Object.keys(entry.skippedReads))
+      if (listed(relativePath) && !cloud.has(relativePath)) delete entry.skippedReads[relativePath];
     yield* writeTeamState(teams);
     const unchangedSinceScan = (relativePath: string) =>
       readLocal(relativePath).pipe(
@@ -921,13 +959,22 @@ export const make = Effect.gen(function* () {
     let downloads = 0;
     let skipped = 0;
     let pending = 0;
-    for (const action of planTeamMirror({
+    const actions = planTeamMirror({
       local,
       cloud,
       synced: new Map(
         Object.entries(entry.synced).filter(([relativePath]) => listed(relativePath)),
       ),
-    })) {
+    });
+    // Keep the attempt budget bounded while giving new or changed documents a turn before
+    // retrying the same unreadable versions. Remember misses across server restarts too.
+    const unchangedReadSkip = (action: (typeof actions)[number]) =>
+      action.kind === "download" &&
+      entry.skippedReads[action.path] !== undefined &&
+      entry.skippedReads[action.path] === cloud.get(action.path)?.eTag;
+    for (const action of actions.toSorted(
+      (left, right) => Number(unchangedReadSkip(left)) - Number(unchangedReadSkip(right)),
+    )) {
       switch (action.kind) {
         case "download": {
           if (downloads >= TEAM_DOWNLOADS_PER_PASS) {
@@ -940,17 +987,39 @@ export const make = Effect.gen(function* () {
           // Access couldn't be checked: keep what was copied and stop for this pass.
           if (document.kind === "unavailable") return;
           if (document.kind === "skip") {
+            entry.skippedReads[action.path] = cloud.get(action.path)!.eTag;
             skipped++;
             break;
           }
-          if (!(yield* unchangedSinceScan(action.path))) break;
+          delete entry.skippedReads[action.path];
+          if (!(yield* unchangedSinceScan(action.path))) {
+            skipped++;
+            break;
+          }
           const bytes = new TextEncoder().encode(document.text);
+          const downloaded = { sha256: sha256Bytes(bytes), eTag: document.eTag };
+          entry.pendingDownloads[action.path] = {
+            ...downloaded,
+            previousSha256: local.get(action.path)?.sha256 ?? null,
+          };
+          // A completed atomic install must remain owned even if the process stops before
+          // recording success, so a later remote withdrawal can still remove its local copy.
+          yield* writeTeamState(teams);
+          if (!(yield* unchangedSinceScan(action.path))) {
+            delete entry.pendingDownloads[action.path];
+            skipped++;
+            break;
+          }
           yield* writeBytesAtomically(toLocalPath(action.path), bytes);
-          entry.synced[action.path] = { sha256: sha256Bytes(bytes), eTag: document.eTag };
+          entry.synced[action.path] = downloaded;
+          delete entry.pendingDownloads[action.path];
           break;
         }
         case "deleteLocal":
-          if (!(yield* unchangedSinceScan(action.path))) break;
+          if (!(yield* unchangedSinceScan(action.path))) {
+            skipped++;
+            break;
+          }
           yield* fs.remove(toLocalPath(action.path)).pipe(
             Effect.catchIf(isNotFound, () => Effect.void),
             Effect.mapError(

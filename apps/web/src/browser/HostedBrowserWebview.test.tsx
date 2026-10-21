@@ -9,6 +9,13 @@ import {
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  __resetClientSettingsPersistenceForTests,
+  ensureClientSettingsHydrated,
+} from "~/hooks/useSettings";
+import { useBrowserSurfaceStore } from "./browserSurfaceStore";
+import * as desktopTabLifetime from "./desktopTabLifetime";
+import { HostedBrowserWebview } from "./HostedBrowserWebview";
 
 const mocks = vi.hoisted(() => ({
   getClientSettings: vi.fn<() => Promise<ClientSettings | null>>(),
@@ -41,14 +48,6 @@ vi.mock("./browserRecording", () => ({
   useActiveBrowserRecordingTabIds: () => mocks.activeRecordings,
   stopBrowserRecording: async () => null,
 }));
-
-import {
-  __resetClientSettingsPersistenceForTests,
-  ensureClientSettingsHydrated,
-} from "~/hooks/useSettings";
-import { useBrowserSurfaceStore } from "./browserSurfaceStore";
-import * as desktopTabLifetime from "./desktopTabLifetime";
-import { HostedBrowserWebview } from "./HostedBrowserWebview";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -174,7 +173,7 @@ describe("HostedBrowserWebview settings hydration", () => {
       await retry;
     });
 
-    expect(acquire).toHaveBeenCalledExactlyOnceWith(runtimeTabId);
+    expect(acquire).toHaveBeenCalledExactlyOnceWith(runtimeTabId, undefined);
     expect(mocks.getPreviewConfig).toHaveBeenCalledExactlyOnceWith(threadRef.environmentId, "work");
     expect(createGuest).toHaveBeenCalledOnce();
     expect(createGuest).toHaveBeenCalledWith(

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Synchronous SHA-256 document fingerprints and campus identity keys use Node crypto.
 // @effect-diagnostics globalDate:off - thread times are shown in host-local time.
 /**
  * One person's daily team memory: the file layout, the local record of what each file says and

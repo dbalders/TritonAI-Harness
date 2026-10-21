@@ -139,7 +139,12 @@ export function mergeTeamStorageResult(
     };
   }
   if (next.status !== "connected" || previous?.status !== "connected") return next;
-  if (command.action === "list-files" || command.action === "status") {
+  if (
+    command.action === "list-files" ||
+    command.action === "status" ||
+    command.action === "connect" ||
+    command.action === "poll"
+  ) {
     return {
       ...next,
       document: previous.document,

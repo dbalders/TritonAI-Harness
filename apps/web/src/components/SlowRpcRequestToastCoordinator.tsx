@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-
 import { type SlowRpcAckRequest, useSlowRpcAckRequests } from "../rpc/requestLatencyState";
 import { toastManager } from "./ui/toast";
 

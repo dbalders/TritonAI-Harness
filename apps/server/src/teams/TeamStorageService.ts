@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Synchronous SHA-256 document fingerprints and campus identity keys use Node crypto.
 import * as NodeCrypto from "node:crypto";
 import {
   type TeamInviteeLookup,
@@ -20,7 +21,7 @@ import {
   HttpClient,
   HttpClientRequest,
   type HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import * as Microsoft from "../memory/sync/microsoftSignIn.ts";
@@ -312,9 +313,10 @@ export const make = (
               return invitee;
             }).pipe(
               Effect.timeout("30 seconds"),
-              Effect.catchTag("TimeoutError", () =>
-                Effect.fail(failure("Microsoft couldn't look up this address. Try again.")),
-              ),
+              Effect.catchTags({
+                TimeoutError: () =>
+                  Effect.fail(failure("Microsoft couldn't look up this address. Try again.")),
+              }),
             );
           const withLookup = (status: TeamStorageStatus) =>
             command.action === "lookup-invitee"
@@ -635,9 +637,9 @@ export const make = (
               MemorySyncFailure: (error) => Effect.fail(failure(error.message)),
             }),
             Effect.timeout("60 seconds"),
-            Effect.catchTag("TimeoutError", () =>
-              Effect.fail(failure("Shared storage timed out. Try again.")),
-            ),
+            Effect.catchTags({
+              TimeoutError: () => Effect.fail(failure("Shared storage timed out. Try again.")),
+            }),
           );
         }),
       );

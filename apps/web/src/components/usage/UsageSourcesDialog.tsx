@@ -1,7 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
-
+import { AsyncResult, Atom } from "effect/reactivity";
 import { isElectron } from "../../env";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";

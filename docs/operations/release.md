@@ -18,6 +18,21 @@ update commands. See [Server Update Architecture](../architecture/server-updates
 
 ## Workflow contract
 
+Run `vp run gitlinks:check` after updating vendored reference repositories. Every tracked
+gitlink must have exactly one matching path and URL in the root `.gitmodules`; remove stale
+mappings when references move or disappear. Upstream sync defaults, local preflight, and CI enforce this, and CI's
+Preflight checkout uses the same immediate credential cleanup as Nightly. Excluding `.repos`
+with sparse checkout does not exclude its gitlinks from that cleanup.
+
+CI Preflight also builds the standalone server executable used by the Windows WSL runtime.
+Its emitted bundle must contain no file-backed ESM imports; disk-backed dependencies must
+load through the executable's CommonJS bridge. A regular desktop bundle build does not
+exercise this executable-only import boundary.
+
+The packaging tests compare `apps/desktop-runtime/package.json` with the current server,
+desktop external dependencies, and native dependency versions. Update that manifest and its
+lockfile together when an upstream sync changes those packages.
+
 The workflow runs for:
 
 - a pushed stable tag matching `v*.*.*`, excluding upstream nightly tags;

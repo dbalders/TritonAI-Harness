@@ -1,8 +1,9 @@
+import { describe } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off - Tests use Node's glob matcher to verify electron-builder exclusions.
 import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { extractFile } from "@electron/asar";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as FileSystem from "effect/FileSystem";
@@ -12,10 +13,15 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { vi } from "vite-plus/test";
-import { parse as parseYaml } from "yaml";
-
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import rootPackageJson from "../package.json" with { type: "json" };
+import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
+import desktopRuntimePackageJson from "../apps/desktop-runtime/package.json" with { type: "json" };
+import serverPackageJson from "../apps/server/package.json" with { type: "json" };
+import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import {
   ancestorNodeModulesPaths,
   assertDesktopUpdatePublishConfiguration,
@@ -28,15 +34,16 @@ import {
   CUA_DRIVER_VERSION,
   copyDirectoryPreservingSymlinks,
   createDesktopSourceBuildEnvironment,
-  createBuildConfig,
-  createStagePatchedDependencies,
   DesktopDmgBackgroundSourceMissingError,
+  createStageWorkspaceConfig,
+  createStagePatchedDependencies,
+  readWorkspaceConfig,
+  createBuildConfig,
   DesktopUpdatePublishConfigurationMissingError,
   DESKTOP_MANAGED_PLUGIN_FILE_SET,
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_EXTRA_RESOURCES,
   DESKTOP_FILE_EXCLUSIONS,
-  createStageWorkspaceConfig,
   findMissingRuntimeDeploymentArchitectures,
   InvalidAzureTrustedSigningEndpointError,
   LINUX_CAPTURE_EXTRA_RESOURCES,
@@ -63,9 +70,11 @@ import {
   preflightLinuxDesktopBuild,
   preflightMacDesktopBuild,
   preflightWindowsDesktopBuild,
+  resolveMacWebAuthnEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
+  resolveDesktopRuntimeNativeDependencies,
   resolveMergedStageDependencies,
   resolveFffNativeDependencies,
   resolveBuildOptions,
@@ -104,6 +113,7 @@ import {
   WindowsDesktopBuildPrerequisitesMissingError,
   WindowsPackagedPayloadValidationError,
   WINDOWS_NATIVE_ASAR_UNPACK_GLOB,
+  stageCursorSdkPlatformPackages,
   WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
   WINDOWS_SERVER_ASAR_RESOURCE,
   WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
@@ -118,8 +128,14 @@ import {
   wslRuntimeArchiveStem,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
+
+// Keeps pnpm from auto-installing TypeScript, a types-only peer, into the app.
+const stagePackageExtensions = {
+  "electron-webauthn": { peerDependenciesMeta: { typescript: { optional: true } } },
+  "@electron-webauthn/macos": { peerDependenciesMeta: { typescript: { optional: true } } },
+};
 
 // A minimal stand-in for the Linux CLI release archive: one top-level
 // directory named after the archive stem holding the executable, the web
@@ -313,7 +329,7 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   yield* fs.makeDirectory(path.dirname(serverEntryPath), { recursive: true });
   yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
-  yield* fs.writeFileString(nativePath, "native-binary");
+  yield* fs.writeFileString(nativePath, "MZ native-binary");
   if (input.pluginRuntimeVersion !== undefined) {
     const effectRoot = path.join(sourceDir, "node_modules/effect");
     yield* fs.makeDirectory(path.join(effectRoot, "dist"), { recursive: true });
@@ -542,6 +558,41 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("permits updater-free manual previews through both packaging guards", () =>
+    Effect.gen(function* () {
+      for (const version of ["0.3.1-pr.123.test", "0.3.1-preview.20261016.123"]) {
+        for (const platform of ["mac", "win"] as const) {
+          yield* assertDesktopUpdatePublishConfiguration({
+            platform,
+            version,
+            updateChannel: "latest",
+            mockUpdates: false,
+          });
+          yield* assertPackagedDesktopUpdateConfig({
+            platform,
+            version,
+            stageDistDir: "/not-packaged",
+            arch: "arm64",
+            productName: "TritonAI Harness",
+          });
+        }
+      }
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it("allows Windows arm64 staging from an x64 root installation", () => {
+    assert.deepStrictEqual(
+      findMissingRuntimeDeploymentArchitectures({
+        configured: { os: ["current"], cpu: ["current", "x64"] },
+        hostPlatform: "win32",
+        hostArch: "x64",
+        targetPlatform: "win",
+        targetArch: "arm64",
+      }),
+      [],
+    );
+  });
+
   it.effect("omits update feeds for pull request preview builds", () =>
     Effect.gen(function* () {
       const preview = yield* createBuildConfig(
@@ -590,6 +641,27 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ),
       ),
     ),
+  );
+
+  it.effect("keeps the checked-in desktop runtime manifest aligned with the packaged runtime", () =>
+    Effect.gen(function* () {
+      const { catalog = {} } = yield* readWorkspaceConfig();
+      assert.deepStrictEqual(
+        resolveCatalogDependencies(
+          desktopRuntimePackageJson.dependencies,
+          catalog,
+          "apps/desktop-runtime",
+        ),
+        {
+          ...resolveCatalogDependencies(serverPackageJson.dependencies, catalog, "apps/server"),
+          ...resolveDesktopRuntimeDependencies(desktopPackageJson.dependencies, catalog),
+        },
+      );
+      assert.deepStrictEqual(
+        desktopRuntimePackageJson.optionalDependencies,
+        resolveDesktopRuntimeNativeDependencies(),
+      );
+    }),
   );
 
   it("stages only the desktop main-process externals", () => {
@@ -677,6 +749,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         os: ["darwin"],
         cpu: ["x64"],
       },
+      verifyDepsBeforeRun: false,
+      packageExtensions: stagePackageExtensions,
     });
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "linux", arch: "x64" }), {
       supportedArchitectures: {
@@ -684,6 +758,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         cpu: ["x64"],
         libc: ["glibc"],
       },
+      verifyDepsBeforeRun: false,
+      packageExtensions: stagePackageExtensions,
     });
     // Windows stages only win32 natives; WSL runs the separately built Linux
     // CLI archive rather than anything installed here.
@@ -692,18 +768,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         os: ["win32"],
         cpu: ["x64"],
       },
+      verifyDepsBeforeRun: false,
+      packageExtensions: stagePackageExtensions,
     });
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "win", arch: "arm64" }), {
       supportedArchitectures: {
         os: ["win32"],
         cpu: ["arm64"],
       },
+      verifyDepsBeforeRun: false,
+      packageExtensions: stagePackageExtensions,
     });
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "mac", arch: "universal" }), {
       supportedArchitectures: {
         os: ["darwin"],
         cpu: ["arm64", "x64"],
       },
+      verifyDepsBeforeRun: false,
+      packageExtensions: stagePackageExtensions,
     });
     assert.deepStrictEqual(
       findMissingRuntimeDeploymentArchitectures({
@@ -731,7 +813,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         targetPlatform: "win",
         targetArch: "x64",
       }),
-      ["os:win32"],
+      [],
     );
     assert.deepStrictEqual(
       findMissingRuntimeDeploymentArchitectures({
@@ -750,28 +832,20 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
-  it.effect("enables Windows native deployment from either Mac host architecture", () =>
+  // pnpm writes "set this to true or false" placeholders into allowBuilds when a
+  // tarball changes. pnpm ignores them, but the release build decode rejects them.
+  it.effect("decodes the repo allowBuilds and every file: tarball it names exists", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
-      const source = yield* fs.readFileString(path.join(repoRoot, "pnpm-workspace.yaml"));
-      const workspace = parseYaml(source) as {
-        supportedArchitectures: Parameters<
-          typeof findMissingRuntimeDeploymentArchitectures
-        >[0]["configured"];
-      };
-
-      for (const hostArch of ["arm64", "x64"] as const) {
-        assert.deepStrictEqual(
-          findMissingRuntimeDeploymentArchitectures({
-            configured: workspace.supportedArchitectures,
-            hostPlatform: "darwin",
-            hostArch,
-            targetPlatform: "win",
-            targetArch: "x64",
-          }),
-          [],
+      const { allowBuilds = {} } = yield* readWorkspaceConfig();
+      const repoRoot = path.join(import.meta.dirname, "..");
+      for (const key of Object.keys(allowBuilds)) {
+        const tarball = key.split("@file:")[1];
+        if (tarball === undefined) continue;
+        assert.isTrue(
+          yield* fs.exists(path.join(repoRoot, tarball)),
+          `allowBuilds names a missing tarball: ${key}`,
         );
       }
     }),
@@ -800,6 +874,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           cpu: ["x64"],
           libc: ["glibc"],
         },
+        verifyDepsBeforeRun: false,
+        packageExtensions: stagePackageExtensions,
         allowBuilds: {
           electron: true,
           "node-pty": true,
@@ -830,6 +906,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           os: ["darwin"],
           cpu: ["arm64"],
         },
+        verifyDepsBeforeRun: false,
+        packageExtensions: stagePackageExtensions,
       },
     );
   });
@@ -853,6 +931,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }
 
     assert.deepStrictEqual(DESKTOP_FILE_EXCLUSIONS, [
+      "!**/node_modules/@cursor/sdk-*/**/*",
+      "!apps/desktop/prod-resources/cursor-sdk",
+      "!apps/desktop/prod-resources/cursor-sdk/**/*",
       "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
       "!**/*.map",
       "!**/*.d.cts",
@@ -940,28 +1021,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
       ]);
       assert.deepStrictEqual(win.extraResources, [
-        {
-          from: "apps/desktop/prod-resources/resource-monitor",
-          to: "resource-monitor",
-        },
-        {
-          from: "apps/desktop/prod-resources/cua-driver",
-          to: "cua-driver",
-        },
+        ...DESKTOP_EXTRA_RESOURCES,
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
         ...WSL_RUNTIME_EXTRA_RESOURCES,
       ]);
       // No Linux CLI archive means staging never writes the runtime, so
       // listing it here would fail the build on a missing source file.
       assert.deepStrictEqual(winWithoutWslRuntime.extraResources, [
-        {
-          from: "apps/desktop/prod-resources/resource-monitor",
-          to: "resource-monitor",
-        },
-        {
-          from: "apps/desktop/prod-resources/cua-driver",
-          to: "cua-driver",
-        },
+        ...DESKTOP_EXTRA_RESOURCES,
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.nsis, {
@@ -976,6 +1043,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}",
       );
       assert.deepStrictEqual(WINDOWS_SERVER_ASAR_IGNORE_GLOBS, [
+        "**/node_modules/@cursor/sdk-*",
+        "**/node_modules/@cursor/sdk-*/**",
         "**/node_modules/@anthropic-ai/claude-agent-sdk-*",
         "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
         "**/node_modules/.bin",
@@ -1006,15 +1075,46 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ...MAC_FILE_EXCLUSIONS,
         DESKTOP_MANAGED_PLUGIN_FILE_SET,
       ]);
-      assert.notProperty(mac.mac as Record<string, unknown>, "sign");
+      // macOS also offers itself as a web browser, so it can be chosen as the default.
+      assert.deepStrictEqual((mac.mac as Record<string, unknown>).protocols, [
+        { name: "TritonAI Harness", schemes: ["t3code", "t3code-dev"] },
+        { name: "Web site URL", schemes: ["http", "https"], role: "Viewer" },
+      ]);
+      // macOS lists a default browser only when it also opens web pages as documents.
+      const macInfo = (mac.mac as { extendInfo: Record<string, unknown> }).extendInfo;
+      assert.strictEqual(macInfo.NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac, true);
+      assert.deepStrictEqual(macInfo.CFBundleDocumentTypes, [
+        {
+          CFBundleTypeName: "Web page",
+          CFBundleTypeRole: "Viewer",
+          LSHandlerRank: "Alternate",
+          LSItemContentTypes: ["public.html", "public.xhtml"],
+        },
+      ]);
+      assert.deepStrictEqual(linux.toolsets, { appimage: "1.0.3" });
+      assert.notProperty(mac, "toolsets");
+      assert.notProperty(win, "toolsets");
+      assert.deepStrictEqual(mac.files, [
+        ...DESKTOP_FILE_EXCLUSIONS,
+        ...MAC_FILE_EXCLUSIONS,
+        DESKTOP_MANAGED_PLUGIN_FILE_SET,
+      ]);
       assert.deepStrictEqual(linux.files, [
         ...DESKTOP_FILE_EXCLUSIONS,
         ...LINUX_FILE_EXCLUSIONS,
         DESKTOP_MANAGED_PLUGIN_FILE_SET,
       ]);
-      assert.deepStrictEqual(win.files, [...DESKTOP_FILE_EXCLUSIONS]);
-      assert.deepStrictEqual(linux.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
-      assert.deepStrictEqual(win.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
+      assert.deepStrictEqual(win.files, DESKTOP_FILE_EXCLUSIONS);
+      assert.deepStrictEqual(winWithoutWslRuntime.files, win.files);
+      assert.notProperty(mac.mac as Record<string, unknown>, "sign");
+      assert.propertyVal(
+        (mac.mac as Record<string, unknown>).extendInfo as Record<string, unknown>,
+        "NSLocalNetworkUsageDescription",
+        "TritonAI Harness connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
+      );
+      for (const config of [linux, win]) {
+        assert.deepStrictEqual(config.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
+      }
       assert.deepStrictEqual(mac.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
@@ -1063,6 +1163,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       resolveMergedStageDependencies({
         platform: "mac",
         serverDependencies: {
+          "@cursor/sdk": "1.0.22",
           "@anthropic-ai/claude-agent-sdk": "^0.3.170",
           "@ff-labs/fff-node": "0.9.4",
           "@opencode-ai/sdk": "^1.3.15",
@@ -1077,6 +1178,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         fffNodeVersion: "0.9.4",
       }),
       {
+        "@cursor/sdk": "1.0.22",
         "@ff-labs/fff-node": "0.9.4",
         "node-pty": "1.1.0",
         "@napi-rs/keyring": "1.3.0",
@@ -1104,6 +1206,58 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
+  it.effect("ships Cursor platform assets outside asar for spawning and native loading", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cursor-helpers-" });
+        const nodeModules = path.join(root, "node_modules");
+        const destination = path.join(root, "resources/node_modules/@cursor");
+        const cursorDirectory = symlinksSupported
+          ? path.join(root, "store/@cursor")
+          : path.join(nodeModules, "@cursor");
+        yield* fs.makeDirectory(path.join(cursorDirectory, "sdk"), { recursive: true });
+        if (symlinksSupported) {
+          yield* fs.makeDirectory(path.join(nodeModules, "@cursor"), { recursive: true });
+          yield* fs.symlink(
+            path.join(cursorDirectory, "sdk"),
+            path.join(nodeModules, "@cursor/sdk"),
+          );
+        }
+        const helpers = [
+          "sdk-darwin-arm64/bin/rg",
+          "sdk-darwin-arm64/bin/cursorsandbox",
+          "sdk-darwin-arm64/vendor/tree-sitter/index.js",
+          "sdk-darwin-arm64/vendor/tree-sitter/binding.node",
+          "sdk-darwin-arm64/vendor/tree-sitter-bash/binding.node",
+          "sdk-darwin-arm64/package.json",
+          "sdk-win32-x64/bin/rg.exe",
+        ];
+        for (const helper of helpers) {
+          const source = path.join(cursorDirectory, helper);
+          yield* fs.makeDirectory(path.dirname(source), { recursive: true });
+          yield* fs.writeFileString(source, "fixture helper", { mode: 0o755 });
+        }
+        yield* stageCursorSdkPlatformPackages(nodeModules, destination);
+        for (const helper of helpers) {
+          assert.equal(yield* fs.readFileString(path.join(destination, helper)), "fixture helper");
+          const packagedPath = `node_modules/@cursor/${helper}`;
+          assert.isTrue(
+            DESKTOP_FILE_EXCLUSIONS.some((glob) =>
+              NodePath.matchesGlob(packagedPath, glob.slice(1)),
+            ),
+          );
+          assert.isTrue(
+            WINDOWS_SERVER_ASAR_IGNORE_GLOBS.some((glob) =>
+              NodePath.matchesGlob(packagedPath, glob),
+            ),
+          );
+        }
+      }),
+    ),
+  );
+
   it("excludes node-pty binaries for the other Windows architecture", () => {
     assert.deepStrictEqual(resolveWindowsServerAsarIgnoreGlobs("x64"), [
       ...WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
@@ -1121,7 +1275,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ]);
   });
 
-  it.effect("keeps target native files while excluding the other Windows architecture", () =>
+  it.effect("unpacks target Windows natives while excluding the other architecture", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -1135,12 +1289,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           "node_modules/node-pty/prebuilds/win32-arm64/conpty/OpenConsole.exe",
           "node_modules/node-pty/third_party/conpty/1.0.0/win10-x64/OpenConsole.exe",
           "node_modules/node-pty/third_party/conpty/1.0.0/win10-arm64/OpenConsole.exe",
+          "node_modules/node-pty/prebuilds/win32-x64/pty.node",
+          "node_modules/node-pty/prebuilds/linux-x64/pty.node",
         ];
 
         for (const nativeFile of nativeFiles) {
           const nativePath = path.join(sourceDir, nativeFile);
           yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
-          yield* fs.writeFileString(nativePath, "native");
+          yield* fs.writeFileString(nativePath, nativeFile.includes("linux") ? "\x7fELF" : "MZ");
         }
 
         const asarPath = path.join(tempDir, "server.asar");
@@ -1154,6 +1310,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               "node_modules/node-pty/prebuilds/win32-x64/conpty/OpenConsole.exe",
             ),
           ),
+        );
+        assert.isTrue(
+          yield* fs.exists(
+            path.join(unpackedRoot, "node_modules/node-pty/prebuilds/win32-x64/pty.node"),
+          ),
+        );
+        // Signed builds sign every unpacked .node, so the ELF prebuild stays packed.
+        assert.isFalse(
+          yield* fs.exists(path.join(unpackedRoot, "node_modules/node-pty/prebuilds/linux-x64")),
+        );
+        assert.equal(
+          extractFile(
+            asarPath,
+            path.join("node_modules", "node-pty", "prebuilds", "linux-x64", "pty.node"),
+          ).toString(),
+          "\x7fELF",
         );
         assert.isFalse(
           yield* fs.exists(path.join(unpackedRoot, "node_modules/node-pty/prebuilds/win32-arm64")),
@@ -1516,7 +1688,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         assert.isBelow(result.fileCount, WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT);
         assert.deepStrictEqual(secondAsar, firstAsar);
       }),
-    ).pipe(Effect.provideService(HostProcessPlatform, "linux")),
+    ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
 
   it.effect("accepts an embedded Linux CLI release archive with a matching digest", () =>
@@ -1536,11 +1708,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         assert.equal(result.packagedAppDir, fixture.packagedAppDir);
       }),
-    ).pipe(Effect.provideService(HostProcessPlatform, "linux")),
+    ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
 
-  for (const targetArch of ["x64", "arm64"] as const) {
-    it.effect(`accepts an embedded archive with the Linux ${targetArch} node-pty prebuild`, () =>
+  it.effect.each(["x64", "arm64"] as const)(
+    "accepts an embedded archive with the Linux %s node-pty prebuild",
+    (targetArch) =>
       Effect.scoped(
         Effect.gen(function* () {
           const fixture = yield* makeWindowsPayloadFixture({
@@ -1559,34 +1732,33 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
           assert.equal(result.packagedAppDir, fixture.packagedAppDir);
         }),
-      ).pipe(Effect.provideService(HostProcessPlatform, "linux")),
-    );
+      ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
+  );
 
-    it.effect(
-      `rejects a node-pty prebuild for the wrong architecture in a Linux ${targetArch} archive`,
-      () =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const fixture = yield* makeWindowsPayloadFixture({
-              copyUnpackedNatives: true,
-              wslRuntime: "valid",
-              targetArch,
-              ptyPrebuildArch: targetArch === "x64" ? "arm64" : "x64",
-            });
-            const error = yield* validateWindowsPackagedPayload({
-              stageDistDir: fixture.stageDistDir,
-              appExecutableName: fixture.appExecutableName,
-              targetArch,
-              appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
-              expectWslRuntime: true,
-            }).pipe(Effect.flip);
+  it.effect.each(["x64", "arm64"] as const)(
+    "rejects a node-pty prebuild for the wrong architecture in a Linux %s archive",
+    (targetArch) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = yield* makeWindowsPayloadFixture({
+            copyUnpackedNatives: true,
+            wslRuntime: "valid",
+            targetArch,
+            ptyPrebuildArch: targetArch === "x64" ? "arm64" : "x64",
+          });
+          const error = yield* validateWindowsPackagedPayload({
+            stageDistDir: fixture.stageDistDir,
+            appExecutableName: fixture.appExecutableName,
+            targetArch,
+            appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+            expectWslRuntime: true,
+          }).pipe(Effect.flip);
 
-            assert.instanceOf(error, WindowsPackagedPayloadValidationError);
-            assert.equal(error.reason, "wsl-runtime-invalid");
-          }),
-        ),
-    );
-  }
+          assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+          assert.equal(error.reason, "wsl-runtime-invalid");
+        }),
+      ),
+  );
 
   it.effect("rejects an embedded archive built for a different release version", () =>
     Effect.scoped(
@@ -1778,7 +1950,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           primaryProbe.args[4],
           path.join(
             fixture.packagedAppDir,
-            "resources/server.asar/node_modules/@ff-labs/fff-node/dist/src/index.js",
+            "resources/server.asar/node_modules/@ff-labs/fff-node/dist/index.js",
           ),
         );
         assert.equal(primaryProbe.options.cwd, fixture.packagedAppDir);
@@ -1807,8 +1979,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.provide(
         Layer.mergeAll(
           spawnerLayer,
-          Layer.succeed(HostProcessPlatform, "win32"),
-          Layer.succeed(HostProcessArchitecture, "x64"),
+          Layer.succeed(HostProcess.Platform, "win32"),
+          Layer.succeed(HostProcess.Architecture, "x64"),
         ),
       ),
     );
@@ -1850,8 +2022,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.provide(
         Layer.mergeAll(
           spawnerLayer,
-          Layer.succeed(HostProcessPlatform, "linux"),
-          Layer.succeed(HostProcessArchitecture, "x64"),
+          Layer.succeed(HostProcess.Platform, "linux"),
+          Layer.succeed(HostProcess.Architecture, "x64"),
         ),
       ),
     );
@@ -1886,20 +2058,25 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       Effect.provide(
         Layer.mergeAll(
           spawnerLayer,
-          Layer.succeed(HostProcessPlatform, "darwin"),
-          Layer.succeed(HostProcessArchitecture, "arm64"),
+          Layer.succeed(HostProcess.Platform, "darwin"),
+          Layer.succeed(HostProcess.Architecture, "arm64"),
         ),
       ),
     );
   });
 
-  for (const { hostPlatform, hostArch, targetArch, sidecarCheck } of [
-    { hostPlatform: "win32", hostArch: "x64", targetArch: "arm64", sidecarCheck: "skipped" },
-    { hostPlatform: "darwin", hostArch: "arm64", targetArch: "x64", sidecarCheck: "skipped" },
-    { hostPlatform: "darwin", hostArch: "x64", targetArch: "x64", sidecarCheck: "skipped" },
-    { hostPlatform: "linux", hostArch: "arm64", targetArch: "x64", sidecarCheck: "skipped" },
-    { hostPlatform: "linux", hostArch: "x64", targetArch: "x64", sidecarCheck: "passed" },
-  ] as const) {
+  describe.each(
+    Array.from(
+      [
+        { hostPlatform: "win32", hostArch: "x64", targetArch: "arm64", sidecarCheck: "skipped" },
+        { hostPlatform: "darwin", hostArch: "arm64", targetArch: "x64", sidecarCheck: "skipped" },
+        { hostPlatform: "darwin", hostArch: "x64", targetArch: "x64", sidecarCheck: "skipped" },
+        { hostPlatform: "linux", hostArch: "arm64", targetArch: "x64", sidecarCheck: "skipped" },
+        { hostPlatform: "linux", hostArch: "x64", targetArch: "x64", sidecarCheck: "passed" },
+      ] as const,
+      (scenario) => ({ scenario }),
+    ),
+  )("case $scenario", ({ scenario: { hostPlatform, hostArch, targetArch, sidecarCheck } }) => {
     it.effect(`reports Windows/${targetArch} runtime checks on ${hostPlatform}/${hostArch}`, () => {
       const commands: Array<{
         readonly command: string;
@@ -1944,13 +2121,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         Effect.provide(
           Layer.mergeAll(
             spawnerLayer,
-            Layer.succeed(HostProcessPlatform, hostPlatform),
-            Layer.succeed(HostProcessArchitecture, hostArch),
+            Layer.succeed(HostProcess.Platform, hostPlatform),
+            Layer.succeed(HostProcess.Architecture, hostArch),
           ),
         ),
       );
     });
-  }
+  });
 
   it.effect("rejects a cross-architecture Windows payload without its primary executable", () =>
     Effect.scoped(
@@ -1974,8 +2151,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ).pipe(
       Effect.provide(
         Layer.mergeAll(
-          Layer.succeed(HostProcessPlatform, "win32"),
-          Layer.succeed(HostProcessArchitecture, "x64"),
+          Layer.succeed(HostProcess.Platform, "win32"),
+          Layer.succeed(HostProcess.Architecture, "x64"),
         ),
       ),
     ),
@@ -2082,15 +2259,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           targetArch: "x64",
           appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
         }).pipe(
-          Effect.provideService(HostProcessPlatform, "linux"),
-          Effect.provideService(HostProcessArchitecture, "x64"),
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Architecture, "x64"),
           Effect.flip,
         );
 
         assert.instanceOf(error, BundleNotSelfContainedError);
         assert.include(error.output, "t3code-deliberately-missing-package");
       }),
-    ).pipe(Effect.provideService(HostProcessPlatform, "linux")),
+    ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
 
   it.effect("preserves both Linux icon resize failures with structural context", () => {
@@ -2272,34 +2449,42 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
-  it.effect("creates a real native DMG from a staged macOS app", () =>
-    Effect.gen(function* () {
-      const hostPlatform = yield* HostProcessPlatform;
-      if (hostPlatform !== "darwin") return;
+  it.effect(
+    "creates a real native DMG from a staged macOS app",
+    () =>
+      Effect.gen(function* () {
+        const hostPlatform = yield* HostProcess.Platform;
+        if (hostPlatform !== "darwin") return;
 
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const stageDistDir = yield* fs.makeTempDirectoryScoped({
-        prefix: "tritonai-native-dmg-test-",
-      });
-      const contentsPath = path.join(stageDistDir, "mac-arm64", "TritonAI Harness.app", "Contents");
-      yield* fs.makeDirectory(contentsPath, { recursive: true });
-      yield* fs.writeFileString(
-        path.join(contentsPath, "Info.plist"),
-        '<?xml version="1.0"?><plist version="1.0"><dict></dict></plist>\n',
-      );
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const stageDistDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "tritonai-native-dmg-test-",
+        });
+        const contentsPath = path.join(
+          stageDistDir,
+          "mac-arm64",
+          "TritonAI Harness.app",
+          "Contents",
+        );
+        yield* fs.makeDirectory(contentsPath, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(contentsPath, "Info.plist"),
+          '<?xml version="1.0"?><plist version="1.0"><dict></dict></plist>\n',
+        );
 
-      const dmgPath = yield* buildMacDmg({
-        stageDistDir,
-        version: "1.2.3",
-        arch: "arm64",
-        verbose: false,
-      });
-      const stat = yield* fs.stat(dmgPath);
+        const dmgPath = yield* buildMacDmg({
+          stageDistDir,
+          version: "1.2.3",
+          arch: "arm64",
+          verbose: false,
+        });
+        const stat = yield* fs.stat(dmgPath);
 
-      assert.equal(stat.type, "File");
-      assert.isAbove(Number(stat.size), 0);
-    }),
+        assert.equal(stat.type, "File");
+        assert.isAbove(Number(stat.size), 0);
+      }),
+    { timeout: 30_000 },
   );
 
   it("derives macOS passkey signing configuration from the Clerk publishable key", () => {
@@ -2324,7 +2509,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       T3CODE_CLERK_PASSKEY_RP_DOMAINS:
         " Clerk.Example.com,example.clerk.accounts.dev,clerk.example.com ",
     });
-    const entitlements = renderMacPasskeyEntitlements(configuration);
+    const entitlements = renderMacPasskeyEntitlements(configuration, {
+      touchIdKeychainAccessGroup: undefined,
+      browserPasskeys: false,
+    });
 
     assert.deepStrictEqual(configuration.rpDomains, [
       "clerk.example.com",
@@ -2334,32 +2522,78 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
-    assert.include(entitlements, "<key>com.apple.security.device.audio-input</key>");
+    assert.notInclude(entitlements, "keychain-access-groups");
+    assert.notInclude(entitlements, "com.apple.developer.web-browser.public-key-credential");
   });
 
-  it("keeps hardened-runtime audio capabilities aligned for the main app and helpers", () => {
-    const configuration = resolveMacPasskeySigningConfiguration({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
-    });
-    const mainEntitlements = renderMacPasskeyEntitlements(configuration);
-    const inheritedEntitlements = renderMacInheritedEntitlements();
-    const hardenedRuntimeKeys = [
-      "com.apple.security.cs.allow-jit",
-      "com.apple.security.cs.allow-unsigned-executable-memory",
-      "com.apple.security.cs.disable-library-validation",
-      "com.apple.security.device.audio-input",
-    ];
+  it("grants in-app browser passkey entitlements only when the provisioning profile does", () => {
+    const configuration = { appId: "com.t3tools.t3code", teamId: "ABC1234567" };
+    // Profiles are CMS envelopes around a plain XML plist.
+    const profile = (entitlements: string, outside = "") =>
+      `0\x82\x1f\x9a\x06\t*\x86H<?xml version="1.0"?><plist version="1.0"><dict>${outside}<key>Entitlements</key><dict>${entitlements}</dict></dict></plist>\x00\x01`;
+    const teamWildcardGroups = `<key>keychain-access-groups</key>
+      <array>
+        <string>ABC1234567.*</string>
+        <string>com.apple.token</string>
+      </array>`;
 
-    for (const key of hardenedRuntimeKeys) {
-      assert.include(mainEntitlements, `<key>${key}</key>`);
-      assert.include(inheritedEntitlements, `<key>${key}</key>`);
-    }
-    assert.notInclude(inheritedEntitlements, "com.apple.application-identifier");
-    assert.notInclude(inheritedEntitlements, "com.apple.developer.associated-domains");
-    assert.notInclude(mainEntitlements, "com.apple.security.device.camera");
-    assert.notInclude(inheritedEntitlements, "com.apple.security.device.camera");
+    assert.deepStrictEqual(resolveMacWebAuthnEntitlements(profile(""), configuration), {
+      touchIdKeychainAccessGroup: undefined,
+      browserPasskeys: false,
+    });
+    assert.deepStrictEqual(
+      resolveMacWebAuthnEntitlements(
+        profile("<key>keychain-access-groups</key><array><string>OTHERTEAM1.*</string></array>"),
+        configuration,
+      ),
+      { touchIdKeychainAccessGroup: undefined, browserPasskeys: false },
+    );
+    // Only real values inside the Entitlements dict count: not comments, not
+    // explicit false, not keys elsewhere in the profile.
+    assert.deepStrictEqual(
+      resolveMacWebAuthnEntitlements(
+        profile(
+          `<!-- ${teamWildcardGroups}
+          <key>com.apple.developer.web-browser.public-key-credential</key><true/> -->
+          <key>com.apple.developer.web-browser.public-key-credential</key><false/>`,
+          teamWildcardGroups,
+        ),
+        configuration,
+      ),
+      { touchIdKeychainAccessGroup: undefined, browserPasskeys: false },
+    );
+    assert.deepStrictEqual(
+      resolveMacWebAuthnEntitlements(
+        profile(
+          `${teamWildcardGroups}
+          <key>com.apple.developer.web-browser.public-key-credential</key>
+          <true/>`,
+        ),
+        configuration,
+      ),
+      {
+        touchIdKeychainAccessGroup: "ABC1234567.com.t3tools.t3code.webauthn",
+        browserPasskeys: true,
+      },
+    );
+
+    const entitlements = renderMacPasskeyEntitlements(
+      { ...configuration, rpDomains: ["clerk.example.com"], provisioningProfilePath: "" },
+      resolveMacWebAuthnEntitlements(
+        profile(
+          `${teamWildcardGroups}<key>com.apple.developer.web-browser.public-key-credential</key><true/>`,
+        ),
+        configuration,
+      ),
+    );
+    assert.match(
+      entitlements,
+      /<key>keychain-access-groups<\/key>\s*<array>\s*<string>ABC1234567\.com\.t3tools\.t3code\.webauthn<\/string>\s*<\/array>/u,
+    );
+    assert.match(
+      entitlements,
+      /<key>com\.apple\.developer\.web-browser\.public-key-credential<\/key>\s*<true\/>/u,
+    );
   });
 
   it("rejects incomplete macOS passkey signing configuration", () => {
@@ -2465,6 +2699,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       });
       assert.deepStrictEqual(mac.protocols, [
         { name: "TritonAI Harness", schemes: ["t3code", "t3code-dev"] },
+        { name: "Web site URL", schemes: ["http", "https"], role: "Viewer" },
       ]);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
@@ -2484,44 +2719,52 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
-  for (const platform of ["win", "mac"] as const) {
-    it.effect(`preserves update-compatible app IDs and separate Nightly names on ${platform}`, () =>
-      Effect.gen(function* () {
-        const stable = yield* createBuildConfig(
-          platform,
-          platform === "win" ? "nsis" : "dmg",
-          "0.3.3",
-          false,
-          false,
-          undefined,
-          undefined,
-        );
-        const nightly = yield* createBuildConfig(
-          platform,
-          platform === "win" ? "nsis" : "dmg",
-          "0.3.4-nightly.20260912.12",
-          false,
-          false,
-          undefined,
-          undefined,
-        );
-        assert.equal(stable.appId, "edu.ucsd.tritonai.harness");
-        assert.equal(
-          nightly.appId,
-          platform === "mac" ? "edu.ucsd.tritonai.harness" : "edu.ucsd.tritonai.harness.nightly",
-        );
-        assert.deepEqual(stable.extraMetadata, { name: "tritonai-harness" });
-        assert.deepEqual(nightly.extraMetadata, { name: "tritonai-harness-nightly" });
-        assert.equal(stable.productName, "TritonAI Harness");
-        assert.equal(nightly.productName, "TritonAI Harness (Nightly)");
-        if (platform === "mac") {
-          assert.deepEqual((nightly.mac as Record<string, unknown>).protocols, [
-            { name: "TritonAI Harness", schemes: ["tritonai-harness-nightly"] },
-          ]);
-        }
-      }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
-    );
-  }
+  describe.each(Array.from(["win", "mac"] as const, (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: platform }) => {
+      it.effect(
+        `preserves update-compatible app IDs and separate Nightly names on ${platform}`,
+        () =>
+          Effect.gen(function* () {
+            const stable = yield* createBuildConfig(
+              platform,
+              platform === "win" ? "nsis" : "dmg",
+              "0.3.3",
+              false,
+              false,
+              undefined,
+              undefined,
+            );
+            const nightly = yield* createBuildConfig(
+              platform,
+              platform === "win" ? "nsis" : "dmg",
+              "0.3.4-nightly.20260912.12",
+              false,
+              false,
+              undefined,
+              undefined,
+            );
+            assert.equal(stable.appId, "edu.ucsd.tritonai.harness");
+            assert.equal(
+              nightly.appId,
+              platform === "mac"
+                ? "edu.ucsd.tritonai.harness"
+                : "edu.ucsd.tritonai.harness.nightly",
+            );
+            assert.deepEqual(stable.extraMetadata, { name: "tritonai-harness" });
+            assert.deepEqual(nightly.extraMetadata, { name: "tritonai-harness-nightly" });
+            assert.equal(stable.productName, "TritonAI Harness");
+            assert.equal(nightly.productName, "TritonAI Harness (Nightly)");
+            if (platform === "mac") {
+              assert.deepEqual((nightly.mac as Record<string, unknown>).protocols, [
+                { name: "TritonAI Harness", schemes: ["tritonai-harness-nightly"] },
+                { name: "Web site URL", schemes: ["http", "https"], role: "Viewer" },
+              ]);
+            }
+          }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+      );
+    },
+  );
 
   it.effect("uses the nightly DMG background for nightly macOS builds", () =>
     Effect.gen(function* () {
@@ -2542,7 +2785,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
-  it.effect("keeps executable resource editing enabled for unsigned Windows builds", () =>
+  it.effect("configures Windows executable metadata and native signing extensions", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig(
         "win",
@@ -2557,6 +2800,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       const win = config.win as Record<string, unknown>;
       const nsis = config.nsis as Record<string, unknown>;
       assert.equal(win.icon, "icon.ico");
+      assert.deepStrictEqual(win.signExts, [".node", ".dll"]);
       assert.equal(win.signAndEditExecutable, true);
       assert.notProperty(win, "azureSignOptions");
       assert.equal(nsis.include, "apps/desktop/resources/installer.nsh");
@@ -2769,6 +3013,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("keeps the managed config in the app while staging native helpers externally", () => {
     assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
       {
+        from: "apps/desktop/prod-resources/cursor-sdk",
+        to: "node_modules/@cursor",
+      },
+      {
         from: "apps/desktop/prod-resources/resource-monitor",
         to: "resource-monitor",
       },
@@ -2943,6 +3191,108 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "@ubjs/node@0.31.0-3": "patches/@ubjs__node@0.31.0-3.patch",
     });
   });
+
+  it.effect("keeps deployed dependencies intact during the packager workspace probe in CI", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "immutable-packaging-stage-" });
+      const marker = path.join(root, "node_modules/retained-runtime/index.js");
+      yield* fs.makeDirectory(path.dirname(marker), { recursive: true });
+      yield* fs.writeFileString(marker, "deployed-runtime");
+      yield* fs.writeFileString(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "rewritten-packaging-stage",
+          version: "1.0.0",
+          private: true,
+          packageManager: rootPackageJson.packageManager,
+        }),
+      );
+      // A deployed lock retains source catalogs while packaging rewrites the
+      // manifest/workspace. A workspace probe must never try to reinstall it.
+      yield* fs.copyFile(
+        NodePath.join(import.meta.dirname, "../pnpm-lock.yaml"),
+        path.join(root, "pnpm-lock.yaml"),
+      );
+      yield* fs.writeFileString(
+        path.join(root, "pnpm-workspace.yaml"),
+        stringifyYaml(createStageWorkspaceConfig({ platform: "mac", arch: "arm64" })),
+      );
+      const command = yield* resolveSpawnCommand("vp", [
+        "exec",
+        "pnpm",
+        "--workspace-root",
+        "exec",
+        process.execPath,
+        "-e",
+        "process.stdout.write('stage-probe')",
+      ]);
+      const child = yield* spawner.spawn(
+        ChildProcess.make(command.command, command.args, {
+          cwd: root,
+          shell: command.shell,
+          env: { ...process.env, CI: "true" },
+          stdout: "ignore",
+          stderr: "pipe",
+        }),
+      );
+      const [exitCode, stderr] = yield* Effect.all(
+        [
+          child.exitCode,
+          child.stderr.pipe(
+            Stream.decodeText(),
+            Stream.runFold(
+              () => "",
+              (acc, chunk) => acc + chunk,
+            ),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+      assert.equal(Number(exitCode), 0, stderr);
+      assert.equal(yield* fs.readFileString(marker), "deployed-runtime");
+    }),
+  );
+
+  it.effect("validates Windows FFI without requiring packed Linux addons to be unpacked", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({ prefix: "ffi-windows-layout-" });
+      const sourceDir = path.join(stageDistDir, "source");
+      const resources = path.join(stageDistDir, "win-unpacked/resources");
+      const winFile = "node_modules/@yuuang/ffi-rs-win32-x64-msvc/ffi-rs.win32-x64-msvc.node";
+      const linuxFile = "node_modules/@yuuang/ffi-rs-linux-x64-gnu/ffi-rs.linux-x64-gnu.node";
+      for (const [file, header] of [
+        [winFile, [0x4d, 0x5a]],
+        [linuxFile, [0x7f, 0x45, 0x4c, 0x46]],
+      ] as const) {
+        yield* fs.makeDirectory(path.dirname(path.join(sourceDir, file)), { recursive: true });
+        yield* fs.writeFile(path.join(sourceDir, file), new Uint8Array(header));
+      }
+      yield* fs.makeDirectory(resources, { recursive: true });
+      const asarPath = path.join(resources, "server.asar");
+      yield* packWindowsServerAsar({ sourceDir, asarPath, arch: "x64" });
+      assert.equal(yield* fs.exists(path.join(`${asarPath}.unpacked`, linuxFile)), false);
+      assert.deepEqual(
+        [...extractFile(asarPath, path.normalize(linuxFile))],
+        [0x7f, 0x45, 0x4c, 0x46],
+      );
+      const options = {
+        stageDistDir,
+        platform: "win" as const,
+        arch: "x64" as const,
+        productName: "TritonAI Harness",
+      };
+      yield* assertPackagedFfiRsNativeBinaries(options);
+      yield* fs.remove(path.join(`${asarPath}.unpacked`, winFile));
+      const error = yield* assertPackagedFfiRsNativeBinaries(options).pipe(Effect.flip);
+      assert.instanceOf(error, PackagedNativeDependencyMissingError);
+      assert.equal(error.packageName, "@yuuang/ffi-rs-win32-x64-msvc");
+    }),
+  );
 
   it.effect("fails closed when an assembled app omits an ffi-rs native binary", () =>
     Effect.gen(function* () {
@@ -3166,8 +3516,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            Layer.succeed(HostProcessPlatform, "win32"),
-            Layer.succeed(HostProcessArchitecture, "x64"),
+            Layer.succeed(HostProcess.Platform, "win32"),
+            Layer.succeed(HostProcess.Architecture, "x64"),
             ConfigProvider.layer(
               ConfigProvider.fromEnv({
                 env: {
@@ -3342,4 +3692,56 @@ it("ignores trailing separators", () => {
     ancestorNodeModulesPaths("C:\\tmp\\probe\\app\\", "\\"),
     ancestorNodeModulesPaths("C:\\tmp\\probe\\app", "\\"),
   );
+});
+
+it.effect("enables Windows native deployment from either Mac host architecture", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
+    const source = yield* fs.readFileString(path.join(repoRoot, "pnpm-workspace.yaml"));
+    const workspace = parseYaml(source) as {
+      supportedArchitectures: Parameters<
+        typeof findMissingRuntimeDeploymentArchitectures
+      >[0]["configured"];
+    };
+
+    for (const hostArch of ["arm64", "x64"] as const) {
+      assert.deepStrictEqual(
+        findMissingRuntimeDeploymentArchitectures({
+          configured: workspace.supportedArchitectures,
+          hostPlatform: "darwin",
+          hostArch,
+          targetPlatform: "win",
+          targetArch: "x64",
+        }),
+        [],
+      );
+    }
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it("keeps hardened-runtime audio capabilities aligned for the main app and helpers", () => {
+  const configuration = resolveMacPasskeySigningConfiguration({
+    T3CODE_APPLE_TEAM_ID: "ABC1234567",
+    T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+    T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
+  });
+  const mainEntitlements = renderMacPasskeyEntitlements(configuration);
+  const inheritedEntitlements = renderMacInheritedEntitlements();
+  const hardenedRuntimeKeys = [
+    "com.apple.security.cs.allow-jit",
+    "com.apple.security.cs.allow-unsigned-executable-memory",
+    "com.apple.security.cs.disable-library-validation",
+    "com.apple.security.device.audio-input",
+  ];
+
+  for (const key of hardenedRuntimeKeys) {
+    assert.include(mainEntitlements, `<key>${key}</key>`);
+    assert.include(inheritedEntitlements, `<key>${key}</key>`);
+  }
+  assert.notInclude(inheritedEntitlements, "com.apple.application-identifier");
+  assert.notInclude(inheritedEntitlements, "com.apple.developer.associated-domains");
+  assert.notInclude(mainEntitlements, "com.apple.security.device.camera");
+  assert.notInclude(inheritedEntitlements, "com.apple.security.device.camera");
 });

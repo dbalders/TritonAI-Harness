@@ -23,7 +23,7 @@ concurrency:
   group: harness-nightly
   cancel-in-progress: false
 env:
-  TRITONAI_INSTALLER_COMPOSITION_COMMIT: 1f1e820b450e073a54ced0873bc51d74b38f63bb
+  TRITONAI_INSTALLER_COMPOSITION_COMMIT: 181eb3e317f4a1f1e25f0356de81462f7ec04c1e
 jobs:
   preflight:
     runs-on: ubuntu-24.04
@@ -48,6 +48,8 @@ jobs:
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
+      - name: Validate Git submodule mappings
+        run: node .github/scripts/check-gitlinks.cjs
       - id: resolve
         uses: actions/github-script@v8
         env:
@@ -105,7 +107,7 @@ jobs:
       - name: Typecheck
         run: vp run typecheck
       - name: Release publication guards
-        run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs
+        run: node --test .github/scripts/check-gitlinks.test.cjs .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs
   prepare_managed_plugins:
     name: Prepare immutable managed plugin composition
     needs:
@@ -682,6 +684,7 @@ jobs:
     if: needs.preflight.outputs.publish == 'true'
     permissions:
       contents: write
+      checks: read
     uses: ./.github/workflows/mobile-nightly-testflight.yml
     with:
       nightly_tag: ${{ needs.preflight.outputs.tag }}
@@ -757,5 +760,72 @@ jobs:
     steps:
       - *a2
       - *a3
+      - name: Install Chromium for server browser integration tests
+        run: node apps/server/node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
       - name: Test
         run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+  # Scheduled runs have no watcher. Keep one open issue per failure streak so a
+  # broken nightly is visible without polling Actions.
+  report_failure:
+    name: Report nightly failure
+    needs:
+      - preflight
+      - quality
+      - prepare_managed_plugins
+      - validate_managed_plugins
+      - build_wsl_runtime
+      - build
+      - mac
+      - publish
+      - mobile_testflight
+      - verify
+      - test
+      - test_server
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the nightly failure issue
+        uses: actions/github-script@v8
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const title = "Nightly workflow is failing";
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const failed = Object.entries(JSON.parse(process.env.NEEDS))
+              .filter(([, job]) => job.result === "failure" || job.result === "cancelled")
+              .map(([name, job]) => `- \`${name}\`: ${job.result}`)
+              .join("\n");
+            const body = [
+              `Nightly run ${runUrl} (${context.eventName}, \`${context.sha.slice(0, 10)}\`) did not finish.`,
+              "",
+              failed,
+            ].join("\n");
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              creator: "github-actions[bot]",
+              per_page: 100,
+            });
+            const existing = issues.find((issue) => !issue.pull_request && issue.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+              core.notice(`Updated ${existing.html_url}`);
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body: `${body}\n\nLater failures are added as comments. Close this issue once the nightly is green again.`,
+              });
+              core.notice(`Opened ${created.html_url}`);
+            }

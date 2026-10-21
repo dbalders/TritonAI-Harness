@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Synchronous SHA-256 document fingerprints and campus identity keys use Node crypto.
 /**
  * Local copies of team memory: which teams this environment copies into the memory vault, and
  * the access checks MemorySync's passes make before copying anything (see `teamMirror.ts`).
@@ -572,7 +573,7 @@ export const makeTeamMemoryMirror = (input: {
             return;
           }
           // Months count as seen only once the copy holds every file listed in them.
-          if (seen?.pending && outcome.pending === 0) {
+          if (seen?.pending && outcome.pending === 0 && outcome.skipped === 0) {
             for (const [key, stamp] of seen.pending.months) seen.months.set(key, stamp);
             if (seen.pending.full) seen.lastFullAt = seen.pending.at;
           }

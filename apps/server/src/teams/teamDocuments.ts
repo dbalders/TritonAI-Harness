@@ -22,7 +22,7 @@ import {
   HttpClient,
   HttpClientRequest,
   type HttpClientResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 
 const MAX_BYTES = 64 * 1024;
 const roots = { memory: "Memory", sop: "SOPs", skill: "Skills" } as const;

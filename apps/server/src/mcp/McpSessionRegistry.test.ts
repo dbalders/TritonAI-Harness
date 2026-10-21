@@ -2,8 +2,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import { HttpServer } from "effect/unstable/http";
-import * as NetAddress from "effect/unstable/net/NetAddress";
+import { HttpServer } from "effect/http";
+import * as NetAddress from "effect/net/NetAddress";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
@@ -48,9 +48,9 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
     expect(token.length).toBeGreaterThan(20);
 
     const resolved = yield* registry.resolve(token);
-    expect(resolved?.threadId).toBe(threadId);
+    expect(resolved?.thread.threadId).toBe(threadId);
     expect(resolved?.capabilities).toEqual(
-      new Set(["preview", "integrations.invoke", "pull-requests"]),
+      new Set(["preview", "integrations.invoke", "orchestration", "worktree", "pull-requests"]),
     );
     expect(issued.expiresAt).toBe(2_000);
     expect(resolved?.expiresAt).toBe(issued.expiresAt);
@@ -85,9 +85,23 @@ it.effect("always grants pull-requests and gates browser and device access indep
         .resolve(issued.config.authorizationHeader.replace(/^Bearer\s+/, ""))
         .pipe(Effect.map((scope) => [...(scope?.capabilities ?? [])].sort()));
 
-    expect(yield* capabilitiesOf(withPreview)).toEqual(["preview", "pull-requests"]);
-    expect(yield* capabilitiesOf(withoutPreview)).toEqual(["pull-requests"]);
-    expect(yield* capabilitiesOf(withDevice)).toEqual(["device", "pull-requests"]);
+    expect(yield* capabilitiesOf(withPreview)).toEqual([
+      "orchestration",
+      "preview",
+      "pull-requests",
+      "worktree",
+    ]);
+    expect(yield* capabilitiesOf(withoutPreview)).toEqual([
+      "orchestration",
+      "pull-requests",
+      "worktree",
+    ]);
+    expect(yield* capabilitiesOf(withDevice)).toEqual([
+      "device",
+      "orchestration",
+      "pull-requests",
+      "worktree",
+    ]);
   }),
 );
 
@@ -111,7 +125,7 @@ it.effect("builds MCP endpoints from the bound server host", () =>
       expect(issued.config.endpoint).toBe(expectedEndpoint);
       const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
       expect((yield* registry.resolve(token))?.capabilities).toEqual(
-        new Set(["preview", "integrations.invoke", "pull-requests"]),
+        new Set(["preview", "integrations.invoke", "orchestration", "worktree", "pull-requests"]),
       );
     }
   }),
@@ -151,7 +165,7 @@ it.effect("keeps a credential alive across turns that never touch an MCP tool", 
       yield* registry.touch(threadId);
     }
 
-    expect((yield* registry.resolve(token))?.threadId).toBe(threadId);
+    expect((yield* registry.resolve(token))?.thread.threadId).toBe(threadId);
   }),
 );
 
@@ -192,7 +206,7 @@ it.effect("touch cannot extend the absolute expiry and an expired bearer is revo
       yield* registry.touch(threadId);
     }
     const beforeExpiry = yield* registry.resolve(token);
-    expect(beforeExpiry?.threadId).toBe(threadId);
+    expect(beforeExpiry?.thread.threadId).toBe(threadId);
     expect(beforeExpiry?.expiresAt).toBe(2_000);
 
     timestamp = 2_000;
@@ -243,7 +257,7 @@ it.effect("defaults to a 30-minute liveness window and eight-hour absolute lifet
       timestamp = halfHour * 30 * 60 * 1_000;
       yield* activeRegistry.touch(activeThreadId);
     }
-    expect((yield* activeRegistry.resolve(activeToken))?.threadId).toBe(activeThreadId);
+    expect((yield* activeRegistry.resolve(activeToken))?.thread.threadId).toBe(activeThreadId);
 
     timestamp = 8 * 60 * 60 * 1_000;
     yield* activeRegistry.touch(activeThreadId);

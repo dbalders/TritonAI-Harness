@@ -2739,79 +2739,97 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("loads a package manifest from .tritonai-plugin without core changes", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-integrations-discovery-"),
-    );
-    const packageRoot = NodePath.join(root, "package");
-    const state: ProviderState = {
-      status: {
-        state: "connected",
-        accountLabel: null,
-        grantedCapabilities: ["fixture.read"],
-        message: null,
-      },
-      credential: null,
-      disconnectFails: false,
-    };
-    try {
-      await NodeFSP.mkdir(NodePath.join(packageRoot, ".tritonai-plugin"), { recursive: true });
-      await NodeFSP.writeFile(
-        NodePath.join(packageRoot, ".tritonai-plugin", "plugin.json"),
-        JSON.stringify(fixtureManifest),
+  it.each([false, true])(
+    "loads and reopens a package with linked skills root: %s",
+    async (linked) => {
+      const root = await NodeFSP.mkdtemp(
+        NodePath.join(NodeOS.tmpdir(), "tritonai-integrations-discovery-"),
       );
-      await NodeFSP.writeFile(NodePath.join(packageRoot, "payload.txt"), "real package payload");
-      await NodeFSP.mkdir(NodePath.join(packageRoot, "skills", "fixture-reader"), {
-        recursive: true,
-      });
-      await NodeFSP.writeFile(
-        NodePath.join(packageRoot, "skills", "fixture-reader", "SKILL.md"),
-        "---\nname: fixture-reader\ndescription: Test fixture skill.\n---\n",
-      );
-      const codexHome = NodePath.join(root, "codex");
-      const registry = new RegistryRuntime(
-        NodePath.join(root, "runtime"),
-        [await packagedFromRoot(packageRoot, provider("test-fixture-provider", state))],
-        new CodexIntegrationSkillMaterializer([codexHome]),
-      );
-      expect(registry.toolDefinitions().map(({ name }) => name)).toEqual(["test.fixture.read"]);
-      await registry.install(fixtureManifest.id);
-      const installedManifest = JSON.parse(
-        await NodeFSP.readFile(
-          NodePath.join(
-            root,
-            "runtime",
-            "installed",
-            fixtureManifest.id,
-            fixtureManifest.version,
-            ".tritonai-plugin",
-            "plugin.json",
+      const packageRoot = NodePath.join(root, "package");
+      const state: ProviderState = {
+        status: {
+          state: "connected",
+          accountLabel: null,
+          grantedCapabilities: ["fixture.read"],
+          message: null,
+        },
+        credential: null,
+        disconnectFails: false,
+      };
+      try {
+        await NodeFSP.mkdir(NodePath.join(packageRoot, ".tritonai-plugin"), { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(packageRoot, ".tritonai-plugin", "plugin.json"),
+          JSON.stringify(fixtureManifest),
+        );
+        await NodeFSP.writeFile(NodePath.join(packageRoot, "payload.txt"), "real package payload");
+        await NodeFSP.mkdir(NodePath.join(packageRoot, "skills", "fixture-reader"), {
+          recursive: true,
+        });
+        await NodeFSP.writeFile(
+          NodePath.join(packageRoot, "skills", "fixture-reader", "SKILL.md"),
+          "---\nname: fixture-reader\ndescription: Test fixture skill.\n---\n",
+        );
+        const codexHome = NodePath.join(root, "codex");
+        if (linked) {
+          const sharedSkills = NodePath.join(root, "shared-skills");
+          await NodeFSP.mkdir(codexHome);
+          await NodeFSP.mkdir(sharedSkills);
+          await NodeFSP.symlink(sharedSkills, NodePath.join(codexHome, "skills"), "junction");
+        }
+        const registry = new RegistryRuntime(
+          NodePath.join(root, "runtime"),
+          [await packagedFromRoot(packageRoot, provider("test-fixture-provider", state))],
+          new CodexIntegrationSkillMaterializer([codexHome]),
+        );
+        expect(registry.toolDefinitions().map(({ name }) => name)).toEqual(["test.fixture.read"]);
+        await registry.install(fixtureManifest.id);
+        const installedManifest = JSON.parse(
+          await NodeFSP.readFile(
+            NodePath.join(
+              root,
+              "runtime",
+              "installed",
+              fixtureManifest.id,
+              fixtureManifest.version,
+              ".tritonai-plugin",
+              "plugin.json",
+            ),
+            "utf8",
           ),
-          "utf8",
-        ),
-      );
-      expect(installedManifest.id).toBe(fixtureManifest.id);
-      expect(
-        await NodeFSP.readFile(
-          NodePath.join(
-            root,
-            "runtime",
-            "installed",
-            fixtureManifest.id,
-            fixtureManifest.version,
-            "payload.txt",
+        );
+        expect(installedManifest.id).toBe(fixtureManifest.id);
+        expect(
+          await NodeFSP.readFile(
+            NodePath.join(
+              root,
+              "runtime",
+              "installed",
+              fixtureManifest.id,
+              fixtureManifest.version,
+              "payload.txt",
+            ),
+            "utf8",
           ),
-          "utf8",
-        ),
-      ).toBe("real package payload");
-      const materializedSkill = NodePath.join(codexHome, "skills", "fixture-reader", "SKILL.md");
-      expect(await NodeFSP.readFile(materializedSkill, "utf8")).toContain("fixture-reader");
-      await registry.setEnabled(fixtureManifest.id, false);
-      await expect(NodeFSP.access(materializedSkill)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
+        ).toBe("real package payload");
+        const materializedSkill = NodePath.join(codexHome, "skills", "fixture-reader", "SKILL.md");
+        expect(await NodeFSP.readFile(materializedSkill, "utf8")).toContain("fixture-reader");
+        await registry.close();
+        const reopened = new RegistryRuntime(
+          NodePath.join(root, "runtime"),
+          [await packagedFromRoot(packageRoot, provider("test-fixture-provider", state))],
+          new CodexIntegrationSkillMaterializer([codexHome]),
+        );
+        await reopened.snapshot();
+        expect(await NodeFSP.readFile(materializedSkill, "utf8")).toContain("fixture-reader");
+        await reopened.setEnabled(fixtureManifest.id, false);
+        await expect(NodeFSP.access(materializedSkill)).rejects.toMatchObject({ code: "ENOENT" });
+        await reopened.close();
+      } finally {
+        await NodeFSP.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("maps legacy skill switches to their authoritative capability bundle", async () => {
     const root = await NodeFSP.mkdtemp(

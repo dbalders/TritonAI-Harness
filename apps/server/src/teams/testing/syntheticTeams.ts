@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Synchronous SHA-256 document fingerprints and campus identity keys use Node crypto.
 import {
   type AccountStatus,
   type TeamCommand,
@@ -13,7 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { AccountService } from "../../auth/AccountService.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import { noTeamMirrorHost, TeamMirrorHost } from "../../memory/sync/teamMirror.ts";

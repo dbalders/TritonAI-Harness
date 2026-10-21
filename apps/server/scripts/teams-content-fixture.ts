@@ -17,6 +17,7 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
   fixtureHomeProblem,
@@ -81,6 +82,9 @@ function findOnPath(name: string, path: string | undefined) {
 }
 
 async function start(flags: Map<string, string | true>) {
+  const serverChild = process.env.T3_TEAMS_CONTENT_FIXTURE_SERVER === "1";
+  if (HostProcess.Platform.defaultValue() === "win32")
+    fail("This local synthetic fixture requires macOS or Linux.");
   if (process.env.T3_TEAMS_CONTENT_FIXTURE !== "1")
     fail("This synthetic fixture starts only with T3_TEAMS_CONTENT_FIXTURE=1.");
   if (process.env.AWS_LAMBDA_FUNCTION_NAME) fail("Refusing to run inside Lambda.");
@@ -94,7 +98,7 @@ async function start(flags: Map<string, string | true>) {
   const webPort = noWeb ? null : Number(flags.get("web-port"));
   const portProblem = fixturePortProblem(port, webPort);
   if (portProblem) fail(portProblem);
-  for (const candidate of [port, ...(webPort === null ? [] : [webPort])])
+  for (const candidate of [port, ...(webPort === null || serverChild ? [] : [webPort])])
     if (!(await portFree(candidate))) fail(`Port ${candidate} is already in use on 127.0.0.1.`);
 
   const layout = prepareFixtureHome(NodePath.resolve(home as string), mockAgentScript);
@@ -102,7 +106,16 @@ async function start(flags: Map<string, string | true>) {
 
   // Web first, from the caller's environment: Vite serves the UI and proxies /api and /ws here.
   let web: NodeChildProcess.ChildProcess | null = null;
-  if (webPort !== null) {
+  const cleanupWeb = () => {
+    if (web?.pid !== undefined && web.exitCode === null) {
+      try {
+        process.kill(-web.pid, "SIGTERM");
+      } catch {}
+    }
+  };
+  // Register before spawning: synchronous setup errors must not orphan a detached web server.
+  if (!serverChild) process.once("exit", cleanupWeb);
+  if (webPort !== null && !serverChild) {
     const vp = findOnPath("vp", inherited.PATH);
     if (!vp) fail("`vp` is not on PATH; start with --no-web or add Vite+ to PATH.");
     const webEnv: NodeJS.ProcessEnv = {
@@ -122,6 +135,40 @@ async function start(flags: Map<string, string | true>) {
     web.once("exit", (code, signal) =>
       process.stderr.write(`${prefix} web dev server exited (${code ?? signal}).\n`),
     );
+  }
+
+  if (!serverChild) {
+    // Services such as HostProcess capture defaults when their modules load. Start a fresh
+    // process with the private environment already installed, before any server imports.
+    const server = NodeChildProcess.spawn(
+      process.execPath,
+      [process.argv[1]!, ...process.argv.slice(2)],
+      {
+        env: {
+          ...fixtureServerEnvironment(layout, inherited, NodePath.dirname(process.execPath)),
+          T3_TEAMS_CONTENT_FIXTURE: "1",
+          T3_TEAMS_CONTENT_FIXTURE_SERVER: "1",
+        },
+        stdio: "inherit",
+      },
+    );
+    const stop = () => {
+      server.kill("SIGTERM");
+    };
+    process.once("SIGTERM", stop);
+    process.once("SIGINT", stop);
+    process.stdout.write(
+      `${prefix} launcherPid=${process.pid} serverPid=${server.pid ?? "starting"} webPid=${web?.pid ?? "none"}\n`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.once("exit", (code) => {
+        cleanupWeb();
+        process.exitCode = code ?? 0;
+        resolve();
+      });
+    });
+    return;
   }
 
   // The server and everything it spawns see only the fixture's private environment.
@@ -272,7 +319,8 @@ async function start(flags: Map<string, string | true>) {
     if (config.host !== "127.0.0.1" || config.baseDir !== layout.baseDir)
       return yield* Effect.die(new Error("Fixture server configuration escaped its isolation."));
     return yield* runServer.pipe(
-      Effect.provideService(ServerConfig, config),
+      // Keep the private PATH: login-shell recovery would reintroduce real provider CLIs.
+      Effect.provideService(ServerConfig, { ...config, shellEnvironmentPrepared: true }),
       Effect.provideService(ServerTeamServices, teamServices),
     );
   }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer)));

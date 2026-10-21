@@ -58,14 +58,14 @@ const run = async (command: TeamStorageCommand) => {
     };
   return null;
 };
-const render = (document = current) =>
+const render = (document = current, canWrite = false) =>
   act(async () =>
     root.render(
       <TeamDocuments
         teamId={teamId}
         document={document}
         files={[]}
-        canWrite={false}
+        canWrite={canWrite}
         busy={false}
         run={run}
       />,
@@ -85,6 +85,9 @@ it("lets a reader see who changed a document and read an earlier version", async
   expect(text()).toContain("Last changed by Bob Editor");
   await press("History");
   expect(text()).toContain("Version 2.0 · current");
+  expect(button("Read version 2.0")?.disabled).toBe(true);
+  await press("Read version 2.0");
+  expect(calls).toEqual([{ action: "list-versions", teamId, path }]);
   expect(text()).toContain("Alice Owner");
   await press("Read version 1.0");
   expect(earlier()?.value).toBe("Earlier text");
@@ -97,4 +100,20 @@ it("lets a reader see who changed a document and read an earlier version", async
   await render({ ...current, etag: "e3", text: "Newer text" });
   expect(earlier()).toBeNull();
   expect(button("History")).toBeDefined();
+});
+
+it("keeps an unsaved edit when a refresh returns a new object for the same document version", async () => {
+  await render(current, true);
+  const content = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="Shared document content"]',
+  )!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      content,
+      "My unsaved edit",
+    );
+    content.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await render({ ...current, lastChange: { ...editor } }, true);
+  expect(content.value).toBe("My unsaved edit");
 });

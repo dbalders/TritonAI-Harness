@@ -20,9 +20,7 @@ import {
   UnplugIcon,
   WrenchIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
-
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -484,7 +482,7 @@ function IntegrationCard({
         aria-labelledby={`${integration.id}-title`}
       >
         <div className="flex items-start gap-3">
-          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-start gap-4 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background">
+          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-start gap-4 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background">
             <span className="flex size-12 shrink-0 items-center justify-center rounded-xl border bg-muted/30 transition-colors group-hover:bg-muted/50">
               <PuzzleIcon className="size-6 text-muted-foreground" aria-hidden="true" />
             </span>

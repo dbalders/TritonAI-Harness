@@ -1,3 +1,4 @@
+import { useTeamsPermission } from "./useTeamsPermission";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useEffect, useReducer } from "react";
 import { serverEnvironment } from "../../state/server";
@@ -12,10 +13,11 @@ const configuredByEnvironment = new Map<EnvironmentId, boolean>();
  * settings search. False until the environment answers, and while it can't.
  */
 export function useTeamsConfigured(environmentId: EnvironmentId | null): boolean {
+  const allowed = useTeamsPermission(environmentId);
   const getStatus = useAtomCommand(serverEnvironment.getAccountStatus, { reportFailure: false });
   const [, answered] = useReducer((count: number) => count + 1, 0);
   useEffect(() => {
-    if (environmentId === null || configuredByEnvironment.has(environmentId)) return;
+    if (!allowed || environmentId === null || configuredByEnvironment.has(environmentId)) return;
     let current = true;
     void getStatus({ environmentId, input: {} }).then((result) => {
       if (result._tag !== "Success") return;
@@ -25,6 +27,6 @@ export function useTeamsConfigured(environmentId: EnvironmentId | null): boolean
     return () => {
       current = false;
     };
-  }, [environmentId, getStatus]);
-  return environmentId !== null && configuredByEnvironment.get(environmentId) === true;
+  }, [allowed, environmentId, getStatus]);
+  return allowed && environmentId !== null && configuredByEnvironment.get(environmentId) === true;
 }

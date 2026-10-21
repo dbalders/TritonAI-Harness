@@ -4,7 +4,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { writeFakeCli, execScriptSource } from "../../testUtils/fakeCli.ts";
+import { writeFakeCli, execScriptSource } from "@t3tools/provider-testing/fakeCli";
 
 /**
  * Layout and safety checks for the synthetic Teams content fixture home. The launcher refuses any
@@ -23,6 +23,8 @@ const BLOCKED_CLIS = [
   "grok",
   "opencode",
   "antigravity",
+  "pi",
+  "muse",
 ];
 
 interface FixtureLayout {
@@ -32,7 +34,7 @@ interface FixtureLayout {
   readonly keyringPath: string;
   readonly userHome: string;
   readonly binDir: string;
-  readonly cursorAgentPath: string;
+  readonly agentPath: string;
   readonly providerRequestLog: string;
   readonly blockedCliLog: string;
   readonly workspace: string;
@@ -49,7 +51,7 @@ export const fixtureLayout = (home: string): FixtureLayout => {
     keyringPath: NodePath.join(fixture, "keyring.json"),
     userHome: NodePath.join(home, "user-home"),
     binDir: NodePath.join(fixture, "bin"),
-    cursorAgentPath: NodePath.join(fixture, "provider", "synthetic-cursor-agent"),
+    agentPath: NodePath.join(fixture, "provider", "synthetic-teams-agent"),
     providerRequestLog: NodePath.join(fixture, "provider-requests.ndjson"),
     blockedCliLog: NodePath.join(fixture, "blocked-provider-cli.log"),
     workspace: NodePath.join(home, "workspace", "synthetic-grant-reports"),
@@ -73,7 +75,8 @@ export function fixtureHomeProblem(
 ): string | null {
   if (!NodePath.isAbsolute(home)) return "--home-dir must be an absolute path.";
   const resolved = NodePath.resolve(home);
-  const userHome = NodePath.resolve(options.userHome ?? NodeOS.homedir());
+  // HOME is deliberately replaced in the server child; protect the actual user's state there too.
+  const userHome = NodePath.resolve(options.userHome ?? NodeOS.userInfo().homedir);
   if (within(userHome, resolved)) return "--home-dir must not contain your home directory.";
   for (const protectedDir of [
     ".t3",
@@ -120,7 +123,7 @@ const writeFile = (path: string, text: string, mode = 0o600) => {
 
 /**
  * Creates (or refreshes) the fixture home: a synthetic secret-store keyring, settings that enable
- * only the deterministic Cursor ACP mock, blocking stubs for real provider CLIs, a private HOME,
+ * only the deterministic local ACP mock, blocking stubs for real provider CLIs, a private HOME,
  * and a small git workspace for the auto-created project. Existing app state is kept on rerun.
  */
 export function prepareFixtureHome(home: string, mockAgentScript: string): FixtureLayout {
@@ -150,8 +153,8 @@ export function prepareFixtureHome(home: string, mockAgentScript: string): Fixtu
       0o755,
     );
   writeFakeCli({
-    directory: NodePath.dirname(layout.cursorAgentPath),
-    name: NodePath.basename(layout.cursorAgentPath),
+    directory: NodePath.dirname(layout.agentPath),
+    name: NodePath.basename(layout.agentPath),
     env: {
       T3_ACP_REQUEST_LOG_PATH: layout.providerRequestLog,
       T3_ACP_PROMPT_RESPONSE_TEXT: PROVIDER_REPLY,
@@ -185,14 +188,27 @@ export function prepareFixtureHome(home: string, mockAgentScript: string): Fixtu
             codexHomePath: layout.codexHome,
             newThreadDefaultsVersion: 1,
           },
-          defaultModelSelection: { instanceId: "cursor", model: "default" },
+          defaultModelSelection: { instanceId: "synthetic", model: "default" },
           enableProviderUpdateChecks: false,
-          providers: {
-            cursor: { enabled: true, binaryPath: layout.cursorAgentPath },
-            claudeAgent: { enabled: false },
-            grok: { enabled: false },
-            opencode: { enabled: false },
-            antigravity: { enabled: false },
+          providerInstances: {
+            ...Object.fromEntries(
+              [
+                "codex",
+                "claudeAgent",
+                "cursor",
+                "grok",
+                "opencode",
+                "antigravity",
+                "pi",
+                "muse",
+              ].map((driver) => [driver, { driver, enabled: false }]),
+            ),
+            synthetic: {
+              driver: "acpRegistry",
+              displayName: "Synthetic Teams",
+              enabled: true,
+              config: { source: "local", commandPath: layout.agentPath, customModels: ["default"] },
+            },
           },
         },
         null,

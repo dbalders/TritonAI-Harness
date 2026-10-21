@@ -2,8 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { TeamsError, type TeamStorageCommand } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
-import { executeDocument } from "./teamDocuments.ts";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { executeDocument, type TeamDailyWriteCommand } from "./teamDocuments.ts";
 
 const actor = "a".repeat(43);
 const teamId = "11111111-1111-4111-a111-111111111111";
@@ -150,10 +150,12 @@ function fixture() {
     }),
   );
   const execute = (
-    command: Extract<
-      TeamStorageCommand,
-      { action: "publish" | "read-file" | "update-file" | "delete-file" }
-    >,
+    command:
+      | Extract<
+          TeamStorageCommand,
+          { action: "publish" | "read-file" | "update-file" | "delete-file" }
+        >
+      | TeamDailyWriteCommand,
     canWrite = true,
     actorId = actor,
   ) =>
@@ -230,6 +232,36 @@ describe("private team document transport", () => {
       expect(recovered?.text).toContain(publish.text);
       expect([...f.items.values()].filter((item) => !item.folder)).toHaveLength(1);
     }),
+  );
+  it.effect.each([false, true])(
+    "recovers a change-marker write whose response was lost (previous confirmed version: %s)",
+    (previouslyConfirmed) =>
+      Effect.gen(function* () {
+        const f = fixture();
+        const initial: TeamDailyWriteCommand = {
+          action: "daily-write",
+          teamId,
+          path: `Daily/${actor}/${device}.changes.json`,
+          text: '{"version":1,"months":{"2026-10":"2026-10-10T12:00:00.000Z"}}',
+          etag: null,
+          guard: Effect.void,
+          replaceChanged: true,
+        };
+        const command: TeamDailyWriteCommand = previouslyConfirmed
+          ? {
+              ...initial,
+              etag: (yield* f.execute(initial))!.etag,
+              text: '{"version":1,"months":{"2026-10":"2026-10-10T13:00:00.000Z"}}',
+            }
+          : initial;
+        f.hideWrite(true);
+        expect((yield* Effect.flip(f.execute(command))).code).toBe("unavailable");
+        f.hideWrite(false);
+        const recovered = (yield* f.execute(command))!;
+        expect(recovered.text).toBe(command.text);
+        expect(recovered.etag).not.toBe(command.etag);
+        expect([...f.items.values()].filter((item) => !item.folder)).toHaveLength(1);
+      }),
   );
   it.effect("rejects stale updates and deletion while preserving the newer content", () =>
     Effect.gen(function* () {

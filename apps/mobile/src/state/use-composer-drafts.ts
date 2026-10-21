@@ -10,19 +10,22 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProjectId as ProjectIdSchema,
   ProviderInteractionMode as ProviderInteractionModeSchema,
+  ProviderOptionSelection as ProviderOptionSelectionSchema,
   RuntimeMode as RuntimeModeSchema,
   type EnvironmentId,
   type ModelSelection,
   type ProjectId,
   type ProviderInteractionMode,
+  type ProviderOptionSelection,
   type RuntimeMode,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { useEffect } from "react";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import { writeFileAtomically } from "../lib/atomic-file";
 import { createComposerContextHistory, referencedComposerContext } from "../lib/composerContext";
+import { isQueuedEditDraftKey } from "./queued-edit-draft-key";
 import {
   collectComposerContextReferences,
   formatComposerContextReference,
@@ -356,6 +359,8 @@ export interface ComposerDraftWorkspaceSelection {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
+  /** Resolve and check out this PR when the queued task is sent. */
+  readonly pullRequestReference?: string;
 }
 
 export type ComposerDraftSettingsUpdate = Pick<
@@ -368,6 +373,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  pullRequestReference: Schema.optional(Schema.String),
 });
 
 const ComposerDraftProjectSchema = Schema.Struct({
@@ -399,6 +405,13 @@ const PersistedComposerDraftsSchema = Schema.Struct({
   schemaVersion: Schema.Literal(COMPOSER_DRAFTS_SCHEMA_VERSION),
   drafts: Schema.Record(Schema.String, ComposerDraftSchema),
   stickyModelSelection: Schema.optional(ModelSelectionSchema),
+  stickyRuntimeMode: Schema.optional(RuntimeModeSchema),
+  modelOptionMemory: Schema.optional(
+    Schema.Record(
+      Schema.String,
+      Schema.Record(Schema.String, Schema.Array(ProviderOptionSelectionSchema)),
+    ),
+  ),
   cloudAccountId: Schema.optional(Schema.String),
   signedOutDrafts: Schema.optional(
     Schema.Record(
@@ -425,9 +438,26 @@ export const composerDraftsAtom = Atom.make<Record<string, ComposerDraft>>({}).p
   Atom.withLabel("mobile:composer-drafts"),
 );
 
+export const composerDraftsLoadedAtom = Atom.make(false).pipe(Atom.keepAlive);
+export const composerDraftsLoadFailedAtom = Atom.make(false).pipe(Atom.keepAlive);
+
 export const stickyComposerModelSelectionAtom = Atom.make<ModelSelection | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:sticky-composer-model-selection"),
+);
+
+export const stickyComposerRuntimeModeAtom = Atom.make<RuntimeMode | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:sticky-composer-runtime-mode"),
+);
+
+export type ModelOptionMemoryState = Readonly<
+  Record<string, Readonly<Record<string, ReadonlyArray<ProviderOptionSelection>>>>
+>;
+
+export const modelOptionMemoryAtom = Atom.make<ModelOptionMemoryState>({}).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:model-option-memory"),
 );
 
 interface SignedOutDrafts {
@@ -454,6 +484,8 @@ const persistenceQueue = new SerializedAsyncQueue();
 export function resetComposerDraftsLoadState(): void {
   loadPromise = null;
   persistRetryNeeded = false;
+  appAtomRegistry.set(composerDraftsLoadedAtom, false);
+  appAtomRegistry.set(composerDraftsLoadFailedAtom, false);
 }
 
 function attachmentContextRecord(
@@ -533,6 +565,20 @@ export function getComposerDraftSnapshot(draftKey: string): ComposerDraft {
   return normalizeDraft(appAtomRegistry.get(composerDraftsAtom)[draftKey]);
 }
 
+export function getPendingTaskRuntimeMode(
+  draftKey: string,
+  defaultRuntimeMode: RuntimeMode,
+  queuedRuntimeMode?: RuntimeMode,
+): RuntimeMode | null {
+  const explicitMode = getComposerDraftSnapshot(draftKey).runtimeMode ?? queuedRuntimeMode;
+  if (explicitMode !== undefined) return explicitMode;
+  const rememberedMode = appAtomRegistry.get(stickyComposerRuntimeModeAtom);
+  if (!appAtomRegistry.get(composerDraftsLoadedAtom)) {
+    return appAtomRegistry.get(composerDraftsLoadFailedAtom) ? rememberedMode : null;
+  }
+  return rememberedMode ?? defaultRuntimeMode;
+}
+
 export function isComposerDraftEmpty(draft: ComposerDraft): boolean {
   return isEmptyDraft(draft);
 }
@@ -608,6 +654,8 @@ export function migrateLegacyNewTaskDraft(
 export function decodePersistedComposerState(value: unknown): {
   readonly drafts: Record<string, ComposerDraft>;
   readonly stickyModelSelection: ModelSelection | null;
+  readonly stickyRuntimeMode: RuntimeMode | null;
+  readonly modelOptionMemory: ModelOptionMemoryState;
   readonly cloudDrafts: ComposerCloudDraftState;
 } {
   const parsed = decodePersistedComposerDraftsDocument(value);
@@ -639,9 +687,15 @@ export function decodePersistedComposerState(value: unknown): {
         // importedShareIds are share-import receipts: a contentless draft
         // carrying one is not empty, or the same native share would be
         // re-imported after restart.
-        .filter(([, draft]) => !isEmptyDraft(draft) || (draft.importedShareIds?.length ?? 0) > 0),
+        .filter(([, draft]) => !isEmptyDraft(draft) || (draft.importedShareIds?.length ?? 0) > 0)
+        // Queued-message edits are in-memory sessions. Their draft outlives a
+        // restart on disk, but the edit record that says which run it belongs
+        // to does not, so the draft would be unreachable and invisible.
+        .filter(([key]) => !isQueuedEditDraftKey(key)),
     ),
     stickyModelSelection: parsed.stickyModelSelection ?? null,
+    stickyRuntimeMode: parsed.stickyRuntimeMode ?? null,
+    modelOptionMemory: parsed.modelOptionMemory ?? {},
     cloudDrafts: {
       accountId: parsed.cloudAccountId ?? null,
       signedOut: Object.fromEntries(
@@ -680,6 +734,8 @@ async function loadPersistedComposerState(): Promise<
       return {
         drafts: {},
         stickyModelSelection: null,
+        stickyRuntimeMode: null,
+        modelOptionMemory: {},
         cloudDrafts: { accountId: null, signedOut: {} },
       };
     }
@@ -701,6 +757,7 @@ async function writePersistedComposerState(
   drafts: Record<string, ComposerDraft>,
   stickyModelSelection: ModelSelection | null,
   cloudDrafts = appAtomRegistry.get(composerCloudDraftsAtom),
+  stickyRuntimeMode = appAtomRegistry.get(stickyComposerRuntimeModeAtom),
 ): Promise<void> {
   let operation: ComposerDraftPersistenceError["operation"] = "open";
   try {
@@ -713,6 +770,10 @@ async function writePersistedComposerState(
       schemaVersion: COMPOSER_DRAFTS_SCHEMA_VERSION,
       drafts: nonEmptyDrafts,
       ...(stickyModelSelection ? { stickyModelSelection } : {}),
+      ...(stickyRuntimeMode ? { stickyRuntimeMode } : {}),
+      ...(Object.keys(appAtomRegistry.get(modelOptionMemoryAtom)).length > 0
+        ? { modelOptionMemory: appAtomRegistry.get(modelOptionMemoryAtom) }
+        : {}),
       ...(cloudDrafts.accountId ? { cloudAccountId: cloudDrafts.accountId } : {}),
       ...(Object.keys(cloudDrafts.signedOut).length > 0
         ? {
@@ -969,7 +1030,7 @@ registerComposerAttachmentUnusedHandler((attachment) => {
   scheduleUnusedComposerAttachmentCleanup([attachment]);
 });
 
-function schedulePersistComposerState(): void {
+export function schedulePersistComposerState(): void {
   if (persistTimer !== null) {
     clearTimeout(persistTimer);
   }
@@ -1000,6 +1061,7 @@ export function ensureComposerDraftsLoaded(): void {
   if (loadPromise !== null) {
     return;
   }
+  appAtomRegistry.set(composerDraftsLoadFailedAtom, false);
   const loading = loadPersistedComposerState().then((persisted) => {
     appAtomRegistry.set(composerCloudDraftsAtom, persisted.cloudDrafts);
     if (Object.keys(persisted.drafts).length > 0) {
@@ -1015,12 +1077,34 @@ export function ensureComposerDraftsLoaded(): void {
     ) {
       appAtomRegistry.set(stickyComposerModelSelectionAtom, persisted.stickyModelSelection);
     }
+    if (
+      persisted.stickyRuntimeMode !== null &&
+      appAtomRegistry.get(stickyComposerRuntimeModeAtom) === null
+    ) {
+      appAtomRegistry.set(stickyComposerRuntimeModeAtom, persisted.stickyRuntimeMode);
+    }
+    if (Object.keys(persisted.modelOptionMemory).length > 0) {
+      const current = appAtomRegistry.get(modelOptionMemoryAtom);
+      appAtomRegistry.set(modelOptionMemoryAtom, {
+        ...persisted.modelOptionMemory,
+        ...Object.fromEntries(
+          Object.entries(current).map(([instanceId, models]) => [
+            instanceId,
+            { ...persisted.modelOptionMemory[instanceId], ...models },
+          ]),
+        ),
+      });
+    }
+    appAtomRegistry.set(composerDraftsLoadedAtom, true);
   });
   loadPromise = loading;
   // Handle fire-and-forget hook loads without swallowing failures from the
   // write and cleanup callers that await this same promise. A later call retries.
   void loading.catch((cause) => {
-    if (loadPromise === loading) loadPromise = null;
+    if (loadPromise === loading) {
+      loadPromise = null;
+      appAtomRegistry.set(composerDraftsLoadFailedAtom, true);
+    }
     console.warn(
       "[composer-drafts] failed to hydrate drafts",
       cause instanceof ComposerDraftPersistenceError
@@ -1155,6 +1239,8 @@ export async function removeDeliveredCloudQueuedMessage(
           (editor.workspaceSelection.mode !== message.creation?.workspaceMode ||
             editor.workspaceSelection.branch !== message.creation?.branch ||
             editor.workspaceSelection.worktreePath !== message.creation?.worktreePath ||
+            editor.workspaceSelection.pullRequestReference !==
+              message.creation?.pullRequestReference ||
             (editor.workspaceSelection.startFromOrigin ?? false) !==
               (message.creation?.startFromOrigin ?? false))))
     )
@@ -1248,6 +1334,11 @@ function updateComposerDrafts(
 
 export function setStickyComposerModelSelection(modelSelection: ModelSelection): void {
   appAtomRegistry.set(stickyComposerModelSelectionAtom, modelSelection);
+  schedulePersistComposerState();
+}
+
+export function setStickyComposerRuntimeMode(runtimeMode: RuntimeMode): void {
+  appAtomRegistry.set(stickyComposerRuntimeModeAtom, runtimeMode);
   schedulePersistComposerState();
 }
 
@@ -1936,4 +2027,18 @@ export function useStickyComposerModelSelection(): ModelSelection | null {
     ensureComposerDraftsLoaded();
   }, []);
   return selection;
+}
+
+export function useStickyComposerRuntimeMode(): {
+  readonly runtimeMode: RuntimeMode | null;
+  readonly loaded: boolean;
+  readonly failed: boolean;
+} {
+  const runtimeMode = useAtomValue(stickyComposerRuntimeModeAtom);
+  const loaded = useAtomValue(composerDraftsLoadedAtom);
+  const failed = useAtomValue(composerDraftsLoadFailedAtom);
+  useEffect(() => {
+    ensureComposerDraftsLoaded();
+  }, []);
+  return { runtimeMode, loaded, failed };
 }

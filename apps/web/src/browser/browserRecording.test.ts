@@ -4,8 +4,23 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { ensureClientSettingsHydrated } from "~/hooks/useSettings";
+import {
+  BROWSER_RECORDING_PAINT_SETTLE_TIMEOUT_MS,
+  BROWSER_RECORDING_STARTUP_SETTLE_TIMEOUT_MS,
+  BrowserRecordingCaptureTimeoutError,
+  BrowserRecordingConflictError,
+  BrowserRecordingFormatUnavailableError,
+  BrowserRecordingStartCancelledError,
+  findActiveBrowserRecordingRuntimeTabId,
+  readActiveBrowserRecordingTabIds,
+  readActiveBrowserRecordingTargets,
+  startBrowserRecording,
+  stopBrowserRecording,
+  stopBrowserRecordingForUpload,
+} from "./browserRecording";
+import { useBrowserSurfaceStore } from "./browserSurfaceStore";
+import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
 const {
   clientSettings,
@@ -65,23 +80,6 @@ vi.mock("~/hooks/useSettings", () => ({
   ensureClientSettingsHydrated: vi.fn(async () => undefined),
   getClientSettings: () => clientSettings,
 }));
-
-import {
-  BROWSER_RECORDING_PAINT_SETTLE_TIMEOUT_MS,
-  BROWSER_RECORDING_STARTUP_SETTLE_TIMEOUT_MS,
-  BrowserRecordingCaptureTimeoutError,
-  BrowserRecordingConflictError,
-  BrowserRecordingFormatUnavailableError,
-  BrowserRecordingStartCancelledError,
-  findActiveBrowserRecordingRuntimeTabId,
-  readActiveBrowserRecordingTabIds,
-  readActiveBrowserRecordingTargets,
-  startBrowserRecording,
-  stopBrowserRecording,
-  stopBrowserRecordingForUpload,
-} from "./browserRecording";
-import { useBrowserSurfaceStore } from "./browserSurfaceStore";
-import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
 class FakeMediaRecorder {
   static readonly instances: FakeMediaRecorder[] = [];

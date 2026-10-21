@@ -6,7 +6,6 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   assistantCitationFromLocation,
   assistantCitationNavigation,

@@ -1,3 +1,4 @@
+import { describe } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off - A fake download edits a note synchronously mid-request.
 import * as NodeFS from "node:fs";
 
@@ -13,7 +14,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Semaphore from "effect/Semaphore";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
@@ -292,6 +293,7 @@ class FakeOneDrive {
  */
 const makeDeniableFileSystem = (fs: FileSystem.FileSystem, path: Path.Path) => {
   const denied = new Map<string, "writes" | "everything">();
+  const hooks = { afterRename: null as ((from: string, to: string) => void) | null };
   const under = (target: string, directory: string) => {
     const relative = path.relative(directory, target);
     return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
@@ -338,9 +340,11 @@ const makeDeniableFileSystem = (fs: FileSystem.FileSystem, path: Path.Path) => {
       guard("writeFile", target, "write", fs.writeFile(target, data, options)),
     remove: (target, options) => guard("remove", target, "write", fs.remove(target, options)),
     rename: (from, to) =>
-      guard("rename", from, "write", guard("rename", to, "write", fs.rename(from, to))),
+      guard("rename", from, "write", guard("rename", to, "write", fs.rename(from, to))).pipe(
+        Effect.tap(() => Effect.sync(() => hooks.afterRename?.(from, to))),
+      ),
   });
-  return { deniable, denied };
+  return { deniable, denied, hooks };
 };
 
 interface Computer {
@@ -363,7 +367,7 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const { deniable, denied } = makeDeniableFileSystem(fs, path);
+    const { deniable, denied, hooks } = makeDeniableFileSystem(fs, path);
     const temporary = yield* fs.makeTempDirectoryScoped({ prefix: "t3-memory-sync-test-" });
     const baseDir = path.join(temporary, ".tritonai-harness");
     const vault = path.join(baseDir, "memory", "general");
@@ -443,6 +447,7 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
       fs,
       path,
       denied,
+      hooks,
     };
   });
 
@@ -489,6 +494,8 @@ const fakeTeamSource = () => {
     lists: 0,
     reads: [] as string[],
     reports: [] as TeamMirrorOutcome[],
+    beforeRead: null as (() => void) | null,
+    skippedPaths: new Set<string>(),
   };
   const source: TeamMirrorSource = {
     teams: Effect.sync(() =>
@@ -507,7 +514,9 @@ const fakeTeamSource = () => {
     read: (_teamId, path) =>
       Effect.sync((): TeamMirrorDocument => {
         state.reads.push(path);
+        state.beforeRead?.();
         if (state.document) return state.document;
+        if (state.skippedPaths.has(path)) return { kind: "skip" };
         const file = state.files.get(path);
         return file ? { kind: "file", ...file } : { kind: "skip" };
       }),
@@ -598,41 +607,44 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
     }),
   );
 
-  for (const name of ["Other computer", MAC.name]) {
-    it.effect(`stops independent first-sync short-ID collisions with ${name}`, () =>
-      Effect.gen(function* () {
-        const drive = new FakeOneDrive();
-        const mac = yield* setup(drive, MAC);
-        const other = yield* setup(drive, {
-          environmentId: "aaaa2222-0000-4000-8000-000000000002",
-          shortId: MAC.shortId,
-          name,
-        });
-        // Neither registration can see the other's records yet.
-        const first = yield* mac.registerDevice;
-        const second = yield* other.registerDevice;
-        assert.strictEqual(first.shortId, second.shortId);
-        yield* mac.writeDay("2026-10-02", "Surviving cloud note");
-        yield* other.writeDay("2026-10-02", "Independent local note");
-        const macSync = yield* connectSync.pipe(Effect.provide(mac.layer));
-        const otherSync = yield* connectSync.pipe(Effect.provide(other.layer));
-        yield* macSync.syncNow;
-        const before = drive.changes.length;
-        yield* otherSync.syncNow;
-        assert.strictEqual((yield* otherSync.getStatus).sync.state, "error");
-        assert.include((yield* otherSync.getStatus).sync.message ?? "", "ownership conflict");
-        assert.strictEqual(drive.changes.length, before);
-        assert.strictEqual(
-          drive.file("TritonAI Harness/memory/general/Daily/2026/2026-10-02 Mac (aaaa).md"),
-          "Surviving cloud note",
-        );
-        assert.strictEqual(
-          yield* other.read(`Daily/2026/2026-10-02 ${other.label}.md`),
-          "Independent local note",
-        );
-      }),
-    );
-  }
+  describe.each(Array.from(["Other computer", MAC.name], (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: name }) => {
+      it.effect(`stops independent first-sync short-ID collisions with ${name}`, () =>
+        Effect.gen(function* () {
+          const drive = new FakeOneDrive();
+          const mac = yield* setup(drive, MAC);
+          const other = yield* setup(drive, {
+            environmentId: "aaaa2222-0000-4000-8000-000000000002",
+            shortId: MAC.shortId,
+            name,
+          });
+          // Neither registration can see the other's records yet.
+          const first = yield* mac.registerDevice;
+          const second = yield* other.registerDevice;
+          assert.strictEqual(first.shortId, second.shortId);
+          yield* mac.writeDay("2026-10-02", "Surviving cloud note");
+          yield* other.writeDay("2026-10-02", "Independent local note");
+          const macSync = yield* connectSync.pipe(Effect.provide(mac.layer));
+          const otherSync = yield* connectSync.pipe(Effect.provide(other.layer));
+          yield* macSync.syncNow;
+          const before = drive.changes.length;
+          yield* otherSync.syncNow;
+          assert.strictEqual((yield* otherSync.getStatus).sync.state, "error");
+          assert.include((yield* otherSync.getStatus).sync.message ?? "", "ownership conflict");
+          assert.strictEqual(drive.changes.length, before);
+          assert.strictEqual(
+            drive.file("TritonAI Harness/memory/general/Daily/2026/2026-10-02 Mac (aaaa).md"),
+            "Surviving cloud note",
+          );
+          assert.strictEqual(
+            yield* other.read(`Daily/2026/2026-10-02 ${other.label}.md`),
+            "Independent local note",
+          );
+        }),
+      );
+    },
+  );
 
   it.effect("restores a legacy downloaded note repeatedly without adopting its ownership", () =>
     Effect.gen(function* () {
@@ -682,45 +694,54 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
     }),
   );
 
-  for (const name of ["Other computer", MAC.name]) {
-    it.effect(`preserves an orphaned remote note downloaded by ${name} with a matching code`, () =>
-      Effect.gen(function* () {
-        const drive = new FakeOneDrive();
-        const mac = yield* setup(drive, MAC);
-        const other = yield* setup(drive, {
-          environmentId: "aaaa2222-0000-4000-8000-000000000002",
-          shortId: MAC.shortId,
-          name,
-        });
-        yield* mac.registerDevice;
-        yield* other.registerDevice;
-        yield* mac.writeDay("2026-10-02", "Orphaned cloud note");
-        const macSync = yield* connectSync.pipe(Effect.provide(mac.layer));
-        yield* macSync.syncNow;
-        changeDeviceRecord(drive, MAC.environmentId, null);
-        yield* other.write(
-          ".devices/aaaa2222-0000-4000-8000-000000000002/written.json",
-          toJson({ version: 1, files: {} }),
-        );
-        const otherSync = yield* connectSync.pipe(Effect.provide(other.layer));
-        const note = `Daily/2026/2026-10-02 ${mac.label}.md`;
-        yield* otherSync.syncNow;
-        assert.strictEqual(yield* other.read(note), "Orphaned cloud note");
-        for (let pass = 0; pass < 2; pass++) {
-          yield* other.fs.remove(other.path.join(other.vault, note));
-          yield* otherSync.syncNow;
-          assert.strictEqual((yield* otherSync.getStatus).sync.state, "idle");
-          assert.strictEqual(yield* other.read(note), "Orphaned cloud note");
-          assert.strictEqual(
-            drive.file(`TritonAI Harness/memory/general/${note}`),
-            "Orphaned cloud note",
-          );
-        }
-      }),
-    );
-  }
+  describe.each(Array.from(["Other computer", MAC.name], (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: name }) => {
+      it.effect(
+        `preserves an orphaned remote note downloaded by ${name} with a matching code`,
+        () =>
+          Effect.gen(function* () {
+            const drive = new FakeOneDrive();
+            const mac = yield* setup(drive, MAC);
+            const other = yield* setup(drive, {
+              environmentId: "aaaa2222-0000-4000-8000-000000000002",
+              shortId: MAC.shortId,
+              name,
+            });
+            yield* mac.registerDevice;
+            yield* other.registerDevice;
+            yield* mac.writeDay("2026-10-02", "Orphaned cloud note");
+            const macSync = yield* connectSync.pipe(Effect.provide(mac.layer));
+            yield* macSync.syncNow;
+            changeDeviceRecord(drive, MAC.environmentId, null);
+            yield* other.write(
+              ".devices/aaaa2222-0000-4000-8000-000000000002/written.json",
+              toJson({ version: 1, files: {} }),
+            );
+            const otherSync = yield* connectSync.pipe(Effect.provide(other.layer));
+            const note = `Daily/2026/2026-10-02 ${mac.label}.md`;
+            yield* otherSync.syncNow;
+            assert.strictEqual(yield* other.read(note), "Orphaned cloud note");
+            for (let pass = 0; pass < 2; pass++) {
+              yield* other.fs.remove(other.path.join(other.vault, note));
+              yield* otherSync.syncNow;
+              assert.strictEqual((yield* otherSync.getStatus).sync.state, "idle");
+              assert.strictEqual(yield* other.read(note), "Orphaned cloud note");
+              assert.strictEqual(
+                drive.file(`TritonAI Harness/memory/general/${note}`),
+                "Orphaned cloud note",
+              );
+            }
+          }),
+      );
+    },
+  );
 
-  for (const recordProblem of ["missing", "invalid", "wrong ID", "collision", "invalid manifest"]) {
+  describe.each(
+    Array.from(["missing", "invalid", "wrong ID", "collision", "invalid manifest"], (scenario) => ({
+      scenario,
+    })),
+  )("case $scenario", ({ scenario: recordProblem }) => {
     it.effect(
       `preserves an uploaded note after local loss with a ${recordProblem} remote device record`,
       () =>
@@ -782,7 +803,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
           }
         }),
     );
-  }
+  });
 
   it.effect("restores a lost inbox while retaining its sync state", () =>
     Effect.gen(function* () {
@@ -1400,6 +1421,111 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
         yield* sync.teams.sync;
         assert.isNull(yield* mac.read(`${FOLDER}/${old}`));
         assert.strictEqual(yield* mac.read(`${FOLDER}/${recent}`), "Recent day");
+      }),
+  );
+
+  it.effect(
+    "removes a withdrawn download after the installed file outlived a failed state save",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const remote = "Memory/a/d/interrupted.md";
+        const relative = `${FOLDER}/${remote}`;
+        const unmanaged = `${FOLDER}/Memory/a/d/local.md`;
+        yield* mac.write(unmanaged, "Local note never copied by Harness");
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        team.files.set(remote, { eTag: "e1", text: "Team content later withdrawn" });
+        // The file lands, but persisting the completed pass fails, as at a crash boundary.
+        mac.hooks.afterRename = (_from, to) => {
+          if (to === mac.path.join(mac.vault, relative))
+            mac.denied.set(mac.path.join(mac.vault, ".sync"), "writes");
+        };
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(relative), "Team content later withdrawn");
+        assert.deepInclude(team.reports.at(-1), { kind: "failed" });
+        mac.hooks.afterRename = null;
+        mac.denied.clear();
+
+        // The next process sees the withdrawal before it can redownload the document.
+        team.files.delete(remote);
+        const restarted = yield* MemorySync.make.pipe(
+          Effect.provideServiceEffect(MicrosoftSignIn.MicrosoftSignIn, MicrosoftSignIn.make(OAUTH)),
+          Effect.provide(mac.layer),
+        );
+        yield* restarted.teams.attach(team.source);
+        yield* restarted.teams.sync;
+        assert.isNull(yield* mac.read(relative));
+        assert.strictEqual(yield* mac.read(unmanaged), "Local note never copied by Harness");
+      }),
+  );
+
+  it.effect.each(["Different local text", "Team text"])(
+    "preserves an unmanaged file when installation failed before replacing its bytes (%s)",
+    (localText) =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const remote = "Memory/a/d/interrupted.md";
+        const relative = `${FOLDER}/${remote}`;
+        yield* mac.write(relative, localText);
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        team.files.set(remote, { eTag: "e1", text: "Team text" });
+        team.beforeRead = () => mac.denied.set(mac.path.join(mac.vault, FOLDER), "writes");
+        yield* sync.teams.sync;
+        assert.deepInclude(team.reports.at(-1), { kind: "failed" });
+        assert.strictEqual(yield* mac.read(relative), localText);
+        team.beforeRead = null;
+        mac.denied.clear();
+
+        team.files.delete(remote);
+        const restarted = yield* MemorySync.make.pipe(
+          Effect.provideServiceEffect(MicrosoftSignIn.MicrosoftSignIn, MicrosoftSignIn.make(OAUTH)),
+          Effect.provide(mac.layer),
+        );
+        yield* restarted.teams.attach(team.source);
+        yield* restarted.teams.sync;
+        assert.strictEqual(yield* mac.read(relative), localText);
+      }),
+  );
+
+  it.effect(
+    "copies valid tail documents after fifty unchanged read skips without exceeding the attempt limit",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        for (let index = 0; index < 50; index++) {
+          const name = `Memory/a/d/skip-${String(index).padStart(2, "0")}.md`;
+          team.files.set(name, { eTag: "e1", text: "Previously unavailable" });
+          team.skippedPaths.add(name);
+        }
+        const tail = "Memory/a/d/zz-valid.md";
+        team.files.set(tail, { eTag: "e1", text: "Valid tail document" });
+        yield* sync.teams.sync;
+        assert.strictEqual(team.reads.length, 50);
+        assert.isNull(yield* mac.read(`${FOLDER}/${tail}`));
+
+        // A changed skipped version becomes eligible immediately. The other misses remain
+        // unchanged, including across a server restart, and must not starve the valid tail.
+        const changed = "Memory/a/d/skip-49.md";
+        team.files.set(changed, { eTag: "e2", text: "Now available" });
+        team.skippedPaths.delete(changed);
+        const restarted = yield* MemorySync.make.pipe(
+          Effect.provideServiceEffect(MicrosoftSignIn.MicrosoftSignIn, MicrosoftSignIn.make(OAUTH)),
+          Effect.provide(mac.layer),
+        );
+        yield* restarted.teams.attach(team.source);
+        team.reads.length = 0;
+        yield* restarted.teams.sync;
+        assert.strictEqual(team.reads.length, 50);
+        assert.strictEqual(team.reads[0], changed);
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${changed}`), "Now available");
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${tail}`), "Valid tail document");
       }),
   );
 

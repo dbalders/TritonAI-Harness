@@ -1,5 +1,4 @@
 import type { ComponentPropsWithoutRef } from "react";
-
 import { cn } from "../lib/utils";
 
 export type WorkspacePageWidth = "readable" | "wide" | "expanded";

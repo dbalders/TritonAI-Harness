@@ -85,8 +85,9 @@ Microsoft account that saved the version, so they can differ from the member
 name on the document's folder.
 
 To make a Harness project a team workspace, open the team, choose the project
-in this Harness environment under **Team projects**, and select **Link to
-team**. Your work in it is then shared with the team's daily memory, as
+in this Harness environment under **Team projects**, review who can read the automatic
+summaries, acknowledge the sharing notice, and select **Link and share new summaries**.
+Your new work in it is then shared with the team's daily memory, as
 described below. Then choose **Open team memory** or **Open team
 skills** to read the team's work summaries or skill documents and publish new
 ones labeled with that project. Each project links to one team; unlink it before
@@ -127,6 +128,12 @@ by deleting its `</team-skill>` line, it is left in your draft and marked until
 you delete it yourself; your access is still checked when you send. Text you
 send stays in that conversation and the agent's context even if the skill or
 your access is later removed.
+
+Queued messages keep these checks after you close the app or edit their text. Access is
+checked again just before the agent receives the message. A queued edit retains its original
+team references; to remove that protection, cancel the queued message and compose a new
+message without team content. If an edited message is restored to the composer, its checks
+stay with it until it is sent or its entire text is cleared.
 
 To use a team skill in every message of a project, open **Settings → Skills**
 and choose the project in **Applying settings for** at the top; without a

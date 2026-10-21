@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -32,7 +32,21 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [55, "ProjectionThreadTitleState"],
   [56, "PullRequestFilesViewed"],
   [57, "ProjectionThreadsAutoSettleDisabledAt"],
-  [58, "ProjectionThreadsTeamSharing"],
+  [58, "Ideas"],
+  [59, "OrchestrationV2"],
+  [60, "RemoveRedundantProjectionIndexes"],
+  [61, "ScheduledTaskWebhooks"],
+  [62, "WebhookRelayDeliveries"],
+  [63, "McpAppModelContext"],
+  [64, "ThreadSnapshotWindowIndexes"],
+  [65, "PullRequestReviewGuides"],
+  [66, "ThreadFailureLookupIndex"],
+  [67, "HarnessActivityViews"],
+  [68, "ProjectBriefs"],
+  [69, "ProjectBriefDispatches"],
+  [70, "ProjectBriefArchives"],
+  [71, "ProjectOverviews"],
+  [72, "TeamSharing"],
 ];
 
 it("keeps the migration registry unique and preserves shipped downstream identities", () => {
@@ -93,6 +107,20 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })))(
             ),
           ["settled_override", "settled_at", "snoozed_until", "snoozed_at", "unsettled_at"],
         );
+
+        // A fresh install must create all follow-through stores without inventing work.
+        const briefStores = yield* sql<{ readonly store: string; readonly count: number }>`
+          SELECT 'briefs' AS store, COUNT(*) AS count FROM project_briefs
+          UNION ALL SELECT 'requests', COUNT(*) FROM project_brief_requests
+          UNION ALL SELECT 'dispatches', COUNT(*) FROM project_brief_dispatches
+          UNION ALL SELECT 'archives', COUNT(*) FROM project_brief_archives
+        `;
+        assert.deepStrictEqual(briefStores, [
+          { store: "briefs", count: 0 },
+          { store: "requests", count: 0 },
+          { store: "dispatches", count: 0 },
+          { store: "archives", count: 0 },
+        ]);
       }),
     );
   },

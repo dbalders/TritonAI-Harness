@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { quoteGitPatchPath, unquoteGitPatchPath } from "./gitPatchPath.ts";
 
 const BELL = "\u0007";
@@ -46,15 +45,13 @@ describe("a name written into a header and read back out", () => {
     `every\t\n\r"\\${BELL}.txt`,
   ];
 
-  for (const name of names) {
-    it(`is the name that went in: ${JSON.stringify(name)}`, () => {
-      const written = quoteGitPatchPath(name);
-      expect(unquoteGitPatchPath(written)).toBe(name);
-      // A parser that takes the quotes off itself, as the clients' one does, gets there too.
-      const unwrapped = written.startsWith('"') ? written.slice(1, -1) : written;
-      expect(unquoteGitPatchPath(unwrapped)).toBe(name);
-    });
-  }
+  it.each(names)("is the name that went in: %j", (name) => {
+    const written = quoteGitPatchPath(name);
+    expect(unquoteGitPatchPath(written)).toBe(name);
+    // A parser that takes the quotes off itself, as the clients' one does, gets there too.
+    const unwrapped = written.startsWith('"') ? written.slice(1, -1) : written;
+    expect(unquoteGitPatchPath(unwrapped)).toBe(name);
+  });
 
   it("carries the whole name past the first thing a header stops at", () => {
     const written = quoteGitPatchPath("tab\tfile.txt");

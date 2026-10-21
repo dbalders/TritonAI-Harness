@@ -4,16 +4,18 @@ import {
   formatTeamContext,
   MessageId,
   ProjectId,
-  type OrchestrationThreadShell,
+  type OrchestrationV2ThreadShell,
   ThreadId,
   TeamsError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
-import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectService } from "../../project/ProjectService.ts";
+import { ProjectionStoreV2 } from "../../orchestration-v2/ProjectionStore.ts";
+import * as TeamMessageGate from "../TeamMessageGate.ts";
 import {
   SYNTHETIC_OAUTH,
   SYNTHETIC_TEAMS,
@@ -38,8 +40,9 @@ const environment = Layer.mergeAll(
     set: (name, value) => Effect.sync(() => void values.set(name, value)),
     remove: (name) => Effect.sync(() => void values.delete(name)),
   }),
-  Layer.mock(ProjectionSnapshotQuery)({
-    getProjectShellById: (id) =>
+  TeamMessageGate.layerMemory(),
+  Layer.mock(ProjectService)({
+    getById: (id) =>
       Effect.succeed(
         id === projectId
           ? Option.some({
@@ -50,14 +53,15 @@ const environment = Layer.mergeAll(
               scripts: [],
               createdAt: "2026-10-09T00:00:00.000Z",
               updatedAt: "2026-10-09T00:00:00.000Z",
+              deletedAt: null,
             })
           : Option.none(),
       ),
-    getThreadShellById: (id) =>
+  }),
+  Layer.mock(ProjectionStoreV2)({
+    getThreadShell: (id) =>
       Effect.succeed(
-        id === threadId
-          ? Option.some({ id, projectId } as unknown as OrchestrationThreadShell)
-          : Option.none(),
+        id === threadId ? ({ id, projectId } as unknown as OrchestrationV2ThreadShell) : null,
       ),
   }),
 );
@@ -65,13 +69,15 @@ const code = <A>(effect: Effect.Effect<A, TeamsError>) =>
   Effect.flip(effect).pipe(Effect.map((error) => error.code));
 const turn = (text: string) =>
   ({
-    type: "thread.turn.start",
+    type: "message.dispatch",
+    dispatchMode: { type: "start_immediately" },
     commandId: CommandId.make("cmd-synthetic"),
     threadId,
-    message: { messageId: MessageId.make("msg-synthetic"), role: "user", text, attachments: [] },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    createdAt: "2026-10-09T00:00:00.000Z",
+    messageId: MessageId.make("msg-synthetic"),
+    text,
+    attachments: [],
+    createdBy: "user",
+    creationSource: "web",
   }) as const;
 
 /** A fresh world and services with session "s" linked to Alpha and connected to Microsoft. */

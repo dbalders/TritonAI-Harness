@@ -19,7 +19,9 @@ A thread does not need a project. To start one without a project, click **or
 start without a project** under a new thread's heading, pick **No project** from
 the project menu in that heading or from **New thread in...** in the command
 palette, or press `mod+alt+n`. On mobile, pick **No project** from the project
-list. To move a draft into a project, pick the project in the heading.
+list. It starts on your current machine; before sending, pick another machine
+from the machine menu to move it there. To move a draft into a project, pick the
+project in the heading.
 
 Each thread without a project works in its own folder under `~/.t3/scratch` (the
 `scratch` folder of your T3 data directory), named after its date, the first words
@@ -41,6 +43,27 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+## Catch up on a project
+
+Select a project's name in the web or desktop sidebar to open its overview.
+It brings together requests waiting on you, work in progress, recent agent updates,
+and the project's background memory notes. Follow a thread to see its full context;
+an agent finishing a turn does not mean its work was reviewed or released.
+
+The overview also suggests **What’s next** from this project's conversations and
+keeps a short project description alongside its history. Opening the project checks
+for new context automatically. Saved suggestions stay visible while an update runs;
+unchanged context reuses the saved result. Suggestions need a Codex text generation
+model configured on the project's environment.
+
+Choose **Open in new thread** on a suggestion to prepare a short request in that
+project. Its source conversations are attached as thread references so the agent can
+read their history when needed. Review or edit the draft, then send it when ready.
+
+Use the folder icon to expand or collapse its threads without leaving the overview.
+Thread activity updates live. Memory notes appear as the background summarizer
+processes your conversations; their source and last update are available on the page.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.
@@ -48,7 +71,8 @@ Pin a thread from its menu to keep it above your active work.
 On web and desktop, unpinning, marking done, snoozing, and archiving a thread each show
 a notification with **Undo** for five seconds. Undo restores the thread's previous
 state, including its pinned position, and reopens an archived thread you were
-viewing. `mod+z` triggers the most recent Undo when no text field is focused; see
+viewing. Discarding an unsent draft from the sidebar works the same way: Undo brings
+back its text and attachments. `mod+z` triggers the most recent Undo when no text field is focused; see
 [Keybindings](./keybindings.md#commands-with-special-behavior).
 
 On web and desktop, you can also drag files from your computer onto any thread row:
@@ -101,15 +125,26 @@ If dragging is unavailable for one environment, update the TritonAI Harness serv
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
+To generate a fresh title from the conversation, open a thread's menu and choose
+**Regenerate title**. The action is unavailable while title generation is in progress
+or when the connected environment needs a server update.
+
+Agents connected through T3 Code can use the same server-owned metadata workflow to
+rename a thread, regenerate its title, or link and unlink a pull request. These changes
+appear on web, desktop, and mobile without requiring the originating browser to remain
+open.
+
 ### Fold working threads (beta)
 
-On web and desktop, turn on **Settings → General → Working section (beta)** to move threads that
-are working or monitoring into a collapsed **Working** section at the bottom of the sidebar. A
-thread returns to the top of the active list when it finishes, fails, or needs an approval or
-answer. Pinned threads stay in the pinned section.
+Turn on **Settings → General → Working section (beta)** on web and desktop, or **Settings →
+Thread behavior → Working section** on iOS and Android, to move threads that are working or
+monitoring into a collapsed **Working** section below the active list. A thread returns to the top
+of the active list when it finishes, fails, or needs an approval or answer. The Working section
+lists the thread you last sent work to first. Pinned threads stay in the pinned section. Each
+device keeps its own choice.
 
 While this is on, the active list is ordered by when each thread last came back to you, so you
-cannot drag to reorder it. Your saved order returns when you turn it off.
+cannot drag or move threads within it. Your saved order returns when you turn it off.
 
 ## Done with a thread
 
@@ -127,6 +162,27 @@ thread done. Work in progress, pending questions or approvals, and live backgrou
 keep the thread active. An open pull request also keeps an inactive thread active,
 but an old closed or merged pull request does not mark work done that you resumed
 after it closed.
+
+To reclaim disk space from done work, turn on **Run in the thread's worktree when the
+thread is marked done** for one of the project's actions, or set `"runOnSettle": true` on a
+`t3.json` script, for example `cargo clean`. It runs each time a thread in its own
+worktree is marked done, manually or automatically, even if a terminal there still runs a
+command such as a dev server. Threads in the project's main checkout skip it. Its terminal
+closes when the command succeeds and stays open when it fails.
+
+On web and desktop, press a thread's **Settle** button and drag up or down to
+mark done every thread in that section between it and the one you release on.
+The **Un-mark done** and **Wake** buttons work the same way in their sections.
+Press `Escape` while dragging to cancel.
+
+By default, environments mark done inactive threads after three days and mark done
+threads whose pull request merged. A closed pull request can also mark done an idle
+thread. Work in progress, pending questions or approvals, and live background work
+prevent automatic mark donement. An open pull request does not prevent inactivity
+mark donement unless you turn on **Keep threads with a PR** in **Settings → General**,
+but an old closed or merged pull request does not mark done work you
+resumed after it closed. Only your own messages count as resuming. A turn that
+finished background work or a pull request watch starts on its own does not.
 
 To keep one thread out of the Done shelf no matter how long it sits idle, open its menu,
 choose **Automatically mark done**, and pick **Disabled**. The current option is checked. Pick
@@ -165,13 +221,44 @@ for custom configuration.
 
 ## Inspect agent work
 
+**Limited** means the provider stopped on a usage or rate limit. The conversation
+keeps the provider's explanation. Retry after the limit resets, or switch to
+another provider instance.
+On web and desktop, press **Resume** in an empty composer to continue a limited
+or interrupted turn manually.
+Queued messages stay saved while the limit blocks the thread. They run after
+the continuation finishes. If the queue was held by a restart, resume it then.
+
+When the provider reports a reset time, choose **Resume at reset** to schedule a
+continuation. You can cancel it from the thread. Enable **Auto-resume limited
+threads** in **Settings → General** on web and desktop, or **Settings → Thread
+behavior** on mobile, to schedule limit stops by default.
+The environment must be running when the reset arrives; it resumes overdue
+continuations after a restart. Sending a new message, archiving, or settling the
+thread prevents a pending continuation from starting.
+
+Choose **Snooze until reset** to hide the thread until its allowance returns.
+Snooze and auto-resume are independent: snooze alone wakes the thread without
+sending a message; enabling both wakes and continues it. **Wake now** cancels
+the snooze. Enable **Snooze limited threads** in thread behavior settings to
+snooze limit stops by default. Providers without a reset time offer manual
+retry and the normal snooze choices.
+
 On web and desktop, use **Agents** to follow work delegated to subagents.
+Stop on a thread also stops the subagents it delegated to.
+
+Subagent threads started by the agent can't take messages; message the parent
+thread instead. When such a subagent needs an approval or an answer, the parent
+thread asks for it.
 
 Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
 
 ## Snooze until later
+
+On web and desktop, hover an active thread and click the clock beside its Done
+check to choose a wake time. The same controls are available with keyboard focus.
 
 Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your
 local time zone, or a duration in minutes, hours, or days. Durations start when

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { toOpenCodeFileParts } from "./opencodeRuntime.ts";
+import { toOpenCodeFileParts } from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 
 describe("toOpenCodeFileParts", () => {
   it("keeps generic files out of provider-native file parts", () => {

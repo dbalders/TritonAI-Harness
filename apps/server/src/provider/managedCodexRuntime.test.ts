@@ -1,15 +1,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
-  HostProcessPlatform,
-  HostProcessExecutablePath,
-  HostProcessEnvironment,
-} from "@t3tools/shared/hostProcess";
+  Platform as HostProcessPlatform,
+  ExecutablePath as HostProcessExecutablePath,
+  Environment as HostProcessEnvironment,
+} from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 
 import * as ProcessRunnerModule from "../processRunner.ts";
 import {

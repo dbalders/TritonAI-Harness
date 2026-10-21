@@ -203,6 +203,16 @@ Generated trees omit `.repos`, `.gitmodules`, and GitHub workflow files: desktop
 submodules are not mobile dependencies, and the generated branch only runs in
 Xcode Cloud.
 Build-only, skipped, and failed nightly publications do not start a mobile build.
+A published nightly also skips the mobile build when no mobile input changed
+since the newest `mobile-nightly` commit that Xcode Cloud archived successfully
+(every Xcode Cloud check on that commit passed, including an Archive action).
+Mobile inputs are `apps/mobile`, the workspace packages it depends on, root
+dependency manifests, patches, brand assets, the third-party license generator,
+its config and referenced notice files, the native generator, and
+`mobile-nightly-testflight.yml`; `*.test.ts` and `*.test.tsx` files are
+ignored. Failed, pending, or never-started Xcode Cloud builds do not count, so
+their changes are built by the next nightly. Running the
+workflow manually builds by default; clear `force` to apply the same check.
 Native preparation runs on macOS and commits the resolved Swift package pins,
 which Xcode Cloud requires before it can validate and archive the shared scheme.
 
@@ -253,13 +263,18 @@ shutdown, but a supervisor created after its cleanup runs would escape it. A clo
 parent scope also closes late arrivals, preventing interrupted startup or runtime
 replacement from leaving a WebSocket alive outside the new registry.
 
-The [Uniwind patch](../../patches/uniwind@1.11.0.patch) still compiles CSS on Metro
-updates so newly used classes are discovered. It skips global style invalidation
-only when the generated stylesheet and theme list are unchanged. Skipping compilation
-would lose new classes; invalidating every consumer for unchanged output makes an
-ordinary component edit refresh the whole app. The fingerprint is recorded only
-after initialization succeeds.
+Uniwind compiles CSS on Metro updates so newly used classes are discovered. It
+skips global style invalidation only when the generated stylesheet and theme list
+are unchanged. Skipping compilation would lose new classes; invalidating every
+consumer for unchanged output makes an ordinary component edit refresh the whole
+app. The fingerprint is recorded only after initialization succeeds.
 
+The [expo-notifications patch](../../patches/expo-notifications@57.0.15.patch) protects
+`NotificationCenterManager`'s delegates and pending responses with a lock. React runtimes can
+register and remove delegates concurrently during reloads or scene startup. Delivery snapshots
+delegates under the lock and invokes them after releasing it. Pending-response replay removes
+only the responses in its snapshot, preserving responses received during callbacks. Changes to
+this native patch require reinstalling dependencies and rebuilding the iOS app.
 The native modules under `apps/mobile/modules/` are `file:` dependencies, and pnpm
 copies those into its virtual store instead of linking them. Metro bundles the copy,
 so an edit to a module's TypeScript is invisible to a running dev client until

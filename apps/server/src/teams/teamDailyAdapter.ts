@@ -40,7 +40,7 @@ const sameStorage = (a: TeamStorage, b: TeamStorage) =>
 const changed = (message: string) => new TeamsError({ code: "conflict", message });
 
 /** A team folder as an opaque key; a daily file is only ever updated in the folder it went to. */
-export const storageKeyOf = (folder: TeamStorage) =>
+const storageKeyOf = (folder: TeamStorage) =>
   [folder.tenantId.toLowerCase(), folder.siteId, folder.driveId, folder.folderId].join("|");
 
 export const makeTeamDailySource = (input: {

@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Synchronous SHA-256 document fingerprints and campus identity keys use Node crypto.
 /**
  * The team pass of daily memory: writes this device's daily file in each team its campus account
  * belongs to, from work in this environment's projects linked to that team. DailyMemory runs it
@@ -31,7 +32,7 @@ import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import type { ServerSettingsService } from "../serverSettings.ts";
@@ -93,7 +94,7 @@ const threadsNow = Effect.fn("teamMemory.threadsNow")(function* (threadIds: Read
         deleted_at AS "deletedAt",
         team_sharing_off_at AS "offAt",
         team_sharing_resumed_at AS "resumedAt"
-      FROM projection_threads
+      FROM harness_activity_threads
       WHERE ${sql.in("thread_id", threadIds.slice(index, index + 500))}
     `;
     for (const row of rows)
@@ -350,6 +351,18 @@ export const makeTeamDailyPass = (input: {
         return true;
       });
 
+    /** A confirmed late write must be announced after a teammate could have scanned its attempt. */
+    const advanceMonth = (team: Team, day: string) =>
+      Effect.gen(function* () {
+        const marker = (team.marker ??= { months: {}, publishedSha: null, etag: null });
+        const month = day.slice(0, 7);
+        const now = yield* Clock.currentTimeMillis;
+        const previous = Date.parse(marker.months[month] ?? "");
+        marker.months[month] = DateTime.formatIso(
+          DateTime.makeUnsafe(Number.isFinite(previous) ? Math.max(now, previous + 1) : now),
+        );
+      });
+
     /** Publishes the team's change marker, in the team's current folder, when it changed. */
     const publishMarker = (
       attached: TeamDailySource,
@@ -402,6 +415,7 @@ export const makeTeamDailyPass = (input: {
     const settleAttempt = (
       attached: TeamDailySource,
       state: State,
+      team: Team,
       record: Day,
       day: string,
       teamId: string,
@@ -417,7 +431,9 @@ export const makeTeamDailyPass = (input: {
         });
         if (found.kind === "lost") return "lost" as const;
         if (found.kind === "held") return "held" as const;
+        let confirmedChange = false;
         if (found.kind === "file" && sha256(found.text) === attempt.sha) {
+          confirmedChange = true;
           // The write landed: what it carried is now what the team has.
           for (const [threadId, section] of Object.entries(record.sections)) {
             const text = attempt.included[threadId];
@@ -439,6 +455,7 @@ export const makeTeamDailyPass = (input: {
           record.publishedSha = attempt.sha;
           record.etag = found.etag;
         } else if (found.kind === "missing") {
+          confirmedChange = attempt.sha === null || record.publishedSha !== null;
           // A removal landed, or nothing was ever written.
           for (const section of Object.values(record.sections)) delete section.owesRemoval;
           if (attempt.sha === null)
@@ -455,6 +472,10 @@ export const makeTeamDailyPass = (input: {
           return "ambiguous" as const;
         }
         delete record.attempt;
+        if (confirmedChange) {
+          yield* advanceMonth(team, day);
+          yield* setStatus(teamId, { lastPublishedAt: yield* nowIso });
+        }
         yield* writeState(state);
         return "settled" as const;
       });
@@ -517,7 +538,14 @@ export const makeTeamDailyPass = (input: {
             );
             continue;
           }
-          const settled = yield* settleAttempt(attached, state, record, day, workspace.teamId);
+          const settled = yield* settleAttempt(
+            attached,
+            state,
+            team,
+            record,
+            day,
+            workspace.teamId,
+          );
           if (settled === "lost") return "lost" as const;
           if (settled === "held") {
             problems.push(
@@ -628,8 +656,7 @@ export const makeTeamDailyPass = (input: {
             }
             record.storageKey = workspace.storageKey;
           }
-          const marker = (team.marker ??= { months: {}, publishedSha: null, etag: null });
-          marker.months[day.slice(0, 7)] = yield* nowIso;
+          yield* advanceMonth(team, day);
           record.attempt = {
             sha,
             included: Object.fromEntries(rendered.included),
@@ -679,6 +706,7 @@ export const makeTeamDailyPass = (input: {
             continue;
           }
           delete record.attempt;
+          yield* advanceMonth(team, day);
           settleRemovals();
           if (rendered.text === null) {
             delete team.days[day];
@@ -788,11 +816,13 @@ export const makeTeamDailyPass = (input: {
             account.authorName,
             nowMs,
           ).pipe(
-            Effect.catchTag("TextGenerationError", (error) => {
-              held = true;
-              return setStatus(teamId, { state: "held", message: error.detail }).pipe(
-                Effect.as(true),
-              );
+            Effect.catchTags({
+              TextGenerationError: (error) => {
+                held = true;
+                return setStatus(teamId, { state: "held", message: error.detail }).pipe(
+                  Effect.as(true),
+                );
+              },
             }),
           );
           if (!summarized) continue;

@@ -126,6 +126,32 @@ describe("Local team copies", () => {
     }),
   );
 
+  it.effect("retries a changed older month after a listed document could not be read", () =>
+    Effect.gen(function* () {
+      const { source, f, marker, synced } = yield* memberOfTeam;
+      const old = dailyIn("2025-01", "2025-01-05");
+      yield* source.list(teamA);
+      yield* synced;
+      marker({ "2026-10": "2026-10-09T20:00:00.000Z", "2025-01": "2026-10-10T11:00:00.000Z" });
+      expect(paths(yield* source.list(teamA))).toContain(old);
+      // The listed changed file is temporarily missing when the copy tries to read it.
+      f.removed.add(`rootA:${old}`);
+      expect(yield* source.read(teamA, old)).toEqual({ kind: "skip" });
+      yield* source.report(teamA, {
+        kind: "synced",
+        at: "2026-10-10T12:00:00.000Z",
+        files: 4,
+        skipped: 1,
+        pending: 0,
+      });
+      f.removed.delete(`rootA:${old}`);
+      expect(paths(yield* source.list(teamA))).toContain(old);
+      expect(yield* source.read(teamA, old)).toMatchObject({ kind: "file" });
+      yield* synced;
+      expect(paths(yield* source.list(teamA))).not.toContain(old);
+    }),
+  );
+
   it.effect("lists every month of a member whose marker can't be read", () =>
     Effect.gen(function* () {
       const { source, f, synced } = yield* memberOfTeam;
@@ -159,30 +185,29 @@ describe("Local team copies", () => {
       message: /different UC San Diego account/u,
     },
   ];
-  for (const ending of endings)
-    it.effect(`removes the copy on the next pass after ${ending.name}`, () =>
-      Effect.gen(function* () {
-        const team = yield* memberOfTeam;
-        yield* ending.end(team);
-        // A pass lists the teams to keep, then each team; either way the copy is detached.
-        const kept = yield* team.source.teams;
-        if (kept.length > 0) expect(yield* team.source.list(teamA)).toEqual({ kind: "detached" });
-        expect(yield* team.source.teams).toEqual([]);
-        if (ending.name === "another campus account signs in") {
-          // The other account doesn't see this one's copies; the original account's comes back.
-          expect(yield* team.mirrors).toEqual([]);
-          team.f.switchTo("alice");
-          expect(yield* team.mirrors).toEqual([expect.objectContaining({ state: "mirrored" })]);
-          return;
-        }
-        expect(yield* team.mirrors).toEqual([
-          expect.objectContaining({
-            state: "detached",
-            message: expect.stringMatching(ending.message),
-          }),
-        ]);
-      }),
-    );
+  it.effect.each(endings)("removes the copy on the next pass after $name", (ending) =>
+    Effect.gen(function* () {
+      const team = yield* memberOfTeam;
+      yield* ending.end(team);
+      // A pass lists the teams to keep, then each team; either way the copy is detached.
+      const kept = yield* team.source.teams;
+      if (kept.length > 0) expect(yield* team.source.list(teamA)).toEqual({ kind: "detached" });
+      expect(yield* team.source.teams).toEqual([]);
+      if (ending.name === "another campus account signs in") {
+        // The other account doesn't see this one's copies; the original account's comes back.
+        expect(yield* team.mirrors).toEqual([]);
+        team.f.switchTo("alice");
+        expect(yield* team.mirrors).toEqual([expect.objectContaining({ state: "mirrored" })]);
+        return;
+      }
+      expect(yield* team.mirrors).toEqual([
+        expect.objectContaining({
+          state: "detached",
+          message: expect.stringMatching(ending.message),
+        }),
+      ]);
+    }),
+  );
 
   it.effect("removes copies read through a session when it signs out", () =>
     Effect.gen(function* () {

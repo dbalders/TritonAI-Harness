@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   accountCommandValue,
   type AccountLoginState,
@@ -15,7 +16,11 @@ import { usePreparedConnection } from "../state/session";
 import { useAtomCommand } from "../state/use-atom-command";
 export function useUcsdAccount(environmentId: EnvironmentId): AccountLoginState & {
   controller: ReturnType<typeof createAccountLoginController>;
+  canSignIn: boolean;
+  canSignOut: boolean;
 } {
+  const canSignIn = useAtomValue(serverEnvironment.startAccountLogin.permissionAtom(environmentId));
+  const canSignOut = useAtomValue(serverEnvironment.signOutAccount.permissionAtom(environmentId));
   const preparedConnection = usePreparedConnection(environmentId);
   const getStatus = useAtomCommand(serverEnvironment.getAccountStatus, { reportFailure: false });
   const start = useAtomCommand(serverEnvironment.startAccountLogin, { reportFailure: false });
@@ -105,5 +110,5 @@ export function useUcsdAccount(environmentId: EnvironmentId): AccountLoginState 
         description: "Your campus account changed. The rest of each draft was kept.",
       });
   }, [accountStatus, environmentId, identity]);
-  return { ...state, controller };
+  return { ...state, controller, canSignIn, canSignOut };
 }

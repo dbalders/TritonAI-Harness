@@ -4,10 +4,14 @@ import {
   type PullRequestFilesViewedResult,
   type PullRequestRef,
 } from "@t3tools/contracts";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { act, StrictMode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  usePullRequestFilesViewed,
+  type PullRequestFilesViewedView,
+} from "./usePullRequestFilesViewed";
 
 const { host, setFilesViewed, toastAdd } = vi.hoisted(() => ({
   host: { data: null as unknown, refresh: vi.fn() },
@@ -29,11 +33,6 @@ vi.mock("~/state/query", () => ({
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => setFilesViewed }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: toastAdd } }));
-
-import {
-  usePullRequestFilesViewed,
-  type PullRequestFilesViewedView,
-} from "./usePullRequestFilesViewed";
 
 const environmentId = EnvironmentId.make("pr-files-viewed-audit");
 const reference: PullRequestRef = {

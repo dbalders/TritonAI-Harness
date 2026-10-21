@@ -59,13 +59,16 @@ export function TeamDocuments({
   const [prior, setPrior] = useState<TeamStorageStatus["priorVersion"] | null>(null);
   const [ownDevice] = useState(teamDocumentDeviceId);
   const pending = useRef<Publish | null>(null);
+  const documentPath = document?.path;
+  const documentEtag = document?.etag;
+  const documentText = document?.text ?? "";
   useEffect(() => {
-    setEdit(document?.text ?? "");
+    setEdit(documentText);
     setConfirmDelete(false);
     // Another document, or a newer version of this one, has a different history.
     setHistory(null);
     setPrior(null);
-  }, [document]);
+  }, [documentPath, documentEtag, documentText]);
   const showHistory = async (path: string) => {
     if (history) {
       setHistory(null);
@@ -338,7 +341,7 @@ export function TeamDocuments({
                       <Button
                         size="xs"
                         variant={prior?.version.id === version.id ? "secondary" : "ghost"}
-                        disabled={busy}
+                        disabled={busy || index === 0}
                         aria-label={`Read version ${version.id}`}
                         onClick={() => void readVersion(document.path, version.id)}
                       >

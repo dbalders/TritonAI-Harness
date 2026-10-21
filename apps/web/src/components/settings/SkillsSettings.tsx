@@ -26,7 +26,6 @@ import {
   UsersIcon,
 } from "lucide-react";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-
 import {
   formatProviderSkillDisplayName,
   formatProviderSkillInstallSource,
@@ -56,6 +55,7 @@ import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { TeamSkillsSettingsSection } from "../teams/TeamSkillsSettings";
 import { useOptionalSettingsScope } from "./SettingsScopeContext";
+import { RecordSkillButton } from "./RecordSkillButton";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
 const EMPTY_SKILL_ROWS: ReadonlyArray<CodexSkillRow> = [];
@@ -457,6 +457,10 @@ export function SkillsSettingsPanel() {
     serverEnvironment.forceRefreshProviderSkillCatalog,
     { label: "skill catalog refresh", reportFailure: false },
   );
+  const refreshProvidersCommand = useAtomCommand(serverEnvironment.refreshProviders, {
+    label: "skill list refresh",
+    reportFailure: false,
+  });
   const [forcingCatalogRefresh, setForcingCatalogRefresh] = useState(false);
   const installSkillCommand = useAtomCommand(serverEnvironment.installProviderSkill, {
     label: "skill install",
@@ -584,14 +588,19 @@ export function SkillsSettingsPanel() {
   const catalogInstallDisabled = installDisabled || catalogError !== null;
   const removalBlocked = ownershipBlocked;
 
-  // The server otherwise checks GitHub only at startup and once a day.
+  // The server otherwise checks GitHub only at startup and once a day, and
+  // re-reads Codex's own skills every few minutes, so a skill an agent just
+  // wrote shows up here on refresh.
   const loadCatalog = async () => {
     if (primaryEnvironmentId) {
       setForcingCatalogRefresh(true);
-      await forceRefreshCatalogCommand({
-        environmentId: primaryEnvironmentId,
-        input: { refresh: "force" },
-      });
+      await Promise.all([
+        forceRefreshCatalogCommand({
+          environmentId: primaryEnvironmentId,
+          input: { refresh: "force" },
+        }),
+        refreshProvidersCommand({ environmentId: primaryEnvironmentId, input: {} }),
+      ]);
       setForcingCatalogRefresh(false);
     }
     catalogQuery.refresh();
@@ -816,9 +825,8 @@ export function SkillsSettingsPanel() {
   );
 
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer headerAction={<RecordSkillButton />}>
       {teamSkillsFirst ? <TeamSkillsSettingsSection /> : null}
-
       {catalogError ? (
         <SettingsSection
           title="TritonAI Commons"

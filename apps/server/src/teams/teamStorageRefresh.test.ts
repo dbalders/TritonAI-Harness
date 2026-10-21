@@ -44,56 +44,58 @@ const changes = [
 ];
 
 describe("Team file changes after a token refresh", () => {
-  for (const scenario of changes)
-    for (const command of ["publish", "update", "delete"] as const)
-      it.effect(`sends no ${command} when ${scenario.name} while the token refreshes`, () =>
-        Effect.gen(function* () {
-          const { f, storage } = yield* connected;
-          // The refresh right before the change itself, after its folders were looked up.
-          f.duringTokenRefresh(
-            () =>
-              f.graph.at(-1)?.startsWith("GET") === true &&
-              (command === "publish"
-                ? f.graph.at(-1)!.endsWith(`/${deviceId}`)
-                : f.graph.at(-1)!.includes(`${recordId}.md`)),
-            Effect.sync(() => scenario.change(f)),
-          );
-          const result = yield* storage
-            .execute(
-              "s",
-              command === "publish"
-                ? {
-                    action: "publish",
-                    teamId: teamA,
-                    recordId,
-                    deviceId,
-                    kind: "memory",
-                    title: "A note",
-                    project: "Grant reports",
-                    text: "Shared text",
-                  }
-                : command === "update"
-                  ? {
-                      action: "update-file",
-                      teamId: teamA,
-                      path: memoryPath,
-                      etag: "v1",
-                      text: "New",
-                    }
-                  : { action: "delete-file", teamId: teamA, path: memoryPath, etag: "v1" },
-            )
-            .pipe(Effect.flip);
-          // Refused, or (for another account) the refreshed token itself is refused.
-          expect([
-            "forbidden",
-            "conflict",
-            "sign_in_required",
-            "not_found",
-            "unavailable",
-          ]).toContain(result.code);
-          expect(f.writes).toEqual([]);
-        }),
+  it.effect.each(
+    changes.flatMap((scenario) =>
+      (["publish", "update", "delete"] as const).map((command) => ({
+        scenario,
+        command,
+        name: scenario.name,
+      })),
+    ),
+  )("sends no $command when $name while the token refreshes", ({ scenario, command }) =>
+    Effect.gen(function* () {
+      const { f, storage } = yield* connected;
+      // The refresh right before the change itself, after its folders were looked up.
+      f.duringTokenRefresh(
+        () =>
+          f.graph.at(-1)?.startsWith("GET") === true &&
+          (command === "publish"
+            ? f.graph.at(-1)!.endsWith(`/${deviceId}`)
+            : f.graph.at(-1)!.includes(`${recordId}.md`)),
+        Effect.sync(() => scenario.change(f)),
       );
+      const result = yield* storage
+        .execute(
+          "s",
+          command === "publish"
+            ? {
+                action: "publish",
+                teamId: teamA,
+                recordId,
+                deviceId,
+                kind: "memory",
+                title: "A note",
+                project: "Grant reports",
+                text: "Shared text",
+              }
+            : command === "update"
+              ? {
+                  action: "update-file",
+                  teamId: teamA,
+                  path: memoryPath,
+                  etag: "v1",
+                  text: "New",
+                }
+              : { action: "delete-file", teamId: teamA, path: memoryPath, etag: "v1" },
+        )
+        .pipe(Effect.flip);
+      // Refused, or (for another account) the refreshed token itself is refused.
+      expect(["forbidden", "conflict", "sign_in_required", "not_found", "unavailable"]).toContain(
+        result.code,
+      );
+      expect(f.writes).toEqual([]);
+    }),
+  );
 
   it.effect("still sends a change when nothing changed during the refresh", () =>
     Effect.gen(function* () {

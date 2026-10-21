@@ -82,6 +82,7 @@ export function TeamProjects({
   const { run, busy, error } = useTeamProjectRequest(environmentId);
   const projects = useProjects();
   const [links, setLinks] = useState<readonly TeamProjectLink[] | null>(null);
+  const [sharingAcknowledged, setSharingAcknowledged] = useState(false);
   const [preferredChoice, setChoice] = useState<string>(linkProjectId ?? "");
   const [open, setOpen] = useState<{ projectId: ProjectId; kind: "memory" | "skill" } | null>(null);
   const [confirmUnlink, setConfirmUnlink] = useState<ProjectId | null>(null);
@@ -101,6 +102,7 @@ export function TeamProjects({
       }
       setLinks(result.projects);
       setConfirmUnlink(null);
+      if (command.action === "bind") setSharingAcknowledged(false);
       onLinksChangeRef.current?.(result.projects.length > 0);
       setOpen((current) =>
         result.projects.some((link) => link.projectId === current?.projectId) ? current : null,
@@ -200,7 +202,8 @@ export function TeamProjects({
               onSubmit={(event) => {
                 event.preventDefault();
                 const project = available.find((entry) => entry.id === choice);
-                if (project) void apply({ action: "bind", teamId, projectId: project.id });
+                if (project && sharingAcknowledged)
+                  void apply({ action: "bind", teamId, projectId: project.id });
               }}
             >
               <label className="min-w-0 flex-1 space-y-1 text-xs">
@@ -210,7 +213,10 @@ export function TeamProjects({
                   className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
                   value={choice}
                   disabled={busy}
-                  onChange={(event) => setChoice(event.target.value)}
+                  onChange={(event) => {
+                    setChoice(event.target.value);
+                    setSharingAcknowledged(false);
+                  }}
                 >
                   <option value="">Choose a project…</option>
                   {available.map((project) => (
@@ -220,8 +226,28 @@ export function TeamProjects({
                   ))}
                 </select>
               </label>
-              <Button type="submit" disabled={busy || !choice}>
-                Link to team
+              <div className="basis-full space-y-2 rounded-md border border-border p-3 text-xs">
+                <p>
+                  Linking turns on automatic daily summaries of new work in this project. Everyone
+                  in this team can read those summaries in shared memory. Project files and full
+                  chats stay in this Harness environment.
+                </p>
+                <p className="text-muted-foreground">
+                  You can stop sharing for an individual thread or unlink the project. Previously
+                  shared summaries may remain in shared storage and version history.
+                </p>
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={sharingAcknowledged}
+                    disabled={busy || !choice}
+                    onChange={(event) => setSharingAcknowledged(event.target.checked)}
+                  />
+                  I understand that new work summaries will be shared with this team.
+                </label>
+              </div>
+              <Button type="submit" disabled={busy || !choice || !sharingAcknowledged}>
+                Link and share new summaries
               </Button>
             </form>
           ) : links.length === 0 ? (
@@ -338,6 +364,7 @@ function TeamProjectDocuments({
 }) {
   const { run, busy, error } = useTeamProjectRequest(environmentId);
   const [state, setState] = useState<TeamStorageStatus | null>(null);
+  const [editorState, setEditorState] = useState<TeamStorageStatus | null>(null);
   const { projectId } = link;
   // The server resolves the team from the project's link; the team id here only keeps the
   // shared document editor's command shape.
@@ -348,12 +375,18 @@ function TeamProjectDocuments({
       const result = await run(input);
       if (!result) return null;
       if ("error" in result) {
-        if (!retryable(result.error)) setState(null);
+        if (!retryable(result.error)) {
+          setState(null);
+          setEditorState(null);
+        }
         return null;
       }
       const next = result.storage;
       if (!next) return null;
       setState((previous) => mergeTeamStorageResult(previous, next, command));
+      if (next.status === "connected")
+        setEditorState((previous) => mergeTeamStorageResult(previous, next, command));
+      else if (next.status !== "disconnected" && next.status !== "pending") setEditorState(null);
       if (command.action === "publish" && next.document) {
         // Show the new note in the list; the listing keeps the open document.
         const listed = await run({
@@ -365,6 +398,10 @@ function TeamProjectDocuments({
           setState((previous) =>
             mergeTeamStorageResult(previous, files, { action: "list-files", teamId }),
           );
+          if (files.status === "connected")
+            setEditorState((previous) =>
+              mergeTeamStorageResult(previous, files, { action: "list-files", teamId }),
+            );
         }
       }
       return next;
@@ -410,9 +447,9 @@ function TeamProjectDocuments({
           ? `Loading team ${kind === "skill" ? "skills" : "memory"}…`
           : `Refresh team ${kind === "skill" ? "skills" : "memory"}`}
       </Button>
-      {state?.status === "connected" ? (
+      {editorState ? (
         <>
-          {state.files.length === 0 ? (
+          {editorState.files.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {kind === "skill"
                 ? "No skills have been published to this team yet."
@@ -421,10 +458,10 @@ function TeamProjectDocuments({
           ) : null}
           <TeamDocuments
             teamId={teamId}
-            document={state.document}
-            files={state.files}
+            document={editorState.document}
+            files={editorState.files}
             canWrite={canWrite}
-            busy={busy}
+            busy={busy || state?.status !== "connected"}
             run={runStorage}
             projectTitle={link.projectTitle}
             projectKind={kind}

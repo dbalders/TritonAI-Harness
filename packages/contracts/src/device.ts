@@ -13,7 +13,6 @@
  * @module Device
  */
 import { Schema } from "effect";
-
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const DevicePlatform = Schema.Literals(["ios", "android"]);

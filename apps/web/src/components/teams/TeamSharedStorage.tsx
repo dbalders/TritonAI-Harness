@@ -20,6 +20,7 @@ export function TeamSharedStorage({
 }) {
   const request = useAtomCommand(serverEnvironment.teamStorage, { reportFailure: false });
   const [state, setState] = useState<TeamStorageStatus | null>(null);
+  const [editorState, setEditorState] = useState<TeamStorageStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
@@ -37,6 +38,9 @@ export function TeamSharedStorage({
         if (generation.current !== requestId) return null;
         const next = response.value;
         setState((previous) => mergeTeamStorageResult(previous, next, input));
+        if (next.status === "connected")
+          setEditorState((previous) => mergeTeamStorageResult(previous, next, input));
+        else if (next.status !== "disconnected" && next.status !== "pending") setEditorState(null);
         if (input.action === "connect" && next.verificationUri)
           await ensureLocalApi().shell.openExternal(next.verificationUri);
         return next;
@@ -50,8 +54,10 @@ export function TeamSharedStorage({
                 cause.code === "unavailable" ||
                 cause.code === "invalid_request")
             )
-          )
+          ) {
             setState(null);
+            setEditorState(null);
+          }
           setError(cause instanceof Error ? cause.message : "Shared storage is unavailable.");
         }
         return null;
@@ -172,13 +178,13 @@ export function TeamSharedStorage({
           ))}
         </ul>
       ) : null}
-      {state?.status === "connected" ? (
+      {editorState ? (
         <TeamDocuments
           teamId={teamId}
-          document={state.document}
-          files={state.files}
+          document={editorState.document}
+          files={editorState.files}
           canWrite={canWrite}
-          busy={busy}
+          busy={busy || state?.status !== "connected"}
           run={run}
         />
       ) : null}

@@ -1,14 +1,14 @@
-import { ApprovalRequestId } from "@t3tools/contracts";
+import { RuntimeRequestId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 
 describe("ComposerPendingApprovalActions", () => {
   it("keeps the main decisions visible and secondary decisions in the menu", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalActions
-        requestId={ApprovalRequestId.make("approval-1")}
+        requestId={RuntimeRequestId.make("approval-1")}
+        canRespond
         isResponding={false}
         onRespondToApproval={async () => undefined}
       />,
@@ -23,7 +23,8 @@ describe("ComposerPendingApprovalActions", () => {
   it("keeps secondary provider labels out of the compact action row", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalActions
-        requestId={ApprovalRequestId.make("approval-safari")}
+        requestId={RuntimeRequestId.make("approval-safari")}
+        canRespond
         isResponding={false}
         options={[
           { decision: "decline", label: "Decline" },
@@ -42,7 +43,8 @@ describe("ComposerPendingApprovalActions", () => {
   it("preserves provider labels for the main decisions", () => {
     const markup = renderToStaticMarkup(
       <ComposerPendingApprovalActions
-        requestId={ApprovalRequestId.make("approval-1")}
+        requestId={RuntimeRequestId.make("approval-1")}
+        canRespond
         isResponding={false}
         options={[
           { decision: "accept", label: "Allow once" },

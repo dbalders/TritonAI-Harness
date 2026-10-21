@@ -2,6 +2,12 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { ProjectId, ThreadId } from "./baseSchemas.ts";
 
+/** Maximum memory or skill references carried by one message. */
+export const MAX_TEAM_MEMORY_REFERENCES = 50;
+export const MAX_TEAM_PROJECT_SKILLS = 5;
+/** Carried references include up to five project skills added by the server. */
+export const MAX_TEAM_MESSAGE_REFERENCES = MAX_TEAM_MEMORY_REFERENCES + MAX_TEAM_PROJECT_SKILLS;
+
 const Id = Schema.String.check(
   Schema.isPattern(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u),
 );
@@ -518,7 +524,10 @@ export const TeamProjectCommand = Schema.Union([
    */
   Schema.Struct({
     action: Schema.Literal("memory-verify"),
-    references: Schema.Array(Id).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
+    references: Schema.Array(Id).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(MAX_TEAM_MESSAGE_REFERENCES),
+    ),
   }),
   /** Publishes text the user chose in a thread as a memory note; provenance comes from the server. */
   Schema.Struct({
@@ -605,7 +614,6 @@ export const TeamMemoryReference = Schema.Struct({
 });
 export type TeamMemoryReference = typeof TeamMemoryReference.Type;
 /** At most this many skills can be on for one project, because each is added to every message. */
-export const MAX_TEAM_PROJECT_SKILLS = 5;
 /** The most skill text, in characters, that can be on for one project at once. */
 export const MAX_TEAM_PROJECT_SKILL_CHARS = 32_000;
 /**

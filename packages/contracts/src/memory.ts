@@ -1,6 +1,29 @@
 import * as Schema from "effect/Schema";
-
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProjectId, ThreadId } from "./baseSchemas.ts";
+
+export const ServerProjectMemoryInput = Schema.Struct({ projectId: ProjectId });
+export type ServerProjectMemoryInput = typeof ServerProjectMemoryInput.Type;
+
+export const ServerProjectMemory = Schema.Struct({
+  state: Schema.Literals(["disabled", "pending", "ready"]),
+  markdown: Schema.NullOr(Schema.String),
+  relativePath: Schema.NullOr(Schema.String),
+  updatedAt: Schema.NullOr(Schema.String),
+  recentUpdates: Schema.Array(
+    Schema.Struct({
+      threadId: ThreadId,
+      text: Schema.String,
+      updatedAt: Schema.String,
+    }),
+  ).check(Schema.isMaxLength(16)),
+});
+export type ServerProjectMemory = typeof ServerProjectMemory.Type;
+
+export class ServerProjectMemoryError extends Schema.TaggedError<ServerProjectMemoryError>()(
+  "ServerProjectMemoryError",
+  { message: Schema.String },
+) {}
 
 /** A local calendar day, `YYYY-MM-DD`. */
 export const MemoryDay = Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/u));

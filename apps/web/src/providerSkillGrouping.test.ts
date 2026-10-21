@@ -4,7 +4,6 @@ import type {
   ServerProviderSkillCatalogEntry,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   dedupeProviderSkillRows,
   groupProviderSkills,
@@ -60,6 +59,52 @@ function entry(
 }
 
 describe("groupProviderSkills", () => {
+  it.each([false, true])("retains distinct catalog installations (managed=%s)", (managed) => {
+    const first = providerRow({
+      instanceId: "codex",
+      name: "shared-skill",
+      path: "/onprem/shared-skill/SKILL.md",
+    });
+    const second = providerRow({
+      instanceId: "codex_frontier",
+      name: "shared-skill",
+      path: "/frontier/shared-skill/SKILL.md",
+    });
+    const grouped = groupProviderSkills({
+      entries: [entry("shared-skill", "ai-team")],
+      rows: [first, second],
+      managedSkillNames: new Set(managed ? ["shared-skill"] : []),
+    });
+    expect(grouped.aiTeamItems[0]?.installedRow).toBe(first);
+    expect(grouped.managedOnlyRows).toEqual(managed ? [second] : []);
+    expect(grouped.otherRows).toEqual(managed ? [] : [second]);
+  });
+
+  it.each([false, true])(
+    "does not list a shared catalog installation twice (managed=%s)",
+    (managed) => {
+      const first = providerRow({
+        instanceId: "codex",
+        name: "shared-skill",
+        path: "/shared/SKILL.md",
+        enabled: false,
+      });
+      const second = providerRow({
+        instanceId: "codex_frontier",
+        name: "shared-skill",
+        path: "/shared/SKILL.md",
+      });
+      const grouped = groupProviderSkills({
+        entries: [entry("shared-skill", "ai-team")],
+        rows: [first, second],
+        managedSkillNames: new Set(managed ? ["shared-skill"] : []),
+      });
+      expect(grouped.aiTeamItems[0]?.installedRow).toBe(second);
+      expect(grouped.managedOnlyRows).toEqual([]);
+      expect(grouped.otherRows).toEqual([]);
+    },
+  );
+
   it("deduplicates provider snapshots that point to the same skill file", () => {
     const path = "/tmp/skills/ucsd-dsmlp-deploy/SKILL.md";
     const cloud = providerRow({

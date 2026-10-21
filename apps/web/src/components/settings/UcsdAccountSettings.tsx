@@ -5,7 +5,8 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
 function AccountConnection({ environmentId }: { readonly environmentId: EnvironmentId }) {
-  const { account, busy, error, checkedAt, controller } = useUcsdAccount(environmentId);
+  const { account, busy, error, checkedAt, controller, canSignIn, canSignOut } =
+    useUcsdAccount(environmentId);
 
   const pending = account?.status === "pending";
   const signedIn = account?.status === "signed-in";
@@ -40,7 +41,11 @@ function AccountConnection({ environmentId }: { readonly environmentId: Environm
       control={
         <div className="flex flex-wrap items-center gap-2">
           {account?.configured && !pending && !signedIn ? (
-            <Button size="xs" disabled={busy} onClick={() => void controller.signIn()}>
+            <Button
+              size="xs"
+              disabled={busy || !canSignIn}
+              onClick={() => void controller.signIn()}
+            >
               Sign in with UC San Diego
             </Button>
           ) : null}
@@ -58,7 +63,7 @@ function AccountConnection({ environmentId }: { readonly environmentId: Environm
             <Button
               size="xs"
               variant="outline"
-              disabled={busy}
+              disabled={busy || !canSignOut}
               onClick={() => void controller.signOut()}
             >
               {pending ? "Cancel" : "Sign out"}

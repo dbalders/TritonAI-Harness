@@ -2,6 +2,7 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   formatTeamContext,
+  MAX_TEAM_MESSAGE_REFERENCES,
   formatTeamNote,
   summarizeTeamNote,
   teamNoteHeader,
@@ -18,6 +19,7 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useUcsdAccount } from "../../hooks/useUcsdAccount";
+import { useTeamsPermission } from "./useTeamsPermission";
 import { MAX_DRAFT_TEAM_MEMORY } from "./teamMemoryDrafts";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -70,8 +72,15 @@ export function SignedIn({
   environmentId: EnvironmentId;
   children: (identity: string) => React.ReactNode;
 }) {
+  const allowed = useTeamsPermission(environmentId);
   const { account } = useUcsdAccount(environmentId);
   const profile = account?.status === "signed-in" ? account.profile : null;
+  if (!allowed)
+    return (
+      <p className="text-sm text-muted-foreground">
+        Your connection does not have permission to use Teams on this environment.
+      </p>
+    );
   if (!account) return <p className="text-sm text-muted-foreground">Checking your account…</p>;
   if (!profile)
     return (
@@ -516,7 +525,7 @@ function ContextPicker({
     const result = onInsert(reference);
     if (result === "full")
       setNotice(
-        `Team memory or skills are already in ${MAX_DRAFT_TEAM_MEMORY} unsent drafts or queued messages. Send or remove one of them, then try again.`,
+        `There is no room for another team note or skill. Harness keeps up to ${MAX_DRAFT_TEAM_MEMORY} manually added notes and skills across unsent drafts, and one message can carry ${MAX_TEAM_MESSAGE_REFERENCES} references including its original queued context. Send or remove an unsent note. For a full queued message, cancel it and compose a new message without team context; for a recovered draft, clear its message text.`,
       );
     else if (result === "not-inserted")
       toastManager.add({

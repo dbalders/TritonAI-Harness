@@ -1,7 +1,6 @@
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import * as Cause from "effect/Cause";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { toastManager } from "../components/ui/toast";
 import {
   showThreadUndoNotice,

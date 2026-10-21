@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { TRITONAI_FIRST_RUN_PROMPT } from "../tritonAiWorkspace";
 import { seedNewDraftPrompt } from "./useHandleNewThread";

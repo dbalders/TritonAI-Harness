@@ -1,8 +1,13 @@
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
+import {
+  AuthSettingsWriteScope,
+  type EnvironmentId,
+  type SshDeviceHostConfig,
+} from "@t3tools/contracts";
+import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { AppleIcon, AndroidIcon } from "../Icons";
 import { Spinner } from "../ui/spinner";
-import type { EnvironmentId, SshDeviceHostConfig } from "@t3tools/contracts";
 import { randomUUID } from "../../lib/utils";
 import { useState } from "react";
 import { deviceEnvironment, useDeviceState } from "../../state/device";
@@ -12,7 +17,6 @@ import { Button } from "../ui/button";
 import { MoreVertical, PlusIcon } from "lucide-react";
 import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
 import { SettingsRow } from "./settingsLayout";
-
 import { useSettingsScope } from "./SettingsScopeContext";
 import { toastManager } from "../ui/toast";
 import { updateDeviceHosts } from "./deviceHostsSettings.logic";
@@ -22,6 +26,7 @@ import { deviceHostConnectionKey } from "./deviceHostConnectionChecks";
 
 export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null }) {
   const { scope, environments, connectedEnvironments } = useSettingsScope();
+  const canConfigure = useEnvironmentScope(props.environmentId, AuthSettingsWriteScope);
   const projectScope = scope.kind === "project" || scope.kind === "checkout";
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const [editing, setEditing] = useState<SshDeviceHostConfig | null>(null);
@@ -41,6 +46,9 @@ export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null
         environments.map(async (environment) => {
           if (environment.connection.phase !== "connected" || !environment.serverConfig) {
             throw new Error("Environment disconnected");
+          }
+          if (!readEnvironmentScope(environment.environmentId, AuthSettingsWriteScope)) {
+            throw new Error("This connection cannot change device settings.");
           }
           return update({
             environmentId: environment.environmentId,
@@ -85,7 +93,9 @@ export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null
         <Button
           size="sm"
           variant="outline"
-          disabled={projectScope || busy || !props.environmentId || editing !== null}
+          disabled={
+            !canConfigure || projectScope || busy || !props.environmentId || editing !== null
+          }
           onClick={() => {
             setOriginalHost(null);
             setEditing({ id: randomUUID(), label: "", target: "" });
@@ -113,7 +123,7 @@ export function DeviceHostsSettings(props: { environmentId: EnvironmentId | null
                   environmentLabel={environment.label}
                   environmentId={environment.environmentId}
                   hosts={environment.serverConfig?.settings.deviceHosts ?? []}
-                  busy={projectScope || busy}
+                  busy={!canConfigure || projectScope || busy}
                   checks={checks}
                   testConnection={async (host) => {
                     const results = await testConnection(host);
@@ -230,7 +240,8 @@ function DeviceHostList({
                         }
                       >
                         {platform.platform === "ios" ? (
-                          <AppleIcon className="size-3.5" />
+                          // The Apple mark is bottom-heavy; lift it so it does not dip under the label.
+                          <AppleIcon className="size-3.5 -translate-y-px" />
                         ) : (
                           <AndroidIcon className="size-3.5" />
                         )}

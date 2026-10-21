@@ -6,7 +6,7 @@
  * each project's sharing began, and to threads not chosen as Don't share, so nothing else is read.
  */
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import {
   type MemoryActivityMessage,
@@ -109,14 +109,10 @@ export const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (
       p.project_id AS "projectId",
       p.title AS "projectTitle",
       p.workspace_root AS "workspaceRoot",
-      CASE
-        WHEN json_valid(r.resume_cursor_json) THEN json_extract(r.resume_cursor_json, '$.threadId')
-      END AS "codexThreadId"
-    FROM projection_thread_messages AS m
-    JOIN projection_threads AS t ON t.thread_id = m.thread_id
+      t.codex_thread_id AS "codexThreadId"
+    FROM harness_activity_messages AS m
+    JOIN harness_activity_threads AS t ON t.thread_id = m.thread_id
     JOIN projection_projects AS p ON p.project_id = t.project_id
-    LEFT JOIN provider_session_runtime AS r
-      ON r.thread_id = t.thread_id AND r.provider_name = 'codex'
     WHERE m.created_at >= ${range.startIso}
       AND m.created_at < ${range.endIso}
       AND m.is_streaming = 0
@@ -201,8 +197,8 @@ export const hasStreamingMessages = Effect.fn("memory.hasStreamingMessages")(fun
     ? // Only a turn whose work the team pass could read holds it back.
       yield* sql<{ readonly streaming: number }>`
         SELECT EXISTS (
-          SELECT 1 FROM projection_thread_messages AS m
-          JOIN projection_threads AS t ON t.thread_id = m.thread_id
+          SELECT 1 FROM harness_activity_messages AS m
+          JOIN harness_activity_threads AS t ON t.thread_id = m.thread_id
           JOIN projection_projects AS p ON p.project_id = t.project_id
           WHERE m.created_at >= ${range.startIso}
             AND m.created_at < ${range.endIso}
@@ -214,7 +210,7 @@ export const hasStreamingMessages = Effect.fn("memory.hasStreamingMessages")(fun
       `
     : yield* sql<{ readonly streaming: number }>`
         SELECT EXISTS (
-          SELECT 1 FROM projection_thread_messages AS m
+          SELECT 1 FROM harness_activity_messages AS m
           WHERE m.created_at >= ${range.startIso}
             AND m.created_at < ${range.endIso}
             AND m.is_streaming = 1

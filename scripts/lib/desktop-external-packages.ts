@@ -18,6 +18,7 @@ export const DESKTOP_RUNTIME_EXTERNAL_PREFIXES = [
   "@trycua/cua-driver",
   "@crowecawcaw/xa11y",
   "@clerk/electron-passkeys",
+  "electron-webauthn",
   "ffi-rs",
   "@yuuang/",
   // Reads its own bundle from disk by resolving `playwright-core/package.json`

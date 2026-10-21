@@ -1,11 +1,13 @@
+// @effect-diagnostics nodeBuiltinImport:off - Synchronous SHA-256 document fingerprints and campus identity keys use Node crypto.
 import {
   type AccountStatus,
-  type ClientOrchestrationCommand,
+  type OrchestrationV2Command,
   formatTeamContext,
   hasHiddenTeamText,
   MAX_TEAM_PROJECT_SKILL_CHARS,
+  MAX_TEAM_MESSAGE_REFERENCES,
   MAX_TEAM_PROJECT_SKILLS,
-  type ProjectId,
+  ProjectId,
   type StuckTeamProjectLink,
   ServerAccountError,
   type TeamContextKind,
@@ -33,17 +35,17 @@ import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import { TeamMirrorHost } from "../memory/sync/teamMirror.ts";
 import { TeamDailyHost } from "../memory/teamDailySource.ts";
-import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectService } from "../project/ProjectService.ts";
+import { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
+import * as TeamMessageGate from "./TeamMessageGate.ts";
 import { makeTeamDailySource } from "./teamDailyAdapter.ts";
 import { identityOf as mirrorIdentityOf, makeTeamMemoryMirror } from "./teamMemoryMirror.ts";
 import { TeamStorageService } from "./TeamStorageService.ts";
 
 const MAX_LINKS = 500;
-/** Memory and skill blocks handed to composers, newest last; older ones must be added again. */
-const MAX_ISSUED = 256;
 const SECRET_NAME = "team-project-links";
 const Link = Schema.Struct({
-  projectId: Schema.String,
+  projectId: ProjectId,
   teamId: Schema.String,
   storage: TeamStorage,
   linkedAt: Schema.String,
@@ -121,6 +123,16 @@ const storageUnavailable = (status: TeamStorageStatus["status"]) =>
         ? "Microsoft storage is not set up for this environment yet."
         : "Connect Microsoft in Teams → your team → Shared storage, then try again.",
   });
+/** Complete wrappers emitted by formatTeamContext; ordinary mentions of tag names are prose. */
+const teamContextBlocks = (text: string) =>
+  [
+    ...text.matchAll(
+      /<team-(memory|skill) team="[^"\r\n]*" (note|skill)="[^"\r\n]*"(?: version="[a-f0-9]{12}")?>\r?\n[\s\S]*?\r?\n<\/team-\1>/gu,
+    ),
+  ]
+    .filter((match) => match[2] === (match[1] === "memory" ? "note" : "skill"))
+    .map((match) => match[0]);
+const teamContextHeader = (block: string) => block.split("\n", 1)[0]?.replace(/\r$/u, "") ?? "";
 const folders = { memory: "Memory", skill: "Skills" } as const;
 /** Documents a project's memory or skill list titles; the rest show their titles once previewed. */
 const LIST_SUMMARIES = 20;
@@ -144,18 +156,7 @@ const hiddenSkillText = () =>
     message:
       "This skill contains hidden or control characters, so Harness won't use it. Ask its author to remove them in Teams → Shared storage.",
   });
-/** A team memory or skill block this server issued, and the authority it was issued under. */
-interface Issued {
-  readonly id: string;
-  readonly sessionId: string;
-  readonly issuer: string;
-  readonly subject: string;
-  readonly projectId: ProjectId;
-  readonly link: Link;
-  readonly block: string;
-  /** Added by the server to a message because its skill is on for the project; never handed out. */
-  readonly applied?: true;
-}
+type Issued = TeamMessageGate.Reference;
 /** An enabled skill as checked for one request, with the approved text when it can be used. */
 interface CheckedSkill {
   readonly skill: TeamProjectSkill;
@@ -189,17 +190,10 @@ export class TeamProjectService extends Context.Service<
       sessionId: string,
       command: TeamProjectCommand,
     ) => Effect.Effect<TeamProjectResult, TeamsError>;
-    /**
-     * Refuses a client's message or goal text that contains a team memory or skill block this
-     * server issued unless the sending session can still open that block's team through the same
-     * link and root.
-     * Defense in depth for the WebSocket and HTTP client dispatch only: it recognizes blocks still
-     * in memory (not after a restart or once evicted), and host MCP tools do not pass through it.
-     * The client's `memory-verify` before each send is what holds edited and older notes.
-     */
+    /** Rechecks server-issued references, including edited draft references and queued edits. */
     readonly authorizeOutgoingCommand: (
       sessionId: string,
-      command: ClientOrchestrationCommand,
+      command: OrchestrationV2Command,
     ) => Effect.Effect<void, TeamsError>;
     /**
      * What a client dispatch sends: `authorizeOutgoingCommand`, then, for a user message in a
@@ -210,8 +204,8 @@ export class TeamProjectService extends Context.Service<
      */
     readonly prepareOutgoingCommand: (
       sessionId: string,
-      command: ClientOrchestrationCommand,
-    ) => Effect.Effect<ClientOrchestrationCommand, TeamsError>;
+      command: OrchestrationV2Command,
+    ) => Effect.Effect<OrchestrationV2Command, TeamsError>;
     /** Campus sign-out, which also removes the local team copies read through this session. */
     readonly signOutAccount: (
       sessionId: string,
@@ -223,11 +217,10 @@ export const make = Effect.gen(function* () {
   const account = yield* AccountService;
   const storage = yield* TeamStorageService;
   const secrets = yield* ServerSecretStore;
-  const projects = yield* ProjectionSnapshotQuery;
+  const projects = yield* ProjectService;
+  const projections = yield* ProjectionStoreV2;
+  const gate = yield* TeamMessageGate.TeamMessageGate;
   const lock = yield* Semaphore.make(1);
-  // In memory on purpose. After a restart or eviction `memory-verify` refuses the old reference,
-  // while the dispatch gate no longer recognizes its block and treats it as ordinary text.
-  const issued = new Map<string, Issued>();
   const host = yield* TeamMirrorHost;
   const daily = yield* TeamDailyHost;
 
@@ -341,7 +334,7 @@ export const make = Effect.gen(function* () {
       if (next.length !== entries.length) yield* writeEnabled(next);
     });
   const activeProject = (projectId: ProjectId) =>
-    projects.getProjectShellById(projectId).pipe(
+    projects.getById(projectId).pipe(
       Effect.mapError(() => failure("Harness projects could not be read.")),
       Effect.map(Option.getOrNull),
     );
@@ -449,12 +442,12 @@ export const make = Effect.gen(function* () {
           message: "This team memory was added under another account. Remove it to send.",
         });
       const unchangedLink = Effect.gen(function* () {
-        if (!sameLink(entry.link, yield* linkFor(entry.projectId)))
+        if (!sameLink(entry.link, yield* linkFor(entry.projectId as ProjectId)))
           return yield* new TeamsError({
             code: "not_found",
             message: "This project's team link changed since the memory was added.",
           });
-        if (!(yield* activeProject(entry.projectId))) return yield* notLinked();
+        if (!(yield* activeProject(entry.projectId as ProjectId))) return yield* notLinked();
       });
       yield* unchangedLink;
       const team = yield* readyTeam(sessionId, entry.link.teamId);
@@ -475,28 +468,7 @@ export const make = Effect.gen(function* () {
         return yield* memoryChanged();
       yield* unchangedLink;
     });
-  const remember = (entry: Issued) => {
-    issued.set(entry.id, entry);
-    for (const id of issued.keys()) {
-      if (issued.size <= MAX_ISSUED) break;
-      issued.delete(id);
-    }
-  };
-  /** Holds a block the server added to a message, replacing its earlier copy for the same authority. */
-  const rememberApplied = (entry: Issued) => {
-    for (const [id, existing] of issued)
-      if (
-        existing.applied &&
-        existing.block === entry.block &&
-        existing.sessionId === entry.sessionId &&
-        existing.issuer === entry.issuer &&
-        existing.subject === entry.subject &&
-        existing.projectId === entry.projectId &&
-        sameLink(existing.link, entry.link)
-      )
-        issued.delete(id);
-    remember(entry);
-  };
+  const remember = gate.remember;
 
   /**
    * The caller's link, team, and own skills for a project, after the membership check every use
@@ -602,22 +574,24 @@ export const make = Effect.gen(function* () {
         return { skill: { ...base, state: "active" }, text: document.text } satisfies CheckedSkill;
       }),
     );
-  const projectOf = (command: Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>) =>
-    projects.getThreadShellById(command.threadId).pipe(
+  const projectOf = (command: Extract<OrchestrationV2Command, { type: "message.dispatch" }>) =>
+    projections.getThreadShell(command.threadId).pipe(
       Effect.mapError(() => failure("The thread could not be read.")),
-      Effect.map((thread) =>
-        Option.isSome(thread)
-          ? thread.value.projectId
-          : (command.bootstrap?.createThread?.projectId ?? null),
-      ),
+      Effect.map((thread) => thread?.projectId ?? null),
     );
   /** Adds the session's active project skills to a user message; see `prepareOutgoingCommand`. */
   const applyProjectSkills = Effect.fn("TeamProjectService.applyProjectSkills")(function* (
     sessionId: string,
-    command: ClientOrchestrationCommand,
+    command: OrchestrationV2Command,
   ) {
-    if (command.type !== "thread.turn.start") return command;
-    const text = command.message.text;
+    if (
+      command.type !== "message.dispatch" ||
+      command.createdBy !== "user" ||
+      command.creationSource === "mcp" ||
+      command.scheduledTaskId !== undefined
+    )
+      return command;
+    const text = command.text;
     // A slash command must reach the provider exactly as typed.
     if (text.trimStart().startsWith("/")) return command;
     // Unreadable settings add nothing rather than stop every message on this server; Settings →
@@ -704,11 +678,12 @@ export const make = Effect.gen(function* () {
       ),
     );
     if (applied.length === 0) return command;
-    for (const { path: _path, version: _version, ...entry } of applied) rememberApplied(entry);
-    const blocks = applied.map((entry) => entry.block).join("\n\n");
+    const remembered = yield* Effect.forEach(applied, remember);
+    const blocks = remembered.map((entry) => entry.block).join("\n\n");
     return {
       ...command,
-      message: { ...command.message, text: text.trim() ? `${text}\n\n${blocks}` : blocks },
+      text: text.trim() ? `${text}\n\n${blocks}` : blocks,
+      teamReferences: [...(command.teamReferences ?? []), ...remembered.map((entry) => entry.id)],
     };
   });
   const enabledSkills = Effect.fn("TeamProjectService.enabledSkills")(function* (
@@ -1003,7 +978,7 @@ export const make = Effect.gen(function* () {
     };
     // The read must still hold for the same account and link when it is handed out.
     yield* authorizeIssued(sessionId, entry, true);
-    remember(entry);
+    yield* remember(entry);
     return {
       projects: [],
       // The document the block was made from, so a changed one is reviewed under its current title.
@@ -1011,7 +986,7 @@ export const make = Effect.gen(function* () {
       reference: {
         id: entry.id,
         kind: "skill",
-        projectId: entry.projectId,
+        projectId: entry.projectId as ProjectId,
         teamName: team.name,
         path: document.path,
         block: entry.block,
@@ -1023,7 +998,7 @@ export const make = Effect.gen(function* () {
     references: readonly string[],
   ) {
     for (const id of new Set(references)) {
-      const entry = issued.get(id);
+      const entry = yield* gate.get(id);
       if (!entry)
         return yield* new TeamsError({
           code: "not_found",
@@ -1033,32 +1008,87 @@ export const make = Effect.gen(function* () {
     }
     return { projects: [], storage: null };
   });
-  const authorizeOutgoingCommand = Effect.fn("TeamProjectService.authorizeOutgoingCommand")(
-    function* (sessionId: string, command: ClientOrchestrationCommand) {
-      const text =
-        command.type === "thread.turn.start"
-          ? command.message.text
-          : command.type === "thread.goal.set"
-            ? (command.objective ?? "")
-            : "";
-      if (!text || issued.size === 0) return;
-      // A block passes when any issuance of it, newest first, still holds for this session, so
-      // memory added again after a relink is not refused for its older, stale issuance.
-      const refused = new Map<string, TeamsError | null>();
-      for (const entry of [...issued.values()].toReversed()) {
-        if (refused.get(entry.block) === null || !text.includes(entry.block)) continue;
-        const result = yield* Effect.result(authorizeIssued(sessionId, entry, false));
-        refused.set(
-          entry.block,
-          result._tag === "Success" ? null : (refused.get(entry.block) ?? result.failure),
-        );
+  const commandReferences = (sessionId: string, command: OrchestrationV2Command) =>
+    Effect.gen(function* () {
+      if (command.type !== "message.dispatch" && command.type !== "queued-run.edit")
+        return [] as readonly Issued[];
+      const references = new Map<string, Issued>();
+      if (command.type === "queued-run.edit") {
+        const records = yield* projections
+          .getThreadRecords(command.threadId, ["runs", "messages"])
+          .pipe(Effect.mapError(() => failure("The queued message could not be read.")));
+        const run = records.runs.find((candidate) => candidate.id === command.runId);
+        if (run)
+          for (const entry of yield* gate.previous(run.userMessageId))
+            references.set(entry.id, entry);
       }
-      for (const error of refused.values())
-        if (error)
+      for (const id of command.teamReferences ?? []) {
+        const entry = references.get(id) ?? (yield* gate.get(id));
+        if (!entry)
           return yield* new TeamsError({
-            code: error.code,
-            message: `This message contains team memory you can no longer send. ${error.message}`,
+            code: "not_found",
+            message: "This team memory has expired. Remove it and add it again.",
           });
+        references.set(entry.id, entry);
+      }
+      const declaredHeaders = new Set(
+        [...references.values()].map((entry) => teamContextHeader(entry.block)),
+      );
+      const blocks = teamContextBlocks(command.text);
+      if (blocks.length > 0) {
+        const thread = yield* projections
+          .getThreadShell(command.threadId)
+          .pipe(Effect.mapError(() => failure("The thread could not be read.")));
+        if (!thread) return yield* notLinked();
+        const profile = yield* signedInProfile(sessionId);
+        const matches = yield* gate.matching({
+          text: command.text,
+          sessionId,
+          issuer: profile.issuer,
+          subject: profile.subject,
+          projectId: thread.projectId,
+        });
+        // Explicit IDs (and durable queue snapshots) keep their authority. A different
+        // issuance of identical text must not append an unrelated session/project.
+        const coveredBlocks = new Set([...references.values()].map((entry) => entry.block));
+        for (const entry of matches)
+          if (!coveredBlocks.has(entry.block)) {
+            references.set(entry.id, entry);
+            coveredBlocks.add(entry.block);
+          }
+        // Every complete wrapper needs its own source: an exact owned issuance,
+        // or the original source header of a declared reference whose body was edited.
+        // A valid reference must never exempt unrelated, expired team context.
+        const matchingBlocks = new Set(matches.map((entry) => entry.block));
+        if (
+          blocks.some(
+            (block) => !matchingBlocks.has(block) && !declaredHeaders.has(teamContextHeader(block)),
+          )
+        )
+          return yield* new TeamsError({
+            code: "not_found",
+            message:
+              "This team context has expired or could not be verified. Remove the team context and add it again before sending.",
+          });
+      }
+      if (references.size > MAX_TEAM_MESSAGE_REFERENCES)
+        return yield* new TeamsError({
+          code: "invalid_request",
+          message:
+            "This message has too many team references. Remove some team context before sending.",
+        });
+      for (const entry of references.values()) {
+        yield* authorizeIssued(sessionId, entry, true);
+        const thread = yield* projections
+          .getThreadShell(command.threadId)
+          .pipe(Effect.mapError(() => failure("The thread could not be read.")));
+        if (thread?.projectId !== entry.projectId) return yield* notLinked();
+      }
+      return [...references.values()];
+    });
+  const authorizeOutgoingCommand = Effect.fn("TeamProjectService.authorizeOutgoingCommand")(
+    function* (sessionId: string, command: OrchestrationV2Command) {
+      yield* commandReferences(sessionId, command);
     },
   );
 
@@ -1066,10 +1096,9 @@ export const make = Effect.gen(function* () {
     sessionId: string,
     command: Extract<TeamProjectCommand, { action: "share" }>,
   ) {
-    const thread = yield* projects.getThreadShellById(command.threadId as ThreadId).pipe(
-      Effect.mapError(() => failure("The thread could not be read.")),
-      Effect.map(Option.getOrNull),
-    );
+    const thread = yield* projections
+      .getThreadShell(command.threadId as ThreadId)
+      .pipe(Effect.mapError(() => failure("The thread could not be read.")));
     const project = thread ? yield* activeProject(thread.projectId) : null;
     if (!thread || !project)
       return yield* new TeamsError({
@@ -1335,13 +1364,35 @@ export const make = Effect.gen(function* () {
   });
   const prepareOutgoingCommand = Effect.fn("TeamProjectService.prepareOutgoingCommand")(function* (
     sessionId: string,
-    command: ClientOrchestrationCommand,
+    command: OrchestrationV2Command,
   ) {
     yield* authorizeOutgoingCommand(sessionId, command);
     const prepared = yield* applyProjectSkills(sessionId, command);
-    // Skill reads can outlive an unlink or account change, even when they add no skills.
-    yield* authorizeOutgoingCommand(sessionId, prepared);
-    return prepared;
+    const references = yield* commandReferences(sessionId, prepared);
+    if (prepared.type === "message.dispatch") {
+      yield* gate.bind({
+        messageId: prepared.messageId,
+        threadId: prepared.threadId,
+        text: prepared.text,
+        references,
+      });
+    } else if (prepared.type === "queued-run.edit") {
+      const records = yield* projections
+        .getThreadRecords(prepared.threadId, ["runs"])
+        .pipe(Effect.mapError(() => failure("The queued message could not be read.")));
+      const run = records.runs.find((candidate) => candidate.id === prepared.runId);
+      if (run)
+        yield* gate.bind({
+          messageId: run.userMessageId,
+          threadId: prepared.threadId,
+          text: prepared.text,
+          references,
+        });
+    }
+    return (prepared.type === "message.dispatch" || prepared.type === "queued-run.edit") &&
+      references.length > 0
+      ? { ...prepared, teamReferences: references.map((entry) => entry.id) }
+      : prepared;
   });
   const signOutAccount = Effect.fn("TeamProjectService.signOutAccount")(function* (
     sessionId: string,
@@ -1364,6 +1415,44 @@ export const make = Effect.gen(function* () {
     );
     return status;
   });
+  yield* gate.registerValidator((entry) =>
+    Effect.gen(function* () {
+      yield* authorizeIssued(entry.sessionId, entry, true);
+      if (!entry.applied) return;
+      const enabled = yield* readEnabled;
+      const approved = enabled.find(
+        (current) =>
+          current.identity === identityOf(entry) &&
+          sameLink(current.link, entry.link) &&
+          current.path === entry.path &&
+          current.version === entry.version,
+      );
+      if (!approved)
+        return yield* new TeamsError({
+          code: "conflict",
+          message:
+            "A team skill on this queued message is no longer approved. Edit the message before sending.",
+        });
+      const checked = yield* checkSkills(entry.sessionId, entry.link, [approved]);
+      if (checked[0]?.skill.state !== "active")
+        return yield* new TeamsError({
+          code: "conflict",
+          message: "A team skill changed while this message was queued. Review it before sending.",
+        });
+      // The version read may have raced sign-out, unlink, or an approval change.
+      yield* authorizeIssued(entry.sessionId, entry, true);
+      if (
+        !(yield* readEnabled).some(
+          (current) =>
+            current.identity === approved.identity &&
+            sameLink(current.link, entry.link) &&
+            current.path === approved.path &&
+            current.version === approved.version,
+        )
+      )
+        return yield* memoryChanged();
+    }),
+  );
   return TeamProjectService.of({
     teams,
     execute,

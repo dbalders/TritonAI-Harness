@@ -1,7 +1,9 @@
 import { closestCenter, type CollisionDetection, type Modifier } from "@dnd-kit/core";
+import { restrictToParentElement } from "@dnd-kit/modifiers";
 import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sortable";
 import {
   resolveSidebarDropTarget,
+  SIDEBAR_FOLDER_SCOPE,
   sidebarListItemId,
   sidebarMarkerId,
   type SidebarListItem,
@@ -18,6 +20,13 @@ const isShelfHeader = (item: SidebarListItem | undefined) =>
   (item.marker === "working-header" ||
     item.marker === "snoozed-header" ||
     item.marker === "settled-header");
+
+/** Keep thread rows inside their folder without clamping a lifted folder's
+ * whole stack before its header can reach a lower folder. */
+export const restrictSidebarThreadToFolder: Modifier = (args) =>
+  args.active?.data.current?.folder === SIDEBAR_FOLDER_SCOPE
+    ? args.transform
+    : restrictToParentElement(args);
 
 /** Keep the lifted card below the Pins label, including when Pins is empty.
  * The container rect follows scrolling; the offset is measured once at pickup. */
@@ -95,10 +104,40 @@ export function createSidebarCollisionDetection(
   };
 }
 
+/** Folder drag scope: a folder sorts among folders, and a row only among the
+ * rows of its own folder. Draggables carry their scope as sortable data. */
+export const sidebarFolderCollisionDetection: CollisionDetection = (args) => {
+  const scope = args.active.data.current?.folder;
+  const droppableContainers = args.droppableContainers.filter(
+    (container) => container.data.current?.folder === scope,
+  );
+  if (scope !== SIDEBAR_FOLDER_SCOPE) return closestCenter({ ...args, droppableContainers });
+  // Folders differ widely in height, so their centers say little about
+  // where the lifted header is. Match the header to the nearest folder top.
+  return droppableContainers
+    .flatMap((container) => {
+      const rect = args.droppableRects.get(container.id);
+      return rect
+        ? [
+            {
+              id: container.id,
+              data: {
+                droppableContainer: container,
+                value: Math.abs(rect.top - args.collisionRect.top),
+              },
+            },
+          ]
+        : [];
+    })
+    .toSorted((left, right) => left.data.value - right.data.value);
+};
+
 /** Preview the committed section layout without moving or mounting DOM nodes.
  * A zero scaleY marks rows/markers to hide while retaining their measured nodes. */
 export function createSidebarSortingStrategy(input: {
   items: readonly SidebarListItem[];
+  /** Suspend the reorder preview while the thread is dragged out as context. */
+  enabled?: boolean;
   settledOrder: readonly string[];
   /** Time-ordered inbox (Working beta): where the lifted row would land. */
   activeOrder?: readonly string[];
@@ -112,6 +151,7 @@ export function createSidebarSortingStrategy(input: {
    * markers stay zero height at rest, so nothing is reserved until pickup. */
   boundaryLabelHeight?: number;
 }): SortingStrategy {
+  if (input.enabled === false) return () => stationary;
   const { items } = input;
   const indices = new Map(items.map((item, index) => [sidebarListItemId(item), index]));
   let previous: Pick<Layout, "rects" | "activeIndex" | "overIndex"> | undefined;
@@ -185,7 +225,11 @@ export function createSidebarSortingStrategy(input: {
     marker("pinned-header");
     projected.push(...groups.pinned);
     marker("pinned-divider");
-    section("active");
+    // Folders keep their measured block; a row entering them stays under
+    // the pointer instead of opening a slot the folders could not show.
+    if (items.some((item) => item.kind === "marker" && item.marker === "active-folders")) {
+      marker("active-folders");
+    } else section("active");
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
       marker("working-header");
       projected.push(...groups.working);

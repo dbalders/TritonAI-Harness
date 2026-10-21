@@ -1,7 +1,6 @@
 import type { LegendListRef } from "@legendapp/list/react";
 import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-
 import {
   observeAssistantCitationCommentSource,
   observeAssistantCitationSource,
@@ -141,6 +140,7 @@ function createSource({ reducedMotion = false } = {}) {
   };
   const mutationCallbacks = new Set<MutationCallback>();
   let resize: ResizeObserverCallback = () => {};
+  const resizeEntries: ResizeObserverEntry[] = [];
   vi.stubGlobal(
     "MutationObserver",
     class {
@@ -159,7 +159,9 @@ function createSource({ reducedMotion = false } = {}) {
       constructor(callback: ResizeObserverCallback) {
         resize = callback;
       }
-      observe() {}
+      observe(target: Element) {
+        resizeEntries.push({ target } as ResizeObserverEntry);
+      }
       disconnect() {
         resize = () => {};
       }
@@ -298,7 +300,7 @@ function createSource({ reducedMotion = false } = {}) {
       root.animations.at(-1)?.finish();
       await Promise.resolve();
     },
-    resize: () => resize([], {} as ResizeObserver),
+    resize: () => resize(resizeEntries, {} as ResizeObserver),
     setMeasured: (value: boolean) => {
       measured = value;
     },

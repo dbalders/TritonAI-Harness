@@ -10,10 +10,13 @@ import {
   TRITONAI_ONPREM_API_KEY_ENV,
 } from "@t3tools/contracts";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
+import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64 from "effect/encoding/Base64";
+import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -25,6 +28,7 @@ import serverPackageJson from "../../../server/package.json" with { type: "json"
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopSecretStoreKey from "./DesktopSecretStoreKey.ts";
+import * as DesktopCliShim from "../app/DesktopCliShim.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
@@ -75,6 +79,10 @@ export class DesktopBackendConfiguration extends Context.Service<
     // fall-back to Windows), so the env switcher can't show "WSL" for a
     // backend that actually resolved to Windows.
     readonly resolvePrimaryLabel: Effect.Effect<string>;
+    // The bootstrap token the renderer should present right now. It rotates
+    // every window (derived from the secret every backend was launched with),
+    // so the renderer never holds one long-lived admin credential.
+    readonly currentBootstrapToken: Effect.Effect<string, PlatformError.PlatformError>;
   }
 >()("@t3tools/desktop/backend/DesktopBackendConfiguration") {}
 
@@ -123,6 +131,7 @@ const WSL_FORWARDED_ENV_NAMES = [
   "UCSD_AI_BASE_URL",
   "TRITONAI_ACCOUNT_SERVICE_URL",
   "TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK",
+  "T3CODE_TELEMETRY_ENABLED",
   // Otherwise the WSL server keeps exporting to endpoints from the bootstrap.
   "T3CODE_OTEL_SDK_DISABLED",
   "OTEL_SDK_DISABLED",
@@ -524,6 +533,7 @@ interface SharedBootstrapInput {
   readonly bootstrapToken: string;
   readonly secretStoreKeys: readonly [string, ...string[]];
   readonly legacySecretFingerprints: Readonly<Record<string, string>>;
+  readonly bootstrapSecret: string;
   readonly observabilitySettings: BackendObservabilitySettings;
 }
 
@@ -805,6 +815,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
   function* (
     input: SharedBootstrapInput & {
       readonly resourceMonitorPath: Option.Option<string>;
+      readonly cliPath: Option.Option<string>;
     },
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -847,10 +858,17 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       desktopBootstrapToken: input.bootstrapToken,
       secretStoreKeys: input.secretStoreKeys,
       legacySecretFingerprints: input.legacySecretFingerprints,
+      desktopBootstrapSecret: input.bootstrapSecret,
+      // DesktopApp installs the shell environment into process.env before any
+      // backend starts, and this child extends it (extendEnv below). WSL gets
+      // a different environment, so its bootstrap never sets this.
+      shellEnvironmentPrepared: true,
       tailscaleServeEnabled: backendExposure.tailscaleServeEnabled,
       tailscaleServePort: backendExposure.tailscaleServePort,
       desktopTelemetryFd: 4,
       desktopTelemetryControlFd: 5,
+      desktopBrowserFd: 6,
+      desktopBrowserControlFd: 7,
       ...Option.match(input.resourceMonitorPath, {
         onNone: () => ({}),
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
@@ -882,6 +900,8 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
           ? {}
           : { PATH: managedPathEntries.reduce(appendPathEntry, process.env.PATH) }),
         ELECTRON_RUN_AS_NODE: "1",
+        // The server names this launcher in commands it asks a person to run.
+        T3CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
       },
       // Primary wants process.env (PATH, shells, etc.), but the bootstrap
       // envelope owns the resolved TritonAI home for the backend.
@@ -1007,7 +1027,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       });
     }
     const decodedKeys = yield* Effect.forEach(input.secretStoreKeys, (encoded) =>
-      Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+      Effect.fromResult(Base64.decode(encoded)).pipe(
         Effect.mapError(() =>
           PlatformError.systemError({
             _tag: "InvalidData",
@@ -1038,6 +1058,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
       : {}),
     host: wslBindHost,
     desktopBootstrapToken: input.bootstrapToken,
+    desktopBootstrapSecret: input.bootstrapSecret,
     secretStoreKeys: input.secretStoreKeys,
     // A WSL backend has a distro-local credential store. Authorizations
     // captured for the Windows-native store must never be reused here.
@@ -1193,19 +1214,19 @@ export const make = Effect.gen(function* () {
   // SynchronizedRef (not a plain Ref) so the read-generate-write is atomic.
   // crypto.randomBytes is a yield point, and resolvePrimary + resolveWsl can
   // resolve concurrently; with a plain Ref both could observe None, generate
-  // distinct tokens, and one would overwrite the other — leaving the two
-  // backends holding mismatched tokens and breaking the shared-token
+  // distinct secrets, and one would overwrite the other — leaving the two
+  // backends deriving mismatched tokens and breaking the shared-token
   // invariant the renderer relies on. modifyEffect serializes the whole
-  // get-or-create so the first caller wins and the rest reuse its token.
-  const tokenRef = yield* SynchronizedRef.make(Option.none<string>());
-  const getOrCreateBootstrapToken = SynchronizedRef.modifyEffect(tokenRef, (current) =>
+  // get-or-create so the first caller wins and the rest reuse its secret.
+  const secretRef = yield* SynchronizedRef.make(Option.none<string>());
+  const getOrCreateBootstrapSecret = SynchronizedRef.modifyEffect(secretRef, (current) =>
     Option.match(current, {
-      onSome: (token) => Effect.succeed([token, current] as const),
+      onSome: (secret) => Effect.succeed([secret, current] as const),
       onNone: () =>
-        crypto.randomBytes(24).pipe(
+        crypto.randomBytes(32).pipe(
           Effect.map((bytes) => {
-            const token = Encoding.encodeHex(bytes);
-            return [token, Option.some(token)] as const;
+            const secret = Hex.encode(bytes);
+            return [secret, Option.some(secret)] as const;
           }),
         ),
     }),
@@ -1234,7 +1255,11 @@ export const make = Effect.gen(function* () {
   // hot-swap of the server-settings file is picked up on the next
   // restart cycle without having to bounce the desktop process.
   const sharedInputs = Effect.gen(function* () {
-    const bootstrapToken = yield* getOrCreateBootstrapToken;
+    const bootstrapSecret = yield* getOrCreateBootstrapSecret;
+    const bootstrapToken = currentDesktopBootstrapToken(
+      bootstrapSecret,
+      yield* Clock.currentTimeMillis,
+    );
     const secretStoreKeyMaterial = yield* getOrCreateSecretStoreKeys;
     const observabilitySettings = yield* readBackendObservabilitySettings.pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -1244,6 +1269,7 @@ export const make = Effect.gen(function* () {
       bootstrapToken,
       secretStoreKeys: secretStoreKeyMaterial.keys,
       legacySecretFingerprints: secretStoreKeyMaterial.legacySecretFingerprints,
+      bootstrapSecret,
       observabilitySettings,
     } satisfies SharedBootstrapInput;
   });
@@ -1278,7 +1304,11 @@ export const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
-    return yield* resolvePrimaryStartConfig({ ...shared, resourceMonitorPath }).pipe(
+    const cliPath = yield* DesktopCliShim.install.pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+    );
+    return yield* resolvePrimaryStartConfig({ ...shared, resourceMonitorPath, cliPath }).pipe(
       Effect.provideService(DesktopComputerUse.DesktopComputerUse, computerUse),
       Effect.provideService(DesktopAppSettings.DesktopAppSettings, settings),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
@@ -1307,7 +1337,13 @@ export const make = Effect.gen(function* () {
     return { useWsl, wslRequested, distro: persistedSettings.wslDistro };
   });
 
+  const currentBootstrapToken = Effect.gen(function* () {
+    const secret = yield* getOrCreateBootstrapSecret;
+    return currentDesktopBootstrapToken(secret, yield* Clock.currentTimeMillis);
+  });
+
   return DesktopBackendConfiguration.of({
+    currentBootstrapToken,
     resolvePrimary: Effect.gen(function* () {
       const { useWsl, wslRequested } = yield* describePrimary;
       if (useWsl) {

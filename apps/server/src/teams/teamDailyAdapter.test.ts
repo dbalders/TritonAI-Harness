@@ -116,8 +116,9 @@ describe("Daily team memory writes", () => {
         }),
     },
   ];
-  for (const scenario of changesDuringRefresh) {
-    it.effect(`sends nothing when ${scenario.name} while the token refreshes`, () =>
+  it.effect.each(changesDuringRefresh)(
+    "sends nothing when $name while the token refreshes",
+    (scenario) =>
       Effect.gen(function* () {
         const team = yield* linkedWith({ shortTokens: true });
         team.f.duringTokenRefresh(beforeTheWrite(team.f), scenario.change(team));
@@ -125,8 +126,10 @@ describe("Daily team memory writes", () => {
         expect(result).toMatchObject({ kind: "held" });
         expect(team.changes()).toEqual([]);
       }),
-    );
-    it.effect(`removes nothing when ${scenario.name} while the token refreshes`, () =>
+  );
+  it.effect.each(changesDuringRefresh)(
+    "removes nothing when $name while the token refreshes",
+    (scenario) =>
       Effect.gen(function* () {
         const team = yield* linkedWith({ shortTokens: true });
         team.f.duringTokenRefresh(beforeTheWrite(team.f), scenario.change(team));
@@ -134,8 +137,7 @@ describe("Daily team memory writes", () => {
         expect(result).toMatchObject({ kind: "held" });
         expect(team.changes()).toEqual([]);
       }),
-    );
-  }
+  );
 
   it.effect("refuses a path in another author's folder", () =>
     Effect.gen(function* () {
@@ -249,21 +251,20 @@ describe("Daily team memory writes", () => {
     }),
   );
 
-  for (const kind of ["first upload", "withdrawal"] as const)
-    it.effect(
-      `never takes a ${kind} as done while Microsoft isn't connected, and finishes after reconnecting`,
-      () =>
-        Effect.gen(function* () {
-          const team = yield* linked;
-          yield* team.storage.execute("s", { action: "disconnect", teamId: teamA });
-          const text = kind === "first upload" ? "# shared" : null;
-          expect(yield* team.write(text)).toMatchObject({ kind: "held" });
-          expect(team.changes()).toEqual([]);
-          yield* team.connect(teamA);
-          expect(yield* team.write(text)).toMatchObject({ kind: "written" });
-          expect(team.changes()).toEqual([
-            expect.objectContaining({ method: kind === "first upload" ? "PUT" : "DELETE" }),
-          ]);
-        }),
-    );
+  it.effect.each(["first upload", "withdrawal"] as const)(
+    "never takes a %s as done while Microsoft isn't connected, and finishes after reconnecting",
+    (kind) =>
+      Effect.gen(function* () {
+        const team = yield* linked;
+        yield* team.storage.execute("s", { action: "disconnect", teamId: teamA });
+        const text = kind === "first upload" ? "# shared" : null;
+        expect(yield* team.write(text)).toMatchObject({ kind: "held" });
+        expect(team.changes()).toEqual([]);
+        yield* team.connect(teamA);
+        expect(yield* team.write(text)).toMatchObject({ kind: "written" });
+        expect(team.changes()).toEqual([
+          expect.objectContaining({ method: kind === "first upload" ? "PUT" : "DELETE" }),
+        ]);
+      }),
+  );
 });

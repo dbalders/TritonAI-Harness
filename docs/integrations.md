@@ -42,6 +42,15 @@ Every tool also declares `effect: "read" | "write"`, which must agree with the p
 metadata. Write tools follow the task's selected runtime mode: supervised modes request approval,
 while Full access preauthorizes them.
 
+Codex and Claude approval prompts for a Harness tool show its name and the call's actual
+arguments, one bounded line each, with secret-looking arguments hidden
+([formatter](../apps/server/src/integrations/IntegrationToolPreview.ts)). A call with a non-empty
+string `summary` argument shows that summary alone instead, so a write tool that accepts `summary`
+must reject any value that does not exactly match the change it will make, typically a summary the
+provider generated in an earlier preview. ACP providers (Cursor, Grok, Antigravity) and OpenCode
+still show their own permission titles, because their requests do not reliably identify a Harness
+tool. Choosing **Always allow this session** or Full access skips later prompts for that tool.
+
 The Registry passes that approval only to declared write tools and runs each write through the same
 bounded commit-admission machinery used by provider lifecycle mutations. A write provider must call
 `beginCommit()` immediately before its external mutation and use the returned commit-tail signal.
@@ -166,6 +175,16 @@ system-browser button before the secure key field. A successful API-key submissi
 extend the union with their own secure submission contract and rendering instead of pretending to
 use another flow's fields.
 
+Some providers only issue confidential OAuth clients that require a client secret on every token
+request (UCSD Jira Data Center is one). That secret cannot ship in Harness, because configuration
+embedded in a desktop build is extractable. Such a provider registers a private HTTPS relay as its
+redirect URI. The relay holds only the secret, stores no codes or tokens, and redirects the browser
+to the provider's one-use `127.0.0.1` listener, whose port travels in `state`. Harness redeems the
+code through the relay with a PKCE verifier that never leaves the backend, so a code delivered
+anywhere else is useless. Relay source and deployment live outside this repository. Like every
+loopback flow, the browser must run on the backend's machine, so a remote web or mobile client
+cannot complete that sign-in; the resulting connection still serves every client.
+
 Connecting requests the plugin's enabled Harness-managed capabilities plus every
 provider-authorized capability offered by its sign-in flow. Enabling an `opt-in` ability whose
 provider grant is missing starts the same explicit authorization flow; the ability remains
@@ -233,7 +252,7 @@ status refreshes do not recopy unchanged skill trees.
 
 Production providers use one Harness-owned Effect runtime. The released Microsoft 365 package's
 exact `4.0.0-beta.78` dependency is a narrow legacy exception; new provider packages declare the
-reviewed `>=4.0.0-beta.78 <4.0.0` peer contract instead. Composition and startup reject every other
+reviewed `>=4.0.0-beta.78 <5.0.0` peer contract instead. Composition and startup reject every other
 exact build pin, extra runtime dependencies, broader peers, and stable or next-major Effect
 versions. Package provenance, file inventory, digests, and immutable snapshots remain exact; only
 the already-verified runtime link is supplied by the host.
@@ -307,3 +326,10 @@ separate trust model are required first. Removing an included production plugin 
 explicit provider-aware retirement migration so its scoped credentials can be deleted with its
 retained state and package files. New providers should remain self-contained packages and avoid
 provider-specific branches in registry, Codex, MCP, RPC, or Plugins UI code.
+
+Effect 4 stable hosts use the same single host-owned runtime as the supported prereleases.
+The first released `4.0.0-beta.78` dependency pin and the exact older
+`>=4.0.0-beta.78 <4.0.0` peer declaration remain recognized for existing packages.
+New SDK packages declare `>=4.0.0-beta.78 <5.0.0`; arbitrary dependency pins and
+other peer contracts are rejected. Upgrade verification must load the selected
+plugin composition against the actual bundled host runtime.

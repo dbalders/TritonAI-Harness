@@ -1,11 +1,12 @@
+// @effect-diagnostics nodeBuiltinImport:off - Key derivation, encryption and constant-time key comparison require Node crypto.
 import * as NodeCrypto from "node:crypto";
 
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Encoding from "effect/encoding/Base64";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -208,7 +209,7 @@ const decodeConfiguredKeys = Effect.fn("ServerSecretStore.decodeConfiguredKeys")
 
   const keys: Buffer[] = [];
   for (const encoded of encodedKeys) {
-    const decoded = yield* Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+    const decoded = yield* Effect.fromResult(Encoding.decode(encoded)).pipe(
       Effect.mapError(
         () =>
           new SecretStoreKeyError({
@@ -233,7 +234,7 @@ const decodeLegacyFingerprints = Effect.fn("ServerSecretStore.decodeLegacyFinger
 ) {
   const fingerprints = new Map<string, Buffer>();
   for (const [name, encoded] of Object.entries(configured ?? {})) {
-    const decoded = yield* Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+    const decoded = yield* Effect.fromResult(Encoding.decode(encoded)).pipe(
       Effect.mapError(
         () =>
           new SecretStoreKeyError({
@@ -364,7 +365,10 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const retireLegacyAuthorization = (name: string): Effect.Effect<void, SecretStoreError> => {
+  const retireLegacyAuthorization = (
+    name: string,
+    migratePlaintext?: Effect.Effect<void, SecretStoreError>,
+  ): Effect.Effect<void, SecretStoreError> => {
     const expected = legacyFingerprints.get(name);
     if (expected === undefined) return Effect.void;
 
@@ -389,18 +393,25 @@ export const make = Effect.gen(function* () {
                 ? keyringFingerprints[name]
                 : undefined;
               if (currentFingerprint === undefined) {
+                if (migratePlaintext !== undefined) {
+                  return yield* new SecretStoreDecodeError({
+                    resource: `secret ${name}`,
+                    cause: new Error("Legacy migration authorization is no longer active."),
+                  });
+                }
                 // Another process can migrate the same authorized bytes and
                 // durably retire the fingerprint while this process waits for
                 // the lock. The absent entry is already the required final
                 // state; a different entry remains a hard failure below.
                 return;
               }
-              if (currentFingerprint !== Encoding.encodeBase64(expected)) {
+              if (currentFingerprint !== Encoding.encode(expected)) {
                 return yield* new SecretStorePersistError({
                   resource: `legacy migration authorization for secret ${name}`,
                 });
               }
 
+              if (migratePlaintext !== undefined) yield* migratePlaintext;
               const remaining = Object.assign(
                 Object.create(null) as Record<string, string>,
                 keyringFingerprints,
@@ -419,7 +430,7 @@ export const make = Effect.gen(function* () {
                     }),
                 ),
               )}\n`;
-              const uuid = yield* crypto.randomUUIDv4.pipe(
+              const uuid = yield* crypto.randomUUIDv4().pipe(
                 Effect.mapError(
                   (cause) =>
                     new SecretStoreTemporaryPathError({
@@ -489,6 +500,8 @@ export const make = Effect.gen(function* () {
             }),
           releaseSqliteProcessLock,
         );
+      } else if (migratePlaintext !== undefined) {
+        yield* migratePlaintext;
       }
       legacyFingerprints.delete(name);
     }).pipe(
@@ -507,7 +520,7 @@ export const make = Effect.gen(function* () {
     const secretPath = resolveSecretPath(name);
     return Effect.gen(function* () {
       const envelope = yield* encodeEnvelope(name, value, keys[0]);
-      const uuid = yield* crypto.randomUUIDv4.pipe(
+      const uuid = yield* crypto.randomUUIDv4().pipe(
         Effect.mapError(
           (cause) =>
             new SecretStoreTemporaryPathError({
@@ -584,8 +597,7 @@ export const make = Effect.gen(function* () {
         // Only bytes fingerprinted while the OS-protected data key was first
         // created are eligible for migration. This prevents damaged envelope
         // headers from being reclassified as unauthenticated plaintext.
-        yield* persistReplacing(name, stored);
-        yield* retireLegacyAuthorization(name);
+        yield* retireLegacyAuthorization(name, persistReplacing(name, stored));
         return Option.some(Uint8Array.from(stored));
       }
 
@@ -639,7 +651,7 @@ export const make = Effect.gen(function* () {
     const secretPath = resolveSecretPath(name);
     return Effect.gen(function* () {
       const envelope = yield* encodeEnvelope(name, value, keys[0]);
-      const uuid = yield* crypto.randomUUIDv4.pipe(
+      const uuid = yield* crypto.randomUUIDv4().pipe(
         Effect.mapError(
           (cause) =>
             new SecretStoreTemporaryPathError({

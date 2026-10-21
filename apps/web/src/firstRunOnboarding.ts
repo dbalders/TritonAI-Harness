@@ -10,10 +10,9 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-
 import { APP_BASE_NAME } from "./branding";
 import { useComposerDraftStore } from "./composerDraftStore";
 import {
@@ -103,7 +102,7 @@ function useComposerDraftStoreHydrated(): boolean {
   return hydrated;
 }
 
-function waitForProject(input: {
+export function waitForProject(input: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
   timeoutMs: number;

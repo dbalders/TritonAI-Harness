@@ -10,7 +10,10 @@ import * as Effect from "effect/Effect";
 import {
   attachmentFileExtension,
   attachmentRelativePath,
+  chatAttachmentStableKey,
   createAttachmentId,
+  createUploadAttachmentId,
+  createDeterministicAttachmentId,
   createPendingAttachmentId,
   isAttachmentIdOwnedByThread,
   parseAttachmentFileExtension,
@@ -19,9 +22,52 @@ import {
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
   sweepStalePendingAttachments,
+  threadHtmlRenderAttachmentIds,
 } from "./attachmentStore.ts";
 
 describe("attachmentStore", () => {
+  it("derives stable attachment ids for idempotent message retries", () => {
+    const first = createDeterministicAttachmentId("thread-1", "message-1:0");
+    const retry = createDeterministicAttachmentId("thread-1", "message-1:0");
+    const next = createDeterministicAttachmentId("thread-1", "message-1:1");
+
+    expect(first).toBe(retry);
+    expect(next).not.toBe(first);
+    expect(first && parseThreadSegmentFromAttachmentId(first)).toBe("thread-1");
+  });
+
+  it("gives a queued edit's new image its own id instead of an earlier image's", () => {
+    const imageA = new Uint8Array([1, 2, 3]);
+    const imageB = new Uint8Array([4, 5, 6]);
+    const sent = createDeterministicAttachmentId(
+      "thread-1",
+      chatAttachmentStableKey("message-1", 0, imageA),
+    );
+    const retried = createDeterministicAttachmentId(
+      "thread-1",
+      chatAttachmentStableKey("message-1", 0, imageA),
+    );
+    // Editing the queued message keeps its id, and the new upload is first in its batch.
+    const edited = createDeterministicAttachmentId(
+      "thread-1",
+      chatAttachmentStableKey("message-1", 0, imageB),
+    );
+
+    expect(retried).toBe(sent);
+    expect(edited).not.toBe(sent);
+  });
+
+  it("keeps deterministic ids distinct when sanitized thread segments collide", () => {
+    const dotted = createDeterministicAttachmentId("thread.a", "message-1:0");
+    const dashed = createDeterministicAttachmentId("thread-a", "message-1:0");
+
+    expect(dotted).toBeTruthy();
+    expect(dashed).toBeTruthy();
+    expect(dotted).not.toBe(dashed);
+    expect(dotted && parseThreadSegmentFromAttachmentId(dotted)).toBe("thread-a");
+    expect(dashed && parseThreadSegmentFromAttachmentId(dashed)).toBe("thread-a");
+  });
+
   it("sanitizes thread ids when creating attachment ids", () => {
     const attachmentId = createAttachmentId("thread.folder/unsafe space");
     expect(attachmentId).toBeTruthy();
@@ -58,12 +104,12 @@ describe("attachmentStore", () => {
 
   it("creates deterministic ids for idempotent upload retries", () => {
     const uploadId = "00000000-0000-4000-8000-000000000005";
-    const attachmentId = createAttachmentId("Thread.One", uploadId);
+    const attachmentId = createUploadAttachmentId("Thread.One", uploadId);
 
-    expect(attachmentId).toBe(createAttachmentId("Thread.One", uploadId));
-    expect(attachmentId).not.toBe(createAttachmentId("thread-one", uploadId));
+    expect(attachmentId).toBe(createUploadAttachmentId("Thread.One", uploadId));
+    expect(attachmentId).not.toBe(createUploadAttachmentId("thread-one", uploadId));
     expect(attachmentId && isAttachmentIdOwnedByThread(attachmentId, "Thread.One")).toBe(true);
-    expect(createAttachmentId("Thread.One", "not-a-uuid")).toBeNull();
+    expect(createUploadAttachmentId("Thread.One", "not-a-uuid")).toBeNull();
   });
 
   it("continues to recognize legacy attachment ownership", () => {
@@ -85,8 +131,11 @@ describe("attachmentStore", () => {
     // look like a stale partial to the sweep.
     expect(attachmentFileExtension("archive.part")).toBe(".bin");
     expect(
-      createAttachmentId("x".repeat(80), "00000000-0000-4000-8000-000000000001", ".abcdefghij")
-        ?.length,
+      createUploadAttachmentId(
+        "x".repeat(80),
+        "00000000-0000-4000-8000-000000000001",
+        ".abcdefghij",
+      )?.length,
     ).toBeLessThanOrEqual(128);
   });
 
@@ -241,5 +290,49 @@ describe("attachmentStore", () => {
     } finally {
       NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("threadHtmlRenderAttachmentIds", () => {
+  it("returns pages this thread published and skips other threads' and failed calls", () => {
+    const own = createAttachmentId("thread-a", "html")!;
+    const other = createAttachmentId("thread-b", "html")!;
+    const render = (attachmentId: string, extra = {}) => ({
+      toolName: "mcp__t3-code__html_render",
+      output: [
+        {
+          type: "text",
+          text: JSON.stringify({ htmlRender: { attachmentId, title: "x", height: 300 }, ...extra }),
+        },
+      ],
+    });
+    expect(
+      threadHtmlRenderAttachmentIds("thread-a", [
+        render(own),
+        render(other),
+        render(createAttachmentId("thread-a", "html")!, { isError: true }),
+        { toolName: "mcp__t3-code__html_preview", output: render(own).output },
+      ]),
+    ).toEqual([own]);
+  });
+
+  it("includes captured MCP App documents from any tool", () => {
+    const app = createAttachmentId("thread-a", "html")!;
+    expect(
+      threadHtmlRenderAttachmentIds("thread-a", [
+        {
+          toolName: "weather.get_weather",
+          output: {
+            t3McpApp: {
+              attachmentId: app,
+              server: "weather",
+              tool: "get_weather",
+              resourceUri: "ui://weather/dashboard",
+            },
+            result: { content: [] },
+          },
+        },
+      ]),
+    ).toEqual([app]);
   });
 });

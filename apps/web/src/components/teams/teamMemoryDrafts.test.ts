@@ -1,28 +1,29 @@
-import {
-  scopedThreadKey,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   EnvironmentId,
   formatTeamContext,
   formatTeamMemoryContext,
   ProjectId,
-  ProviderInstanceId,
   ThreadId,
+  TeamProjectCommand,
+  MAX_TEAM_MESSAGE_REFERENCES,
+  MAX_TEAM_PROJECT_SKILLS,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   type ComposerThreadTarget,
-  composerTargetKey,
   DraftId,
   useComposerDraftStore,
 } from "../../composerDraftStore";
-import { useQueuedMessageStore } from "../../queuedMessageStore";
 import {
   addDraftTeamMemory,
   beginDraftTeamMemorySend,
   draftTeamMemoryInPrompt,
+  draftTeamReferenceIds,
+  inheritDraftTeamReferences,
+  moveDraftTeamMemory,
+  clearDraftTeamReferenceText,
   MAX_DRAFT_TEAM_MEMORY,
   reconcileDraftTeamMemoryAccount,
   removeDraftTeamMemory,
@@ -33,6 +34,7 @@ import {
   useDraftTeamMemoryStore,
 } from "./teamMemoryDrafts";
 
+const isTeamProjectCommand = Schema.is(TeamProjectCommand);
 const environmentA = EnvironmentId.make("environment-a");
 const environmentB = EnvironmentId.make("environment-b");
 const threadAt = (id: string, environment = environmentA) =>
@@ -76,32 +78,11 @@ const insert = (entry: ReturnType<typeof reference>) => {
   return { result, inserted };
 };
 /** A send from the composer: the draft is cleared, then restored, queued, or gone. */
-const send = (
-  target: ComposerThreadTarget,
-  outcome: "sent" | "failed" | "queued",
-  queueKey = composerTargetKey(target),
-) => {
+const send = (target: ComposerThreadTarget, outcome: "sent" | "failed" | "queued") => {
   const finish = beginDraftTeamMemorySend(target);
   const text = prompt(target);
   setPrompt(target, "");
   if (outcome === "failed") setPrompt(target, text);
-  if (outcome === "queued")
-    useQueuedMessageStore.getState().enqueue(queueKey, {
-      prompt: text,
-      images: [],
-      files: [],
-      terminalContexts: [],
-      previewAnnotations: [],
-      reviewComments: [],
-      sendSettings: {
-        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        promptEffort: null,
-      },
-      queuedAfterToolActivityId: null,
-      createdAt: "2026-10-09T00:00:00.000Z",
-    });
   finish();
 };
 const ids = () => useDraftTeamMemoryStore.getState().entries.map((entry) => entry.id);
@@ -121,8 +102,7 @@ const skillReference = (id: string, text = skillBlock) => ({
 
 describe("team memory in drafts", () => {
   beforeEach(() => {
-    useDraftTeamMemoryStore.setState({ entries: [], problems: {} });
-    useQueuedMessageStore.setState({ queuesByThreadKey: {}, lastDispatchByThreadKey: {} });
+    useDraftTeamMemoryStore.setState({ entries: [], inheritedReferences: {}, problems: {} });
     setPrompt(thread, "");
     setPrompt(otherThread, "");
     reconcileDraftTeamMemoryAccount(environmentA, "campus:alice");
@@ -195,9 +175,11 @@ describe("team memory in drafts", () => {
     expect(prompt()).toBe(`Ask\n\n${withoutClosing}\nMY OWN IMPORTANT TEXT`);
     expect(ids()).toEqual(["r1"]);
     expect(draftTeamMemoryInPrompt(thread, prompt()).map((entry) => entry.id)).toEqual(["r1"]);
-    // Deleting the rest of the note ends tracking.
+    // After a block's boundaries were edited away, later rewriting cannot prove removal.
     setPrompt(thread, "Ask\n\nMY OWN IMPORTANT TEXT");
     settleDraftTeamMemory();
+    expect(ids()).toEqual(["r1"]);
+    clearDraftTeamReferenceText(thread);
     expect(ids()).toEqual([]);
   });
 
@@ -271,55 +253,189 @@ describe("team memory in drafts", () => {
     expect(ids()).not.toContain("r0");
   });
 
-  it("keeps references a failed or queued send still needs", () => {
+  it("can verify every reference in a full draft and refuses the next insertion", () => {
+    for (let index = 0; index < MAX_DRAFT_TEAM_MEMORY; index++) {
+      expect(
+        insert(
+          reference(
+            `00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+            thread,
+            "campus:alice",
+            note(`Memory/a/b/${index}.md`, `Note ${index} has a separate policy.`),
+          ),
+        ).result,
+      ).toBe("added");
+    }
+    const references = draftTeamMemoryInPrompt(thread, prompt()).map((entry) => entry.id);
+    expect(references).toHaveLength(MAX_DRAFT_TEAM_MEMORY);
+    expect(isTeamProjectCommand({ action: "memory-verify", references })).toBe(true);
+    expect(insert(reference("extra", thread, "campus:alice", secondBlock))).toEqual({
+      result: "full",
+      inserted: false,
+    });
+    expect(
+      isTeamProjectCommand({
+        action: "memory-verify",
+        references: [
+          ...references,
+          ...Array.from(
+            { length: MAX_TEAM_MESSAGE_REFERENCES - MAX_DRAFT_TEAM_MEMORY + 1 },
+            (_, index) => `ffffffff-ffff-ffff-ffff-${String(index).padStart(12, "0")}`,
+          ),
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["memory", "skill"] as const)(
+    "retains %s provenance after wrappers are removed and text is reflowed",
+    (kind) => {
+      const original =
+        kind === "skill" ? skillReference("reflowed", skillBlock) : reference("reflowed");
+      insert(original);
+      const paragraph = original.block
+        .split("\n")
+        .slice(1, -1)
+        .filter((line) => !line.startsWith("</team-"))
+        .join(" ");
+      setPrompt(thread, `My own opening. ${paragraph} My own ending.`);
+      expect(draftTeamReferenceIds(thread, prompt())).toEqual(["reflowed"]);
+      setPrompt(thread, prompt().replace("template", "checklist").replace("grant", "award"));
+      expect(reconcileDraftTeamMemoryAccount(environmentA, "campus:bob").unresolved).toBe(1);
+      expect(draftTeamReferenceIds(thread, prompt())).toEqual(["reflowed"]);
+      removeDraftTeamMemory(thread);
+      expect(draftTeamReferenceIds(thread, prompt())).toEqual(["reflowed"]);
+      clearDraftTeamReferenceText(thread);
+      expect(draftTeamReferenceIds(thread, prompt())).toEqual([]);
+    },
+  );
+
+  it("preserves a queued message's references when a dirty edit returns to the draft", () => {
+    const edit = DraftId.make("queued-edit:a");
+    setPrompt(edit, "A heavily rewritten team note with my own additions");
+    inheritDraftTeamReferences(edit, ["saved-reference"]);
+    insert(reference("new-reference", edit));
+    const moved = prompt(edit);
+    useComposerDraftStore.getState().moveComposerPromptAndImages(edit, thread);
+    moveDraftTeamMemory(edit, thread);
+    expect(draftTeamReferenceIds(thread, moved)).toEqual(["saved-reference", "new-reference"]);
+    expect(draftTeamReferenceIds(edit, "")).toEqual([]);
+    // An account switch cannot silently remove opaque provenance and permit a new send.
+    reconcileDraftTeamMemoryAccount(environmentA, "campus:bob");
+    expect(draftTeamReferenceIds(thread, prompt())).toContain("saved-reference");
+    send(thread, "failed");
+    expect(draftTeamReferenceIds(thread, prompt())).toContain("saved-reference");
+    clearDraftTeamReferenceText(thread);
+    expect(prompt()).toBe("");
+    expect(draftTeamReferenceIds(thread, prompt())).toEqual([]);
+  });
+
+  it("restores inherited queue provenance after draft-store rehydration", async () => {
+    setPrompt(thread, "Edited team material retained after reload");
+    inheritDraftTeamReferences(thread, ["saved-reference"]);
+    const { storage, name } = useDraftTeamMemoryStore.persist.getOptions();
+    if (storage === undefined || name === undefined)
+      throw new Error("Draft storage is unavailable");
+    const saved = await storage.getItem(name);
+    if (saved === null) throw new Error("Draft provenance was not persisted");
+    useDraftTeamMemoryStore.setState({ inheritedReferences: {} });
+    await storage.setItem(name, saved);
+    await useDraftTeamMemoryStore.persist.rehydrate();
+    expect(draftTeamReferenceIds(thread, prompt())).toEqual(["saved-reference"]);
+  });
+
+  it("recovers 50 manual references plus the project's automatic skills without dropping protection", () => {
+    const manual = Array.from(
+      { length: MAX_DRAFT_TEAM_MEMORY },
+      (_, index) => `00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+    );
+    const automatic = Array.from(
+      { length: MAX_TEAM_PROJECT_SKILLS },
+      (_, index) => `11111111-1111-1111-1111-${String(index).padStart(12, "0")}`,
+    );
+    const edit = DraftId.make("queued-edit:full-context");
+    const references = [...manual, ...automatic];
+    expect(references).toHaveLength(MAX_TEAM_MESSAGE_REFERENCES);
+    setPrompt(edit, "Edited text from a queued message with all approved team context");
+    inheritDraftTeamReferences(edit, references);
+    setPrompt(thread, prompt(edit));
+    setPrompt(edit, "");
+    moveDraftTeamMemory(edit, thread);
+    expect(draftTeamReferenceIds(thread, prompt())).toEqual(references);
+    expect(
+      isTeamProjectCommand({
+        action: "memory-verify",
+        references: draftTeamReferenceIds(thread, prompt()),
+      }),
+    ).toBe(true);
+    expect(insert(reference("extra"))).toEqual({ result: "full", inserted: false });
+    send(thread, "failed");
+    expect(draftTeamReferenceIds(thread, prompt())).toEqual(references);
+    send(thread, "sent");
+    expect(useDraftTeamMemoryStore.getState().inheritedReferences).toEqual({});
+  });
+
+  it("allows new notes up to the combined message limit and keeps other drafts independent", () => {
+    setPrompt(thread, "A recovered queued message");
+    inheritDraftTeamReferences(
+      thread,
+      Array.from({ length: MAX_DRAFT_TEAM_MEMORY }, (_, index) => `saved-${index}`),
+    );
+    for (let index = MAX_DRAFT_TEAM_MEMORY; index < MAX_TEAM_MESSAGE_REFERENCES; index++) {
+      expect(
+        insert(
+          reference(
+            `new-${index}`,
+            thread,
+            "campus:alice",
+            note(`Memory/a/b/${index}.md`, "A new policy for this team."),
+          ),
+        ).result,
+      ).toBe("added");
+    }
+    expect(draftTeamReferenceIds(thread, prompt())).toHaveLength(MAX_TEAM_MESSAGE_REFERENCES);
+    expect(insert(reference("extra"))).toEqual({ result: "full", inserted: false });
+    expect(insert(reference("other-draft", otherThread)).result).toBe("added");
+  });
+
+  it("counts inherited queued references before adding another note", () => {
+    setPrompt(thread, "An edited queued message");
+    inheritDraftTeamReferences(
+      thread,
+      Array.from({ length: MAX_TEAM_MESSAGE_REFERENCES }, (_, index) => `saved-${index}`),
+    );
+    expect(insert(reference("extra"))).toEqual({ result: "full", inserted: false });
+    expect(prompt()).toBe("An edited queued message");
+    send(thread, "queued");
+    expect(useDraftTeamMemoryStore.getState().inheritedReferences).toEqual({});
+  });
+
+  it("retains failed sends and releases provenance to the server after enqueueing", () => {
     insert(reference("r1"));
     send(thread, "failed");
     expect(prompt()).toBe(block);
     expect(ids()).toEqual(["r1"]);
-    // A queued message holds its text outside the draft; its reference stays for a later restore.
+    // Native queues persist their own provenance; the client no longer mirrors queued text.
     send(thread, "queued");
     expect(prompt()).toBe("");
-    for (let index = 1; index < MAX_DRAFT_TEAM_MEMORY; index++)
-      insert(reference(`r${index + 1}`, threadAt(`thread-${index}`)));
-    expect(insert(reference("extra", threadAt("thread-extra"))).result).toBe("full");
-    expect(ids()).toContain("r1");
-    // Stop puts the queued text back in the draft, still tracked.
-    const [restored] = useQueuedMessageStore.getState().drain(composerTargetKey(thread));
-    setPrompt(thread, restored!.prompt);
-    settleDraftTeamMemory();
-    expect(draftTeamMemoryInPrompt(thread, prompt()).map((entry) => entry.id)).toEqual(["r1"]);
+    expect(ids()).toEqual([]);
   });
 
-  it("holds a queued note only for its own thread", () => {
-    insert(reference("queued"));
-    send(thread, "queued");
-    // The same note sent from other threads is forgotten even while thread A's copy is queued.
-    for (let index = 0; index < MAX_DRAFT_TEAM_MEMORY; index++) {
-      const target = threadAt(`thread-${index}`);
-      expect(insert(reference(`r${index}`, target)).result).toBe("added");
-      send(target, "sent");
-    }
-    expect(ids()).toEqual(["queued"]);
-    // Once the queued message goes out, its reference is released too.
-    const queueKey = composerTargetKey(thread);
-    const [message] = useQueuedMessageStore.getState().queuesByThreadKey[queueKey]!;
-    useQueuedMessageStore.getState().finishSend(queueKey, message!.id);
-    settleDraftTeamMemory();
-    expect(ids()).toEqual([]);
-    // A local draft queues under its session's thread, and its note is held there.
+  it("releases accepted references independently for each draft", () => {
     const draftId = DraftId.make("draft-a");
     useComposerDraftStore
       .getState()
       .setProjectDraftThreadId(
         scopeProjectRef(environmentA, ProjectId.make("project-a")),
         draftId,
-        {
-          threadId: ThreadId.make("thread-draft"),
-        },
+        { threadId: ThreadId.make("thread-draft") },
       );
-    insert(reference("draft", draftId));
-    send(draftId, "queued", scopedThreadKey(threadAt("thread-draft")));
-    expect(ids()).toEqual(["draft"]);
+    insert(reference("thread-note"));
+    insert(reference("draft-note", draftId));
+    send(thread, "queued");
+    expect(ids()).toEqual(["draft-note"]);
+    send(draftId, "queued");
+    expect(ids()).toEqual([]);
   });
 
   it("removes team memory that returns to a draft after the account changed", () => {

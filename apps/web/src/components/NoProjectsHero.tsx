@@ -1,6 +1,5 @@
 import { MessageSquareDashedIcon, PlusIcon } from "lucide-react";
 import { useCallback } from "react";
-
 import { openCommandPalette } from "../commandPaletteBus";
 import { isElectron } from "../env";
 import { useScratchProject } from "../hooks/useScratchProject";

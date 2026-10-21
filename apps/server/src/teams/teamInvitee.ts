@@ -1,7 +1,7 @@
 import { type TeamInviteeLookup, TeamsError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { HttpClientRequest, type HttpClientResponse } from "effect/unstable/http";
+import { HttpClientRequest, type HttpClientResponse } from "effect/http";
 
 // User.ReadBasic.All returns only displayName, givenName, id, mail, photo, securityIdentifier,
 // surname, and userPrincipalName. userType, accountEnabled, jobTitle, and department need broader

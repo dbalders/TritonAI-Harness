@@ -47,6 +47,7 @@ import {
   membershipReviewCopy,
   roleLabel,
 } from "./teamMembershipReview";
+import { useTeamsPermission } from "./useTeamsPermission";
 import { useTeamsCommand, useTeamsController } from "./useTeamsController";
 
 export function TeamsPage({
@@ -101,8 +102,8 @@ export function TeamsPage({
           </div>
           {linkProjectTitle !== null && environmentId === linkProject?.environmentId ? (
             <p className="text-sm text-muted-foreground">
-              To link {linkProjectTitle}, open a team below and choose <strong>Link to team</strong>{" "}
-              under Team projects.
+              To link {linkProjectTitle}, open a team below and choose{" "}
+              <strong>Link and share new summaries</strong> under Team projects.
             </p>
           ) : null}
           {environmentId ? (
@@ -129,8 +130,15 @@ function TeamAccount({
   environmentId: EnvironmentId;
   linkProjectId: ProjectId | null;
 }) {
-  const { account, busy, error, controller } = useUcsdAccount(environmentId);
+  const allowed = useTeamsPermission(environmentId);
+  const { account, busy, error, controller, canSignIn, canSignOut } = useUcsdAccount(environmentId);
   const signedIn = account?.status === "signed-in" && account.profile;
+  if (!allowed)
+    return (
+      <p className="text-sm text-muted-foreground">
+        Your connection does not have permission to use Teams on this environment.
+      </p>
+    );
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-4">
@@ -149,12 +157,16 @@ function TeamAccount({
         </div>
         <div className="flex flex-wrap gap-2">
           {signedIn || account?.status === "pending" ? (
-            <Button variant="outline" disabled={busy} onClick={() => void controller.signOut()}>
+            <Button
+              variant="outline"
+              disabled={busy || !canSignOut}
+              onClick={() => void controller.signOut()}
+            >
               {signedIn ? "Sign out" : "Cancel sign-in"}
             </Button>
           ) : (
             <Button
-              disabled={busy || !account?.configured}
+              disabled={busy || !account?.configured || !canSignIn}
               onClick={() => void controller.signIn()}
             >
               {account ? "Sign in with UC San Diego" : "Checking account…"}
@@ -507,7 +519,7 @@ export function TeamWorkspace({
                   key={entry.id}
                   disabled={busy}
                   onClick={() => void run({ action: "get", teamId: entry.id })}
-                  className={`rounded-xl border p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring ${team?.id === entry.id ? "border-primary bg-accent/40" : "border-border hover:bg-accent/30"}`}
+                  className={`rounded-xl border p-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${team?.id === entry.id ? "border-primary bg-accent/40" : "border-border hover:bg-accent/30"}`}
                 >
                   <div className="flex items-center gap-2">
                     <UsersIcon className="size-4 shrink-0 text-muted-foreground" />

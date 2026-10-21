@@ -1,3 +1,4 @@
+import { DEFAULT_TRITONAI_CODEX_HOME_PATH } from "@t3tools/contracts";
 /**
  * ServerSettings - Server-authoritative settings service.
  *
@@ -11,24 +12,23 @@
  * @module ServerSettings
  */
 import {
-  DEFAULT_TEXT_GENERATION_MODEL,
-  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
-  DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
-  DEFAULT_TRITONAI_CODEX_HOME_PATH,
+  TRITONAI_API_KEY_ENV,
   ModelSelection,
+  ProjectId,
   ProjectScript,
-  type ProjectSettingsOverrides,
+  ProjectSettingsOverrides,
   type ProviderInstanceConfig,
-  type ProviderInstanceEnvironmentVariable,
-  type UsageLimitSourceConfig,
+  type ProviderInstanceMutation,
+  defaultInstanceIdForDriver,
+  isProviderDriverKind,
   ProviderDriverKind,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
+  ResponseStreamingMode,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
-  TRITONAI_API_KEY_ENV,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -45,20 +45,40 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { writeFileStringAtomically } from "./atomicWrite.ts";
+import * as SqlClient from "effect/sql/SqlClient";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
+import { resolveSymlinkTarget } from "@t3tools/shared/symlink";
 import * as ServerConfig from "./config.ts";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
 import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
 import {
   applyServerSettingsPatch,
   deriveLegacyProjectOverrides,
+  fallbackTextGenerationModelSelection,
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import {
+  readSecretFieldValues,
+  sourceControlHostSecretName,
+} from "./sourceControl/sourceControlHostSecrets.ts";
+
+import { mapSettingsSecrets, SECRET_REDACTED, type SettingsSecret } from "./settingsSecrets.ts";
+
+export {
+  resolveReviewGuideModelSelection,
+  resolveSourceControlWriterModelSelection,
+} from "@t3tools/shared/serverSettings";
+
+const encodeServerSettings = Schema.encodeEffect(ServerSettings);
+const encodeUnknownJsonPretty = Schema.encodeUnknownEffect(fromJsonStringPretty(Schema.Unknown));
+const decodeUnknownSettingsDocument = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
+const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
+
 import {
   applyManagedHarnessPolicy,
   createManagedProfileSettings,
@@ -67,17 +87,7 @@ import {
   rawSettingsHasTextGenerationSelection,
   stripManagedFieldsForPersistence,
 } from "./managedPolicy.ts";
-
-export { resolveSourceControlWriterModelSelection } from "@t3tools/shared/serverSettings";
-
-const encodeServerSettings = Schema.encodeEffect(ServerSettings);
-const encodeUnknownJsonPretty = Schema.encodeUnknownEffect(fromJsonStringPretty(Schema.Unknown));
-const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
-const decodeServerSettingsExit = Schema.decodeUnknownExit(ServerSettings);
-const decodeUnknownJsonExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
-
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -119,16 +129,41 @@ function mergeJsonDocuments(base: unknown, overlay: unknown): unknown {
   return merged;
 }
 
+function removeManagedTritonAiProviderEnvironment(settings: ServerSettings): ServerSettings {
+  let changed = false;
+  const providerInstances = Object.fromEntries(
+    Object.entries(settings.providerInstances).map(([instanceId, instance]) => {
+      if (!instance.environment) return [instanceId, instance];
+      const environment = instance.environment.filter(
+        (variable) => variable.name.toUpperCase() !== TRITONAI_API_KEY_ENV,
+      );
+      if (environment.length === instance.environment.length) return [instanceId, instance];
+      changed = true;
+      return [instanceId, { ...instance, environment }];
+    }),
+  );
+  return changed ? { ...settings, providerInstances } : settings;
+}
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
 /**
- * Older provider configs duplicated `enabled` inside the driver-specific
- * config blob. Fold that legacy flag into the canonical instance field; a
- * disable on either side wins so a user's disable is never silently undone.
+ * Fold the legacy in-config `enabled` flag into the envelope-level
+ * `ProviderInstanceConfig.enabled` and strip it from the config blob, so
+ * explicit provider instances carry exactly one enabled flag. Old settings
+ * files can hold both flags with conflicting values; an explicit false on
+ * either side wins so a user's disable is never silently undone. Runs on
+ * every load and update — the file converges on the next write.
  */
 const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSettings => {
   let changed = false;
   const providerInstances: Record<string, ProviderInstanceConfig> = {};
   for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
     const config = instance.config;
+    // Only fold boolean flags: a malformed `enabled` (e.g. `"false"`) must
+    // stay in the blob so driver schema validation flags it instead of the
+    // fold silently repairing the config.
     if (
       config === null ||
       typeof config !== "object" ||
@@ -152,7 +187,9 @@ const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSetti
       config: restConfig,
     } satisfies ProviderInstanceConfig;
   }
-  if (!changed) return settings;
+  if (!changed) {
+    return settings;
+  }
   return {
     ...settings,
     providerInstances: providerInstances as ServerSettings["providerInstances"],
@@ -176,92 +213,45 @@ const normalizeServerSettings = (
     ),
   );
 
-function providerEnvironmentSecretName(input: {
-  readonly instanceId: string;
-  readonly name: string;
-}): string {
-  return `provider-env-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
-}
-
-const LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY = "provider-legacy-opencode-server-credential";
-
-function removeManagedTritonAiProviderEnvironment(settings: ServerSettings): ServerSettings {
-  let changed = false;
-  const providerInstances = Object.fromEntries(
-    Object.entries(settings.providerInstances).map(([instanceId, instance]) => {
-      if (!instance.environment) return [instanceId, instance];
-      const environment = instance.environment.filter(
-        (variable) => variable.name.toUpperCase() !== TRITONAI_API_KEY_ENV,
-      );
-      if (environment.length === instance.environment.length) return [instanceId, instance];
-      changed = true;
-      return [instanceId, { ...instance, environment }];
-    }),
-  );
-  return changed ? { ...settings, providerInstances } : settings;
-}
-
-/**
- * On disk a hub key or Bitbucket token is replaced by this marker and the
- * real value lives in the secret store, mirroring provider environment
- * secrets. A client that sends the marker back means "keep what you have".
- */
-const SECRET_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
-
-function usageLimitSourceSecretName(sourceId: string): string {
-  return `usage-limit-source-${Buffer.from(sourceId, "utf8").toString("base64url")}`;
-}
-
-const BITBUCKET_SECRET_NAMES = {
-  accessToken: "bitbucket-access-token",
-  apiToken: "bitbucket-api-token",
-} as const;
-const BITBUCKET_SECRET_FIELDS = ["accessToken", "apiToken"] as const;
-
-const redactSecret = (value: string) => (value.length > 0 ? SECRET_REDACTED : "");
-
-function redactProviderEnvironmentVariable(
-  variable: ProviderInstanceEnvironmentVariable,
-): ProviderInstanceEnvironmentVariable {
-  if (!variable.sensitive) {
-    const { valueRedacted: _omit, ...rest } = variable;
-    return rest;
-  }
-  return {
-    ...variable,
-    value: "",
-    ...(variable.value.length > 0 || variable.valueRedacted ? { valueRedacted: true } : {}),
-  };
-}
-
 export function redactServerSettingsForClient(settings: ServerSettings): ServerSettings {
-  const providerInstances = Object.fromEntries(
-    Object.entries(settings.providerInstances).map(([instanceId, instance]) => [
-      instanceId,
-      instance.environment
-        ? {
-            ...instance,
-            environment: instance.environment.map(redactProviderEnvironmentVariable),
-          }
-        : instance,
-    ]),
+  return mapSettingsSecrets(settings, (secret) =>
+    secret.sensitive
+      ? { value: "", redacted: secret.redacted || secret.value.length > 0 }
+      : { value: secret.value, redacted: false },
   );
-  // The hub key is a bearer secret; clients only need to know one is set.
-  const usageLimitSources = Object.fromEntries(
-    Object.entries(settings.usageLimitSources).map(([id, source]) => [
-      id,
-      {
-        ...source,
-        managementKey: redactSecret(source.managementKey),
-      },
-    ]),
-  );
-  const bitbucket = {
-    ...settings.bitbucket,
-    accessToken: redactSecret(settings.bitbucket.accessToken),
-    apiToken: redactSecret(settings.bitbucket.apiToken),
-  };
-  return { ...settings, providerInstances, usageLimitSources, bitbucket };
+}
+
+export function applyProviderInstanceMutation(
+  settings: ServerSettings,
+  mutation: ProviderInstanceMutation,
+): ServerSettings {
+  const providerInstances = { ...settings.providerInstances };
+  if (mutation.operation === "upsert" || mutation.operation === "create") {
+    providerInstances[mutation.instanceId] = mutation.instance;
+  } else {
+    delete providerInstances[mutation.instanceId];
+  }
+  return { ...settings, providerInstances };
+}
+
+function ensureProviderInstanceMutationAllowed(
+  settings: ServerSettings,
+  mutation: ProviderInstanceMutation,
+  settingsPath: string,
+): Effect.Effect<void, ServerSettingsError> {
+  if (
+    mutation.operation === "create" &&
+    settings.providerInstances[mutation.instanceId] !== undefined
+  ) {
+    return Effect.fail(
+      new ServerSettingsError({
+        settingsPath,
+        operation: "create-provider-instance",
+        providerInstanceId: mutation.instanceId,
+      }),
+    );
+  }
+  return Effect.void;
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -276,13 +266,24 @@ export class ServerSettingsService extends Context.Service<
     /** Read the current settings. */
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
 
-    /** Read the normalized user-owned settings before the managed policy overlay. */
+    /** Normalized user settings before the managed runtime policy. */
     readonly getPersistedSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
 
     /** Patch settings and persist. Returns the new full settings object. */
     readonly updateSettings: (
       patch: ServerSettingsPatch,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
+
+    /** Apply a patch and one provider-instance mutation against the same latest settings snapshot. */
+    readonly updateProviderInstance: (
+      mutation: ProviderInstanceMutation,
+      patch?: ServerSettingsPatch,
+    ) => Effect.Effect<ServerSettings, ServerSettingsError>;
+
+    /** Run an effect against a settings snapshot while settings writes are paused. */
+    readonly withSettingsSnapshot: <A, E, R>(
+      use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | ServerSettingsError, R>;
 
     /** Stream of settings change events. */
     readonly streamChanges: Stream.Stream<ServerSettings>;
@@ -314,19 +315,44 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
         : {}),
     });
     const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
+    const writeSemaphore = yield* Semaphore.make(1);
+    const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider));
 
-    return {
-      start: Effect.void,
-      ready: Effect.void,
-      getSettings: Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider)),
-      getPersistedSettings: Ref.get(currentSettingsRef),
-      updateSettings: (patch) =>
+    const updateTestSettings = (
+      update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
+    ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+      writeSemaphore.withPermits(1)(
         Ref.get(currentSettingsRef).pipe(
-          Effect.map((currentSettings) => applyServerSettingsPatch(currentSettings, patch)),
+          Effect.flatMap(update),
           Effect.flatMap(normalizeServerSettings),
           Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
           Effect.map(resolveTextGenerationProvider),
         ),
+      );
+
+    return {
+      start: Effect.void,
+      ready: Effect.void,
+      getSettings,
+      getPersistedSettings: Ref.get(currentSettingsRef),
+      updateSettings: (patch) =>
+        updateTestSettings((currentSettings) =>
+          Effect.succeed(applyServerSettingsPatch(currentSettings, patch)),
+        ),
+      updateProviderInstance: (mutation, patch = {}) =>
+        updateTestSettings((currentSettings) =>
+          Effect.gen(function* () {
+            yield* ensureProviderInstanceMutationAllowed(
+              currentSettings,
+              mutation,
+              "test settings",
+            );
+            const patched = applyServerSettingsPatch(currentSettings, patch);
+            return applyProviderInstanceMutation(patched, mutation);
+          }),
+        ),
+      withSettingsSnapshot: (use) =>
+        writeSemaphore.withPermits(1)(getSettings.pipe(Effect.flatMap(use))),
       streamChanges: Stream.empty,
       subscribeChanges: Effect.succeed(Stream.empty),
     } satisfies ServerSettingsService["Service"];
@@ -335,121 +361,205 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
 export const layerTest = (overrides: DeepPartial<ServerSettings> = {}) =>
   Layer.effect(ServerSettingsService, makeTest(overrides));
 
-const LegacyOpenCodePasswordJson = fromLenientJson(
-  Schema.Struct({
-    providers: Schema.optionalKey(
-      Schema.Struct({
-        opencode: Schema.optionalKey(
-          Schema.Struct({
-            serverPassword: Schema.optionalKey(Schema.String),
-          }),
-        ),
-      }),
-    ),
-  }),
-);
-const decodeLegacyOpenCodePasswordJsonExit = Schema.decodeUnknownExit(LegacyOpenCodePasswordJson);
-const PersistedOptionalProviderSettings = Schema.Struct({
-  providers: Schema.optionalKey(
-    Schema.Struct({
-      cursor: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
-      grok: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
-      opencode: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+// Migrate saved token delivery without accepting it in settings writes or
+// letting one retired value reset the rest of the environment's settings.
+const PersistedResponseStreamingMode = Schema.Union([
+  ResponseStreamingMode,
+  Schema.Literal("token"),
+]).pipe(
+  Schema.decodeTo(
+    ResponseStreamingMode,
+    SchemaTransformation.transform({
+      decode: (mode) => (mode === "token" ? "paragraph" : mode),
+      encode: (mode) => mode,
     }),
   ),
-});
-const decodePersistedOptionalProviderSettingsJsonExit = Schema.decodeUnknownExit(
-  fromLenientJson(PersistedOptionalProviderSettings),
+);
+const ServerSettingsJson = fromLenientJson(
+  Schema.Struct({
+    ...ServerSettings.fields,
+    responseStreamingMode: PersistedResponseStreamingMode.pipe(
+      Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
+    ),
+    projectSettingsOverrides: Schema.Record(
+      ProjectId,
+      Schema.Struct({
+        ...ProjectSettingsOverrides.fields,
+        responseStreamingMode: Schema.optionalKey(PersistedResponseStreamingMode),
+      }),
+    ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  }),
+);
+const decodeServerSettingsJsonExit = Schema.decodeUnknownExit(ServerSettingsJson);
+/**
+ * The retired `providers.<kind>` map, read without its old schemas. Before
+ * `providerInstances` existed each built-in driver had one blob there; it
+ * now only feeds `migrateLegacyProviderSettings`.
+ */
+const LegacyProviderSettingsJson = fromLenientJson(
+  Schema.Struct({
+    providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+    // Retired for `sourceControlHosts`; read only by `migrateLegacySourceControlSettings`.
+    bitbucket: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+    github: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
+);
+const decodeLegacyProviderSettingsJsonExit = Schema.decodeUnknownExit(LegacyProviderSettingsJson);
+
+/** The secret store names the retired `bitbucket` and `github` keys kept their tokens under. */
+const LEGACY_BITBUCKET_SECRET_NAMES: Readonly<Record<string, string>> = {
+  accessToken: "bitbucket-access-token",
+  apiToken: "bitbucket-api-token",
+};
+const legacyGitHubTokenSecretName = (host: string) =>
+  `github-token-${Buffer.from(host.trim().toLowerCase(), "utf8").toString("base64url")}`;
+
+/**
+ * Folds the retired `bitbucket` and `github` keys into `sourceControlHosts`, unless the new key
+ * already holds that host. Returns the secret store entries to copy to their new names.
+ */
+function migrateLegacySourceControlSettings(
+  settings: ServerSettings,
+  legacy: {
+    readonly bitbucket?: Readonly<Record<string, unknown>> | undefined;
+    readonly github?: Readonly<Record<string, unknown>> | undefined;
+  },
+): {
+  readonly settings: ServerSettings;
+  readonly secretMoves: ReadonlyArray<{ readonly from: string; readonly to: string }>;
+} {
+  const sourceControlHosts = { ...settings.sourceControlHosts };
+  const secretMoves: Array<{ readonly from: string; readonly to: string }> = [];
+  if (legacy.bitbucket !== undefined && sourceControlHosts.bitbucket === undefined) {
+    sourceControlHosts.bitbucket = legacy.bitbucket;
+    for (const [field, from] of Object.entries(LEGACY_BITBUCKET_SECRET_NAMES)) {
+      if (legacy.bitbucket[field] !== SECRET_REDACTED) continue;
+      secretMoves.push({
+        from,
+        to: sourceControlHostSecretName({ kind: "bitbucket", field, serverHost: null }),
+      });
+    }
+  }
+  if (legacy.github !== undefined && sourceControlHosts.github === undefined) {
+    sourceControlHosts.github = legacy.github;
+    for (const [serverHost, value] of readSecretFieldValues(legacy.github.tokens)) {
+      if (serverHost === null || value !== SECRET_REDACTED) continue;
+      secretMoves.push({
+        from: legacyGitHubTokenSecretName(serverHost),
+        to: sourceControlHostSecretName({ kind: "github", field: "tokens", serverHost }),
+      });
+    }
+  }
+  return { settings: { ...settings, sourceControlHosts }, secretMoves };
+}
+
+// Drivers that start disabled, so a session in the history means the user
+// turned them on before the instance kept an explicit flag.
+const HISTORY_RESTORED_DRIVERS: ReadonlySet<ProviderDriverKind> = new Set(
+  ["cursor", "grok", "opencode"].map((driver) => ProviderDriverKind.make(driver)),
 );
 
-function restoreUsedProviders(
+/**
+ * Move each customized legacy `providers.<kind>` blob into the driver's
+ * default `providerInstances` slot. An explicit instance already in that slot
+ * wins. Blobs that match a fresh install (empty, or only an `enabled` flag
+ * equal to the driver default) carry nothing and are dropped.
+ *
+ * A cursor/grok/opencode slot without an `enabled` flag is enabled when
+ * provider history shows the driver was used, which is how those drivers
+ * were opted into before they had an explicit flag. Callers run this only
+ * while the settings file still has the retired map, so it happens once.
+ */
+function migrateLegacyProviderSettings(
   settings: ServerSettings,
-  persisted: typeof PersistedOptionalProviderSettings.Type,
+  legacyProviders: Readonly<Record<string, unknown>>,
   providerHistory: ReadonlyArray<{
     readonly providerName: string;
     readonly providerInstanceId: string | null;
   }>,
 ): ServerSettings {
-  const usedProviders = new Set(providerHistory.map(({ providerName }) => providerName));
-  const usedProviderInstances = new Set(
+  // History rows are raw SQL text; compare them as strings.
+  const usedProviders = new Set<string>(providerHistory.map(({ providerName }) => providerName));
+  const usedProviderInstances = new Set<string>(
     providerHistory.map(
       ({ providerName, providerInstanceId }) => providerInstanceId ?? providerName,
     ),
   );
-  const providerInstances = Object.fromEntries(
-    Object.entries(settings.providerInstances).map(([instanceId, instance]) => [
-      instanceId,
+
+  const providerInstances: Record<ProviderInstanceId, ProviderInstanceConfig> = {};
+  for (const [instanceId, instance] of Object.entries(settings.providerInstances) as Array<
+    [ProviderInstanceId, ProviderInstanceConfig]
+  >) {
+    providerInstances[instanceId] =
       instance.enabled === undefined &&
-      (instance.driver === "cursor" ||
-        instance.driver === "grok" ||
-        instance.driver === "opencode") &&
+      HISTORY_RESTORED_DRIVERS.has(instance.driver) &&
       usedProviderInstances.has(instanceId)
         ? { ...instance, enabled: true }
-        : instance,
-    ]),
-  );
+        : instance;
+  }
+
+  // History restores a never-configured cursor/grok/opencode slot too.
+  const legacyEntries = new Map(Object.entries(legacyProviders));
+  for (const driver of HISTORY_RESTORED_DRIVERS) {
+    if (!legacyEntries.has(driver)) legacyEntries.set(driver, {});
+  }
+  for (const [kind, blob] of legacyEntries) {
+    if (!isProviderDriverKind(kind) || blob === null || typeof blob !== "object") continue;
+    if (Array.isArray(blob)) continue;
+    const driver = kind;
+    const instanceId = defaultInstanceIdForDriver(driver);
+    if (Object.hasOwn(providerInstances, instanceId)) continue;
+
+    const { enabled: rawEnabled, ...config } = blob as Record<string, unknown>;
+    const explicitEnabled = typeof rawEnabled === "boolean" ? rawEnabled : undefined;
+    const enabled =
+      explicitEnabled ??
+      (HISTORY_RESTORED_DRIVERS.has(driver) && usedProviders.has(driver) ? true : undefined);
+    const driverDefault = resolveProviderInstanceEnabled({ driver, config: {} });
+    if (Object.keys(config).length === 0 && (enabled === undefined || enabled === driverDefault)) {
+      continue;
+    }
+    providerInstances[instanceId] = {
+      driver,
+      ...(enabled === undefined ? {} : { enabled }),
+      config,
+    } satisfies ProviderInstanceConfig;
+  }
 
   return {
     ...settings,
-    providers: {
-      ...settings.providers,
-      cursor: {
-        ...settings.providers.cursor,
-        enabled: persisted.providers?.cursor?.enabled ?? usedProviders.has("cursor"),
-      },
-      grok: {
-        ...settings.providers.grok,
-        enabled: persisted.providers?.grok?.enabled ?? usedProviders.has("grok"),
-      },
-      opencode: {
-        ...settings.providers.opencode,
-        enabled: persisted.providers?.opencode?.enabled ?? usedProviders.has("opencode"),
-      },
-    },
     providerInstances,
   };
 }
 
-function hasExplicitLegacyOpenCodePasswordClear(raw: string): boolean {
-  const decoded = decodeLegacyOpenCodePasswordJsonExit(raw);
-  if (decoded._tag === "Failure") return false;
-  const opencode = decoded.value.providers?.opencode;
-  return (
-    opencode !== undefined &&
-    Object.hasOwn(opencode, "serverPassword") &&
-    opencode.serverPassword?.trim().length === 0
-  );
+const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
+
+/** ACP Registry instances reject every application text-generation operation. */
+function selectionSupportsTextGeneration(
+  settings: ServerSettings,
+  selection: ModelSelection,
+): boolean {
+  return settings.providerInstances[selection.instanceId]?.driver !== ACP_REGISTRY_DRIVER;
 }
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  return isModelSelectionProviderEnabled(settings, settings.textGenerationModelSelection)
+  return isModelSelectionProviderEnabled(settings, settings.textGenerationModelSelection) &&
+    selectionSupportsTextGeneration(settings, settings.textGenerationModelSelection)
     ? settings
     : fallbackTextGenerationProvider(settings);
 }
 
 function fallbackTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  // Same precedence as isModelSelectionProviderEnabled: an explicit provider
-  // instance wins over the legacy providers map, which decodes to defaults
-  // (codex enabled) when the Providers UI has only written providerInstances.
-  const fallbackEntry = Object.entries(settings.providers).find(([driver, provider]) => {
-    const instance = settings.providerInstances[ProviderInstanceId.make(driver)];
-    return instance === undefined ? provider.enabled : resolveProviderInstanceEnabled(instance);
-  });
-  const fallback = fallbackEntry ? ProviderDriverKind.make(fallbackEntry[0]) : undefined;
-  if (!fallback) {
-    return settings;
-  }
-
-  return {
-    ...settings,
-    textGenerationModelSelection: {
-      instanceId: ProviderInstanceId.make(fallback),
-      model:
-        DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[fallback] ??
-        DEFAULT_MODEL_BY_PROVIDER[fallback] ??
-        DEFAULT_TEXT_GENERATION_MODEL,
-    } satisfies ModelSelection,
-  };
+  // A slot without an explicit instance uses its driver's default enabled state.
+  const fallback = fallbackTextGenerationModelSelection(
+    settings.providerInstances,
+    (instanceId, driver) =>
+      resolveProviderInstanceEnabled(
+        settings.providerInstances[instanceId] ?? { driver, config: {} },
+      ),
+    { defaultModelSelection: settings.defaultModelSelection },
+  );
+  return fallback === null ? settings : { ...settings, textGenerationModelSelection: fallback };
 }
 
 // Values under these keys are compared as a whole — never stripped field-by-field.
@@ -458,33 +568,10 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "automaticGitFetchInterval",
   "providerHealthRefreshInterval",
   "sourceControlWriterModelSelection",
+  "reviewGuideModelSelection",
   "textGenerationModelSelection",
   "pullRequestMergeMethod",
 ]);
-
-// Provider history can restore previous use, but cannot recover a new explicit
-// opt-in or opt-out. Remove these defaults before sparse comparison so both
-// boolean states remain persisted.
-function removeOptionalProviderEnabledDefaults(encodedDefaults: unknown): unknown {
-  const defaults = jsonRecord(encodedDefaults);
-  const providers = jsonRecord(defaults?.providers);
-  if (!defaults || !providers) return encodedDefaults;
-  const withoutEnabled = (value: unknown): unknown => {
-    const provider = jsonRecord(value);
-    if (!provider) return value;
-    const { enabled: _enabled, ...rest } = provider;
-    return rest;
-  };
-  return {
-    ...defaults,
-    providers: {
-      ...providers,
-      cursor: withoutEnabled(providers.cursor),
-      grok: withoutEnabled(providers.grok),
-      opencode: withoutEnabled(providers.opencode),
-    },
-  };
-}
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
   if (Array.isArray(current) || Array.isArray(defaults)) {
@@ -607,29 +694,15 @@ function foldLegacyProjectSettings(
   };
 }
 
-const make = (
-  managedPolicyEnabled: boolean,
-  credentialEnvironment: NodeJS.ProcessEnv = process.env,
-) =>
+const make = (managedPolicyEnabled: boolean, credentialEnvironment?: NodeJS.ProcessEnv) =>
   Effect.gen(function* () {
     const { settingsPath, baseDir } = yield* ServerConfig.ServerConfig;
     const fs = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
     const defaultCodexHomePath = pathService.join(baseDir, "codex");
-    const secretStore = yield* ServerSecretStore.ServerSecretStore;
-    const sql = yield* SqlClient.SqlClient;
-    const writeSemaphore = yield* Semaphore.make(1);
-    const cacheKey = "settings" as const;
-    const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
+    const effectiveCredentialEnvironment =
+      credentialEnvironment ?? (yield* HostProcess.Environment);
     const rawDocumentRef = yield* Ref.make<unknown>({});
-    const startedRef = yield* Ref.make(false);
-    const startedDeferred = yield* Deferred.make<void, ServerSettingsError>();
-    const watcherScope = yield* Scope.make("sequential");
-    yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
-
-    const emitChange = (settings: ServerSettings) =>
-      PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
-
     const applyEffectivePolicy = (settings: ServerSettings) =>
       managedPolicyEnabled
         ? Ref.get(rawDocumentRef).pipe(
@@ -637,13 +710,25 @@ const make = (
               applyManagedHarnessPolicy(settings, undefined, {
                 textGenerationSelectionWasPersisted:
                   rawSettingsHasTextGenerationSelection(rawDocument),
-                credentialEnvironment,
+                credentialEnvironment: effectiveCredentialEnvironment,
                 rawSettingsDocument: rawDocument,
                 defaultCodexHomePath,
               }),
             ),
           )
         : Effect.succeed(settings);
+    const secretStore = yield* ServerSecretStore.ServerSecretStore;
+    const sql = yield* SqlClient.SqlClient;
+    const writeSemaphore = yield* Semaphore.make(1);
+    const cacheKey = "settings" as const;
+    const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
+    const startedRef = yield* Ref.make(false);
+    const startedDeferred = yield* Deferred.make<void, ServerSettingsError>();
+    const watcherScope = yield* Scope.make("sequential");
+    yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
+
+    const emitChange = (settings: ServerSettings) =>
+      PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
 
     const readConfigExists = fs.exists(settingsPath).pipe(
       Effect.mapError(
@@ -656,28 +741,6 @@ const make = (
       ),
     );
 
-    const foldProjectSettings = Effect.fn("ServerSettings.foldProjectSettings")(function* (
-      settings: ServerSettings,
-    ) {
-      const rows = settings.projectSettingsFolded
-        ? []
-        : yield* sql<LegacyProjectSettingsRow>`
-            SELECT project_id AS "projectId", default_model_selection_json AS "defaultModelSelection",
-              default_thread_env_mode AS "defaultThreadEnvMode", auto_pull AS "autoPull", scripts_json AS "scripts"
-            FROM projection_projects WHERE deleted_at IS NULL
-          `.pipe(
-            Effect.mapError(
-              (cause) =>
-                new ServerSettingsError({
-                  settingsPath,
-                  operation: "read-project-settings",
-                  cause,
-                }),
-            ),
-          );
-      return foldLegacyProjectSettings(settings, rows);
-    });
-
     const readRawConfig = fs.readFileString(settingsPath).pipe(
       Effect.mapError(
         (cause) =>
@@ -689,504 +752,55 @@ const make = (
       ),
     );
 
-    const materializeProviderSecrets = (
-      settings: ServerSettings,
-    ): Effect.Effect<ServerSettings, ServerSettingsError> =>
-      Effect.gen(function* () {
-        const providerInstances: Record<string, ProviderInstanceConfig> = {
-          ...settings.providerInstances,
-        };
-        for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
-          if (!instance.environment) continue;
-          const environment: ProviderInstanceEnvironmentVariable[] = [];
-          for (const variable of instance.environment) {
-            if (!variable.sensitive || !variable.valueRedacted) {
-              environment.push(variable);
-              continue;
-            }
-            const secret = yield* secretStore
-              .get(providerEnvironmentSecretName({ instanceId, name: variable.name }))
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ServerSettingsError({
-                      settingsPath,
-                      operation: "read-secret",
-                      providerInstanceId: instanceId,
-                      environmentVariable: variable.name,
-                      cause,
-                    }),
-                ),
-              );
-            environment.push({
-              ...variable,
-              value: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
-            });
-          }
-          providerInstances[instanceId] = {
-            ...instance,
-            environment,
-          } satisfies ProviderInstanceConfig;
-        }
-
-        const usageLimitSources: Record<string, UsageLimitSourceConfig> = {};
-        for (const [sourceId, source] of Object.entries(settings.usageLimitSources)) {
-          if (source.managementKey !== SECRET_REDACTED) {
-            usageLimitSources[sourceId] = source;
-            continue;
-          }
-          const secret = yield* secretStore
-            .get(usageLimitSourceSecretName(sourceId))
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
-              ),
-            );
-          usageLimitSources[sourceId] = {
-            ...source,
-            managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
-          };
-        }
-
-        const storedValue = yield* secretStore.get(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ServerSettingsError({
-                settingsPath,
-                operation: "read-secret",
-                providerInstanceId: "opencode",
-                environmentVariable: "serverPassword",
-                cause,
-              }),
-          ),
-        );
-        const currentPassword = Option.isSome(storedValue)
-          ? textDecoder.decode(storedValue.value)
-          : settings.providers.opencode.serverPassword;
-        const bitbucket = { ...settings.bitbucket };
-        for (const field of BITBUCKET_SECRET_FIELDS) {
-          if (bitbucket[field] !== SECRET_REDACTED) continue;
-          const secret = yield* secretStore
-            .get(BITBUCKET_SECRET_NAMES[field])
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
-              ),
-            );
-          bitbucket[field] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
-        }
-        return {
-          ...settings,
-          providers: {
-            ...settings.providers,
-            opencode: {
-              ...settings.providers.opencode,
-              serverPassword: currentPassword,
-            },
-          },
-          providerInstances: providerInstances as ServerSettings["providerInstances"],
-          usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
-          bitbucket,
-        };
-      });
-
-    const removeLegacyOpenCodeStoredValue = secretStore
-      .remove(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY)
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new ServerSettingsError({
-              settingsPath,
-              operation: "remove-secret",
-              providerInstanceId: "opencode",
-              environmentVariable: "serverPassword",
-              cause,
-            }),
-        ),
-      );
-
-    interface SecretDescriptor {
-      readonly name: string;
-      readonly providerInstanceId: string;
-      readonly environmentVariable: string;
-    }
-
-    const secretDescriptorsForUpdate = (
-      current: ServerSettings,
-      next: ServerSettings,
-    ): ReadonlyArray<SecretDescriptor> => {
-      const descriptors = new Map<string, SecretDescriptor>();
-      descriptors.set(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY, {
-        name: LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY,
-        providerInstanceId: "opencode",
-        environmentVariable: "serverPassword",
-      });
-      for (const field of BITBUCKET_SECRET_FIELDS) {
-        descriptors.set(BITBUCKET_SECRET_NAMES[field], {
-          name: BITBUCKET_SECRET_NAMES[field],
-          providerInstanceId: "bitbucket",
-          environmentVariable: field,
-        });
-      }
-      for (const settings of [current, next]) {
-        for (const sourceId of Object.keys(settings.usageLimitSources)) {
-          const name = usageLimitSourceSecretName(sourceId);
-          descriptors.set(name, {
-            name,
-            providerInstanceId: sourceId,
-            environmentVariable: "managementKey",
-          });
-        }
-        for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
-          for (const variable of instance.environment ?? []) {
-            const name = providerEnvironmentSecretName({ instanceId, name: variable.name });
-            if (descriptors.has(name)) continue;
-            descriptors.set(name, {
-              name,
-              providerInstanceId: instanceId,
-              environmentVariable: variable.name,
-            });
-          }
-        }
-      }
-      return Array.from(descriptors.values());
-    };
-
-    const snapshotProviderSecrets = (
-      current: ServerSettings,
-      next: ServerSettings,
-    ): Effect.Effect<
-      ReadonlyArray<readonly [SecretDescriptor, Option.Option<Uint8Array>]>,
-      ServerSettingsError
-    > =>
-      Effect.forEach(secretDescriptorsForUpdate(current, next), (descriptor) =>
-        secretStore.get(descriptor.name).pipe(
-          Effect.map((value) => [descriptor, value] as const),
-          Effect.mapError(
-            (cause) =>
-              new ServerSettingsError({
-                settingsPath,
-                operation: "read-secret",
-                providerInstanceId: descriptor.providerInstanceId,
-                environmentVariable: descriptor.environmentVariable,
-                cause,
-              }),
-          ),
-        ),
-      );
-
-    const restoreProviderSecrets = (
-      snapshot: ReadonlyArray<readonly [SecretDescriptor, Option.Option<Uint8Array>]>,
-    ): Effect.Effect<void> =>
-      Effect.forEach(
-        snapshot,
-        ([descriptor, previousValue]) =>
-          Option.match(previousValue, {
-            onNone: () => secretStore.remove(descriptor.name),
-            onSome: (value) => secretStore.set(descriptor.name, value),
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logError("failed to restore provider credential", {
-                settingsPath,
-                providerInstanceId: descriptor.providerInstanceId,
-                environmentVariable: descriptor.environmentVariable,
-                cause,
-              }),
-            ),
-          ),
-        { discard: true },
-      );
-
-    const runWithProviderSecretRollback = <A>(
-      current: ServerSettings,
-      next: ServerSettings,
-      effect: Effect.Effect<A, ServerSettingsError>,
-    ): Effect.Effect<A, ServerSettingsError> =>
-      Effect.gen(function* () {
-        const snapshot = yield* snapshotProviderSecrets(current, next);
-        return yield* effect.pipe(
-          Effect.catchCause((cause) =>
-            restoreProviderSecrets(snapshot).pipe(Effect.andThen(Effect.failCause(cause))),
-          ),
-        );
-      });
-
-    const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
-      changes.pipe(
-        Stream.mapEffect((settings) =>
-          materializeProviderSecrets(settings).pipe(
-            Effect.catch((error: ServerSettingsError) =>
-              Effect.logWarning("failed to materialize provider environment secrets", {
-                operation: error.operation,
-                providerInstanceId: error.providerInstanceId,
-                environmentVariable: error.environmentVariable,
-                cause: error.cause,
-              }).pipe(Effect.as(settings)),
-            ),
-          ),
-        ),
-        Stream.mapEffect(applyEffectivePolicy),
-        Stream.map(resolveTextGenerationProvider),
-      );
-
-    const persistProviderSecrets = (
-      current: ServerSettings,
-      next: ServerSettings,
-    ): Effect.Effect<ServerSettings, ServerSettingsError> =>
-      Effect.gen(function* () {
-        const providerInstances: Record<string, ProviderInstanceConfig> = {
-          ...next.providerInstances,
-        };
-
-        const nextSecretKeys = new Set<string>();
-        for (const [instanceId, instance] of Object.entries(next.providerInstances)) {
-          if (!instance.environment) continue;
-          const environment: ProviderInstanceEnvironmentVariable[] = [];
-          for (const variable of instance.environment) {
-            const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
-            if (!variable.sensitive) {
-              yield* secretStore.remove(secretName).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ServerSettingsError({
-                      settingsPath,
-                      operation: "remove-secret",
-                      providerInstanceId: instanceId,
-                      environmentVariable: variable.name,
-                      cause,
-                    }),
-                ),
-              );
-              environment.push(redactProviderEnvironmentVariable(variable));
-              continue;
-            }
-
-            nextSecretKeys.add(secretName);
-            // Match the provider environment's last-value-wins behavior for duplicate names.
-            const previous = variable.valueRedacted
-              ? current.providerInstances[
-                  ProviderInstanceId.make(instanceId)
-                ]?.environment?.findLast((entry) => entry.name === variable.name)
-              : undefined;
-            const inlineValue =
-              previous?.sensitive && !previous.valueRedacted && previous.value.length > 0
-                ? previous.value
-                : undefined;
-            const value = inlineValue ?? variable.value;
-            if (!variable.valueRedacted || inlineValue !== undefined) {
-              if (value.length > 0) {
-                yield* secretStore.set(secretName, textEncoder.encode(value)).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new ServerSettingsError({
-                        settingsPath,
-                        operation: "write-secret",
-                        providerInstanceId: instanceId,
-                        environmentVariable: variable.name,
-                        cause,
-                      }),
-                  ),
-                );
-                environment.push({ ...variable, value: "", valueRedacted: true });
-              } else {
-                yield* secretStore.remove(secretName).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new ServerSettingsError({
-                        settingsPath,
-                        operation: "remove-secret",
-                        providerInstanceId: instanceId,
-                        environmentVariable: variable.name,
-                        cause,
-                      }),
-                  ),
-                );
-                const { valueRedacted: _omit, ...rest } = variable;
-                environment.push(rest);
-              }
-              continue;
-            }
-
-            environment.push(redactProviderEnvironmentVariable(variable));
-          }
-          providerInstances[instanceId] = {
-            ...instance,
-            environment,
-          } satisfies ProviderInstanceConfig;
-        }
-
-        for (const [instanceId, instance] of Object.entries(current.providerInstances)) {
-          for (const variable of instance.environment ?? []) {
-            if (!variable.sensitive) continue;
-            const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
-            if (nextSecretKeys.has(secretName)) continue;
-            yield* secretStore.remove(secretName).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ServerSettingsError({
-                    settingsPath,
-                    operation: "remove-stale-secret",
-                    providerInstanceId: instanceId,
-                    environmentVariable: variable.name,
-                    cause,
-                  }),
-              ),
-            );
-          }
-        }
-
-        const usageLimitSources: Record<string, UsageLimitSourceConfig> = {};
-        for (const [sourceId, source] of Object.entries(next.usageLimitSources)) {
-          const secretName = usageLimitSourceSecretName(sourceId);
-          if (source.managementKey === SECRET_REDACTED) {
-            // Unchanged from the client's point of view; the store already has it.
-            usageLimitSources[sourceId] = source;
-            continue;
-          }
-          if (source.managementKey.length === 0) {
-            yield* secretStore
-              .remove(secretName)
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ServerSettingsError({ settingsPath, operation: "remove-secret", cause }),
-                ),
-              );
-            usageLimitSources[sourceId] = source;
-            continue;
-          }
-          yield* secretStore
-            .set(secretName, textEncoder.encode(source.managementKey))
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ServerSettingsError({ settingsPath, operation: "write-secret", cause }),
-              ),
-            );
-          usageLimitSources[sourceId] = {
-            ...source,
-            managementKey: SECRET_REDACTED,
-          };
-        }
-        for (const sourceId of Object.keys(current.usageLimitSources)) {
-          if (sourceId in next.usageLimitSources) continue;
-          yield* secretStore.remove(usageLimitSourceSecretName(sourceId)).pipe(
-            Effect.mapError(
-              (cause) =>
-                new ServerSettingsError({
-                  settingsPath,
-                  operation: "remove-stale-secret",
-                  cause,
-                }),
-            ),
-          );
-        }
-
-        // OpenCodeSettings defines this field as TrimmedString, and persistence runs before
-        // normalizeServerSettings, so normalize it before writing the secret-store value.
-        const storedValue = next.providers.opencode.serverPassword.trim();
-        if (storedValue.length > 0) {
-          yield* secretStore
-            .set(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY, textEncoder.encode(storedValue))
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ServerSettingsError({
-                    settingsPath,
-                    operation: "write-secret",
-                    providerInstanceId: "opencode",
-                    environmentVariable: "serverPassword",
-                    cause,
-                  }),
-              ),
-            );
-        } else if (current.providers.opencode.serverPassword.length > 0) {
-          yield* removeLegacyOpenCodeStoredValue;
-        }
-
-        const bitbucket = { ...next.bitbucket };
-        for (const field of BITBUCKET_SECRET_FIELDS) {
-          let value = bitbucket[field];
-          if (value === SECRET_REDACTED) {
-            // The marker keeps what is saved. A plaintext value hand-edited into settings.json
-            // is not in the secret store yet, so move it there instead of dropping it.
-            const inline = current.bitbucket[field];
-            if (inline === SECRET_REDACTED || inline.length === 0) continue;
-            value = inline;
-          }
-          const secretName = BITBUCKET_SECRET_NAMES[field];
-          if (value.length === 0) {
-            yield* secretStore
-              .remove(secretName)
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ServerSettingsError({ settingsPath, operation: "remove-secret", cause }),
-                ),
-              );
-            continue;
-          }
-          yield* secretStore
-            .set(secretName, textEncoder.encode(value))
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ServerSettingsError({ settingsPath, operation: "write-secret", cause }),
-              ),
-            );
-          bitbucket[field] = SECRET_REDACTED;
-        }
-
-        return {
-          ...next,
-          providers: {
-            ...next.providers,
-            opencode: {
-              ...next.providers.opencode,
-              serverPassword: "",
-            },
-          },
-          providerInstances: providerInstances as ServerSettings["providerInstances"],
-          usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
-          bitbucket,
-        };
-      });
-
     const writeSettingsAtomically = Effect.fnUntraced(
       function* (
         settings: ServerSettings,
         options?: { readonly replaceProviderInstances?: boolean },
       ) {
+        const userSettings = managedPolicyEnabled
+          ? stripManagedFieldsForPersistence(settings)
+          : settings;
         const [encodedSettings, encodedDefaults, rawDocument] = yield* Effect.all([
-          encodeServerSettings(settings),
-          encodeServerSettings(DEFAULT_SERVER_SETTINGS).pipe(
-            Effect.map(removeOptionalProviderEnabledDefaults),
-          ),
+          encodeServerSettings(userSettings),
+          encodeServerSettings(DEFAULT_SERVER_SETTINGS),
           Ref.get(rawDocumentRef),
         ]);
         const sparseSettings = stripDefaultServerSettings(encodedSettings, encodedDefaults) ?? {};
+        const rawRecord = jsonRecord(rawDocument);
+        const rawInstances = jsonRecord(rawRecord?.providerInstances);
+        const encodedInstances = jsonRecord(encodedSettings.providerInstances);
+        const retainedRawDocument =
+          options?.replaceProviderInstances && rawRecord && rawInstances && encodedInstances
+            ? {
+                ...rawRecord,
+                providerInstances: Object.fromEntries(
+                  Object.entries(rawInstances).filter(
+                    ([id, instance]) =>
+                      Object.hasOwn(encodedInstances, id) &&
+                      jsonRecord(instance)?.driver === jsonRecord(encodedInstances[id])?.driver,
+                  ),
+                ),
+              }
+            : rawDocument;
         const unknownSettings =
           collectUnknownSettingsFields(
-            rawDocument,
+            retainedRawDocument,
             encodedSettings,
             new Set([
+              "providers",
               "projectSettingsOverrides",
               "projectAgentBrowserAccessOverrides",
               "projectScriptOverrides",
               "projectAutoPullOverrides",
               "usagePriceOverrides",
               "usageLimitSources",
-              ...(options?.replaceProviderInstances ? ["providerInstances"] : []),
             ]),
           ) ?? {};
         const persistedDocument = mergeJsonDocuments(unknownSettings, sparseSettings);
-        const sparseSettingsJson = yield* encodeUnknownJsonPretty(persistedDocument);
-
+        const contents = yield* encodeUnknownJsonPretty(persistedDocument);
         yield* writeFileStringAtomically({
           filePath: settingsPath,
-          contents: `${sparseSettingsJson}\n`,
+          contents: `${contents}\n`,
           mode: 0o600,
         }).pipe(
           Effect.provideService(FileSystem.FileSystem, fs),
@@ -1195,70 +809,130 @@ const make = (
         yield* Ref.set(rawDocumentRef, persistedDocument);
       },
       Effect.mapError(
-        (cause) =>
-          new ServerSettingsError({
-            settingsPath,
-            operation: "write-file",
-            cause,
-          }),
+        (cause) => new ServerSettingsError({ settingsPath, operation: "write-file", cause }),
       ),
     );
 
-    const hasPlaintextProviderSecret = (settings: ServerSettings): boolean =>
-      settings.providers.opencode.serverPassword.length > 0 ||
-      Object.values(settings.providerInstances).some((instance) =>
-        instance.environment?.some(
-          (variable) => variable.sensitive && !variable.valueRedacted && variable.value.length > 0,
-        ),
-      );
-
     /**
-     * Moves Bitbucket tokens hand-edited into settings.json into the secret store as they load,
-     * so plaintext does not stay on disk. If the store is unavailable, the token keeps working
-     * from the file and the move is retried on the next load.
+     * Migrate plaintext schema-declared credentials on load. Failed moves stay usable from
+     * the file and are retried next time; client redaction does not depend on migration.
      */
-    const moveInlineBitbucketTokens = (settings: ServerSettings) =>
+    const moveInlineSettingsSecrets = (settings: ServerSettings) =>
       Effect.gen(function* () {
-        const bitbucket = { ...settings.bitbucket };
-        let moved = false;
-        for (const field of BITBUCKET_SECRET_FIELDS) {
-          const value = bitbucket[field];
-          if (value.length === 0 || value === SECRET_REDACTED) continue;
+        const pending: SettingsSecret[] = [];
+        mapSettingsSecrets(settings, (secret) => {
+          if (secret.kind === "field" && !secret.redacted && secret.value.length > 0) {
+            pending.push(secret);
+          }
+          return secret;
+        });
+        const moved = new Set<string>();
+        for (const secret of pending) {
           const stored = yield* secretStore
-            .set(BITBUCKET_SECRET_NAMES[field], textEncoder.encode(value))
+            .set(secret.secretName, textEncoder.encode(secret.value))
             .pipe(
               Effect.as(true),
               Effect.catch(() =>
-                Effect.logWarning("failed to move a Bitbucket token into the secret store", {
-                  field,
-                }).pipe(Effect.as(false)),
+                Effect.logWarning("failed to move a settings secret into the secret store").pipe(
+                  Effect.as(false),
+                ),
               ),
             );
-          if (!stored) continue;
-          bitbucket[field] = SECRET_REDACTED;
-          moved = true;
+          if (stored) moved.add(secret.secretName);
         }
-        return moved ? { ...settings, bitbucket } : settings;
+        if (moved.size === 0) return settings;
+        return mapSettingsSecrets(settings, (secret) =>
+          moved.has(secret.secretName) ? { value: "", redacted: true } : secret,
+        );
       });
 
     const loadSettingsFromDisk = Effect.gen(function* () {
-      let persisted: typeof PersistedOptionalProviderSettings.Type = {};
+      let settings = DEFAULT_SERVER_SETTINGS;
+      let legacyProviders: Readonly<Record<string, unknown>> | undefined;
+      let legacySourceControl: Parameters<typeof migrateLegacySourceControlSettings>[1] = {};
+      // A file that failed to decode must stay on disk for the user to repair;
+      // the fold below only writes when it started from the file's real contents.
+      let settingsFileTrusted = true;
+
+      const fileExists = yield* readConfigExists;
+      let managedMigration = false;
+      if (!fileExists && managedPolicyEnabled) {
+        const history = yield* sql`SELECT 1 FROM projection_thread_sessions
+        UNION ALL SELECT 1 FROM provider_session_runtime
+        UNION ALL SELECT 1 FROM orchestration_v2_projection_threads LIMIT 1`.pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({ settingsPath, operation: "read-provider-history", cause }),
+          ),
+        );
+        yield* Ref.set(
+          rawDocumentRef,
+          createManagedProfileSettings(
+            history.length > 0 ? DEFAULT_TRITONAI_CODEX_HOME_PATH : defaultCodexHomePath,
+          ),
+        );
+        managedMigration = true;
+      }
+      if (fileExists) {
+        const raw = yield* readRawConfig;
+        const rawParsed = decodeUnknownSettingsDocument(raw);
+        const migration =
+          managedPolicyEnabled && rawParsed._tag === "Success"
+            ? migrateLegacyInstallerManagedSettings(rawParsed.value, { defaultCodexHomePath })
+            : { document: rawParsed._tag === "Success" ? rawParsed.value : {}, migrated: false };
+        yield* Ref.set(rawDocumentRef, migration.document);
+        managedMigration = migration.migrated;
+        const migratedRaw =
+          rawParsed._tag === "Success"
+            ? yield* encodeUnknownJsonPretty(migration.document).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSettingsError({ settingsPath, operation: "read-file", cause }),
+                ),
+              )
+            : raw;
+        const decoded = decodeServerSettingsJsonExit(migratedRaw);
+        const legacySettings = decodeLegacyProviderSettingsJsonExit(migratedRaw);
+        if (legacySettings._tag === "Success") {
+          legacyProviders = legacySettings.value.providers;
+          legacySourceControl = {
+            bitbucket: legacySettings.value.bitbucket,
+            github: legacySettings.value.github,
+          };
+        }
+        if (decoded._tag === "Failure" || legacySettings._tag === "Failure") {
+          const failure = decoded._tag === "Failure" ? decoded : legacySettings;
+          settingsFileTrusted = false;
+          // The file may hold an opt-out we can no longer read; never resume threads on a guess.
+          settings = { ...DEFAULT_SERVER_SETTINGS, continueThreadsAfterServerUpdate: false };
+          if (failure._tag === "Failure") {
+            yield* Effect.logWarning("failed to parse settings.json, using defaults", {
+              path: settingsPath,
+              issues: Cause.pretty(failure.cause),
+              cause: failure.cause,
+            });
+          }
+        } else {
+          settings = decoded.value;
+        }
+      }
+
       const providerHistory = yield* sql<{
         readonly providerName: string;
         readonly providerInstanceId: string | null;
       }>`
-        SELECT DISTINCT
-          provider_name AS "providerName",
-          provider_instance_id AS "providerInstanceId"
-        FROM projection_thread_sessions
-        WHERE provider_name IN ('codex', 'cursor', 'grok', 'opencode')
-        UNION
-        SELECT DISTINCT
-          provider_name AS "providerName",
-          provider_instance_id AS "providerInstanceId"
-        FROM provider_session_runtime
-        WHERE provider_name IN ('codex', 'cursor', 'grok', 'opencode')
-      `.pipe(
+      SELECT DISTINCT
+        provider_name AS "providerName",
+        provider_instance_id AS "providerInstanceId"
+      FROM projection_thread_sessions
+      WHERE provider_name IN ('cursor', 'grok', 'opencode')
+      UNION
+      SELECT DISTINCT
+        provider_name AS "providerName",
+        provider_instance_id AS "providerInstanceId"
+      FROM provider_session_runtime
+      WHERE provider_name IN ('cursor', 'grok', 'opencode')
+    `.pipe(
         Effect.mapError(
           (cause) =>
             new ServerSettingsError({
@@ -1268,139 +942,392 @@ const make = (
             }),
         ),
       );
-      const restoreProviderHistory = (settings: ServerSettings) =>
-        foldProviderInstanceEnabledFlags(
-          restoreUsedProviders(
-            settings,
-            persisted,
-            providerHistory.filter(({ providerName }) => providerName !== "codex"),
-          ),
-        );
 
-      if (!(yield* readConfigExists)) {
-        let restoredSettings = restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
-        if (managedPolicyEnabled) {
-          const hasCodexHistory = providerHistory.some(
-            ({ providerName }) => providerName === "codex",
-          );
-          const initialDocument = migrateLegacyInstallerManagedSettings(
-            createManagedProfileSettings(
-              hasCodexHistory ? DEFAULT_TRITONAI_CODEX_HOME_PATH : defaultCodexHomePath,
-            ),
-          ).document;
-          const defaultsMigration = migrateManagedNewThreadDefaults(
-            yield* foldProjectSettings(restoredSettings),
-            initialDocument,
-          );
-          restoredSettings = defaultsMigration.settings;
-          yield* Ref.set(rawDocumentRef, defaultsMigration.document);
-          // Record the home before the first conversation so reopening cannot reclassify it as legacy.
-          yield* writeSettingsAtomically(restoredSettings);
-        } else {
-          yield* Ref.set(rawDocumentRef, {});
-          yield* writeSettingsAtomically(restoredSettings);
-        }
-        return restoredSettings;
-      }
+      const legacyProjectRows =
+        settings.projectSettingsFolded || !settingsFileTrusted
+          ? []
+          : yield* sql<LegacyProjectSettingsRow>`
+          SELECT
+            project_id AS "projectId",
+            default_model_selection_json AS "defaultModelSelection",
+            default_thread_env_mode AS "defaultThreadEnvMode",
+            auto_pull AS "autoPull",
+            scripts_json AS "scripts"
+          FROM projection_projects
+          WHERE deleted_at IS NULL
+        `.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    operation: "read-project-settings",
+                    cause,
+                  }),
+              ),
+            );
 
-      const raw = yield* readRawConfig;
-      const persistedSettings = decodePersistedOptionalProviderSettingsJsonExit(raw);
-      if (persistedSettings._tag === "Success") {
-        persisted = persistedSettings.value;
-      }
-      const parsed = decodeUnknownJsonExit(raw);
-      if (parsed._tag === "Failure") {
-        yield* Effect.logWarning("failed to parse settings.json, using defaults", {
-          path: settingsPath,
-          issues: Cause.pretty(parsed.cause),
-          cause: parsed.cause,
-        });
-        yield* Ref.set(rawDocumentRef, {});
-        return restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
-      }
-      const migration = managedPolicyEnabled
-        ? migrateLegacyInstallerManagedSettings(parsed.value, { defaultCodexHomePath })
-        : { document: parsed.value, migrated: false };
-      yield* Ref.set(rawDocumentRef, migration.document);
-      const decoded = decodeServerSettingsExit(migration.document);
-      if (decoded._tag === "Failure") {
-        yield* Effect.logWarning("failed to parse settings.json, using defaults", {
-          path: settingsPath,
-          issues: Cause.pretty(decoded.cause),
-          cause: decoded.cause,
-        });
-        return restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
-      }
-      const restored = restoreProviderHistory(decoded.value);
-      const foldedSettings = yield* foldProjectSettings(restored);
-      const settingsWithStoredTokens = yield* moveInlineBitbucketTokens(foldedSettings);
-      const settingsNeedRewrite = settingsWithStoredTokens !== restored;
-      const defaultsMigration = managedPolicyEnabled
-        ? migrateManagedNewThreadDefaults(settingsWithStoredTokens, migration.document)
-        : { settings: settingsWithStoredTokens, document: migration.document, migrated: false };
-      yield* Ref.set(rawDocumentRef, defaultsMigration.document);
-      const restoredSettings = defaultsMigration.settings;
-      const withoutManagedTritonAiProviderEnvironment =
-        removeManagedTritonAiProviderEnvironment(restoredSettings);
-      const removedManagedTritonAiProviderEnvironment =
-        withoutManagedTritonAiProviderEnvironment !== restoredSettings;
-      if (hasExplicitLegacyOpenCodePasswordClear(raw)) {
-        return yield* runWithProviderSecretRollback(
-          restoredSettings,
-          withoutManagedTritonAiProviderEnvironment,
-          removeLegacyOpenCodeStoredValue.pipe(
-            Effect.andThen(
-              persistProviderSecrets(restoredSettings, withoutManagedTritonAiProviderEnvironment),
-            ),
-            Effect.flatMap(normalizeServerSettings),
-            Effect.tap(writeSettingsAtomically),
-          ),
-        );
-      }
-      if (
-        !hasPlaintextProviderSecret(restoredSettings) &&
-        !Object.values(restoredSettings.usageLimitSources).some(
-          (source) => source.managementKey.length > 0 && source.managementKey !== SECRET_REDACTED,
-        ) &&
-        !removedManagedTritonAiProviderEnvironment
-      ) {
-        if (migration.migrated || defaultsMigration.migrated || settingsNeedRewrite) {
-          yield* writeSettingsAtomically(withoutManagedTritonAiProviderEnvironment);
-        }
-        return restoredSettings;
-      }
-
-      const migrated = yield* runWithProviderSecretRollback(
-        restoredSettings,
-        withoutManagedTritonAiProviderEnvironment,
-        persistProviderSecrets(restoredSettings, withoutManagedTritonAiProviderEnvironment).pipe(
-          Effect.flatMap(normalizeServerSettings),
-          Effect.tap(writeSettingsAtomically),
-        ),
+      const loaded = foldProviderInstanceEnabledFlags(
+        legacyProviders === undefined
+          ? settings
+          : migrateLegacyProviderSettings(settings, legacyProviders, providerHistory),
       );
+      const folded = settingsFileTrusted
+        ? foldLegacyProjectSettings(loaded, legacyProjectRows)
+        : loaded;
+      // Copied, not moved: the old entry is removed only after the new file is written. A token
+      // that cannot be read or copied leaves the retired keys in place, so the migration runs again
+      // on the next load instead of dropping it.
+      const legacySecretsCopied = yield* Effect.forEach(
+        settingsFileTrusted
+          ? migrateLegacySourceControlSettings(folded, legacySourceControl).secretMoves
+          : [],
+        (move) =>
+          secretStore.get(move.from).pipe(
+            Effect.flatMap((secret) =>
+              Option.isNone(secret) ? Effect.void : secretStore.set(move.to, secret.value),
+            ),
+            Effect.as(true),
+            Effect.catch(() =>
+              Effect.logWarning("failed to copy a source control secret to its new name", {
+                secretName: move.to,
+              }).pipe(Effect.as(false)),
+            ),
+          ),
+      ).pipe(Effect.map((copied) => copied.every(Boolean)));
+      const hasLegacySourceControl =
+        settingsFileTrusted &&
+        legacySecretsCopied &&
+        (legacySourceControl.bitbucket !== undefined || legacySourceControl.github !== undefined);
+      const sourceControlMigration = hasLegacySourceControl
+        ? migrateLegacySourceControlSettings(folded, legacySourceControl)
+        : { settings: folded, secretMoves: [] };
+      // Only rewrite a file that decoded cleanly; an untrusted one stays for the user to repair.
+      const defaultsMigration =
+        settingsFileTrusted && managedPolicyEnabled
+          ? migrateManagedNewThreadDefaults(
+              sourceControlMigration.settings,
+              yield* Ref.get(rawDocumentRef),
+            )
+          : {
+              settings: sourceControlMigration.settings,
+              document: yield* Ref.get(rawDocumentRef),
+              migrated: false,
+            };
+      yield* Ref.set(rawDocumentRef, defaultsMigration.document);
+      if (hasLegacySourceControl) {
+        yield* Ref.update(rawDocumentRef, (document) => {
+          const next = { ...jsonRecord(document) };
+          delete next.bitbucket;
+          delete next.github;
+          return next;
+        });
+      }
+      const migrated = settingsFileTrusted
+        ? removeManagedTritonAiProviderEnvironment(
+            yield* moveInlineSettingsSecrets(defaultsMigration.settings),
+          )
+        : folded;
+      // A file still carrying the retired `providers`, `bitbucket`, or `github` keys is rewritten
+      // once so the migrated values persist and the old keys disappear.
+      if (
+        settingsFileTrusted &&
+        (migrated !== loaded ||
+          managedMigration ||
+          defaultsMigration.migrated ||
+          legacyProviders !== undefined ||
+          hasLegacySourceControl)
+      ) {
+        yield* writeSettingsAtomically(migrated);
+        for (const move of sourceControlMigration.secretMoves) {
+          yield* secretStore.remove(move.from).pipe(Effect.ignore);
+        }
+      }
       return migrated;
     });
 
-    const settingsCache = yield* Cache.make<typeof cacheKey, ServerSettings, ServerSettingsError>({
+    // A failed read is not kept: the next read retries instead of replaying the failure.
+    const settingsCache = yield* Cache.makeWith<
+      typeof cacheKey,
+      ServerSettings,
+      ServerSettingsError
+    >(() => loadSettingsFromDisk, {
       capacity: 1,
-      lookup: () => loadSettingsFromDisk,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
     });
 
     const getSettingsFromCache = Cache.get(settingsCache, cacheKey);
+
+    const materializeSettingsSecrets = (
+      settings: ServerSettings,
+    ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+      Effect.gen(function* () {
+        const storedSecrets = new Map<string, string>();
+        const pending = new Map<string, SettingsSecret>();
+        mapSettingsSecrets(settings, (secret) => {
+          if (secret.sensitive && secret.redacted) pending.set(secret.secretName, secret);
+          return secret;
+        });
+        for (const secret of pending.values()) {
+          const value = yield* secretStore.get(secret.secretName).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({
+                  settingsPath,
+                  operation: "read-secret",
+                  providerInstanceId: secret.providerInstanceId,
+                  environmentVariable: secret.environmentVariable,
+                  cause,
+                }),
+            ),
+          );
+          storedSecrets.set(
+            secret.secretName,
+            Option.isSome(value) ? textDecoder.decode(value.value) : "",
+          );
+        }
+        return mapSettingsSecrets(settings, (secret) => ({
+          value:
+            secret.sensitive && secret.redacted
+              ? (storedSecrets.get(secret.secretName) ?? "")
+              : secret.value,
+          redacted: secret.sensitive && secret.kind === "environment" && secret.redacted,
+        }));
+      });
+
+    const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
+      changes.pipe(
+        Stream.mapEffect((settings) =>
+          materializeSettingsSecrets(settings).pipe(
+            Effect.flatMap(applyEffectivePolicy),
+            Effect.catch((error: ServerSettingsError) =>
+              Effect.logWarning("failed to materialize settings secrets", {
+                operation: error.operation,
+                providerInstanceId: error.providerInstanceId,
+                environmentVariable: error.environmentVariable,
+                cause: error.cause,
+              }).pipe(Effect.andThen(applyEffectivePolicy(settings))),
+            ),
+          ),
+        ),
+        Stream.map(resolveTextGenerationProvider),
+      );
+
+    type SecretChange = {
+      readonly secretName: string;
+      readonly providerInstanceId?: string;
+      readonly environmentVariable?: string;
+    } & (
+      | { readonly kind: "write"; readonly value: Uint8Array }
+      | { readonly kind: "remove"; readonly operation: "remove-secret" | "remove-stale-secret" }
+    );
+
+    const persistSettingsSecrets = (current: ServerSettings, next: ServerSettings) =>
+      Effect.sync(() => {
+        const previous = new Map<string, SettingsSecret>();
+        mapSettingsSecrets(current, (secret) => {
+          // Duplicate environment names follow the provider's last-value-wins behavior.
+          previous.set(secret.secretName, secret);
+          return secret;
+        });
+        const changes: SecretChange[] = [];
+        const nextSecretNames = new Set<string>();
+        const settings = mapSettingsSecrets(next, (secret) => {
+          const metadata = {
+            secretName: secret.secretName,
+            ...(secret.providerInstanceId !== undefined
+              ? { providerInstanceId: secret.providerInstanceId }
+              : {}),
+            ...(secret.environmentVariable !== undefined
+              ? { environmentVariable: secret.environmentVariable }
+              : {}),
+          };
+          if (!secret.sensitive) {
+            changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
+            return { value: secret.value, redacted: false };
+          }
+          const old = previous.get(secret.secretName);
+          const inlineValue =
+            old?.sensitive && !old.redacted && old.value.length > 0 ? old.value : undefined;
+          const value = secret.redacted ? inlineValue : secret.value;
+          if (value === undefined) {
+            nextSecretNames.add(secret.secretName);
+            return { value: "", redacted: true };
+          }
+          if (value.length === 0) {
+            changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
+            return { value: "", redacted: false };
+          }
+          nextSecretNames.add(secret.secretName);
+          changes.push({ ...metadata, kind: "write", value: textEncoder.encode(value) });
+          return { value: "", redacted: true };
+        });
+        for (const secret of previous.values()) {
+          if (!secret.sensitive || nextSecretNames.has(secret.secretName)) continue;
+          if (changes.some((change) => change.secretName === secret.secretName)) continue;
+          changes.push({
+            kind: "remove",
+            secretName: secret.secretName,
+            operation: "remove-stale-secret",
+            ...(secret.providerInstanceId !== undefined
+              ? { providerInstanceId: secret.providerInstanceId }
+              : {}),
+            ...(secret.environmentVariable !== undefined
+              ? { environmentVariable: secret.environmentVariable }
+              : {}),
+          });
+        }
+        return { settings, changes };
+      });
+
+    const rollbackSettingsSecretWrites = (
+      writes: ReadonlyArray<{
+        readonly secretName: string;
+        readonly previousValue: Option.Option<Uint8Array>;
+        readonly providerInstanceId?: string;
+        readonly environmentVariable?: string;
+      }>,
+    ) =>
+      Effect.forEach(
+        writes.toReversed(),
+        (write) =>
+          (Option.isSome(write.previousValue)
+            ? secretStore.set(write.secretName, write.previousValue.value)
+            : secretStore.remove(write.secretName)
+          ).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("failed to roll back settings secret", {
+                providerInstanceId: write.providerInstanceId,
+                environmentVariable: write.environmentVariable,
+                cause,
+              }),
+            ),
+          ),
+        { discard: true },
+      );
+
+    const applySettingsSecretChanges = (changes: ReadonlyArray<SecretChange>) => {
+      const applied: Array<{
+        readonly secretName: string;
+        readonly previousValue: Option.Option<Uint8Array>;
+        readonly providerInstanceId?: string;
+        readonly environmentVariable?: string;
+      }> = [];
+      const rollback = Effect.suspend(() => rollbackSettingsSecretWrites(applied));
+      return Effect.forEach(
+        changes,
+        (change) =>
+          Effect.gen(function* () {
+            const previousValue = yield* secretStore.get(change.secretName).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    operation: "read-secret",
+                    providerInstanceId: change.providerInstanceId,
+                    environmentVariable: change.environmentVariable,
+                    cause,
+                  }),
+              ),
+            );
+            // A store operation may mutate before reporting an error (for example chmod after rename).
+            applied.push({ ...change, previousValue });
+            yield* (
+              change.kind === "write"
+                ? secretStore.set(change.secretName, change.value)
+                : secretStore.remove(change.secretName)
+            ).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    operation: change.kind === "write" ? "write-secret" : change.operation,
+                    providerInstanceId: change.providerInstanceId,
+                    environmentVariable: change.environmentVariable,
+                    cause,
+                  }),
+              ),
+            );
+          }),
+        { discard: true },
+      ).pipe(
+        Effect.tapError(() => rollback),
+        Effect.as(rollback),
+      );
+    };
+
+    const updateAndPersistSettings = (
+      update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
+      options?: { readonly replaceProviderInstances?: boolean },
+    ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+      writeSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const current = yield* getSettingsFromCache.pipe(
+            Effect.flatMap(materializeSettingsSecrets),
+          );
+          const proposed = yield* update(current);
+          const updated = removeManagedTritonAiProviderEnvironment(
+            managedPolicyEnabled ? stripManagedFieldsForPersistence(proposed) : proposed,
+          );
+          const persisted = yield* persistSettingsSecrets(current, updated);
+          const next = yield* normalizeServerSettings(persisted.settings);
+          const materialized = yield* Effect.uninterruptibleMask(() =>
+            Effect.gen(function* () {
+              const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
+              const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
+              if (Exit.isFailure(materializedExit)) {
+                yield* rollbackSecretChanges;
+                return yield* Effect.failCause(materializedExit.cause);
+              }
+              const writeExit = yield* Effect.exit(writeSettingsAtomically(next, options));
+              if (Exit.isFailure(writeExit)) {
+                yield* rollbackSecretChanges;
+                return yield* Effect.failCause(writeExit.cause);
+              }
+              return materializedExit.value;
+            }),
+          );
+          yield* Cache.set(settingsCache, cacheKey, next);
+          yield* emitChange(next);
+          return resolveTextGenerationProvider(yield* applyEffectivePolicy(materialized));
+        }),
+      );
+
+    const withSettingsSnapshot: ServerSettingsService["Service"]["withSettingsSnapshot"] = (use) =>
+      writeSemaphore.withPermits(1)(
+        getSettingsFromCache.pipe(
+          Effect.flatMap(materializeSettingsSecrets),
+          Effect.flatMap(applyEffectivePolicy),
+          Effect.map(resolveTextGenerationProvider),
+          Effect.flatMap(use),
+        ),
+      );
 
     const revalidateAndEmit = writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         yield* Cache.invalidate(settingsCache, cacheKey);
         const settings = yield* getSettingsFromCache;
-        const materialized = yield* materializeProviderSecrets(settings);
-        yield* emitChange(yield* applyEffectivePolicy(materialized));
+        yield* emitChange(settings);
       }),
     );
 
+    const watchFileChanges = (filePath: string) => {
+      const directory = pathService.dirname(filePath);
+      const fileName = pathService.basename(filePath);
+      const resolvedFilePath = pathService.resolve(filePath);
+      return fs
+        .watch(directory)
+        .pipe(
+          Stream.filter(
+            (event) =>
+              event.path === fileName ||
+              event.path === filePath ||
+              pathService.resolve(directory, event.path) === resolvedFilePath,
+          ),
+        );
+    };
+
     const startWatcher = Effect.gen(function* () {
       const settingsDir = pathService.dirname(settingsPath);
-      const settingsFile = pathService.basename(settingsPath);
-      const settingsPathResolved = pathService.resolve(settingsPath);
 
       yield* fs.makeDirectory(settingsDir, { recursive: true }).pipe(
         Effect.mapError(
@@ -1415,19 +1342,43 @@ const make = (
 
       const revalidateAndEmitSafely = revalidateAndEmit.pipe(Effect.ignoreCause({ log: true }));
 
+      // A symlinked settings file is rewritten in its destination's directory,
+      // which a watch on the link's directory never sees. The link is resolved
+      // again whenever it changes, so repointing it moves the watch along.
+      const watchLinkTarget = Effect.gen(function* () {
+        const linkTargetPath = yield* resolveSymlinkTarget(settingsPath).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, pathService),
+        );
+        if (linkTargetPath === pathService.resolve(settingsPath)) {
+          return Option.none<string>();
+        }
+        yield* fs
+          .makeDirectory(pathService.dirname(linkTargetPath), { recursive: true })
+          .pipe(Effect.ignore({ log: true }));
+        return Option.some(linkTargetPath);
+      }).pipe(Effect.orElseSucceed(() => Option.none<string>()));
+
+      const initialLinkTarget = yield* watchLinkTarget;
+      const linkTargetEvents = Stream.make(initialLinkTarget).pipe(
+        Stream.concat(watchFileChanges(settingsPath).pipe(Stream.mapEffect(() => watchLinkTarget))),
+        Stream.changes,
+        Stream.switchMap(
+          Option.match({
+            onNone: () => Stream.empty,
+            onSome: (linkTargetPath) =>
+              watchFileChanges(linkTargetPath).pipe(Stream.ignore({ log: true })),
+          }),
+        ),
+      );
+
       // Debounce watch events so the file is fully written before we read it.
       // Editors emit multiple events per save (truncate, write, rename) and
       // `fs.watch` can fire before the content has been flushed to disk.
-      const debouncedSettingsEvents = fs.watch(settingsDir).pipe(
-        Stream.filter((event) => {
-          return (
-            event.path === settingsFile ||
-            event.path === settingsPath ||
-            pathService.resolve(settingsDir, event.path) === settingsPathResolved
-          );
-        }),
-        Stream.debounce(Duration.millis(100)),
-      );
+      const debouncedSettingsEvents = Stream.merge(
+        watchFileChanges(settingsPath),
+        linkTargetEvents,
+      ).pipe(Stream.debounce(Duration.millis(100)));
 
       yield* Stream.runForEach(debouncedSettingsEvents, () => revalidateAndEmitSafely).pipe(
         Effect.ignoreCause({ log: true }),
@@ -1444,12 +1395,8 @@ const make = (
 
       const startup = Effect.gen(function* () {
         yield* startWatcher;
-        yield* writeSemaphore.withPermits(1)(
-          Effect.gen(function* () {
-            yield* Cache.invalidate(settingsCache, cacheKey);
-            yield* getSettingsFromCache;
-          }),
-        );
+        yield* Cache.invalidate(settingsCache, cacheKey);
+        yield* getSettingsFromCache;
       });
 
       const startupExit = yield* Effect.exit(startup);
@@ -1465,42 +1412,27 @@ const make = (
       start,
       ready: Deferred.await(startedDeferred),
       getSettings: getSettingsFromCache.pipe(
-        Effect.flatMap(materializeProviderSecrets),
+        Effect.flatMap(materializeSettingsSecrets),
         Effect.flatMap(applyEffectivePolicy),
         Effect.map(resolveTextGenerationProvider),
       ),
-      getPersistedSettings: getSettingsFromCache.pipe(Effect.flatMap(materializeProviderSecrets)),
+      getPersistedSettings: getSettingsFromCache.pipe(Effect.flatMap(materializeSettingsSecrets)),
       updateSettings: (patch) =>
-        writeSemaphore.withPermits(1)(
-          Effect.gen(function* () {
-            const current = yield* getSettingsFromCache.pipe(
-              Effect.flatMap(materializeProviderSecrets),
-            );
-            const patched = applyServerSettingsPatch(current, patch);
-            const proposed = removeManagedTritonAiProviderEnvironment(
-              managedPolicyEnabled ? stripManagedFieldsForPersistence(patched) : patched,
-            );
-            // Materialize before committing the file so a failed read-back restores the secrets.
-            const { next, materialized } = yield* runWithProviderSecretRollback(
-              current,
-              proposed,
-              Effect.gen(function* () {
-                const next = yield* persistProviderSecrets(current, proposed).pipe(
-                  Effect.flatMap(normalizeServerSettings),
-                );
-                const materialized = yield* materializeProviderSecrets(next);
-                yield* writeSettingsAtomically(next, {
-                  replaceProviderInstances: patch.providerInstances !== undefined,
-                });
-                return { next, materialized };
-              }),
-            );
-            yield* Cache.set(settingsCache, cacheKey, next);
-            const effective = yield* applyEffectivePolicy(materialized);
-            yield* emitChange(effective);
-            return resolveTextGenerationProvider(effective);
-          }),
+        updateAndPersistSettings(
+          (current) => Effect.succeed(applyServerSettingsPatch(current, patch)),
+          { replaceProviderInstances: patch.providerInstances !== undefined },
         ),
+      updateProviderInstance: (mutation, patch = {}) =>
+        updateAndPersistSettings(
+          (current) =>
+            Effect.gen(function* () {
+              yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
+              const patched = applyServerSettingsPatch(current, patch);
+              return applyProviderInstanceMutation(patched, mutation);
+            }),
+          { replaceProviderInstances: true },
+        ),
+      withSettingsSnapshot,
       get streamChanges() {
         return materializeChanges(Stream.fromPubSub(changesPubSub));
       },
@@ -1514,9 +1446,7 @@ const make = (
 
 export const layer = Layer.effect(ServerSettingsService, make(true));
 
-/** Managed policy layer with an explicit credential snapshot for deterministic tests. */
 export const layerManagedTest = (credentialEnvironment: NodeJS.ProcessEnv) =>
   Layer.effect(ServerSettingsService, make(true, credentialEnvironment));
 
-/** Parent-compatible settings behavior for tests that do not exercise the TritonAI overlay. */
 export const layerUnmanagedTest = Layer.effect(ServerSettingsService, make(false));

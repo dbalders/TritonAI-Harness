@@ -14,18 +14,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
-    name: Check
+  preflight:
+    name: Preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
+
+      - name: Validate Git submodule mappings
+        run: node .github/scripts/check-gitlinks.cjs
 
       - name: Reject repository-owned PR assets
         run: |
@@ -45,30 +49,21 @@ jobs:
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
-      # Files/dependencies are repo-wide; export checks cover clean workspaces only.
-      - name: Check unused code
-        run: vp run knip:check
-
-      - name: Check
-        run: vp check
-
-      - name: Typecheck
-        run: vpr typecheck
+      # Share the local gate, including unused-code checks, in one maintained command.
+      - name: Preflight checks
+        run: vp run preflight:checks
 
       - name: Release publication guards
         run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/*stable*.test.cjs .github/scripts/prepare-mobile-native.test.cjs .github/scripts/controlled-release-assets.test.cjs
       - name: Install browser secret helper build libraries
         run: |
-          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config build-essential
 
-      - name: Build desktop pipeline
-        run: vp run build:desktop
+      - name: Build and verify desktop pipeline
+        run: vp run preflight:desktop
 
-      - name: Verify preload bundle output
-        run: node apps/desktop/scripts/verify-preload-bundle.mjs
-
-      - name: Verify main bundle native SDK imports
-        run: node apps/desktop/scripts/verify-main-bundle-imports.mjs
+      - name: Build and verify standalone server executable
+        run: VP_NODE_VERSION=26.8.2 node apps/server/scripts/cli.ts build-exe --verbose
 
   # Everything except `t3` (apps/server). `--parallel` drops the package
   # dependency ordering that `vp run` applies by default: these `test` tasks
@@ -101,7 +96,7 @@ jobs:
 
       - name: Install browser secret helper build libraries
         run: |
-          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config build-essential
 
       - name: Test preview artifact validation
         run: python3 -B .github/scripts/stage-preview-bundle.test.py
@@ -110,7 +105,7 @@ jobs:
         run: node --test .github/scripts/check-nightly-release.test.cjs
 
       - name: Test
-        run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
+        run: vp run preflight:tests
 
   # apps/server sets `fileParallelism: false`, so its 239 files run strictly
   # one at a time. Sharding spreads them over separate runners instead of
@@ -119,11 +114,12 @@ jobs:
   test_server:
     name: Test Server ${{ matrix.shard }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Include dependency/browser setup and post-job cache/finalization around the serial tests.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -143,11 +139,14 @@ jobs:
       # No Electron setup here: `t3` (apps/server) has no Electron dependency
       # and none of its tests touch the runtime. Only the non-server `test`
       # job, which covers @t3tools/desktop, needs the download.
+      - name: Install Chromium for server browser integration tests
+        run: node apps/server/node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
+
       - name: Test
         env:
           T3CODE_TRANSFER_BUDGET_REPORT_PATH: ${{ runner.temp }}/t3code-transfer-budget.md
           T3CODE_TRANSFER_BUDGET_RESULT_PATH: ${{ runner.temp }}/thread-transfer-result.json
-        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: vp run preflight:server --shard ${{ matrix.shard }}/${{ strategy.job-total }}
 
       # src/server.test.ts writes the budget report, so exactly one shard
       # produces these files. Gating the upload on their presence keeps a
@@ -348,3 +347,32 @@ jobs:
 
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
+
+  # Keep the branch-protection name stable while requiring every CI result.
+  check:
+    name: Check
+    if: ${{ always() }}
+    needs:
+      [
+        preflight,
+        test,
+        test_server,
+        rust,
+        mobile_native_changes,
+        mobile_native_static_analysis,
+        release_smoke,
+      ]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e '. as $needs | all(to_entries[];
+            .value.result == "success"
+            or (.key == "mobile_native_static_analysis"
+              and .value.result == "skipped"
+              and $needs.mobile_native_changes.result == "success"
+              and $needs.mobile_native_changes.outputs.changed == "false"))' > /dev/null

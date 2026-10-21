@@ -9,7 +9,10 @@ export function SidebarAccount({
   busy,
   error,
   controller,
+  canSignIn,
+  canSignOut,
 }: ReturnType<typeof useUcsdAccount>) {
+  if (account?.configured === false && !error) return null;
   const profile = account?.status === "signed-in" ? account.profile : null;
   if (profile) {
     const initials = profile.displayName
@@ -40,7 +43,7 @@ export function SidebarAccount({
           <MenuItem render={<Link to="/settings/connections" hash="ucsd-account" />}>
             Account settings
           </MenuItem>
-          <MenuItem disabled={busy} onClick={() => void controller.signOut()}>
+          <MenuItem disabled={busy || !canSignOut} onClick={() => void controller.signOut()}>
             Sign out
           </MenuItem>
         </MenuPopup>
@@ -53,7 +56,7 @@ export function SidebarAccount({
         variant="ghost"
         size="xs"
         className="w-full justify-start"
-        disabled={busy || !account?.configured}
+        disabled={busy || !account?.configured || !canSignIn}
         onClick={() =>
           void (account?.status === "pending" ? controller.reopenBrowser() : controller.signIn())
         }

@@ -7,13 +7,13 @@
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { type OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
+import { ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
@@ -22,10 +22,12 @@ import { TeamMirrorHost, type TeamMirrorSource } from "../../memory/sync/teamMir
 import { teamDailyPath } from "../../memory/teamDaily.ts";
 import { makeTeamDailyPass } from "../../memory/teamDailyPass.ts";
 import { TeamDailyHost } from "../../memory/teamDailySource.ts";
-import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectService } from "../../project/ProjectService.ts";
+import { ProjectionStoreV2 } from "../../orchestration-v2/ProjectionStore.ts";
+import { layerMemory as SqlitePersistenceMemory } from "../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
+import * as TeamMessageGate from "../TeamMessageGate.ts";
 import {
   makeSyntheticTeamServices,
   makeSyntheticTeamsWorld,
@@ -44,14 +46,27 @@ const layer = (baseDir: string) =>
       set: (name, value) => Effect.sync(() => void values.set(name, value)),
       remove: (name) => Effect.sync(() => void values.delete(name)),
     }),
-    Layer.mock(ProjectionSnapshotQuery)({
-      getProjectShellById: (id) =>
+    Layer.mock(ProjectService)({
+      getById: (id) =>
         Effect.succeed(
           id === projectId
-            ? Option.some({ id, title: "Grant reports" } as unknown as OrchestrationProjectShell)
+            ? Option.some({
+                id,
+                title: "Grant reports",
+                workspaceRoot: `/code/${id}`,
+                defaultModelSelection: null,
+                scripts: [],
+                createdAt: at(1, 9),
+                updatedAt: at(1, 9),
+                deletedAt: null,
+              })
             : Option.none(),
         ),
     }),
+    Layer.mock(ProjectionStoreV2)({
+      getThreadShell: () => Effect.succeed(null),
+    }),
+    TeamMessageGate.layerMemory(),
     ServerSettings.layerTest({ memoryEnabled: true }),
     Layer.mock(TextGeneration)({
       generateTeamDailyMemory: (input) =>
@@ -85,16 +100,18 @@ const seed = Effect.gen(function* () {
     ["private", "personal", "Personal errand"],
   ] as const)
     yield* sql`
-      INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
-      VALUES (${thread}, ${project}, ${title}, ${created}, ${created})
+      INSERT INTO orchestration_v2_projection_threads
+        (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES (${thread}, ${project}, ${title}, 'codex', 'approval-required', 'default', ${created}, ${created}, '{}')
     `;
 });
 const say = (id: string, thread: string, text: string, createdAt: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
-      INSERT INTO projection_thread_messages (message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at)
-      VALUES (${id}, ${thread}, ${`turn-${id}`}, 'user', ${text}, 0, ${createdAt}, ${createdAt})
+      INSERT INTO orchestration_v2_projection_messages
+        (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)
+      VALUES (${id}, ${thread}, ${`turn-${id}`}, 'user', 0, ${createdAt}, ${createdAt}, json_object('text', ${text}))
     `;
   });
 
@@ -172,7 +189,7 @@ describe("Daily team memory over the synthetic world", () => {
           world.switchTo("member");
           yield* services.project.teams("s", { action: "list" });
           const sql = yield* SqlClient.SqlClient;
-          yield* sql`UPDATE projection_threads SET team_sharing_off_at = ${at(10, 16)} WHERE thread_id = 'withdrawn'`;
+          yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = json_set(payload_json, '$.teamSharingOffAt', ${at(10, 16)}) WHERE thread_id = 'withdrawn'`;
           yield* pass.run;
 
           world.switchTo("owner");
@@ -241,7 +258,7 @@ describe("Daily team memory over the synthetic world", () => {
           world.editDocument("alpha", path, edited, "owner");
           // The member withdraws a thread; Harness won't overwrite the edited file.
           const sql = yield* SqlClient.SqlClient;
-          yield* sql`UPDATE projection_threads SET team_sharing_off_at = ${at(10, 16)} WHERE thread_id = 'withdrawn'`;
+          yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = json_set(payload_json, '$.teamSharingOffAt', ${at(10, 16)}) WHERE thread_id = 'withdrawn'`;
           yield* pass.run;
           expect(world.readDocument("alpha", path)).toBe(edited);
           expect((yield* pass.status(alpha))?.message).toContain("changed in SharePoint");

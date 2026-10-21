@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useTeamsPermission } from "./useTeamsPermission";
 import { accountKey } from "./teamMembershipReview";
 
 const teamsControllers = createTeamsControllerCache();
@@ -36,8 +37,9 @@ export function useTeamsController(
   environmentId: EnvironmentId,
   profile: AccountProfile | null,
 ): TeamsController | null {
+  const allowed = useTeamsPermission(environmentId);
   const execute = useTeamsCommand(environmentId);
-  const key = profile ? `${environmentId}\n${accountKey(profile)}` : null;
+  const key = allowed && profile ? `${environmentId}\n${accountKey(profile)}` : null;
   return useMemo(() => (key === null ? null : teamsControllers(key, execute)), [execute, key]);
 }
 

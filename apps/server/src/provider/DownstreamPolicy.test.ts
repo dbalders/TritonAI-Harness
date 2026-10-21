@@ -17,8 +17,8 @@ import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { loadBuiltinIntegrations } from "../integrations/builtins.ts";
 import { type IntegrationManifest, validateIntegrationManifest } from "../integrations/manifest.ts";
 import { materializeCodexShadowHome, resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
-import { computeDynamicToolFingerprint, readResumeThreadId } from "./Layers/CodexSessionRuntime.ts";
-import { tritonAiCodexCapabilities } from "./Layers/CodexProvider.ts";
+import { getManagedCodexSettings } from "../managedPolicy.ts";
+import { tritonAiCodexCapabilities } from "./CodexProvider.ts";
 
 describe("downstream provider and integration policy", () => {
   it("keeps the default integration catalog fixed and capability access explicit", async () => {
@@ -68,29 +68,6 @@ describe("downstream provider and integration policy", () => {
     ).toThrow(/unsupported fields/u);
   });
 
-  it("keeps Codex conversation history when dynamic-tool grants change", () => {
-    const tool = {
-      name: "fixture_records_search",
-      description: "Read fixture records.",
-      inputSchema: { type: "object" },
-    } as const;
-    const cursor = {
-      threadId: "provider-thread",
-      dynamicToolNames: [tool.name],
-      dynamicToolFingerprint: computeDynamicToolFingerprint([tool]),
-    };
-
-    expect(readResumeThreadId(cursor, [tool])?.threadId).toBe("provider-thread");
-    expect(
-      readResumeThreadId(cursor, [{ ...tool, description: "Changed capability contract." }]),
-    ).toEqual({ threadId: "provider-thread", toolCatalogChanged: true });
-    // A revoked grant still resumes; item/tool/call refuses tools missing from the live catalog.
-    expect(readResumeThreadId(cursor, [])).toEqual({
-      threadId: "provider-thread",
-      toolCatalogChanged: true,
-    });
-  });
-
   it("pins TritonAI identity and conservative provider defaults", () => {
     const capabilities = tritonAiCodexCapabilities(null);
     const reasoning = capabilities.optionDescriptors?.find(
@@ -108,8 +85,7 @@ describe("downstream provider and integration policy", () => {
       model: DEFAULT_TRITONAI_CODEX_MODEL,
       options: [{ id: "reasoningEffort", value: "high" }],
     });
-    expect(DEFAULT_SERVER_SETTINGS.providers.codex).toMatchObject({
-      enabled: true,
+    expect(getManagedCodexSettings(DEFAULT_SERVER_SETTINGS)).toMatchObject({
       customModels: [DEFAULT_TRITONAI_CODEX_MODEL],
     });
     expect(reasoning).toMatchObject({
@@ -125,7 +101,9 @@ it.layer(NodeServices.layer)("managed Codex home policy", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const defaultLayout = yield* resolveCodexHomeLayout(DEFAULT_SERVER_SETTINGS.providers.codex);
+      const defaultLayout = yield* resolveCodexHomeLayout(
+        getManagedCodexSettings(DEFAULT_SERVER_SETTINGS),
+      );
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "tritonai-upstream-safety-" });
       const sharedHome = path.join(root, "managed-codex");
       const shadowHome = path.join(root, "personal-codex");

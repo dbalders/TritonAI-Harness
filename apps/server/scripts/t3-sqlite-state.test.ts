@@ -3,10 +3,12 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { runSqliteState } from "./t3-sqlite-state.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 const createFixtureDatabase = Effect.fn("createSqliteStateFixtureDatabase")(function* (
   baseDir: string,
@@ -14,7 +16,7 @@ const createFixtureDatabase = Effect.fn("createSqliteStateFixtureDatabase")(func
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const stateDir = path.join(baseDir, "userdata");
-  const databasePath = path.join(stateDir, "state.sqlite");
+  const databasePath = path.join(stateDir, "statev2.sqlite");
   yield* fs.makeDirectory(stateDir, { recursive: true });
   yield* Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -73,82 +75,106 @@ it.layer(NodeServices.layer)("t3-sqlite-state", (it) => {
     }),
   );
 
-  it.effect("backs up isolated state before writes and refuses the shared home", () =>
+  it.effect("enables checkpoint_fullfsync on its direct connection", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sqlite-state-exec-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sqlite-state-fsync-" });
       yield* createFixtureDatabase(baseDir);
 
-      const mutation = yield* runSqliteState({
-        operation: "exec",
+      const result = yield* runSqliteState({
+        operation: "query",
         baseDir,
-        sql: "INSERT INTO fixtures (id, label) VALUES (2, 'seeded')",
+        sql: "PRAGMA checkpoint_fullfsync",
       });
-      assert.equal(mutation.operation, "exec");
-      if (mutation.operation === "exec") {
-        assert.equal((yield* fs.stat(mutation.backup)).mode & 0o777, 0o600);
-      }
 
-      const error = yield* runSqliteState(
-        {
+      assert.equal(result.operation, "query");
+      if (result.operation === "query") {
+        assert.deepStrictEqual(result.rows, [{ checkpoint_fullfsync: 1 }]);
+      }
+    }),
+  );
+
+  it.effect.skipIf(!symlinksSupported)(
+    "backs up isolated state before writes and refuses the shared home",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sqlite-state-exec-" });
+        yield* createFixtureDatabase(baseDir);
+
+        const mutation = yield* runSqliteState({
           operation: "exec",
           baseDir,
-          sql: "DELETE FROM fixtures",
-        },
-        { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
-      ).pipe(Effect.flip);
-      assert.equal(error._tag, "SqliteStateSharedHomeMutationError");
+          sql: "INSERT INTO fixtures (id, label) VALUES (2, 'seeded')",
+        });
+        assert.equal(mutation.operation, "exec");
+        if (mutation.operation === "exec") {
+          assert.equal((yield* fs.stat(mutation.backup)).mode & 0o777, 0o600);
+        }
 
-      const aliasParent = yield* fs.makeTempDirectoryScoped({
-        prefix: "t3-sqlite-state-alias-",
-      });
-      const aliasBaseDir = path.join(aliasParent, "shared-home-alias");
-      yield* fs.symlink(baseDir, aliasBaseDir);
-      const aliasError = yield* runSqliteState(
-        {
-          operation: "exec",
-          baseDir: aliasBaseDir,
-          sql: "DELETE FROM fixtures",
-        },
-        { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
-      ).pipe(Effect.flip);
-      assert.equal(aliasError._tag, "SqliteStateSharedHomeMutationError");
+        const error = yield* runSqliteState(
+          {
+            operation: "exec",
+            baseDir,
+            sql: "DELETE FROM fixtures",
+          },
+          { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
+        ).pipe(Effect.flip);
+        assert.equal(error._tag, "SqliteStateSharedHomeMutationError");
 
-      const sharedDatabasePath = path.join(baseDir, "userdata", "state.sqlite");
-      const databaseAliasBaseDir = yield* fs.makeTempDirectoryScoped({
-        prefix: "t3-sqlite-state-database-alias-",
-      });
-      yield* fs.makeDirectory(path.join(databaseAliasBaseDir, "userdata"), { recursive: true });
-      yield* fs.symlink(
-        sharedDatabasePath,
-        path.join(databaseAliasBaseDir, "userdata", "state.sqlite"),
-      );
-      const databaseAliasError = yield* runSqliteState(
-        {
-          operation: "exec",
-          baseDir: databaseAliasBaseDir,
-          sql: "DELETE FROM fixtures",
-        },
-        { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
-      ).pipe(Effect.flip);
-      assert.equal(databaseAliasError._tag, "SqliteStateSharedHomeMutationError");
+        const aliasParent = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-sqlite-state-alias-",
+        });
+        const aliasBaseDir = path.join(aliasParent, "shared-home-alias");
+        yield* fs.symlink(baseDir, aliasBaseDir);
+        const aliasError = yield* runSqliteState(
+          {
+            operation: "exec",
+            baseDir: aliasBaseDir,
+            sql: "DELETE FROM fixtures",
+          },
+          { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
+        ).pipe(Effect.flip);
+        assert.equal(aliasError._tag, "SqliteStateSharedHomeMutationError");
 
-      const hardLinkBaseDir = yield* fs.makeTempDirectoryScoped({
-        prefix: "t3-sqlite-state-hard-link-",
-      });
-      yield* fs.makeDirectory(path.join(hardLinkBaseDir, "userdata"), { recursive: true });
-      yield* fs.link(sharedDatabasePath, path.join(hardLinkBaseDir, "userdata", "state.sqlite"));
-      const hardLinkError = yield* runSqliteState(
-        {
-          operation: "exec",
-          baseDir: hardLinkBaseDir,
-          sql: "DELETE FROM fixtures",
-        },
-        { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
-      ).pipe(Effect.flip);
-      assert.equal(hardLinkError._tag, "SqliteStateSharedHomeMutationError");
-    }),
+        const sharedDatabasePath = path.join(baseDir, "userdata", "statev2.sqlite");
+        const databaseAliasBaseDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-sqlite-state-database-alias-",
+        });
+        yield* fs.makeDirectory(path.join(databaseAliasBaseDir, "userdata"), { recursive: true });
+        yield* fs.symlink(
+          sharedDatabasePath,
+          path.join(databaseAliasBaseDir, "userdata", "statev2.sqlite"),
+        );
+        const databaseAliasError = yield* runSqliteState(
+          {
+            operation: "exec",
+            baseDir: databaseAliasBaseDir,
+            sql: "DELETE FROM fixtures",
+          },
+          { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
+        ).pipe(Effect.flip);
+        assert.equal(databaseAliasError._tag, "SqliteStateSharedHomeMutationError");
+
+        const hardLinkBaseDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-sqlite-state-hard-link-",
+        });
+        yield* fs.makeDirectory(path.join(hardLinkBaseDir, "userdata"), { recursive: true });
+        yield* fs.link(
+          sharedDatabasePath,
+          path.join(hardLinkBaseDir, "userdata", "statev2.sqlite"),
+        );
+        const hardLinkError = yield* runSqliteState(
+          {
+            operation: "exec",
+            baseDir: hardLinkBaseDir,
+            sql: "DELETE FROM fixtures",
+          },
+          { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
+        ).pipe(Effect.flip);
+        assert.equal(hardLinkError._tag, "SqliteStateSharedHomeMutationError");
+      }),
   );
 
   it.effect("rejects SQL that can attach or write external database files", () =>
@@ -163,6 +189,10 @@ it.layer(NodeServices.layer)("t3-sqlite-state", (it) => {
         "ATTACH DATABASE '/tmp/shared.sqlite' AS shared",
         "/* guarded */ DETACH DATABASE shared",
         "VACUUM main INTO '/tmp/copied.sqlite'",
+        `SELECT '--'; ATTACH DATABASE '${baseDir}/outside.sqlite' AS outside`,
+        `SELECT '/*'; ATTACH DATABASE '${baseDir}/outside.sqlite' AS outside`,
+        `SELECT '--'; VACUUM main INTO '${baseDir}/outside.sqlite'`,
+        `SELECT "--"; ATTACH DATABASE '${baseDir}/outside.sqlite' AS outside`,
       ]) {
         const error = yield* runSqliteState({ operation: "exec", baseDir, sql }).pipe(Effect.flip);
         assert.equal(error._tag, "SqliteStateExternalDatabaseSqlError");

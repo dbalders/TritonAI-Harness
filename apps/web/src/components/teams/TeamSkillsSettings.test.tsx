@@ -29,6 +29,7 @@ vi.mock("../../state/use-atom-command", () => {
   };
   return { useAtomCommand: () => request };
 });
+vi.mock("./useTeamsPermission", () => ({ useTeamsPermission: () => true }));
 vi.mock("../../state/server", () => ({ serverEnvironment: { teamProjects: "teamProjects" } }));
 vi.mock("../../hooks/useUcsdAccount", () => ({
   useUcsdAccount: () => ({

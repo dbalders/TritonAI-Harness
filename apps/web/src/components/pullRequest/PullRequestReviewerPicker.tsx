@@ -1,10 +1,4 @@
-/**
- * Asking someone to review, from the row that says who is already reviewing.
- *
- * The people who may be asked are read only once this menu opens: on a large repository that is
- * a list of everyone with access, which is worth a request when somebody wants it and worth
- * nothing on every pull request they merely open.
- */
+import { useAtomCommand } from "~/state/use-atom-command";
 import type {
   EnvironmentId,
   PullRequestRef,
@@ -12,16 +6,21 @@ import type {
 } from "@t3tools/contracts";
 import { CheckIcon, UserPlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
-
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
-import { useAtomCommand } from "~/state/use-atom-command";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-
 import { toastManager } from "../ui/toast";
 import { PullRequestCandidatePicker } from "./PullRequestCandidatePicker";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { readableFailure } from "./pullRequestDetail.logic";
+
+/**
+ * Asking someone to review, from the row that says who is already reviewing.
+ *
+ * The people who may be asked are read only once this menu opens: on a large repository that is
+ * a list of everyone with access, which is worth a request when somebody wants it and worth
+ * nothing on every pull request they merely open.
+ */
 
 /** Long lists are common — an organisation repository lists everyone — so what arrived can be
  * narrowed here. It narrows only what arrived: the host is asked once, when the menu opens. */

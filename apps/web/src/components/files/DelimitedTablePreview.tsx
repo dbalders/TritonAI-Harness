@@ -1,7 +1,6 @@
 /* oxlint-disable react/no-array-index-key -- Table rows and columns have stable positions and may contain identical values. */
 import { parseDelimitedPreview } from "@t3tools/shared/delimitedPreview";
 import { useMemo } from "react";
-
 import { FileSurfaceNotice } from "./fileSurfaceChrome";
 
 /** A bounded, readable table for CSV and TSV text; the source view keeps every byte. */

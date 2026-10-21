@@ -1,6 +1,5 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   isFileDiffCollapsed,
   isLineInFileDiff,
