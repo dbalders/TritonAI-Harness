@@ -1901,7 +1901,7 @@ it.effect(
         assert.equal(resolved?.thread.threadId, threadId);
         assert.deepEqual(
           resolved?.capabilities,
-          new Set(["preview", "orchestration", "worktree", "pull-requests"]),
+          new Set(["preview", "orchestration", "worktree", "pull-requests", "integrations.invoke"]),
         );
 
         yield* manager.close(providerSessionId);
@@ -1958,7 +1958,7 @@ it.effect(
         const resolved = yield* registry.resolve(token!);
         assert.deepEqual(
           resolved?.capabilities,
-          new Set(["orchestration", "worktree", "pull-requests"]),
+          new Set(["orchestration", "worktree", "pull-requests", "integrations.invoke"]),
         );
 
         yield* manager.close(providerSessionId);
@@ -2530,6 +2530,70 @@ it.effect(
         ),
       );
     }),
+);
+
+it.effect("ProviderSessionManagerV2 rotates a reused MCP credential that lacks plugin access", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const mcpConfigs = yield* Ref.make<
+      ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
+    >([]);
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const registry = yield* McpSessionRegistry.McpSessionRegistry;
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-stale-plugin-grant");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      const original = (yield* Ref.get(mcpConfigs)).at(-1);
+      assert.isDefined(original);
+      yield* manager.detach({ providerSessionId, threadId, detail: "Workspace changed." });
+
+      // A credential minted without the plugin grant, as builds before #399 did.
+      const stale = yield* registry.issue({
+        threadId,
+        providerInstanceId: modelSelection.instanceId,
+        capabilities: new Set(
+          [
+            ...McpSessionRegistry.providerSessionCapabilities({
+              browser: original!.browserToolsAvailable,
+              device: original!.capabilities?.has("device") ?? false,
+            }),
+          ].filter((capability) => capability !== "integrations.invoke"),
+        ),
+      });
+      yield* mcpSessions.set(stale.config);
+
+      yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      const current = yield* mcpSessions.read(threadId);
+      assert.notEqual(current?.providerSessionId, stale.config.providerSessionId);
+      assert.isTrue(current?.capabilities?.has("integrations.invoke"));
+      const staleToken = stale.config.authorizationHeader.replace(/^Bearer\s+/, "");
+      assert.isUndefined(yield* registry.resolve(staleToken));
+
+      yield* manager.close(providerSessionId);
+    });
+
+    yield* effect.pipe(
+      Effect.provide(
+        layerTest({
+          state,
+          idleTimeoutMs: 1_000,
+          mcpConfigs,
+        }),
+      ),
+    );
+  }),
 );
 
 it.effect(
