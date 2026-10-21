@@ -1,4 +1,8 @@
 import Migration0067 from "./Migrations/067_HarnessActivityViews.ts";
+import Migration0068 from "./Migrations/068_ProjectBriefs.ts";
+import Migration0069 from "./Migrations/069_ProjectBriefDispatches.ts";
+import Migration0070 from "./Migrations/070_ProjectBriefArchives.ts";
+import Migration0071 from "./Migrations/071_ProjectOverviews.ts";
 /**
  * Migration runner with an inline loader.
  *
@@ -161,11 +165,15 @@ export const migrationEntries = [
   [65, "PullRequestReviewGuides", V2Migration0061],
   [66, "ThreadFailureLookupIndex", V2Migration0062],
   [67, "HarnessActivityViews", Migration0067],
-  [68, "DropUnusedV1Projections", UpstreamMigration0063],
-  [69, "CanonicalizeThreadPullRequestLinks", UpstreamMigration0064],
-  [70, "CodexUsageNativeTurnIndex", UpstreamMigration0065],
-  [71, "RepairClientSettlementTimestamps", UpstreamMigration0066],
-  [72, "WebhookDedupe", UpstreamMigration0067],
+  [68, "ProjectBriefs", Migration0068],
+  [69, "ProjectBriefDispatches", Migration0069],
+  [70, "ProjectBriefArchives", Migration0070],
+  [71, "ProjectOverviews", Migration0071],
+  [72, "DropUnusedV1Projections", UpstreamMigration0063],
+  [73, "CanonicalizeThreadPullRequestLinks", UpstreamMigration0064],
+  [74, "CodexUsageNativeTurnIndex", UpstreamMigration0065],
+  [75, "RepairClientSettlementTimestamps", UpstreamMigration0066],
+  [76, "WebhookDedupe", UpstreamMigration0067],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

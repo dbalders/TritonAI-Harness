@@ -1,3 +1,6 @@
+import * as ProjectBrief from "./projectBrief/ProjectBriefService.ts";
+import * as ProjectOverview from "./project/ProjectOverview.ts";
+import * as DailyMemory from "./memory/DailyMemory.ts";
 import * as PublicSkillRepository from "./provider/publicSkillRepository.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as HttpClient from "effect/http/HttpClient";
@@ -453,6 +456,9 @@ it.live.each(["thread", "shell"] as const)(
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
+  Layer.mock(ProjectBrief.ProjectBriefService)({}),
+  Layer.mock(ProjectOverview.ProjectOverview)({}),
+  Layer.mock(DailyMemory.DailyMemory)({}),
   Layer.mock(PublicSkillRepository.PublicSkillRepository)({}),
   Layer.mock(VcsProcess.VcsProcess)({}),
   Layer.succeed(

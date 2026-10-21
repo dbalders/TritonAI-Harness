@@ -208,6 +208,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { isElectron } from "../env";
 import { desktopLocalBackendId, isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
+import { useGuidedTourChatGuide } from "./onboarding/GuidedTourChatGuide";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
@@ -5445,10 +5446,12 @@ export default function ChatView(props: ChatViewProps) {
     };
   })() as ComposerBannerStackItem | null;
 
-  const sendStandaloneCommand = async (text: string, failureMessage: string) => {
-    if (!activeThread || !clientSettingsHydrated || sendInFlightRef.current) return;
+  // Commands such as /compact and /goal clear run as their own turn. The draft
+  // and its attachments stay local.
+  const sendStandaloneCommand = async (text: string, failureMessage: string): Promise<boolean> => {
+    if (!activeThread || !clientSettingsHydrated || sendInFlightRef.current) return false;
     const context = composerRef.current?.getSendContext();
-    if (!context?.providerAvailable) return;
+    if (!context?.providerAvailable) return false;
 
     const threadId = activeThread.id;
     const messageId = newMessageId();
@@ -5469,43 +5472,51 @@ export default function ChatView(props: ChatViewProps) {
       },
     ]);
     scrollToEnd();
-    // Commands settle into a result, so this always runs.
-    const settingsResult = await persistThreadSettingsForNextTurn({
-      threadId,
-      createdAt,
-      ...(localCheckoutBranchMismatch ? { branch: localCheckoutBranchMismatch.currentBranch } : {}),
-      runtimeMode,
-      interactionMode: context.interactionMode,
-    });
-    const result =
-      settingsResult._tag === "Failure"
-        ? settingsResult
-        : await startThreadTurn({
-            environmentId,
-            input: {
-              threadId,
-              message: { messageId, role: "user", text, attachments: [] },
-              modelSelection: context.selectedModelSelection,
-              runtimeMode,
-              interactionMode: context.interactionMode,
-              createdAt,
-            },
-          });
-    if (result._tag === "Failure") {
-      setOptimisticUserMessages((messages) =>
-        messages.filter((message) => message.id !== messageId),
-      );
-      resetLocalDispatch();
-      if (!isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        setThreadError(threadId, error instanceof Error ? error.message : failureMessage);
+    return await (async () => {
+      const settingsResult = await persistThreadSettingsForNextTurn({
+        threadId,
+        createdAt,
+        ...(localCheckoutBranchMismatch
+          ? { branch: localCheckoutBranchMismatch.currentBranch }
+          : {}),
+        runtimeMode,
+        interactionMode: context.interactionMode,
+      });
+      const result =
+        settingsResult._tag === "Failure"
+          ? settingsResult
+          : await startThreadTurn({
+              environmentId,
+              input: {
+                threadId,
+                message: { messageId, role: "user", text, attachments: [] },
+                modelSelection: context.selectedModelSelection,
+                runtimeMode,
+                interactionMode: context.interactionMode,
+                createdAt,
+              },
+            });
+      if (result._tag === "Failure") {
+        setOptimisticUserMessages((messages) =>
+          messages.filter((message) => message.id !== messageId),
+        );
+        resetLocalDispatch();
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(threadId, error instanceof Error ? error.message : failureMessage);
+        }
+        return false;
       }
-    } else {
       clearUsageLimitsFor(routeThreadKey);
-    }
-    sendInFlightRef.current = false;
+      return true;
+    })().finally(async () => {
+      sendInFlightRef.current = false;
+    });
   };
   const sendStandaloneCommandStable = useStableCallback(sendStandaloneCommand);
+  const sendGuidedTourMessage = useStableCallback((text: string) =>
+    sendStandaloneCommand(text, "That didn't send. Try again, or type it below."),
+  );
   // A native /goal keeps the agent working across turns. Stop pauses a Codex
   // goal; once the thread is idle the row offers the native follow-ups.
   const [computerUseNotice, setComputerUseNotice] = useState<{
@@ -5758,12 +5769,23 @@ export default function ChatView(props: ChatViewProps) {
           },
         })
       : null;
+  const guidedTourBannerItem = useGuidedTourChatGuide({
+    environmentId,
+    threadId: activeThread?.id ?? null,
+    run: activeLatestRun,
+    isWorking,
+    hasPendingApproval: pendingApprovals.length > 0,
+    hasPendingQuestion: pendingUserInputs.length > 0,
+    timelineEntries,
+    send: sendGuidedTourMessage,
+  });
   const composerBannerItems = (() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const backgroundWorkItems = [
       childInputBannerItem,
       goalBannerItem,
       backgroundWorkBannerItem,
+      guidedTourBannerItem,
     ].filter((item) => item !== null);
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];

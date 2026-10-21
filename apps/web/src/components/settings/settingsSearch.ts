@@ -608,6 +608,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "experimental-guided-tour",
+    title: "Guided tour (experimental)",
+    to: "/settings/general",
+    searchTerms: ["onboarding getting started tutorial walkthrough first run beta experimental"],
+  },
+  {
     id: "legacy-plan-mode",
     title: "Plan mode (legacy)",
     to: "/settings/general",

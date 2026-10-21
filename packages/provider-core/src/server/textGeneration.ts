@@ -124,6 +124,8 @@ export interface IdeasGenerationInput {
   /** Everything the model may draw on, already formatted and trimmed by the Ideas service. */
   context: string;
   modelSelection: ModelSelection;
+  /** Limits suggestions to one project and also asks for a short project description. */
+  project?: { readonly id: string; readonly title: string };
 }
 
 /** One idea as the model wrote it, before the Ideas service checks it against the context. */
@@ -144,6 +146,7 @@ export interface GeneratedIdea {
 
 export interface IdeasGenerationResult {
   ideas: ReadonlyArray<GeneratedIdea>;
+  description?: string;
 }
 
 /** Commit, change request, branch, and title generation backed by one provider instance. */

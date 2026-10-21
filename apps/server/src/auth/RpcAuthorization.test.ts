@@ -6,6 +6,7 @@ import {
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
+  ProjectId,
   ThreadId,
   AuthOrchestrationOperateScope,
   ORCHESTRATION_V2_WS_METHODS,
@@ -480,6 +481,140 @@ describe("thread context authorization", () => {
       }).pipe(Effect.scoped),
   );
 });
+it.effect("does not expose captured project files with only orchestration read access", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.projectBriefGet> =>
+          tag !== WS_METHODS.projectBriefGet,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectBriefGet, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.projectBriefGet]({
+      projectId: ProjectId.make("project"),
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("does not expose project memory with only orchestration read access", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.serverGetProjectMemory
+        > => tag !== WS_METHODS.serverGetProjectMemory,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.serverGetProjectMemory, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.serverGetProjectMemory]({
+      projectId: ProjectId.make("project"),
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("does not expose archived source snapshots without filesystem permission", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.projectBriefArchiveGet
+        > => tag !== WS_METHODS.projectBriefArchiveGet,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectBriefArchiveGet, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.projectBriefArchiveGet]({
+      projectId: ProjectId.make("project"),
+      archiveId: "archive-1",
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("requires filesystem permission before project-brief capture or dispatch", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.projectBriefExecute
+        > => tag !== WS_METHODS.projectBriefExecute,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectBriefExecute, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationOperateScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.projectBriefExecute]({
+      projectId: ProjectId.make("project"),
+      requestId: "capture-1",
+      expectedRevision: 0,
+      action: "addSource",
+      source: { kind: "file", relativePath: "plan.md" },
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
 
 it.effect("separates host file URLs from readable attachment URLs", () =>
   Effect.gen(function* () {
@@ -560,6 +695,54 @@ it.effect("denies manual cleanup before the handler without settings permission"
     );
     expect(yield* client[WS_METHODS.serverRunStorageCleanup]({}).pipe(Effect.flip)).toMatchObject({
       requiredPermission: AuthSettingsWriteScope,
+    });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("protects cached project overviews with filesystem permission", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          | typeof WS_METHODS.projectOverviewGet
+          | typeof WS_METHODS.projectOverviewSubscribe
+          | typeof WS_METHODS.projectOverviewEnsure
+        > =>
+          tag !== WS_METHODS.projectOverviewGet &&
+          tag !== WS_METHODS.projectOverviewSubscribe &&
+          tag !== WS_METHODS.projectOverviewEnsure,
+      ),
+    );
+    let handled = false;
+    const denyHandler = () =>
+      Effect.sync(() => {
+        handled = true;
+      }).pipe(Effect.andThen(Effect.never));
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectOverviewGet, denyHandler),
+          group.toLayerHandler(WS_METHODS.projectOverviewSubscribe, () =>
+            Stream.fromEffect(denyHandler()),
+          ),
+          group.toLayerHandler(WS_METHODS.projectOverviewEnsure, denyHandler),
+          RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+        ),
+      ),
+    );
+    const input = { projectId: ProjectId.make("project") };
+    expect(yield* client[WS_METHODS.projectOverviewGet](input).pipe(Effect.flip)).toMatchObject({
+      requiredPermission: AuthFilesystemReadScope,
+    });
+    expect(
+      yield* client[WS_METHODS.projectOverviewSubscribe](input).pipe(Stream.runDrain, Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(yield* client[WS_METHODS.projectOverviewEnsure](input).pipe(Effect.flip)).toMatchObject({
+      requiredPermission: AuthFilesystemReadScope,
     });
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),

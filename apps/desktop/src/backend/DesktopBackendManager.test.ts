@@ -385,7 +385,8 @@ describe("DesktopBackendManager", () => {
         const script = `
         process.on("SIGTERM", () => {});
         process.stdout.write("ready\\n");
-        setTimeout(() => process.exit(42), 15000);
+        // The fallback must outlast the 1s readiness budget plus 5s termination grace.
+        setTimeout(() => process.exit(42), 30000);
       `;
         const result = yield* DesktopBackendManager.runBackendProcess({
           ...baseConfig,

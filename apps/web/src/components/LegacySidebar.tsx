@@ -4,7 +4,6 @@ import { Spinner } from "~/components/ui/spinner";
 import {
   ArchiveIcon,
   ArrowUpDownIcon,
-  ChevronRightIcon,
   FolderPlusIcon,
   Globe2Icon,
   SearchIcon,
@@ -21,6 +20,7 @@ import {
   useLinkedThreadPullRequest,
 } from "./ThreadStatusIndicators";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { ProjectFolderHeading } from "./projectHome/ProjectFolderHeading";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -1379,7 +1379,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     isThreadListExpanded,
   });
 
-  const handleProjectButtonClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+  const handleProjectButtonClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
     if (suppressProjectClickForContextMenuRef.current) {
       suppressProjectClickForContextMenuRef.current = false;
       event.preventDefault();
@@ -1400,19 +1400,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     if (useThreadSelectionStore.getState().hasSelection()) {
       clearSelection();
     }
-    setProjectExpanded(projectPreferenceKeys, !projectExpanded);
+    if (isMobile) setOpenMobile(false);
   };
 
-  const handleProjectButtonKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    if (dragInProgressRef.current) {
-      return;
-    }
-    setProjectExpanded(projectPreferenceKeys, !projectExpanded);
-  };
-
-  const handleProjectButtonPointerDownCapture = (event: React.PointerEvent<HTMLButtonElement>) => {
+  const handleProjectButtonPointerDownCapture = (event: React.PointerEvent<HTMLElement>) => {
     suppressProjectClickForContextMenuRef.current = false;
     if (
       isContextMenuPointerDown({
@@ -1598,7 +1589,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     }
   };
 
-  const handleProjectButtonContextMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
+  const handleProjectButtonContextMenu = (event: React.MouseEvent<HTMLElement>) => {
     event.preventDefault();
     suppressProjectClickForContextMenuRef.current = true;
     void (async () => {
@@ -2258,60 +2249,46 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
   return (
     <>
-      <div className="group/project-header relative">
-        <SidebarMenuButton
-          ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
-          className={isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : undefined}
-          {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
-          {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
-          onPointerDownCapture={handleProjectButtonPointerDownCapture}
-          onClick={handleProjectButtonClick}
-          onKeyDown={handleProjectButtonKeyDown}
-          onContextMenu={handleProjectButtonContextMenu}
+      <div
+        className="group/project-header relative flex items-center py-0.5 pr-8"
+        ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
+        {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.attributes : {})}
+        {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
+        onPointerDownCapture={handleProjectButtonPointerDownCapture}
+        onContextMenu={handleProjectButtonContextMenu}
+      >
+        <ProjectFolderHeading
+          title={project.displayName}
+          projectKey={project.projectKey}
+          leading={<ProjectFavicon project={project} />}
+          expanded={projectExpanded}
+          canReorder={isManualProjectSorting && dragHandleProps !== null}
+          onOpen={handleProjectButtonClick}
+          onToggle={() => {
+            if (dragInProgressRef.current) return;
+            if (
+              suppressProjectClickForContextMenuRef.current ||
+              suppressProjectClickAfterDragRef.current
+            ) {
+              suppressProjectClickForContextMenuRef.current = false;
+              suppressProjectClickAfterDragRef.current = false;
+              return;
+            }
+            setProjectExpanded(projectPreferenceKeys, !projectExpanded);
+          }}
         >
-          {!projectExpanded && projectStatus ? (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <span
-                    aria-label={projectStatus.label}
-                    className={`-ml-0.5 relative inline-flex size-3.5 shrink-0 items-center justify-center ${projectStatus.colorClass}`}
-                  />
-                }
-              >
-                <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover/project-header:opacity-0">
-                  <span
-                    className={`size-[9px] rounded-full ${projectStatus.dotClass} ${
-                      projectStatus.pulse ? "motion-safe:animate-status-pulse" : ""
-                    }`}
-                  />
-                </span>
-                <ChevronRightIcon className="absolute inset-0 m-auto size-3.5 text-icon-muted opacity-0 transition-opacity duration-150 group-hover/project-header:opacity-100" />
-              </TooltipTrigger>
-              <TooltipPopup side="top">{projectStatus.label}</TooltipPopup>
-            </Tooltip>
-          ) : (
-            <ChevronRightIcon
-              className={`-ml-0.5 size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150 ${
-                projectExpanded ? "rotate-90" : ""
-              }`}
-            />
-          )}
-          <span className="flex shrink-0">
-            <ProjectFavicon project={project} />
-          </span>
-          <span className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="truncate text-sm font-medium text-sidebar-foreground/90">
-              {project.displayName}
+          {project.groupedProjectCount > 1 ? (
+            <span className="shrink-0 text-3xs text-secondary-label">
+              {project.groupedProjectCount} projects
             </span>
-            {project.groupedProjectCount > 1 ? (
-              <span className="shrink-0 text-secondary-label text-3xs">
-                {project.groupedProjectCount} projects
-              </span>
-            ) : null}
-          </span>
-          <span aria-hidden className="w-4 shrink-0 max-sm:w-10" />
-        </SidebarMenuButton>
+          ) : null}
+          {!projectExpanded && projectStatus ? (
+            <span
+              className={`size-1.5 shrink-0 rounded-full ${projectStatus.dotClass}`}
+              aria-label={projectStatus.label}
+            />
+          ) : null}
+        </ProjectFolderHeading>
 
         {project.environmentPresence === "remote-only" && (
           <Tooltip>

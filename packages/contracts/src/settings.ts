@@ -438,6 +438,13 @@ export const ClientSettingsSchema = Schema.Struct({
 
   planModeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   contextWindowMeterEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Experimental guided tour. Off by default; while off, the tour has no
+  // entry point, its route redirects away and its chat guide never renders.
+  experimentalGuidedTourEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  // Desktop resting composer: scrolling an existing thread's conversation
+  // settles the composer into its single-line layout. Losing focus never does.
   composerCollapseOnScroll: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   composerRichTextEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sendShortcut: Schema.Literals(["enter", "mod-enter-multiline", "mod-enter"]).pipe(
@@ -1656,6 +1663,7 @@ export const ClientSettingsPatch = Schema.Struct({
   diffFilesCollapsed: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   tritonAiFirstRunOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
+  experimentalGuidedTourEnabled: Schema.optionalKey(Schema.Boolean),
   diffLayout: Schema.optionalKey(DiffLayout),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
   glassOpacity: Schema.optionalKey(GlassOpacity),

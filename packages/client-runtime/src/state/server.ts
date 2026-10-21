@@ -1101,6 +1101,35 @@ export function createServerEnvironmentAtoms<R, E>(
       // Summaries finish in the background, so an open settings page catches up.
       refreshIntervalMs: 30_000,
     }),
+    projectMemory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:project-memory",
+      tag: WS_METHODS.serverGetProjectMemory,
+      refreshIntervalMs: 60_000,
+    }),
+    projectOverview: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:project-overview:live",
+      tag: WS_METHODS.projectOverviewSubscribe,
+    }),
+    ensureProjectOverview: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:project-overview:ensure",
+      tag: WS_METHODS.projectOverviewEnsure,
+    }),
+    projectBrief: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:project-brief:get",
+      tag: WS_METHODS.projectBriefGet,
+    }),
+    projectBriefLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:project-brief:live",
+      tag: WS_METHODS.projectBriefSubscribe,
+    }),
+    projectBriefArchive: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:project-brief:archive",
+      tag: WS_METHODS.projectBriefArchiveGet,
+    }),
+    executeProjectBrief: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:project-brief:execute",
+      tag: WS_METHODS.projectBriefExecute,
+    }),
     ideas: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:ideas:list",
       tag: WS_METHODS.ideasList,

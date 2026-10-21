@@ -1,5 +1,7 @@
 "use client";
 
+import { useParams } from "@tanstack/react-router";
+
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -776,6 +778,16 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const paletteRouteTarget = useThreadRouteTarget();
+  const briefRouteProject = useParams({
+    strict: false,
+    select: (params) =>
+      params.projectId && params.environmentId
+        ? {
+            environmentId: params.environmentId as EnvironmentId,
+            projectId: params.projectId as ProjectId,
+          }
+        : null,
+  });
   const projects = useProjects();
   const referenceThreadRef =
     pathname === "/pull-requests"
@@ -883,12 +895,14 @@ function OpenCommandPaletteDialog(props: {
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
   const { environmentLabelById, projectEnvironmentLocationById } = useEnvironmentLookups();
   const projectGroups = useSortedProjectGroups(environmentLabelById);
-  const contextualProjectRef = resolveThreadActionProjectRef({
-    activeDraftThread,
-    activeThread: activeThread ?? undefined,
-    defaultProjectRef,
-    handleNewThread,
-  });
+  const contextualProjectRef =
+    briefRouteProject ??
+    resolveThreadActionProjectRef({
+      activeDraftThread,
+      activeThread: activeThread ?? undefined,
+      defaultProjectRef,
+      handleNewThread,
+    });
   const projectPickerEntries = buildSidebarProjectPickerEntries({
     groups: projectGroups,
     preferredProjectRef: contextualProjectRef,
@@ -2056,6 +2070,24 @@ function OpenCommandPaletteDialog(props: {
     projectGroups[0] ??
     null;
   if (contextualProjectGroup) {
+    const briefProjectRef = contextualProjectRef ?? {
+      environmentId: contextualProjectGroup.environmentId,
+      projectId: contextualProjectGroup.id,
+    };
+    actionItems.push({
+      kind: "action",
+      value: "action:project-brief",
+      searchTerms: ["project", "brief", "sources", "decisions", "actions", "results"],
+      title: "Open project brief",
+      description: contextualProjectGroup.displayName,
+      icon: <FileSearchIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({
+          to: "/project-brief/$environmentId/$projectId",
+          params: briefProjectRef,
+        });
+      },
+    });
     actionItems.push({
       kind: "action",
       value: "action:project-settings",

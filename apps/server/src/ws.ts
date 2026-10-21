@@ -1,3 +1,4 @@
+import * as DailyMemory from "./memory/DailyMemory.ts";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as HttpClient from "effect/http/HttpClient";
 import type * as PublicSkillRepository from "./provider/publicSkillRepository.ts";
@@ -133,6 +134,8 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as ProjectBrief from "./projectBrief/ProjectBriefService.ts";
+import * as ProjectOverview from "./project/ProjectOverview.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -1208,6 +1211,9 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
 );
 
 type WsRpcServices =
+  | ProjectBrief.ProjectBriefService
+  | ProjectOverview.ProjectOverview
+  | DailyMemory.DailyMemory
   | SqlClient.SqlClient
   | ThreadManagementService.ThreadManagementService
   | OrchestrationEventStore.OrchestrationEventStore
@@ -1310,6 +1316,14 @@ type WsRpcHandlers = {
 // Keep each registration group below TypeScript's instantiation limit. Both share
 // one handler context and register on the same WebSocket protocol.
 const wsRpcFirstHalfTags = [
+  WS_METHODS.projectBriefGet,
+  WS_METHODS.projectBriefArchiveGet,
+  WS_METHODS.projectBriefSubscribe,
+  WS_METHODS.projectBriefExecute,
+  WS_METHODS.projectOverviewGet,
+  WS_METHODS.projectOverviewSubscribe,
+  WS_METHODS.projectOverviewEnsure,
+  WS_METHODS.serverGetProjectMemory,
   ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
   ORCHESTRATION_V2_WS_METHODS.stopWorkflow,
   ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,
@@ -1617,6 +1631,8 @@ export const layerWsRpc = (
         PullRequestSyncReactor.PullRequestSyncReactor,
       );
       const deviceService = Context.get(requestServices, DeviceService.DeviceService);
+      const projectBrief = Context.get(requestServices, ProjectBrief.ProjectBriefService);
+      const projectOverview = Context.get(requestServices, ProjectOverview.ProjectOverview);
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = Context.get(requestServices, Orchestrator.OrchestratorV2);
@@ -2263,6 +2279,7 @@ export const layerWsRpc = (
       const account = Context.get(requestServices, Account.AccountService);
       const memorySync = Context.get(requestServices, MemorySync.MemorySync);
       const ideas = Context.get(requestServices, Ideas.Ideas);
+      const dailyMemory = Context.get(requestServices, DailyMemory.DailyMemory);
       const handlers: WsRpcHandlers = {
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
@@ -2502,6 +2519,13 @@ export const layerWsRpc = (
               Effect.as(commandOutputHub.subscribe(input)),
             ),
           ),
+        [WS_METHODS.projectBriefGet]: (input) => projectBrief.get(input),
+        [WS_METHODS.projectBriefArchiveGet]: (input) => projectBrief.archiveGet(input),
+        [WS_METHODS.projectBriefSubscribe]: (input) => projectBrief.subscribe(input),
+        [WS_METHODS.projectBriefExecute]: (input) => projectBrief.execute(input),
+        [WS_METHODS.projectOverviewGet]: (input) => projectOverview.get(input),
+        [WS_METHODS.projectOverviewSubscribe]: (input) => projectOverview.subscribe(input),
+        [WS_METHODS.projectOverviewEnsure]: (input) => projectOverview.ensure(input),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
@@ -3603,6 +3627,7 @@ export const layerWsRpc = (
         [WS_METHODS.serverPollAccountLogin]: (input) => account.pollLogin(currentSessionId, input),
         [WS_METHODS.serverSignOutAccount]: (_input) => account.signOut(currentSessionId),
         [WS_METHODS.serverGetMemoryStatus]: (_input) => memorySync.getStatus,
+        [WS_METHODS.serverGetProjectMemory]: (input) => dailyMemory.getProjectMemory(input),
         [WS_METHODS.serverStartMemorySync]: (_input) => memorySync.start,
         [WS_METHODS.serverPollMemorySync]: ({ flowId }) => memorySync.poll(flowId),
         [WS_METHODS.serverSyncMemoryNow]: (_input) =>
@@ -3658,6 +3683,14 @@ export const layerWsRpc = (
       };
       return Layer.merge(
         FirstWsRpcGroup.toLayer({
+          [WS_METHODS.projectBriefGet]: handlers[WS_METHODS.projectBriefGet],
+          [WS_METHODS.projectBriefArchiveGet]: handlers[WS_METHODS.projectBriefArchiveGet],
+          [WS_METHODS.projectBriefSubscribe]: handlers[WS_METHODS.projectBriefSubscribe],
+          [WS_METHODS.projectBriefExecute]: handlers[WS_METHODS.projectBriefExecute],
+          [WS_METHODS.projectOverviewGet]: handlers[WS_METHODS.projectOverviewGet],
+          [WS_METHODS.projectOverviewSubscribe]: handlers[WS_METHODS.projectOverviewSubscribe],
+          [WS_METHODS.projectOverviewEnsure]: handlers[WS_METHODS.projectOverviewEnsure],
+          [WS_METHODS.serverGetProjectMemory]: handlers[WS_METHODS.serverGetProjectMemory],
           [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]:
             handlers[ORCHESTRATION_V2_WS_METHODS.dispatchCommand],
           [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]:

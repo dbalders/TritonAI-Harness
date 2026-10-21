@@ -4,6 +4,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
+  AuthFilesystemReadScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
@@ -14,6 +15,8 @@ import { WS_METHODS } from "./rpc.ts";
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
+  [WS_METHODS.projectOverviewEnsure]: AuthOrchestrationOperateScope,
+  [WS_METHODS.projectBriefExecute]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
   [WS_METHODS.pullRequestsRunAction]: AuthSourceControlWriteScope,
@@ -59,6 +62,9 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
+  if (method === WS_METHODS.projectBriefExecute || method === WS_METHODS.projectOverviewEnsure) {
+    return [AuthOrchestrationOperateScope, AuthFilesystemReadScope];
+  }
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {
     const payload = decodePrepareThread(input);
     if (payload.mode === "worktree" && payload.threadId !== undefined)

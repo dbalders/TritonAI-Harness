@@ -478,6 +478,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     const { prompt, outputSchema } = buildIdeasPrompt({
       count: input.count,
       context: input.context,
+      ...(input.project ? { project: input.project } : {}),
     });
 
     const generated = yield* runCodexJson({
@@ -489,6 +490,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     });
 
     return {
+      ...("description" in generated && typeof generated.description === "string"
+        ? { description: generated.description.trim() }
+        : {}),
       ideas: generated.ideas.map((idea) => ({
         ref: idea.ref.trim(),
         topic: idea.topic.trim(),

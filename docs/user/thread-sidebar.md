@@ -43,6 +43,27 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+## Catch up on a project
+
+Select a project's name in the web or desktop sidebar to open its overview.
+It brings together requests waiting on you, work in progress, recent agent updates,
+and the project's background memory notes. Follow a thread to see its full context;
+an agent finishing a turn does not mean its work was reviewed or released.
+
+The overview also suggests **What’s next** from this project's conversations and
+keeps a short project description alongside its history. Opening the project checks
+for new context automatically. Saved suggestions stay visible while an update runs;
+unchanged context reuses the saved result. Suggestions need a Codex text generation
+model configured on the project's environment.
+
+Choose **Open in new thread** on a suggestion to prepare a short request in that
+project. Its source conversations are attached as thread references so the agent can
+read their history when needed. Review or edit the draft, then send it when ready.
+
+Use the folder icon to expand or collapse its threads without leaving the overview.
+Thread activity updates live. Memory notes appear as the background summarizer
+processes your conversations; their source and last update are available on the page.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.

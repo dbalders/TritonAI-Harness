@@ -309,7 +309,7 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
     UNION SELECT thread_id FROM projection_threads
       WHERE pending_approval_count > 0 OR pending_user_input_count > 0`;
 
-  // Older source databases still carry live V1 turns; migration 068 removes the table.
+  // Older source databases still carry live V1 turns; migration 072 removes the table.
   const v1Turns =
     yield* sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'projection_turns'`;
   if (v1Turns.length > 0) {
