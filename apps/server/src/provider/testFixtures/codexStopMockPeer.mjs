@@ -20,6 +20,11 @@ if (process.argv[3] === "worker") {
   const respond = (id, result) => write({ id, result });
   const notify = (method, params) => write({ method, params });
   const nativeThreadId = "stop-process-thread";
+  const mode = process.argv[3];
+  const nullId = mode.startsWith("null-");
+  let listScans = 0;
+  let lateRegistered = false;
+  let duplicatePublished = false;
   let turnNumber = 0;
   let pendingTermination;
   let terminationAttempts = 0;
@@ -38,8 +43,8 @@ if (process.argv[3] === "worker") {
     id: "foreground-command",
     command: "wait; write FINISH",
     cwd: workspace,
-    processId: "foreground-handle",
-    source: "unifiedExecStartup",
+    processId: nullId && status === "inProgress" ? null : "foreground-handle",
+    source: nullId && status === "inProgress" ? "agent" : "unifiedExecStartup",
     status,
     commandActions: [{ type: "unknown", command: "wait; write FINISH" }],
     aggregatedOutput: null,
@@ -119,6 +124,8 @@ if (process.argv[3] === "worker") {
         notify("turn/started", { threadId: nativeThreadId, turn: turn(turnId, "inProgress") });
         if (turnNumber === 1) {
           await spawnWorker("unrelated-handle", "unrelated");
+          if (nullId) await spawnWorker("other-thread-handle", "other-thread");
+          if (mode === "null-late-item") await spawnWorker("late-handle", "late");
           await spawnWorker("foreground-handle", "foreground");
           notify("item/started", {
             threadId: nativeThreadId,
@@ -140,27 +147,113 @@ if (process.argv[3] === "worker") {
         });
         return;
       case "thread/backgroundTerminals/terminate":
+        if (
+          mode === "null-late-item" &&
+          params.threadId === nativeThreadId &&
+          params.processId === "late-handle" &&
+          lateRegistered
+        ) {
+          const owned = children.get("late-handle");
+          owned.child.kill();
+          await owned.exited;
+          respond(id, { terminated: true });
+          return;
+        }
         if (params.threadId !== nativeThreadId || params.processId !== "foreground-handle") {
           throw new Error("Attempted to terminate a command outside the stopped lineage");
         }
         if (
-          ["retry", "natural-completion"].includes(process.argv[3]) &&
+          ["retry", "natural-completion", "null-retry"].includes(mode) &&
           ++terminationAttempts <= 2
         ) {
           respond(id, { terminated: false });
           return;
         }
+        if (mode === "null-duplicate-provenance") {
+          duplicatePublished = true;
+          notify("item/started", {
+            threadId: nativeThreadId,
+            turnId: "turn-1",
+            item: command("inProgress"),
+            startedAtMs: 1782622450500,
+          });
+        }
+        if (mode === "null-verify-present" || mode === "null-duplicate-provenance") {
+          respond(id, { terminated: true });
+          return;
+        }
         pendingTermination = id;
+        if (mode === "null-duplicate-start") {
+          notify("item/started", {
+            threadId: nativeThreadId,
+            turnId: "turn-1",
+            item: command("inProgress"),
+            startedAtMs: 1782622450500,
+          });
+        }
         notify("fixture/terminationPending", {});
         return;
-      case "thread/backgroundTerminals/list":
-        respond(id, { data: [{ processId: "foreground-handle" }], nextCursor: null });
+      case "thread/backgroundTerminals/list": {
+        if (!nullId) {
+          respond(id, { data: [{ processId: "foreground-handle" }], nextCursor: null });
+          return;
+        }
+        if (params.threadId === "other-native-thread") {
+          respond(id, {
+            data: [{ itemId: "foreground-command", processId: "other-thread-handle" }],
+            nextCursor: null,
+          });
+          return;
+        }
+        if (params.threadId !== nativeThreadId) throw new Error("Wrong native thread lookup");
+        if (!params.cursor) {
+          listScans++;
+          if (mode === "null-late-registration" && listScans === 1) {
+            respond(id, { data: [], nextCursor: null });
+            return;
+          }
+          respond(id, {
+            data: [
+              {
+                itemId: "unrelated-item",
+                processId: "unrelated-handle",
+                command: "wait; write FINISH",
+              },
+            ],
+            nextCursor: "owned-page",
+          });
+          return;
+        }
+        const data = children.get("foreground-handle")?.running
+          ? [{ itemId: "foreground-command", processId: "foreground-handle" }]
+          : [];
+        if (lateRegistered && children.get("late-handle")?.running)
+          data.push({ itemId: "late-command", processId: "late-handle" });
+        if (mode === "null-no-match" && data.length) data[0].itemId = "another-item";
+        if (mode === "null-duplicate-start" && pendingTermination !== undefined && data.length)
+          delete data[0].itemId;
+        if (mode === "null-duplicate-provenance" && duplicatePublished && data.length)
+          delete data[0].itemId;
+        if (mode === "null-missing-attribution" && data.length) delete data[0].itemId;
+        if (mode === "null-ambiguous" && data.length)
+          data.push({ itemId: "foreground-command", processId: "unrelated-handle" });
+        respond(id, { data, nextCursor: null });
         return;
+      }
       case "fixture/allowTermination": {
         const owned = children.get("foreground-handle");
         if (owned.running) {
           owned.child.kill();
           await owned.exited;
+        }
+        if (mode === "null-late-item") {
+          lateRegistered = true;
+          notify("item/started", {
+            threadId: nativeThreadId,
+            turnId: "turn-1",
+            item: { ...command("inProgress"), id: "late-command" },
+            startedAtMs: 1782622450500,
+          });
         }
         respond(pendingTermination, { terminated: true });
         respond(id, {});
@@ -168,6 +261,7 @@ if (process.argv[3] === "worker") {
       }
       case "fixture/releaseForeground":
         await releaseWorker("foreground-handle");
+        if (mode === "null-late-item") await releaseWorker("late-handle");
         respond(id, {});
         return;
       case "fixture/completeForeground":
@@ -183,6 +277,7 @@ if (process.argv[3] === "worker") {
         return;
       case "fixture/releaseUnrelated":
         await releaseWorker("unrelated-handle");
+        if (nullId) await releaseWorker("other-thread-handle");
         respond(id, {});
         return;
       case "fixture/eventFence":

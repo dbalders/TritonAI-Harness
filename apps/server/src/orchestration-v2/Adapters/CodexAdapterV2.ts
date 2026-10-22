@@ -248,6 +248,7 @@ const CodexBackgroundTerminalTerminateResponse = Schema.Struct({
 const CodexBackgroundTerminalsListResponse = Schema.Struct({
   data: Schema.Array(
     Schema.Struct({
+      itemId: Schema.optionalKey(Schema.String),
       processId: Schema.String,
     }),
   ),
@@ -1215,6 +1216,7 @@ interface TrackedRunningCommandItem {
   readonly command: string;
   readonly aggregatedOutput?: string;
   readonly processId?: string;
+  readonly processIdFromRegistry?: true;
 }
 
 function isPersistentCodexDynamicTool(item: CodexDynamicToolItem): boolean {
@@ -2366,7 +2368,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           Ref.update(runningCommandItemsByTurn, (current) => {
             const updated = new Map(current);
             const items = new Map(updated.get(nativeTurnId) ?? []);
-            items.set(item.id, item);
+            const previous = items.get(item.id);
+            items.set(item.id, {
+              ...item,
+              ...(item.processId === undefined && previous?.processId !== undefined
+                ? { processId: previous.processId }
+                : {}),
+              ...(previous?.processIdFromRegistry === true &&
+              (item.processId === undefined || item.processId === previous.processId)
+                ? { processIdFromRegistry: true as const }
+                : {}),
+            });
             updated.set(nativeTurnId, items);
             return updated;
           });
@@ -2580,8 +2592,35 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
           });
 
+        const listBackgroundTerminals = Effect.fn("CodexAdapterV2.listBackgroundTerminals")(
+          function* (nativeThreadId: string) {
+            const terminals: Array<CodexBackgroundTerminalsListPage["data"][number]> = [];
+            const cursors = new Set<string>();
+            let cursor: string | null = null;
+            do {
+              const response: unknown = yield* client.raw.request(
+                "thread/backgroundTerminals/list",
+                {
+                  threadId: nativeThreadId,
+                  ...(cursor === null ? {} : { cursor }),
+                },
+              );
+              const page = yield* decodeCodexBackgroundTerminalsListResponse(response);
+              terminals.push(...page.data);
+              cursor = page.nextCursor;
+              if (cursor !== null) {
+                if (cursors.has(cursor))
+                  return yield* toProtocolError("Codex terminal pagination repeated a cursor.");
+                cursors.add(cursor);
+              }
+            } while (cursor !== null);
+            return terminals;
+          },
+          Effect.timeout("10 seconds"),
+        );
+
         const terminateBackgroundTerminal = Effect.fn("CodexAdapterV2.terminateBackgroundTerminal")(
-          function* (nativeThreadId: string, processId: string) {
+          function* (nativeThreadId: string, processId: string, verifyAbsence = false) {
             const response = yield* client.raw
               .request("thread/backgroundTerminals/terminate", {
                 threadId: nativeThreadId,
@@ -2603,7 +2642,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }),
               );
             const result = yield* decodeCodexBackgroundTerminalTerminateResponse(response);
-            if (result.terminated) return;
+            if (result.terminated && !verifyAbsence) return;
             let cursor: string | null = null;
             while (true) {
               const response: unknown = yield* client.raw.request(
@@ -7530,12 +7569,64 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
               const containedTerminalKeys = new Set<string>();
               const attemptedTerminalKeys = new Set<string>();
+              const unresolvedCommandKeys = new Set<string>();
               const collectTrackedTerminals = (targets: typeof interruptTargets) =>
                 Effect.gen(function* () {
+                  // Guardian review can publish an Agent/null placeholder and
+                  // suppress the later startup event containing the real handle.
+                  // Recover only an exact owned item in its native thread.
+                  const beforeLookup = yield* Ref.get(runningCommandItemsByTurn);
+                  const lookedUpCommandKeys = new Set<string>();
+                  const missingByThread = new Map<
+                    string,
+                    Array<{ nativeTurnId: string; item: TrackedRunningCommandItem }>
+                  >();
+                  for (const target of targets) {
+                    const nativeThreadId = yield* getNativeThreadId(target.context.providerThread);
+                    for (const item of beforeLookup.get(target.context.nativeTurnId)?.values() ??
+                      []) {
+                      if (item.processId !== undefined) continue;
+                      const missing = missingByThread.get(nativeThreadId) ?? [];
+                      missing.push({ nativeTurnId: target.context.nativeTurnId, item });
+                      missingByThread.set(nativeThreadId, missing);
+                    }
+                  }
+                  for (const [nativeThreadId, missing] of missingByThread) {
+                    for (const { item } of missing)
+                      lookedUpCommandKeys.add(`${nativeThreadId}:${item.id}`);
+                    const terminals = yield* listBackgroundTerminals(nativeThreadId);
+                    yield* turnTerminalizationPermit.withPermits(1)(
+                      Ref.update(runningCommandItemsByTurn, (current) => {
+                        const updated = new Map(current);
+                        for (const { nativeTurnId, item } of missing) {
+                          const items = updated.get(nativeTurnId);
+                          const tracked = items?.get(item.id);
+                          if (tracked === undefined || tracked.processId !== undefined) continue;
+                          const matches = terminals.filter(
+                            (terminal) => terminal.itemId === item.id,
+                          );
+                          if (matches.length !== 1 || matches[0]!.processId.length === 0) continue;
+                          const next = new Map(items);
+                          next.set(item.id, {
+                            ...tracked,
+                            processId: matches[0]!.processId,
+                            processIdFromRegistry: true,
+                          });
+                          updated.set(nativeTurnId, next);
+                        }
+                        return updated;
+                      }),
+                    );
+                  }
                   const trackedTerminals = new Map<
                     string,
-                    { readonly nativeThreadId: string; readonly processId: string }
+                    {
+                      readonly nativeThreadId: string;
+                      readonly processId: string;
+                      readonly verifyAbsence: boolean;
+                    }
                   >();
+                  unresolvedCommandKeys.clear();
                   const runningItems = yield* Ref.get(runningCommandItemsByTurn);
                   for (const target of targets) {
                     const nativeThreadId = yield* getNativeThreadId(target.context.providerThread);
@@ -7545,7 +7636,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         trackedTerminals.set(`${nativeThreadId}:${item.processId}`, {
                           nativeThreadId,
                           processId: item.processId,
+                          verifyAbsence: item.processIdFromRegistry === true,
                         });
+                      } else if (lookedUpCommandKeys.has(`${nativeThreadId}:${item.id}`)) {
+                        unresolvedCommandKeys.add(`${nativeThreadId}:${item.id}`);
                       }
                     }
                   }
@@ -7563,10 +7657,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     );
                   return yield* Effect.forEach(
                     pendingTerminals,
-                    ([key, { nativeThreadId, processId }]) =>
+                    ([key, { nativeThreadId, processId, verifyAbsence }]) =>
                       Effect.gen(function* () {
                         attemptedTerminalKeys.add(key);
-                        yield* terminateBackgroundTerminal(nativeThreadId, processId);
+                        yield* terminateBackgroundTerminal(
+                          nativeThreadId,
+                          processId,
+                          verifyAbsence,
+                        );
                         containedTerminalKeys.add(key);
                       }).pipe(
                         Effect.as({ success: true as const }),
@@ -7664,10 +7762,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                           context.nativeTurnId,
                         );
                         for (const command of commands?.values() ?? []) {
-                          if (
-                            command.processId !== undefined &&
-                            !containedTerminalKeys.has(`${nativeThreadId}:${command.processId}`)
-                          )
+                          if (command.processId === undefined) {
+                            if (unresolvedCommandKeys.has(`${nativeThreadId}:${command.id}`)) {
+                              return yield* toProtocolError(
+                                `Codex command ${command.id} has no uniquely attributed terminal handle; Stop could not confirm containment.`,
+                              );
+                            }
+                            return;
+                          }
+                          if (!containedTerminalKeys.has(`${nativeThreadId}:${command.processId}`))
                             return;
                         }
                         yield* finalizeCodexTurn({
@@ -7813,42 +7916,66 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 yield* interruptLateDescendants;
                 yield* finalizeRemainingInterruptLineage;
 
-                const terminationResults = yield* terminateTrackedTerminals(interruptTargets);
-                const failedTermination = terminationResults.find((result) => !result.success);
-                if (failedTermination !== undefined && !failedTermination.success) {
-                  return yield* Effect.fail(failedTermination.error);
+                let settledContained = false;
+                while (!settledContained) {
+                  const terminationResults = yield* terminateTrackedTerminals(interruptTargets);
+                  const failedTermination = terminationResults.find((result) => !result.success);
+                  if (failedTermination !== undefined && !failedTermination.success) {
+                    return yield* Effect.fail(failedTermination.error);
+                  }
+                  // Stop the retained items without rewriting the completed root turn.
+                  settledContained = yield* turnTerminalizationPermit.withPermits(1)(
+                    Effect.gen(function* () {
+                      for (const target of interruptTargets) {
+                        const context = target.context;
+                        if ((yield* Ref.get(settledTurns)).get(context.nativeTurnId) !== context)
+                          continue;
+                        const nativeThreadId = yield* getNativeThreadId(context.providerThread);
+                        const commands = (yield* Ref.get(runningCommandItemsByTurn)).get(
+                          context.nativeTurnId,
+                        );
+                        for (const command of commands?.values() ?? []) {
+                          if (command.processId === undefined) {
+                            if (unresolvedCommandKeys.has(`${nativeThreadId}:${command.id}`))
+                              return yield* toProtocolError(
+                                `Codex command ${command.id} has no uniquely attributed terminal handle; Stop could not confirm containment.`,
+                              );
+                            return false;
+                          }
+                          if (!containedTerminalKeys.has(`${nativeThreadId}:${command.processId}`))
+                            return false;
+                        }
+                      }
+                      const completedAt = yield* DateTime.now;
+                      for (const target of interruptTargets) {
+                        const context = target.context;
+                        if ((yield* Ref.get(settledTurns)).get(context.nativeTurnId) !== context)
+                          continue;
+                        yield* terminalizeRunningCommandItems(
+                          context,
+                          context.nativeTurnId,
+                          "interrupted",
+                          completedAt,
+                        );
+                        yield* terminalizeRunningDynamicTools(
+                          context,
+                          context.nativeTurnId,
+                          "interrupted",
+                          completedAt,
+                          true,
+                        );
+                        yield* terminalizeMcpAppCaptures(context, context.nativeTurnId);
+                        yield* Ref.update(runningCommandItemsByTurn, (current) => {
+                          const updated = new Map(current);
+                          updated.delete(context.nativeTurnId);
+                          return updated;
+                        });
+                        yield* releaseSettledTurnIfIdle(context.nativeTurnId);
+                      }
+                      return true;
+                    }),
+                  );
                 }
-                // Stop the retained items without rewriting the completed root turn.
-                yield* turnTerminalizationPermit.withPermits(1)(
-                  Effect.gen(function* () {
-                    const completedAt = yield* DateTime.now;
-                    for (const target of interruptTargets) {
-                      const context = target.context;
-                      if ((yield* Ref.get(settledTurns)).get(context.nativeTurnId) !== context)
-                        continue;
-                      yield* terminalizeRunningCommandItems(
-                        context,
-                        context.nativeTurnId,
-                        "interrupted",
-                        completedAt,
-                      );
-                      yield* terminalizeRunningDynamicTools(
-                        context,
-                        context.nativeTurnId,
-                        "interrupted",
-                        completedAt,
-                        true,
-                      );
-                      yield* terminalizeMcpAppCaptures(context, context.nativeTurnId);
-                      yield* Ref.update(runningCommandItemsByTurn, (current) => {
-                        const updated = new Map(current);
-                        updated.delete(context.nativeTurnId);
-                        return updated;
-                      });
-                      yield* releaseSettledTurnIfIdle(context.nativeTurnId);
-                    }
-                  }),
-                );
               }).pipe(Effect.ensuring(cleanupInterruptState));
             }).pipe(
               Effect.mapError(

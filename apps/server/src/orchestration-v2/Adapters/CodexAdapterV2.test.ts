@@ -6748,6 +6748,38 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     (entry) =>
       entry.type === "emit_inbound" && entry.label === "thread/backgroundTerminals/terminate/child",
   );
+  const recoveredTerminalFrames = (
+    threadId: string,
+    itemId: string,
+    processId: string,
+    firstId: number,
+  ) => [
+    {
+      type: "expect_outbound" as const,
+      frame: { id: firstId, method: "thread/backgroundTerminals/list", params: { threadId } },
+    },
+    {
+      type: "emit_inbound" as const,
+      frame: { id: firstId, result: { data: [{ itemId, processId }], nextCursor: null } },
+    },
+    {
+      type: "expect_outbound" as const,
+      frame: {
+        id: firstId + 1,
+        method: "thread/backgroundTerminals/terminate",
+        params: { threadId, processId },
+      },
+    },
+    { type: "emit_inbound" as const, frame: { id: firstId + 1, result: { terminated: true } } },
+    {
+      type: "expect_outbound" as const,
+      frame: { id: firstId + 2, method: "thread/backgroundTerminals/list", params: { threadId } },
+    },
+    {
+      type: "emit_inbound" as const,
+      frame: { id: firstId + 2, result: { data: [], nextCursor: null } },
+    },
+  ];
   const interruptSubagentTimeoutTranscript = makeCodexReplayTranscript({
     scenario: "codex-interrupt-subagent-timeout",
     entries: [
@@ -6769,6 +6801,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           },
         },
       },
+      ...recoveredTerminalFrames(
+        INTERRUPT_CHILD_NATIVE_THREAD,
+        INTERRUPT_CHILD_TIMEOUT_BOUNDARY_ITEM,
+        "57683",
+        7,
+      ),
     ],
   });
 
@@ -7211,11 +7249,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           },
         },
       },
+      ...recoveredTerminalFrames(
+        INTERRUPT_NATIVE_THREAD,
+        INTERRUPT_TIMEOUT_BOUNDARY_ITEM,
+        "57683",
+        6,
+      ).slice(0, 2),
       {
         type: "expect_outbound",
         label: "thread/backgroundTerminals/terminate/two",
         frame: {
-          id: 6,
+          id: 7,
           method: "thread/backgroundTerminals/terminate",
           params: { threadId: INTERRUPT_NATIVE_THREAD, processId: "57681" },
         },
@@ -7223,8 +7267,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       {
         type: "emit_inbound",
         label: "thread/backgroundTerminals/terminate/two",
-        frame: { id: 6, result: { terminated: true } },
+        frame: { id: 7, result: { terminated: true } },
       },
+      ...recoveredTerminalFrames(
+        INTERRUPT_NATIVE_THREAD,
+        INTERRUPT_TIMEOUT_BOUNDARY_ITEM,
+        "57683",
+        7,
+      ).slice(2),
       {
         type: "emit_inbound",
         label: "turn/completed/late",

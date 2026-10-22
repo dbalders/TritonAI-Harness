@@ -49,6 +49,16 @@ it.live.each([
   "natural-completion",
   "completion-waits-for-permit",
   "stop-claims-after-snapshot",
+  "null-process-id",
+  "null-retry",
+  "null-late-registration",
+  "null-late-item",
+  "null-duplicate-start",
+  "null-duplicate-provenance",
+  "null-no-match",
+  "null-missing-attribution",
+  "null-ambiguous",
+  "null-verify-present",
 ] as const)(
   "withholds Stop acknowledgment until the owned foreground process is contained (%s)",
   (mode) =>
@@ -240,6 +250,18 @@ it.live.each([
         yield* runtime.startTurn(yield* input(1));
         yield* Deferred.await(commandStarted);
         assert.equal(yield* fs.readFileString(path.join(cwd, "foreground-start")), "START\n");
+        if (mode.startsWith("null-")) {
+          assert.equal(yield* fs.readFileString(path.join(cwd, "other-thread-start")), "START\n");
+          assert.deepEqual(
+            yield* nativeClient.raw.request("thread/backgroundTerminals/list", {
+              threadId: "other-native-thread",
+            }),
+            {
+              data: [{ itemId: "foreground-command", processId: "other-thread-handle" }],
+              nextCursor: null,
+            },
+          );
+        }
         const providerTurn = events.find((event) => event.type === "provider_turn.updated");
         assert.isDefined(providerTurn);
         assert.equal(providerTurn.type, "provider_turn.updated");
@@ -249,8 +271,29 @@ it.live.each([
             providerTurnId: providerTurn.providerTurn.id,
           })
           .pipe(Effect.provideService(PermitRaceActor, "stop"));
-        if (mode === "retry" || mode === "natural-completion") {
+        const unresolvedOwnership = [
+          "null-no-match",
+          "null-missing-attribution",
+          "null-ambiguous",
+          "null-verify-present",
+          "null-duplicate-provenance",
+        ].includes(mode);
+        if (
+          mode === "retry" ||
+          mode === "natural-completion" ||
+          mode === "null-retry" ||
+          unresolvedOwnership
+        ) {
           assert.equal((yield* Effect.exit(stop))._tag, "Failure");
+          if (mode === "null-duplicate-provenance") {
+            yield* client.raw.request("fixture/eventFence", {});
+            yield* Deferred.await(eventFenceObserved);
+            assert.equal(
+              (yield* Effect.exit(stop))._tag,
+              "Failure",
+              "A duplicate null-ID start must retain registry absence verification on retry",
+            );
+          }
           assert.isTrue(
             yield* runtime.hasPendingBackgroundWork!,
             "Failed containment must retain the live foreground process handle for retry",
@@ -261,7 +304,7 @@ it.live.each([
             "A failed Stop must not claim that the foreground process is interrupted",
           );
         }
-        if (mode === "natural-completion") {
+        if (mode === "natural-completion" || unresolvedOwnership) {
           // Stop explicitly failed. When the process then exits naturally, its
           // actual completion must drain the buffered terminal without a retry.
           // A duplicate native completion with no Stop waiter must return even
@@ -314,6 +357,11 @@ it.live.each([
             yield* fs.exists(path.join(cwd, "foreground-finish")),
             "The foreground process wrote FINISH after Harness acknowledged Stop",
           );
+          if (mode === "null-late-item")
+            assert.isFalse(
+              yield* fs.exists(path.join(cwd, "late-finish")),
+              "Late null-ID command escaped containment",
+            );
           assert.isFalse(
             acknowledgedBeforeContainment,
             "Stop was acknowledged before process containment",
@@ -325,6 +373,8 @@ it.live.each([
         );
         yield* client.raw.request("fixture/releaseUnrelated", {});
         assert.equal(yield* fs.readFileString(path.join(cwd, "unrelated-finish")), "FINISH\n");
+        if (mode.startsWith("null-"))
+          assert.equal(yield* fs.readFileString(path.join(cwd, "other-thread-finish")), "FINISH\n");
         yield* client.raw.request("fixture/lateCompletion", {});
         yield* runtime.startTurn(yield* input(2));
         yield* Deferred.await(followupCompleted);
