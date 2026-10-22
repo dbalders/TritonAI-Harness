@@ -292,7 +292,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         const providerArgs: string[] = [];
         // undefined means absent; null means a selector we cannot safely interpret.
         let selectedProvider: string | null | undefined;
-        let hasProviderTransport = false;
+        // An unrelated transport must not change native authentication or be queried here.
+        const providerTransports = new Map<string, string[]>();
         {
           const args = codexExecLaunchArgs(effectiveConfig.launchArgs);
           for (let index = 0; index < args.length; index++) {
@@ -335,20 +336,24 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             if (/^(?:openai_base_url|chatgpt_base_url)(?:\.|$)/.test(key)) return yield* fail();
             const isProviderTransport =
               key === "model_providers" || key.startsWith("model_providers.");
-            if (isProviderTransport) hasProviderTransport = true;
-            const allowedTransport =
-              /^model_providers\.[A-Za-z0-9_-]+\.(?:name|base_url|env_key|wire_api|requires_openai_auth|supports_websockets|model_catalog_url)$/.test(
+            const transport =
+              /^model_providers\.([A-Za-z0-9_-]+)\.(?:name|base_url|env_key|wire_api|requires_openai_auth|supports_websockets|model_catalog_url)$/.exec(
                 key,
               );
-            if (isProviderTransport && !allowedTransport) return yield* fail();
-            if (allowedTransport) providerArgs.push("--config", `${key}=${configValue}`);
+            if (isProviderTransport && !transport) return yield* fail();
+            if (transport) {
+              const provider = transport[1]!;
+              const overrides = providerTransports.get(provider) ?? [];
+              overrides.push("--config", `${key}=${configValue}`);
+              providerTransports.set(provider, overrides);
+            }
           }
         }
         if (selectedProvider === null) return yield* fail();
         if (selectedProvider === undefined) {
           // Partial transport overrides do not identify which endpoint/account to use.
           // A configured gateway must win over an unrelated native ChatGPT sign-in.
-          if (hasProviderTransport) return yield* fail();
+          if (providerTransports.size > 0) return yield* fail();
           if (effectiveEnvironment[TRITONAI_API_KEY_ENV]?.trim()) {
             providerArgs.push(...makeTritonAiCodexConfigArgs(effectiveEnvironment));
           } else {
@@ -357,10 +362,11 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         }
         if (selectedProvider !== undefined)
           providerArgs.push(
+            ...(providerTransports.get(selectedProvider) ?? []),
             "--config",
             `model_provider=${encodeCodexConfigString(selectedProvider)}`,
           );
-        if (selectedProvider === "openai" && !hasProviderTransport) {
+        if (selectedProvider === "openai" && !providerTransports.has(selectedProvider)) {
           // Native sign-in may be reused only for the built-in transport. A
           // custom provider (even named openai) never receives the native file.
           // Never read/parse tokens or copy config, instructions, skills or history.

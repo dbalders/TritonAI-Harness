@@ -183,6 +183,41 @@ describe("Help report preparation", () => {
     );
   });
 
+  it.each([
+    { label: "no snapshot", snapshot: null },
+    { label: "unrelated snapshot", snapshot: context },
+  ])("removes pasted UNC paths without relying on snapshot values ($label)", ({ snapshot }) => {
+    const path = String.raw`\\corp-files\Research\participant.csv`;
+    const spacedPath = String.raw`\\corp-files\Research share\private document.csv`;
+    const extendedPath = String.raw`\\?\UNC\corp-files\Research\private.csv`;
+    const punctuationPath = String.raw`\\corp-files\Research\private, part;more.csv`;
+    const report = buildHelpReport({
+      ...reportInput,
+      context: snapshot,
+      summary: `Cannot open ${path}`,
+      steps: `Open "${spacedPath}"; then retry.`,
+      expected: `Read "${punctuationPath}" and ${JSON.stringify(path)}`,
+      actual: `Failed at ${extendedPath}`,
+      includeConversation: true,
+      conversation: [
+        { role: "user", content: `I tried ${spacedPath}` },
+        { role: "assistant", content: `Check ${path}` },
+      ],
+    });
+    for (const privateText of [
+      "corp-files",
+      "Research",
+      "participant.csv",
+      "private document.csv",
+      "private.csv",
+      "part;more.csv",
+    ])
+      expect(report).not.toContain(privateText);
+    expect(report).toContain("[local path]");
+    expect(report).toContain("then retry.");
+    expect(report).toContain("Help conversation (included by choice)");
+  });
+
   it("redacts exact host and client paths from optional snapshots, including serialized profiles", () => {
     const privatePaths = [
       "/unusual-host/private worktrees",

@@ -408,6 +408,8 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     "-c model_provider={} --config=model_provider=openai",
     "-c model_provider=true --config=model_provider=openai",
     "-c model_provider.nested=selected_route --config=model_provider=openai",
+    `-c model_provider=openai -c 'model_providers.unused.base_url="https://unused.example.invalid/v1"'`,
+    `-c 'model_providers.unused.env_key="UNUSED_API_KEY"' -c model_provider=openai`,
   ])("explicitly selects native auth over ambient gateway credentials (%s)", (launchArgs) =>
     withFakeCodexEnv(
       {

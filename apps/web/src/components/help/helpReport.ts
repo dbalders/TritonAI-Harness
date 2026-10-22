@@ -113,6 +113,8 @@ function publicReportText(
     text,
   );
   return redactHelpText(withoutSnapshotValues)
+    .replace(/(["'\x60])\\{2,}[^\\\s<>"'\x60]+\\[^\r\n]*?\1/gu, "$1[local path]$1")
+    .replace(/\\{2,}[^\\\s<>"'\x60]+\\[^\r\n<>"'\x60,;]*/gu, "[local path]")
     .replace(
       /(["'`])(?:[A-Z]:[\\/]|\/(?:Users|home|private|var|tmp|Applications|opt|Volumes|root|srv|etc|mnt|media|run|usr|workspace|workspaces|data|app)\/)[^\r\n]*?\1/giu,
       "$1[local path]$1",
