@@ -68,6 +68,9 @@ describe("HelpDocumentation source catalog", () => {
         for (const context of [
           "i saw someone have their app use a mouse for them, how do i do that",
           "Use Computer use in Settings > General to control the mouse.",
+          // A real answer mentions several prerequisites and other features. Those
+          // matches must not crowd the primary guide out of the retrieval budget.
+          "That's Computer use—it lets the agent move the mouse, click, type, and interact with desktop apps.\n\nOn your Mac, it's currently off, but Accessibility and Screen Recording permissions are already granted.\n\nOpen Settings → General → Computer use and turn it on.\nIf prompted, choose Restart Harness, then check that the status is Ready.\nIn a normal chat using a Codex-backed provider, try: /computer-use Open Notes and create a note.\n\nIt works only with the local desktop backend, not SSH, WSL, or other remote environments. I can explain setup here, but can't control your mouse from Help.\ni saw someone have their app use a mouse for them, how do i do that",
         ]) {
           const result = yield* docs.search("What permissions do I need?", context);
           expect(result.documentation[0]?.path).toBe("docs/user/computer-use.md");

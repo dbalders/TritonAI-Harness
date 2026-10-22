@@ -221,6 +221,19 @@ const make = Effect.gen(function* () {
             }))
             .filter((section) => section.score > 0)
             .sort((left, right) => right.score - left.score || left.index - right.index);
+          // Preserve a compact primary guide before broad prerequisite matches
+          // consume the budget. Long guides still reserve only relevant sections,
+          // leaving at least half the budget for instructions from other topics.
+          if (selected.length === 0 && doc.content.length <= MAX_SELECTED / 2) {
+            selected.push({
+              doc,
+              indices: doc.sections.map((_, index) => index),
+              sections,
+              content: doc.content,
+            });
+            remaining -= doc.content.length;
+            continue;
+          }
           for (const section of sections) {
             const content = excerpt(doc, [section.index]);
             if (content.length > Math.min(MAX_DOCUMENT, remaining)) continue;
