@@ -6,15 +6,17 @@ import {
   gateDynamicToolCall,
   dynamicToolApprovalRequired,
   dynamicToolInvocationAllowed,
-  dynamicToolApprovalPrompt,
   dynamicToolResponse,
   invokeAdmittedDynamicTool,
+  planDynamicToolApproval,
   reconcilePluginSkillAvailability,
   withPluginSkillLease,
   type CodexPluginSkillDefinition,
   type CodexPluginSkillLease,
+  type DynamicToolApprovalPlan,
 } from "../../provider/CodexDynamicTools.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
+import { registerBrowserNavigationGate } from "../../preview/BrowserNavigationGate.ts";
 import { UCSD_AI_BASE_URL_ENV, PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@t3tools/contracts";
 import { makeTritonAiImageProxy } from "../../provider/Drivers/TritonAiImageProxy.ts";
 import {
@@ -107,6 +109,7 @@ import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -1378,6 +1381,12 @@ export const CODEX_THREAD_CONFIG = {
 // that limit so the server's own wait timeout ends a long call.
 const CODEX_T3_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 
+/** Harness MCP tools whose approval the Codex adapter's browser navigation gate owns. */
+const CODEX_T3_MCP_GATED_TOOLS = {
+  preview_open: { approval_mode: "approve" },
+  preview_navigate: { approval_mode: "approve" },
+} as const;
+
 export function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly computerUseMcp?: import("@t3tools/contracts").DesktopMcpServerConfiguration | undefined;
@@ -1418,6 +1427,10 @@ export function codexThreadRuntimeParams(input: {
                       http_headers: {
                         Authorization: mcpSession.authorizationHeader,
                       },
+                      // The adapter's browser navigation gate approves these two by destination,
+                      // in every runtime mode. Codex's own approval would ask generically, or in
+                      // Auto let its automatic reviewer decide.
+                      tools: CODEX_T3_MCP_GATED_TOOLS,
                     },
                   }),
             },
@@ -5354,6 +5367,122 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
         );
 
+        /**
+         * Asks the user about a direct-tool or browser call that needs approval, unless the runtime
+         * mode or an earlier "Always allow this session" covers it. Returns the decision, or
+         * undefined when nothing needed asking. The direct tools and the MCP browser navigation
+         * gate both use it, so a session grant covers both routes.
+         */
+        const decideToolApproval = (input: {
+          readonly context: ActiveCodexTurnContext;
+          readonly grantThreadId: string;
+          readonly runtimeMode: RuntimeMode;
+          readonly approval: DynamicToolApprovalPlan;
+          readonly nativeItemId: string;
+        }) =>
+          Effect.gen(function* () {
+            const { approval, runtimeMode } = input;
+            let approvals = flatToolApprovals.get(input.grantThreadId);
+            if (approvals?.runtimeMode !== runtimeMode) {
+              approvals = { runtimeMode, names: new Set() };
+              flatToolApprovals.set(input.grantThreadId, approvals);
+            }
+            const granted = approvals.names.has(approval.grantKey);
+            if (!dynamicToolApprovalRequired(approval.requiresApproval, granted, runtimeMode))
+              return runtimeMode === "full-access" || granted ? ("accept" as const) : undefined;
+            const artifacts = yield* buildApprovalRequestArtifacts({
+              context: input.context,
+              nativeItemId: input.nativeItemId,
+              nativeRequestId: input.nativeItemId,
+              requestKind: "permission",
+              prompt: approval.prompt,
+            });
+            const deferred = yield* Deferred.make<ProviderApprovalDecision>();
+            yield* Ref.update(pendingRuntimeRequests, (current) =>
+              new Map(current).set(String(artifacts.request.id), {
+                type: "approval",
+                requestId: artifacts.request.id,
+                requestKind: "permission",
+                decision: deferred,
+              }),
+            );
+            yield* emitProviderEvent({
+              type: "node.updated",
+              driver: CODEX_PROVIDER,
+              node: artifacts.node,
+            });
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            yield* emitProviderEvent({
+              type: "runtime_request.updated",
+              driver: CODEX_PROVIDER,
+              threadId: artifacts.node.threadId,
+              runtimeRequest: artifacts.request,
+            });
+            const decision = yield* Deferred.await(deferred).pipe(
+              Effect.ensuring(
+                Ref.update(pendingRuntimeRequests, (current) => {
+                  const next = new Map(current);
+                  next.delete(String(artifacts.request.id));
+                  return next;
+                }),
+              ),
+            );
+            if (decision === "acceptForSession") approvals.names.add(approval.grantKey);
+            return decision;
+          });
+
+        // Codex also reaches the browser through the Harness MCP server, where Codex approves the
+        // call itself (in Auto, with its automatic reviewer) and standard models have no direct
+        // browser tools. codexThreadRuntimeParams turns Codex's own approval off for the two
+        // navigation tools, and this gate approves them instead, for the turn that made the call.
+        yield* registerBrowserNavigationGate(adapterOptions.instanceId, (request) =>
+          Effect.gen(function* () {
+            let owner: ActiveCodexTurnContext | undefined;
+            for (const context of (yield* Ref.get(activeTurns)).values()) {
+              const candidate = approvalOwnerCodexTurn(context).owner;
+              if (candidate.projectionThreadId === request.threadId) owner = candidate;
+            }
+            if (owner === undefined) return undefined;
+            const credential = yield* mcpSessions.read(request.threadId);
+            if (
+              credential?.providerSessionId !== request.credentialId ||
+              (credential.expiresAt !== undefined &&
+                (yield* Clock.currentTimeMillis) >= credential.expiresAt)
+            )
+              return {
+                admitted: false,
+                reason: "This thread's browser credential is no longer active.",
+              } as const;
+            const approval = planDynamicToolApproval({
+              requiresApproval: false,
+              // MCP tool input is decoded JSON.
+              payload: { tool: request.toolName, arguments: request.arguments as Schema.Json },
+            });
+            const decision = yield* decideToolApproval({
+              context: owner,
+              grantThreadId:
+                owner.providerThread.nativeThreadRef?.nativeId ?? owner.providerThread.id,
+              runtimeMode: owner.input.runtimePolicy.runtimeMode,
+              approval,
+              nativeItemId: `mcp-browser-navigation:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
+            });
+            return dynamicToolInvocationAllowed(approval.requiresApproval, decision)
+              ? ({ admitted: true } as const)
+              : ({ admitted: false, reason: "The user declined opening this website." } as const);
+          }).pipe(
+            Effect.catch(() =>
+              Effect.succeed({
+                admitted: false,
+                reason: "The browser approval could not be shown, so the page was not opened.",
+              } as const),
+            ),
+          ),
+        ).pipe(Effect.provideService(Scope.Scope, scope));
+
         yield* client.handleServerRequest("item/tool/call", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
@@ -5374,67 +5503,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               );
             const gate = yield* gateDynamicToolCall({ options: catalog.options, payload });
             if (!gate.allowed) return gate.response;
-            const runtimeMode = owner.input.runtimePolicy.runtimeMode;
-            let approvals = flatToolApprovals.get(payload.threadId);
-            if (approvals?.runtimeMode !== runtimeMode) {
-              approvals = { runtimeMode, names: new Set() };
-              flatToolApprovals.set(payload.threadId, approvals);
-            }
-            let decision: ProviderApprovalDecision | undefined =
-              runtimeMode === "full-access" || approvals.names.has(payload.tool)
-                ? "accept"
-                : undefined;
-            if (
-              dynamicToolApprovalRequired(
-                gate.definition.requiresApproval,
-                approvals.names.has(payload.tool),
-                runtimeMode,
-              )
-            ) {
-              const artifacts = yield* buildApprovalRequestArtifacts({
-                context,
-                nativeItemId: payload.callId,
-                nativeRequestId: payload.callId,
-                requestKind: "permission",
-                prompt: dynamicToolApprovalPrompt(payload),
-              });
-              const deferred = yield* Deferred.make<ProviderApprovalDecision>();
-              yield* Ref.update(pendingRuntimeRequests, (current) =>
-                new Map(current).set(String(artifacts.request.id), {
-                  type: "approval",
-                  requestId: artifacts.request.id,
-                  requestKind: "permission",
-                  decision: deferred,
-                }),
-              );
-              yield* emitProviderEvent({
-                type: "node.updated",
-                driver: CODEX_PROVIDER,
-                node: artifacts.node,
-              });
-              yield* emitProviderEvent({
-                type: "turn_item.updated",
-                driver: CODEX_PROVIDER,
-                turnItem: artifacts.turnItem,
-              });
-              yield* emitProviderEvent({
-                type: "runtime_request.updated",
-                driver: CODEX_PROVIDER,
-                threadId: artifacts.node.threadId,
-                runtimeRequest: artifacts.request,
-              });
-              decision = yield* Deferred.await(deferred).pipe(
-                Effect.ensuring(
-                  Ref.update(pendingRuntimeRequests, (current) => {
-                    const next = new Map(current);
-                    next.delete(String(artifacts.request.id));
-                    return next;
-                  }),
-                ),
-              );
-              if (decision === "acceptForSession") approvals.names.add(payload.tool);
-            }
-            if (!dynamicToolInvocationAllowed(gate.definition.requiresApproval, decision))
+            const approval = planDynamicToolApproval({
+              requiresApproval: gate.definition.requiresApproval,
+              payload,
+            });
+            const decision = yield* decideToolApproval({
+              context,
+              grantThreadId: payload.threadId,
+              runtimeMode: owner.input.runtimePolicy.runtimeMode,
+              approval,
+              nativeItemId: payload.callId,
+            });
+            if (!dynamicToolInvocationAllowed(approval.requiresApproval, decision))
               return dynamicToolResponse(false, "The user declined this tool call.");
             return yield* invokeAdmittedDynamicTool({
               options: catalog.options,

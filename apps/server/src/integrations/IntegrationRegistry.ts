@@ -49,6 +49,13 @@ import {
   type IntegrationProviderTool,
 } from "./IntegrationTool.ts";
 
+import {
+  makeDocumentTextExtractor,
+  type DocumentTextRequest,
+  type DocumentTextResult,
+  type IntegrationDocumentTextExtractor,
+} from "./IntegrationDocumentText.ts";
+
 export type { IntegrationProviderTool } from "./IntegrationTool.ts";
 
 export interface IntegrationProviderStatus {
@@ -62,6 +69,12 @@ export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
   /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
+  /**
+   * Present for read invocations. Extracts bounded text from PDF or DOCX bytes in an isolated,
+   * time- and memory-limited process bound to this invocation's signal, so a provider never has
+   * to hand raw document bytes to the model. Older hosts omit it.
+   */
+  extractDocumentText?(request: DocumentTextRequest): Promise<DocumentTextResult>;
   /**
    * Present only for a write invocation. Providers must await this immediately before their
    * narrow external mutation and use the returned signal for every fallible commit-tail step.
@@ -255,6 +268,8 @@ export type IntegrationToolAvailability =
 export interface RegistryRuntimeOptions {
   readonly providerStatusTimeoutMs?: number;
   readonly providerOperationTimeoutMs?: number;
+  /** Defaults to the isolated `__document-text` process extractor. */
+  readonly documentText?: IntegrationDocumentTextExtractor;
   /** Observes every provider fault, which otherwise surfaces only as a reset prompt. */
   readonly onProviderFault?: (fault: IntegrationProviderFault) => void;
 }
@@ -906,6 +921,7 @@ export class RegistryRuntime {
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
   readonly #providerSummaryRefreshWork = new Map<IntegrationProvider, Set<Promise<void>>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
+  readonly #documentText: IntegrationDocumentTextExtractor;
   #closing = false;
   #closePromise: Promise<void> | null = null;
 
@@ -927,6 +943,7 @@ export class RegistryRuntime {
     this.#providerOperationTimeoutMs =
       options.providerOperationTimeoutMs ?? DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS;
     this.#onProviderFault = options.onProviderFault;
+    this.#documentText = options.documentText ?? makeDocumentTextExtractor();
     if (
       !Number.isSafeInteger(this.#providerStatusTimeoutMs) ||
       this.#providerStatusTimeoutMs <= 0 ||
@@ -3506,7 +3523,11 @@ export class RegistryRuntime {
                     return commitSignal;
                   },
                 }
-              : { signal },
+              : {
+                  signal,
+                  extractDocumentText: (request: DocumentTextRequest) =>
+                    this.#documentText(request, signal),
+                },
           );
         };
         const invocationWork = Promise.resolve().then(() =>
