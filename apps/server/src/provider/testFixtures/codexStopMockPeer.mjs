@@ -28,6 +28,7 @@ if (process.argv[3] === "worker") {
   let turnNumber = 0;
   let pendingTermination;
   let terminationAttempts = 0;
+  let unloaded = false;
   const turn = (id, status) => ({
     id,
     items: [],
@@ -71,6 +72,16 @@ if (process.argv[3] === "worker") {
     owned.child.send("continue");
     await owned.exited;
   };
+  const removeOwned = async () => {
+    const owned = children.get("foreground-handle");
+    if (owned?.running) {
+      owned.child.kill();
+      await owned.exited;
+    }
+    unloaded = true;
+  };
+  const notFound = (id) =>
+    write({ id, error: { code: -32600, message: `thread not found: ${nativeThreadId}` } });
   const handle = async ({ id, method, params }) => {
     switch (method) {
       case "initialize":
@@ -147,6 +158,16 @@ if (process.argv[3] === "worker") {
         });
         return;
       case "thread/backgroundTerminals/terminate":
+        NodeFS.appendFileSync(
+          NodePath.join(workspace, "terminate-attempts"),
+          JSON.stringify(params) + "\n",
+        );
+        if (mode === "null-unloaded-terminate" || mode === "null-unloaded-verify") {
+          await removeOwned();
+          if (mode === "null-unloaded-terminate") notFound(id);
+          else respond(id, { terminated: true });
+          return;
+        }
         if (
           mode === "null-late-item" &&
           params.threadId === nativeThreadId &&
@@ -206,6 +227,15 @@ if (process.argv[3] === "worker") {
           return;
         }
         if (params.threadId !== nativeThreadId) throw new Error("Wrong native thread lookup");
+        if (mode === "null-unloaded-initial" || mode === "null-unloaded-settled" || unloaded) {
+          await removeOwned();
+          notFound(id);
+          return;
+        }
+        if (mode === "null-unknown-rpc") {
+          write({ id, error: { code: -32603, message: "unclassified registry failure" } });
+          return;
+        }
         if (!params.cursor) {
           listScans++;
           if (mode === "null-late-registration" && listScans === 1) {
@@ -262,6 +292,10 @@ if (process.argv[3] === "worker") {
       case "fixture/releaseForeground":
         await releaseWorker("foreground-handle");
         if (mode === "null-late-item") await releaseWorker("late-handle");
+        respond(id, {});
+        return;
+      case "fixture/removeOwned":
+        await removeOwned();
         respond(id, {});
         return;
       case "fixture/completeForeground":

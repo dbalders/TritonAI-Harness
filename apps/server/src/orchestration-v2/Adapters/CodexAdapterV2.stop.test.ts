@@ -17,6 +17,11 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as CodexClient from "effect-codex-app-server/client";
+import {
+  CodexAppServerProcessExitedError,
+  CodexAppServerInputStreamEndedError,
+  CodexAppServerTransportError,
+} from "effect-codex-app-server/errors";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -59,6 +64,18 @@ it.live.each([
   "null-missing-attribution",
   "null-ambiguous",
   "null-verify-present",
+  "null-unloaded-initial",
+  "null-unloaded-settled",
+  "null-unloaded-terminate",
+  "null-unloaded-verify",
+  "null-exited-initial",
+  "null-exited-terminate",
+  "null-exited-verify",
+  "null-input-ended-initial",
+  "null-input-ended-terminate",
+  "null-input-ended-verify",
+  "null-generic-transport",
+  "null-unknown-rpc",
 ] as const)(
   "withholds Stop acknowledgment until the owned foreground process is contained (%s)",
   (mode) =>
@@ -121,8 +138,60 @@ it.live.each([
         );
         const clientContext = yield* Layer.build(CodexClient.layerChildProcess(handle));
         const nativeClient = Context.get(clientContext, CodexClient.CodexAppServerClient);
+        const terminateRequests: unknown[] = [];
+        let targetLists = 0;
+        let terminationSent = false;
+        const conclusiveEnd = mode.includes("-exited-") || mode.includes("-input-ended-");
         const client: CodexClient.CodexAppServerClient["Service"] = {
           ...nativeClient,
+          raw: {
+            ...nativeClient.raw,
+            request: (method, params) =>
+              Effect.gen(function* () {
+                if (method === "thread/backgroundTerminals/terminate") {
+                  terminateRequests.push(params);
+                  terminationSent = true;
+                }
+                if (method === "thread/backgroundTerminals/list") targetLists++;
+                if (
+                  mode === "null-generic-transport" &&
+                  method === "thread/backgroundTerminals/list"
+                )
+                  return yield* Effect.fail(
+                    new CodexAppServerTransportError({
+                      operation: "read-input-stream",
+                      cause: new Error("unclassified transport failure"),
+                    }),
+                  );
+                const removedHere =
+                  conclusiveEnd &&
+                  ((mode.endsWith("initial") &&
+                    method === "thread/backgroundTerminals/list" &&
+                    targetLists === 1) ||
+                    (mode.endsWith("terminate") &&
+                      method === "thread/backgroundTerminals/terminate") ||
+                    (mode.endsWith("verify") &&
+                      method === "thread/backgroundTerminals/list" &&
+                      terminationSent));
+                if (removedHere) {
+                  yield* nativeClient.raw.request("fixture/removeOwned", {});
+                  return yield* Effect.fail(
+                    mode.includes("-exited-")
+                      ? new CodexAppServerProcessExitedError({ code: 0 })
+                      : new CodexAppServerInputStreamEndedError({}),
+                  );
+                }
+                if (
+                  conclusiveEnd &&
+                  mode.endsWith("verify") &&
+                  method === "thread/backgroundTerminals/terminate"
+                ) {
+                  yield* nativeClient.raw.request("fixture/removeOwned", {});
+                  return { terminated: true };
+                }
+                return yield* nativeClient.raw.request(method, params);
+              }),
+          },
           request: (method, params) =>
             (method === "turn/interrupt"
               ? Deferred.succeed(stopClaimed, undefined).pipe(Effect.asVoid)
@@ -265,18 +334,44 @@ it.live.each([
         const providerTurn = events.find((event) => event.type === "provider_turn.updated");
         assert.isDefined(providerTurn);
         assert.equal(providerTurn.type, "provider_turn.updated");
+        const settledRemoval = mode === "null-unloaded-settled";
+        if (settledRemoval) {
+          yield* client.raw.request("fixture/normalCompletion", {});
+          yield* Deferred.await(followupCompleted);
+        }
         const stop = runtime
           .interruptTurn({
             providerThread,
             providerTurnId: providerTurn.providerTurn.id,
+            ...(settledRemoval ? { requestRuntimeRestart: true } : {}),
           })
           .pipe(Effect.provideService(PermitRaceActor, "stop"));
+        if (mode.startsWith("null-unloaded-") || conclusiveEnd) {
+          yield* stop;
+          if (!settledRemoval) yield* Deferred.await(firstTerminal);
+          assert.isFalse(
+            yield* runtime.hasPendingBackgroundWork!,
+            "Confirmed removal must drain retained command ownership",
+          );
+          yield* client.raw.request("fixture/releaseForeground", {});
+          assert.isFalse(yield* fs.exists(path.join(cwd, "foreground-finish")));
+          yield* client.raw.request("fixture/releaseUnrelated", {});
+          assert.equal(yield* fs.readFileString(path.join(cwd, "unrelated-finish")), "FINISH\n");
+          assert.equal(yield* fs.readFileString(path.join(cwd, "other-thread-finish")), "FINISH\n");
+          assert.lengthOf(
+            events.filter((event) => event.type === "turn.terminal"),
+            1,
+          );
+          return;
+        }
         const unresolvedOwnership = [
           "null-no-match",
           "null-missing-attribution",
           "null-ambiguous",
           "null-verify-present",
           "null-duplicate-provenance",
+          "null-generic-transport",
+          "null-unknown-rpc",
         ].includes(mode);
         if (
           mode === "retry" ||
@@ -285,6 +380,22 @@ it.live.each([
           unresolvedOwnership
         ) {
           assert.equal((yield* Effect.exit(stop))._tag, "Failure");
+          if (
+            [
+              "null-no-match",
+              "null-missing-attribution",
+              "null-ambiguous",
+              "null-generic-transport",
+              "null-unknown-rpc",
+            ].includes(mode)
+          ) {
+            assert.lengthOf(
+              terminateRequests,
+              0,
+              "Unattributed or unknown failures must send ZERO terminate RPCs",
+            );
+            assert.isFalse(yield* fs.exists(path.join(cwd, "terminate-attempts")));
+          }
           if (mode === "null-duplicate-provenance") {
             yield* client.raw.request("fixture/eventFence", {});
             yield* Deferred.await(eventFenceObserved);

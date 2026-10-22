@@ -2617,6 +2617,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             return terminals;
           },
           Effect.timeout("10 seconds"),
+          // Undefined means confirmed removal, never an empty or failed registry lookup.
+          Effect.catchTags({
+            CodexAppServerProcessExitedError: () => Effect.succeed(undefined),
+            CodexAppServerInputStreamEndedError: () => Effect.succeed(undefined),
+            CodexAppServerRequestError: (error) =>
+              error.code === -32600 && error.errorMessage.startsWith("thread not found:")
+                ? Effect.succeed(undefined)
+                : Effect.fail(error),
+          }),
         );
 
         const terminateBackgroundTerminal = Effect.fn("CodexAdapterV2.terminateBackgroundTerminal")(
@@ -2627,40 +2636,31 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 processId,
               })
               .pipe(
+                Effect.map((response) => ({ removed: false as const, response })),
                 // The app-server that ran the terminal is gone, and with it
                 // the only handle to the terminal: nothing is left to stop.
                 Effect.catchTags({
-                  CodexAppServerProcessExitedError: () => Effect.succeed({ terminated: true }),
-                  CodexAppServerInputStreamEndedError: () => Effect.succeed({ terminated: true }),
+                  CodexAppServerProcessExitedError: () =>
+                    Effect.succeed({ removed: true as const }),
+                  CodexAppServerInputStreamEndedError: () =>
+                    Effect.succeed({ removed: true as const }),
                   // The thread is unloaded, as Codex does a minute after a
                   // settle or archive unsubscribes it. Unloading kills the
                   // thread's terminals, so nothing is left to stop.
                   CodexAppServerRequestError: (error) =>
                     error.code === -32600 && error.errorMessage.startsWith("thread not found:")
-                      ? Effect.succeed({ terminated: true })
+                      ? Effect.succeed({ removed: true as const })
                       : Effect.fail(error),
                 }),
               );
-            const result = yield* decodeCodexBackgroundTerminalTerminateResponse(response);
+            if (response.removed) return;
+            const result = yield* decodeCodexBackgroundTerminalTerminateResponse(response.response);
             if (result.terminated && !verifyAbsence) return;
-            let cursor: string | null = null;
-            while (true) {
-              const response: unknown = yield* client.raw.request(
-                "thread/backgroundTerminals/list",
-                {
-                  threadId: nativeThreadId,
-                  ...(cursor === null ? {} : { cursor }),
-                },
+            const terminals = yield* listBackgroundTerminals(nativeThreadId);
+            if (terminals?.some((terminal) => terminal.processId === processId)) {
+              return yield* toProtocolError(
+                `Codex background terminal ${processId} remained active after termination.`,
               );
-              const page: CodexBackgroundTerminalsListPage =
-                yield* decodeCodexBackgroundTerminalsListResponse(response);
-              if (page.data.some((terminal) => terminal.processId === processId)) {
-                return yield* toProtocolError(
-                  `Codex background terminal ${processId} remained active after termination.`,
-                );
-              }
-              if (page.nextCursor === null) return;
-              cursor = page.nextCursor;
             }
           },
           Effect.timeout("10 seconds"),
@@ -7570,6 +7570,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               const containedTerminalKeys = new Set<string>();
               const attemptedTerminalKeys = new Set<string>();
               const unresolvedCommandKeys = new Set<string>();
+              const removedNativeThreads = new Set<string>();
               const collectTrackedTerminals = (targets: typeof interruptTargets) =>
                 Effect.gen(function* () {
                   // Guardian review can publish an Agent/null placeholder and
@@ -7583,6 +7584,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   >();
                   for (const target of targets) {
                     const nativeThreadId = yield* getNativeThreadId(target.context.providerThread);
+                    if (removedNativeThreads.has(nativeThreadId)) continue;
                     for (const item of beforeLookup.get(target.context.nativeTurnId)?.values() ??
                       []) {
                       if (item.processId !== undefined) continue;
@@ -7595,6 +7597,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     for (const { item } of missing)
                       lookedUpCommandKeys.add(`${nativeThreadId}:${item.id}`);
                     const terminals = yield* listBackgroundTerminals(nativeThreadId);
+                    if (terminals === undefined) {
+                      removedNativeThreads.add(nativeThreadId);
+                      continue;
+                    }
                     yield* turnTerminalizationPermit.withPermits(1)(
                       Ref.update(runningCommandItemsByTurn, (current) => {
                         const updated = new Map(current);
@@ -7630,6 +7636,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   const runningItems = yield* Ref.get(runningCommandItemsByTurn);
                   for (const target of targets) {
                     const nativeThreadId = yield* getNativeThreadId(target.context.providerThread);
+                    if (removedNativeThreads.has(nativeThreadId)) continue;
                     const items = runningItems.get(target.context.nativeTurnId);
                     for (const item of items?.values() ?? []) {
                       if (item.processId !== undefined) {
@@ -7762,6 +7769,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                           context.nativeTurnId,
                         );
                         for (const command of commands?.values() ?? []) {
+                          if (removedNativeThreads.has(nativeThreadId)) continue;
                           if (command.processId === undefined) {
                             if (unresolvedCommandKeys.has(`${nativeThreadId}:${command.id}`)) {
                               return yield* toProtocolError(
@@ -7935,6 +7943,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                           context.nativeTurnId,
                         );
                         for (const command of commands?.values() ?? []) {
+                          if (removedNativeThreads.has(nativeThreadId)) continue;
                           if (command.processId === undefined) {
                             if (unresolvedCommandKeys.has(`${nativeThreadId}:${command.id}`))
                               return yield* toProtocolError(
