@@ -6617,7 +6617,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         ...(completion.turn.error.codexErrorInfo == null
                           ? {}
                           : {
-                              failureCode: codexErrorInfoCode(completion.turn.error.codexErrorInfo),
+                              failureErrorInfo: completion.turn.error.codexErrorInfo,
                             }),
                       }),
                 });
@@ -7835,6 +7835,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         // A command can register while the containment RPC is
                         // returning. Re-scan it before publishing a terminal,
                         // while item handlers cannot add another owned handle.
+                        // Leave the context active when another scan is needed;
+                        // the enclosing loop repeats containment before returning.
                         const nativeThreadId = yield* getNativeThreadId(context.providerThread);
                         const commands = (yield* Ref.get(runningCommandItemsByTurn)).get(
                           context.nativeTurnId,
@@ -7868,9 +7870,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                                 ...(nativeCompletion.turn.error.codexErrorInfo == null
                                   ? {}
                                   : {
-                                      failureCode: codexErrorInfoCode(
-                                        nativeCompletion.turn.error.codexErrorInfo,
-                                      ),
+                                      failureErrorInfo: nativeCompletion.turn.error.codexErrorInfo,
                                     }),
                               }),
                         });

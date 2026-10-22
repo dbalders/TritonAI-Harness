@@ -8278,6 +8278,154 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect.each(["owner", "drain"] as const)(
+    "preserves structured Codex failure info through buffered Stop %s finalization",
+    (route) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const threadId = INTERRUPT_NATIVE_THREAD;
+          const turnId = INTERRUPT_NATIVE_TURN;
+          const transcript = makeCodexReplayTranscript({
+            scenario: `buffered-stop-failure-${route}`,
+            entries: [
+              ...codexReplayPreamble({
+                nativeThreadId: threadId,
+                nativeTurnId: turnId,
+                prompt: INTERRUPT_PROMPT,
+              }),
+              {
+                type: "emit_inbound",
+                label: "item/started/owned",
+                frame: {
+                  method: "item/started",
+                  params: { threadId, turnId, item: interruptCommandItem("inProgress") },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "turn/interrupt",
+                frame: { id: 4, method: "turn/interrupt", params: { threadId, turnId } },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn/completed/failed-before-ack",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId,
+                    turn: {
+                      ...makeCodexReplayTurn({ id: turnId, status: "failed" }),
+                      error: {
+                        message: "Provider stopped this request.",
+                        codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
+                        additionalDetails: null,
+                      },
+                    },
+                  },
+                },
+              },
+              { type: "emit_inbound", label: "turn/interrupt/ack", frame: { id: 4, result: {} } },
+              {
+                type: "expect_outbound",
+                label: "thread/backgroundTerminals/terminate",
+                frame: {
+                  id: 5,
+                  method: "thread/backgroundTerminals/terminate",
+                  params: { threadId, processId: "57680" },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "thread/backgroundTerminals/terminate/result",
+                frame:
+                  route === "owner"
+                    ? { id: 5, result: { terminated: true } }
+                    : { id: 5, error: { code: -32_000, message: "Containment unavailable" } },
+              },
+              ...(route === "drain"
+                ? [
+                    {
+                      type: "expect_outbound" as const,
+                      label: "thread/backgroundTerminals/terminate/retry",
+                      frame: {
+                        id: 6,
+                        method: "thread/backgroundTerminals/terminate",
+                        params: { threadId, processId: "57680" },
+                      },
+                    },
+                    {
+                      type: "emit_inbound" as const,
+                      label: "thread/backgroundTerminals/terminate/retry-failed",
+                      frame: {
+                        id: 6,
+                        error: { code: -32_000, message: "Containment unavailable" },
+                      },
+                    },
+                    {
+                      type: "emit_inbound" as const,
+                      label: "item/completed/after-failed-stop",
+                      afterMs: 1_000,
+                      frame: {
+                        method: "item/completed",
+                        params: { threadId, turnId, item: interruptCommandItem("completed") },
+                      },
+                    },
+                  ]
+                : []),
+            ],
+          });
+          const harness = yield* makeCodexReplayHarness(transcript);
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              text: INTERRUPT_PROMPT,
+              attemptId: RunAttemptId.make(`buffered-stop-failure-${route}`),
+            }),
+          );
+          yield* awaitUntil(
+            () =>
+              harness.events.some(
+                (event) =>
+                  event.type === "turn_item.updated" &&
+                  event.turnItem.nativeItemRef?.nativeId === INTERRUPT_COMMAND_ITEM &&
+                  event.turnItem.status === "running",
+              ),
+            "owned command running",
+          );
+          const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+            driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+            nativeTurnId: turnId,
+          });
+          const stopped = yield* harness.runtime
+            .interruptTurn({
+              providerThread: harness.providerThread,
+              providerTurnId,
+            })
+            .pipe(Effect.exit);
+          assert.equal(stopped._tag, route === "owner" ? "Success" : "Failure");
+          if (route === "drain") {
+            assert.lengthOf(harness.terminalEvents(), 0);
+            assert.isTrue(yield* harness.hasPendingBackgroundWork);
+            yield* TestClock.adjust("1 second");
+          }
+          yield* harness.firstTerminal;
+          const terminal = harness.terminalEvents()[0];
+          assert.equal(terminal?.status, "failed");
+          if (terminal?.status !== "failed") return;
+          assert.equal(terminal.failure.code, "responseTooManyFailedAttempts");
+          assert.equal(terminal.failure.class, "usage_limit");
+          assert.lengthOf(harness.terminalEvents(), 1);
+          assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+
   it.effect.each([
     {
       name: "usage",
