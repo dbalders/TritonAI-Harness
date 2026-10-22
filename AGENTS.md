@@ -1,5 +1,17 @@
 # TritonAI Harness
 
+## Bot release hold and merge destination (David, 2026-10-21)
+
+**Status: NOT READY FOR RELEASE.** This is a standing instruction for all agents working on the TritonAI Bot project, including its Harness integration.
+
+- In `dbalders/TritonAI-Harness`, all Bot feature, fix, and integration PRs must target **`feat/tritonai-bot-service`**, the head branch of [PR #364](https://github.com/dbalders/TritonAI-Harness/pull/364). Branch from that integration branch and merge approved Bot changes there.
+- **Never merge Bot work into Harness `main`, merge PR #364 into `main`, push Bot changes directly to `main`, or enable auto-merge into `main` while this hold is active.** PR #404's earlier merge is not a precedent or authorization.
+- A generic “merge it,” `/prm`, green CI, clean reviews, a successful pilot, or the passage of time does not lift this hold. For Bot work, generic merge authorization means the #364 integration branch only.
+- Only David may explicitly mark the Bot project ready for release and authorize its integration into Harness `main`. Record that explicit decision here before lifting the hold; agents must not mark it ready on their own. Release and deployment still require their own applicable authorization.
+- Before creating or merging a Bot PR, verify the repository and actual base ref. If the Harness base is `main`, stop and correct it to `feat/tritonai-bot-service`; if the integration branch is missing or renamed, stop and resolve the destination rather than falling back to `main`. Recheck the base immediately before merging and verify the result on that exact destination afterward.
+- `dbalders/TritonAI-Bot` is the separate private service repository; #364 and `feat/tritonai-bot-service` belong to Harness. Do not move private service implementation into Harness or invent a matching service branch. A service-repository merge needs its own explicit authorization and never authorizes a Harness merge to `main`.
+- Checking out or fast-forwarding a local `main` for inspection does not lift this hold or authorize merging Bot work into it.
+
 TritonAI Harness is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
 
 You can think of TritonAI Harness as an open source "bring-your-own-subscription" alternative to apps like Claude Desktop, Codex App, Cursor Glass and Conductor.
