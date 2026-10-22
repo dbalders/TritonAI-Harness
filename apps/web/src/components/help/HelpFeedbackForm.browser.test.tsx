@@ -84,18 +84,22 @@ it("downloads the exact preview and opens the tracker manually with no report in
   using createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:help-report");
   using revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
   const downloads: HTMLAnchorElement[] = [];
+  const deferredConsumption = Promise.withResolvers<boolean>();
   // Records the download link instead of letting the browser save a file.
   using _download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
     this: HTMLAnchorElement,
   ) {
     downloads.push(this);
+    // Model a download consumer that starts after click returns.
+    queueMicrotask(() => deferredConsumption.resolve(revokeObjectURL.mock.calls.length === 0));
   });
   await act(() => button(screen, "Download report").click());
+  expect(await deferredConsumption.promise).toBe(true);
   const blob = createObjectURL.mock.calls[0]?.[0] as Blob;
   expect(await blob.text()).toBe(preview(screen));
   expect(downloads).toHaveLength(1);
   expect(downloads[0]!.download).toBe("tritonai-help-report.md");
-  expect(revokeObjectURL).toHaveBeenCalledWith("blob:help-report");
+  await expect.poll(() => revokeObjectURL.mock.calls).toEqual([["blob:help-report"]]);
   expect(state.openExternal).not.toHaveBeenCalled();
   await act(async () => button(screen, "Open issue tracker").click());
   expect(state.openExternal).toHaveBeenCalledExactlyOnceWith(HELP_ISSUE_TRACKER_URL);

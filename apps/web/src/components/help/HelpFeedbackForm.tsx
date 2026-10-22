@@ -26,7 +26,11 @@ function downloadReport(report: string): boolean {
   } catch {
     return false;
   } finally {
-    if (url !== null) URL.revokeObjectURL(url);
+    if (url !== null) {
+      const downloadUrl = url;
+      // Let consumers that start after click returns use the URL before releasing it.
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
+    }
   }
 }
 

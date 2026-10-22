@@ -6,6 +6,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import { EnvironmentId, ProviderInstanceId, ProviderSessionId, ThreadId } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -25,6 +26,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
+import * as CodexTextGeneration from "../../textGeneration/CodexTextGeneration.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
@@ -102,6 +104,32 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
+  it.effect.each(["", "   "])(
+    "resolves a blank config home to the environment's Codex home before Help setup: %j",
+    (homePath) =>
+      Effect.gen(function* () {
+        using generation = vi.spyOn(CodexTextGeneration, "makeCodexTextGeneration");
+        const config = yield* ServerConfig.ServerConfig;
+        const instance = yield* CodexDriver.create({
+          instanceId: ProviderInstanceId.make("blank-home-help"),
+          displayName: "Blank home Help",
+          enabled: false,
+          config: {
+            ...CodexDriver.defaultConfig(),
+            setupMode: "existing",
+            binaryPath: process.execPath,
+            homePath,
+          },
+        });
+        expect(generation).toHaveBeenCalledOnce();
+        expect(generation.mock.calls[0]?.[0].homePath).toBe(NodePath.join(config.baseDir, "codex"));
+        expect(instance.textGeneration.generateHelp).toBeDefined();
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        Effect.scoped,
+      ),
+  );
+
   it.effect.each([
     ["codex_frontier", "gpt-6.1-sol", "codex", "api-glm-5.3-flash"],
     ["codex", "api-glm-5.3-flash", "codex_frontier", "gpt-6.1-sol"],

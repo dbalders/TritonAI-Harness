@@ -57,14 +57,15 @@ function reportRedactions(context: HelpContext | null): readonly (readonly [stri
         );
       }
     } else if (typeof value === "string") {
+      const trimmed = value.trim();
       if (
         /(?:api[_-]?key|management[_-]?key|token|secret|password|passwd|authorization|cookie|credential)/iu.test(
           key,
-        )
+        ) &&
+        !/^(?:configured|missing|configured \(value omitted\)|not configured)$/iu.test(trimmed)
       ) {
         add(value, "[redacted]");
       }
-      const trimmed = value.trim();
       if (/^(?:\[|\{|")/u.test(trimmed)) {
         try {
           const decoded: unknown = JSON.parse(trimmed);

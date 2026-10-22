@@ -135,6 +135,44 @@ const expandedContext: HelpContext = {
 };
 
 describe("Help report preparation", () => {
+  it.each(["configured", "missing", "Configured (value omitted)", "Not configured"])(
+    "preserves public credential status labels in report text: %s",
+    (status) => {
+      const summary = `The setting says ${status}; please explain it.`;
+      const report = buildHelpReport({
+        ...reportInput,
+        context: {
+          ...expandedContext,
+          knowledge: {
+            ...expandedContext.knowledge!,
+            settings: {
+              entries: [
+                { key: "usageLimitSources.source.managementKey", value: status },
+                { key: "provider.apiKey", value: "opaque-private-setting" },
+              ],
+              totalCount: 2,
+              omittedCount: 0,
+            },
+          },
+          client: {
+            ...expandedContext.client!,
+            settings: {
+              entries: [{ key: "clientSecret", value: status }],
+              totalCount: 1,
+              omittedCount: 0,
+            },
+          },
+        },
+        summary,
+        actual: "Unexpected opaque-private-setting value.",
+        includeConversation: true,
+        conversation: [{ role: "user", content: summary }],
+      });
+      expect(report).toContain(summary);
+      expect(report).not.toContain("opaque-private-setting");
+    },
+  );
+
   it("includes reproducible behavior and useful app metadata while excluding host identity and conversation by default", () => {
     const report = buildHelpReport(reportInput);
     expect(report).toContain("Provider stops replying");
