@@ -1,4 +1,4 @@
-import { type ServerProviderSkill, type ServerProviderSlashCommand } from "@t3tools/contracts";
+import type { ServerProviderSkill, ServerProviderSlashCommand } from "@t3tools/contracts";
 import * as Predicate from "effect/Predicate";
 
 // Pi RPC get_commands omits TUI builtins. Advertise /compact so T3 can map it to RPC compact.
@@ -42,7 +42,6 @@ function normalizePiSkillScope(scope: string | undefined): string | undefined {
   return scope;
 }
 
-/** Maps Pi's `get_commands` payload to T3's shared command and skill surfaces. */
 export function parsePiDiscoveredCommands(data: unknown): PiDiscoveredCommands {
   const commands = recordField(data, "commands");
   if (!Array.isArray(commands)) return { slashCommands: [], skills: [] };

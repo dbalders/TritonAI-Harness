@@ -2,7 +2,6 @@ import { assert, it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
-import { ProjectId } from "./baseSchemas.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
 import {
   ProjectFaviconPath,
@@ -149,7 +148,6 @@ describe("shared project payloads", () => {
     });
     expect(Object.hasOwn(create, "scripts")).toBe(false);
     expect(Object.hasOwn(update, "title")).toBe(false);
-    // Internal RPC callers may explicitly supply undefined, as before the extraction.
     expect(
       decodeProjectMutation({ type: "project.update", ...envelope, title: undefined }),
     ).toHaveProperty("title", undefined);
@@ -255,7 +253,6 @@ effectIt.effect("an icon kind from a newer server shows the default icon", () =>
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.isNull(shell.projectIcon);
-    // A known kind with a broken payload still fails.
     const broken = yield* Effect.exit(decodeReceivedIcon({ kind: "emoji" }));
     assert.strictEqual(broken._tag, "Failure");
   }),

@@ -151,11 +151,6 @@ interface MakeInstanceInput {
   readonly pruneRuntimes?: (distro: string | null, runtimeId: string) => Effect.Effect<void>;
 }
 
-// Helper that constructs a primary backend instance using the factory
-// directly. The factory's deps (FileSystem, ChildProcessSpawner,
-// HttpClient, DesktopBackendOutputLogFactory) are provided per-test via
-// a scoped layer; tests yield the returned Effect inside `Effect.scoped`
-// to drive the instance's lifecycle.
 function makeTestInstance(input: MakeInstanceInput) {
   const stubLog: DesktopObservability.DesktopBackendOutputLogShape = {
     beginSession: () => Effect.void,
@@ -422,9 +417,10 @@ describe("DesktopBackendManager", () => {
         }).pipe(Effect.provide(layerHttpClient(() => Effect.never)), Effect.exit);
         assert.isTrue(yield* Deferred.isDone(childReady));
         // A child that reaches its own exit(42) was never force-killed.
-        assert.isTrue(Exit.isFailure(result));
-        if (Exit.isFailure(result)) {
-          assert.include(Cause.pretty(result.cause), "SIGKILL");
+        assert.isTrue(Exit.isSuccess(result));
+        if (Exit.isSuccess(result)) {
+          assert.isTrue(Option.isNone(result.value.code));
+          assert.equal(result.value.reason, "killed by SIGKILL");
         }
       }).pipe(Effect.provide(NodeServices.layer), TestClock.withLive),
   );
@@ -542,6 +538,30 @@ describe("DesktopBackendManager", () => {
       assert.equal(error.message, "Failed to read the exit status of desktop backend process 123.");
       assert.notInclude(error.message, "exit-status-secret-sentinel");
       assert.isTrue(isBackendProcessError(error));
+    }),
+  );
+
+  it.effect("reports a SIGKILL exit without an exit code", () =>
+    Effect.gen(function* () {
+      const exitCause = PlatformError.systemError({
+        _tag: "Unknown",
+        module: "ChildProcess",
+        method: "exitCode",
+        cause: new Error("Process interrupted due to receipt of signal: 'SIGKILL'"),
+      });
+      const layerSpawner = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(makeProcess({ exitCode: Effect.fail(exitCause) })),
+        ),
+      );
+
+      const exit = yield* DesktopBackendManager.runBackendProcess({
+        ...baseConfig,
+        desktopTelemetryStream: Stream.empty,
+      }).pipe(Effect.scoped, Effect.provide(Layer.merge(layerSpawner, layerHealthyHttpClient)));
+
+      assert.deepEqual(exit, { code: Option.none(), reason: "killed by SIGKILL" });
     }),
   );
 
@@ -1428,15 +1448,12 @@ describe("DesktopBackendManager", () => {
         yield* instance.start;
         assert.deepEqual(failures, []);
 
-        // Five fatal attempts with exponential backoff (500ms, 1s, 2s, 4s) reach
-        // the cap, at which point the failure is surfaced exactly once.
         yield* TestClock.adjust(Duration.millis(500));
         yield* TestClock.adjust(Duration.seconds(1));
         yield* TestClock.adjust(Duration.seconds(2));
         yield* TestClock.adjust(Duration.seconds(4));
         assert.deepEqual(failures, ["Node.js not found"]);
 
-        // Past the cap the loop stops and nothing else is surfaced.
         yield* TestClock.adjust(Duration.seconds(8));
         yield* TestClock.adjust(Duration.seconds(30));
         assert.deepEqual(failures, ["Node.js not found"]);
@@ -1526,8 +1543,7 @@ describe("DesktopBackendManager", () => {
         });
 
         yield* instance.start;
-        // Well beyond the fatal cap's worth of time: a transient failure must
-        // keep retrying (self-heal) and never surface.
+
         yield* TestClock.adjust(Duration.minutes(2));
         assert.deepEqual(failures, []);
       }).pipe(Effect.provide(TestClock.layer())),
@@ -1677,10 +1693,6 @@ describe("DesktopBackendManager", () => {
   it.effect("stopAllPoolInstances bounds the quit finalizer when backends hang", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        // Each backend's process-scope finalizer reports when it starts and
-        // when it finishes, keyed by instance name, so the test can prove
-        // both backends reached each milestone instead of inferring it from
-        // a shared flag or a clock advance.
         const teardownStarted = yield* Queue.unbounded<string>();
         const teardownFinished = yield* Queue.unbounded<string>();
         const allowTeardown = yield* Deferred.make<void>();
@@ -1721,9 +1733,6 @@ describe("DesktopBackendManager", () => {
           unregister: () => Effect.die(new Error("unregister not implemented")),
         });
 
-        // Mirror the quit path: register stopAllPoolInstances as a scope
-        // finalizer and let the scope close run it, rather than calling it
-        // as an ordinary interruptible effect.
         const quitFiber = yield* Effect.scoped(
           Effect.addFinalizer(() => DesktopApp.stopAllPoolInstances()),
         ).pipe(Effect.provide(layerMockPool), Effect.forkChild);
@@ -1731,14 +1740,10 @@ describe("DesktopBackendManager", () => {
         const started = yield* Queue.takeN(teardownStarted, 2);
         assert.deepEqual(started.toSorted(), ["instance1", "instance2"]);
 
-        // Both backends are now hung in teardown. Advancing past the 5s
-        // budget must let the quit finalizer return without them.
         yield* TestClock.adjust(Duration.seconds(5));
         yield* Fiber.join(quitFiber);
         assert.equal(yield* Queue.size(teardownFinished), 0);
 
-        // The timed-out closes keep running in the background and finish
-        // once the backends unblock.
         yield* Deferred.succeed(allowTeardown, undefined);
         const finished = yield* Queue.takeN(teardownFinished, 2);
         assert.deepEqual(finished.toSorted(), ["instance1", "instance2"]);

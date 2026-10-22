@@ -1,5 +1,4 @@
 import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 
-// A failed request cannot distinguish filtering from an outage. Keep this a
-// possible cause, and suggest a way to check without changing server settings.
-export const NETWORK_BLOCKING_HINT = `Your DNS or firewall may be blocking ${TRITONAI_CONNECT_NAME}. Try another network, such as a phone hotspot.`;
+export const NETWORK_BLOCKING_HINT = `Your DNS or firewall may be blocking ${TRITONAI_CONNECT_NAME}. Try another network, such as a different Wi-Fi or mobile data.`;
+export const UNRESPONSIVE_HOST_HINT = "It may be overloaded, asleep, or off the network.";

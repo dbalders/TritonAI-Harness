@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Vault paths identify independent skills in a shared Codex home.
 /**
  * Layout of the memory folder and the files Harness owns inside it.
  *
@@ -11,14 +12,11 @@
  * has two writers for one file. A device's own records live in
  * `.devices/<environment id>/`.
  */
-// @effect-diagnostics nodeBuiltinImport:off - Vault paths identify independent skills in a shared Codex home.
 import * as NodeCrypto from "node:crypto";
-
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { isLocalDay } from "./memoryDays.ts";
 import { deviceFileLabel } from "./memoryNotes.ts";
@@ -121,14 +119,13 @@ const DeviceRecord = Schema.Struct({
 });
 export const decodeDeviceRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(DeviceRecord));
 
-const readDeviceRecord = (file: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const raw = yield* fs.readFileString(file).pipe(Effect.option);
-    if (raw._tag === "None") return null;
-    const record = yield* decodeDeviceRecord(raw.value).pipe(Effect.option);
-    return record._tag === "Some" ? record.value : null;
-  });
+const readDeviceRecord = Effect.fn("memoryVault.readDeviceRecord")(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const raw = yield* fs.readFileString(file).pipe(Effect.option);
+  if (raw._tag === "None") return null;
+  const record = yield* decodeDeviceRecord(raw.value).pipe(Effect.option);
+  return record._tag === "Some" ? record.value : null;
+});
 
 /** Characters that break wiki links or are invalid in Windows file names. */
 function fileSafeName(value: string): string {

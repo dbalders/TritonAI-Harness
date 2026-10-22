@@ -577,7 +577,6 @@ export function connectionAccess(integration: IntegrationSummary | null): Connec
   return { reads, writes };
 }
 
-// ---------------------------------------------------------------------------------
 // Live progress: the chat's work log, retold in plain words while the first answer is
 // on its way. Only things that really happened are described.
 

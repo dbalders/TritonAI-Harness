@@ -1,6 +1,5 @@
 import { it } from "@effect/vitest";
 import {
-  CommandId,
   EventId,
   ProjectId,
   ProviderInstanceId,
@@ -14,7 +13,6 @@ import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { expect } from "vite-plus/test";
-
 import * as DateTime from "effect/DateTime";
 import * as AnalyticsReactor from "./AnalyticsReactor.ts";
 import { AnalyticsService } from "./AnalyticsService.ts";

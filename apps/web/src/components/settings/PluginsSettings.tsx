@@ -1,5 +1,6 @@
 import type {
   IntegrationConnectResult,
+  EnvironmentId,
   IntegrationSummary,
   IntegrationsListResult,
 } from "@t3tools/contracts";
@@ -41,6 +42,12 @@ import {
   updateIntegrationFlowIfCurrent,
   withIntegrationPollDelay,
 } from "./integrationPolling";
+
+function requireConfirmedApiKey(result: IntegrationConnectResult, flowId: string): void {
+  if (result.kind !== "connected" || result.flowId !== flowId) {
+    throw new Error("The plugin did not confirm the API-key connection.");
+  }
+}
 
 function unwrap<A, E>(result: AtomCommandResult<A, E>): A {
   if (result._tag === "Failure") throw squashAtomCommandFailure(result);
@@ -309,11 +316,12 @@ export function IntegrationAuthorizationFlow({
   readonly busy: boolean;
   readonly onApiKeySubmit: (flowId: string, value: string) => Promise<void>;
 }) {
-  const [apiKey, setApiKey] = useState("");
-
-  useEffect(() => {
-    setApiKey("");
-  }, [flow.flowId]);
+  const [credential, setCredential] = useState({ flowId: flow.flowId, value: "" });
+  if (credential.flowId !== flow.flowId) {
+    setCredential({ flowId: flow.flowId, value: "" });
+  }
+  const apiKey = credential.flowId === flow.flowId ? credential.value : "";
+  const setApiKey = (value: string) => setCredential({ flowId: flow.flowId, value });
 
   switch (flow.kind) {
     case "device_code":
@@ -447,7 +455,18 @@ function IntegrationCard({
   const connectButtonRef = useRef<HTMLButtonElement>(null);
   const handledAttentionRequestRef = useRef<number | undefined>(undefined);
 
-  useEffect(() => {
+  const expansionRequest = {
+    flowId: flow?.flowId,
+    needsConnectionAction,
+    connectionAttentionRequest,
+  };
+  const [lastExpansionRequest, setLastExpansionRequest] = useState(expansionRequest);
+  if (
+    lastExpansionRequest.flowId !== expansionRequest.flowId ||
+    lastExpansionRequest.needsConnectionAction !== needsConnectionAction ||
+    lastExpansionRequest.connectionAttentionRequest !== connectionAttentionRequest
+  ) {
+    setLastExpansionRequest(expansionRequest);
     if (
       shouldExpandIntegrationCard({
         needsConnectionAction,
@@ -457,7 +476,7 @@ function IntegrationCard({
     ) {
       setExpanded(true);
     }
-  }, [connectionAttentionRequest, flow, needsConnectionAction]);
+  }
 
   useEffect(() => {
     if (
@@ -782,8 +801,21 @@ function IntegrationCard({
 
 export function PluginsSettingsPanel() {
   const environmentId = usePrimaryEnvironmentId();
+  return <EnvironmentPluginsSettingsPanel key={environmentId} environmentId={environmentId} />;
+}
+
+function EnvironmentPluginsSettingsPanel({
+  environmentId,
+}: {
+  readonly environmentId: EnvironmentId | null;
+}) {
   const environmentIdRef = useRef(environmentId);
-  environmentIdRef.current = environmentId;
+  useEffect(() => {
+    environmentIdRef.current = environmentId;
+    return () => {
+      environmentIdRef.current = null;
+    };
+  }, [environmentId]);
   const listCommand = useAtomCommand(serverEnvironment.listIntegrations, { reportFailure: false });
   const installCommand = useAtomCommand(serverEnvironment.installIntegration, {
     reportFailure: false,
@@ -805,7 +837,7 @@ export function PluginsSettingsPanel() {
     reportFailure: false,
   });
   const [data, setData] = useState<IntegrationsListResult>({ integrations: [] });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(environmentId !== null);
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [flows, setFlows] = useState<ReadonlyMap<string, ActiveIntegrationFlow>>(() => new Map());
@@ -816,151 +848,142 @@ export function PluginsSettingsPanel() {
   const connectionAttentionSequenceRef = useRef(0);
   const activeFlowIdsRef = useRef(new Map<string, string>());
 
-  useEffect(() => {
-    setData({ integrations: [] });
-    setFlows(new Map());
-    activeFlowIdsRef.current = new Map();
-    setBusyIds(new Set());
-    setErrors({});
-    setConnectionAttentionState({ attention: null, announcement: "" });
-    connectionAttentionSequenceRef.current = 0;
-    setLoading(environmentId !== null);
-  }, [environmentId]);
-
-  const load = useCallback(async () => {
-    if (!environmentId) return;
+  const load = () => {
+    if (!environmentId) return Promise.resolve();
     const targetEnvironmentId = environmentId;
-    setLoading(true);
-    try {
-      const result = unwrap(await listCommand({ environmentId: targetEnvironmentId, input: {} }));
-      if (environmentIdRef.current !== targetEnvironmentId) return;
-      setData(result);
-      setErrors((current) => {
-        const { [PANEL_ERROR]: _, ...rest } = current;
-        return rest;
+    return listCommand({ environmentId: targetEnvironmentId, input: {} })
+      .then((response) => {
+        const result = unwrap(response);
+        if (environmentIdRef.current !== targetEnvironmentId) return;
+        setData(result);
+        setErrors((current) => {
+          const rest = { ...current };
+          delete rest[PANEL_ERROR];
+          return rest;
+        });
+      })
+      .catch((cause) => {
+        if (environmentIdRef.current !== targetEnvironmentId) return;
+        setErrors((current) => ({ ...current, [PANEL_ERROR]: errorMessage(cause) }));
+      })
+      .finally(() => {
+        if (environmentIdRef.current === targetEnvironmentId) setLoading(false);
       });
-    } catch (cause) {
-      if (environmentIdRef.current !== targetEnvironmentId) return;
-      setErrors((current) => ({ ...current, [PANEL_ERROR]: errorMessage(cause) }));
-    } finally {
-      if (environmentIdRef.current === targetEnvironmentId) setLoading(false);
-    }
-  }, [environmentId, listCommand]);
+  };
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const pollFlow = useCallback<PollIntegrationFlow>(
-    async (id, flow, cancelled) => {
-      if (!environmentId) return;
-      const targetEnvironmentId = environmentId;
-      if (!integrationFlowIsActive(flow, Date.now())) {
-        if (activeFlowIdsRef.current.get(id) === flow.flowId) {
-          activeFlowIdsRef.current.delete(id);
-          setErrors((current) => ({
-            ...current,
-            [id]: "Plugin sign-in expired. Start again.",
-          }));
-          setFlows((current) => updateIntegrationFlowIfCurrent(current, id, flow.flowId, null));
-        }
-        return;
-      }
-      try {
-        const result = unwrap(
-          await pollCommand({
-            environmentId: targetEnvironmentId,
-            input: { id, flowId: flow.flowId },
-          }),
-        );
-        if (
-          cancelled() ||
-          environmentIdRef.current !== targetEnvironmentId ||
-          activeFlowIdsRef.current.get(id) !== flow.flowId
-        )
-          return;
-        setData((current) => ({
-          integrations: current.integrations.map((item) =>
-            item.id === id ? result.integration : item,
-          ),
+  const pollFlow: PollIntegrationFlow = async (id, flow, cancelled) => {
+    if (!environmentId) return;
+    const targetEnvironmentId = environmentId;
+    if (!integrationFlowIsActive(flow, Date.now())) {
+      if (activeFlowIdsRef.current.get(id) === flow.flowId) {
+        activeFlowIdsRef.current.delete(id);
+        setErrors((current) => ({
+          ...current,
+          [id]: "Plugin sign-in expired. Start again.",
         }));
-        if (result.integration.connectionState === "connected") {
-          setConnectionAttentionState((current) => clearOwnedConnectionAttention(current, id));
-        }
-        setErrors((current) => {
-          const { [id]: _, ...rest } = current;
-          return rest;
-        });
-        if (result.state !== "pending") {
-          activeFlowIdsRef.current.delete(id);
-          if (result.state === "failed" || result.state === "expired") {
-            setErrors((current) => ({
-              ...current,
-              [id]: result.message ?? "Plugin sign-in did not complete. Start again.",
-            }));
-          }
-          setFlows((current) => updateIntegrationFlowIfCurrent(current, id, flow.flowId, null));
-        } else if (integrationFlowIsActive(flow, Date.now())) {
-          setFlows((current) =>
-            updateIntegrationFlowIfCurrent(
-              current,
-              id,
-              flow.flowId,
-              scheduleIntegrationFlow(withIntegrationPollDelay(flow, result.retryAfterSeconds)),
-            ),
-          );
-        } else {
-          activeFlowIdsRef.current.delete(id);
-          setErrors((current) => ({
-            ...current,
-            [id]: "Plugin sign-in expired. Start again.",
-          }));
-          setFlows((current) => updateIntegrationFlowIfCurrent(current, id, flow.flowId, null));
-        }
-      } catch (cause) {
-        if (
-          cancelled() ||
-          environmentIdRef.current !== targetEnvironmentId ||
-          activeFlowIdsRef.current.get(id) !== flow.flowId
-        )
-          return;
-        setErrors((current) => ({ ...current, [id]: errorMessage(cause) }));
-        if (integrationFlowCanRetryAfterPollError(flow, Date.now())) {
-          setFlows((current) =>
-            updateIntegrationFlowIfCurrent(current, id, flow.flowId, scheduleIntegrationFlow(flow)),
-          );
-        } else {
-          activeFlowIdsRef.current.delete(id);
-          setFlows((current) => updateIntegrationFlowIfCurrent(current, id, flow.flowId, null));
-        }
+        setFlows((current) => updateIntegrationFlowIfCurrent(current, id, flow.flowId, null));
       }
-    },
-    [environmentId, pollCommand],
-  );
-
-  const action = useCallback(
-    async (
-      kind: "enable" | "disable" | "connect" | "disconnect",
-      integration: IntegrationSummary,
-    ) => {
-      if (!environmentId) return;
-      const targetEnvironmentId = environmentId;
-      setBusyIds((current) => new Set(current).add(integration.id));
+      return;
+    }
+    try {
+      const result = unwrap(
+        await pollCommand({
+          environmentId: targetEnvironmentId,
+          input: { id, flowId: flow.flowId },
+        }),
+      );
+      if (
+        cancelled() ||
+        environmentIdRef.current !== targetEnvironmentId ||
+        activeFlowIdsRef.current.get(id) !== flow.flowId
+      )
+        return;
+      setData((current) => ({
+        integrations: current.integrations.map((item) =>
+          item.id === id ? result.integration : item,
+        ),
+      }));
+      if (result.integration.connectionState === "connected") {
+        setConnectionAttentionState((current) => clearOwnedConnectionAttention(current, id));
+      }
       setErrors((current) => {
-        const { [integration.id]: _, ...rest } = current;
+        const rest = { ...current };
+        delete rest[id];
         return rest;
       });
-      if (kind === "disable" || kind === "disconnect") {
-        activeFlowIdsRef.current.delete(integration.id);
-        setFlows((current) => {
-          const next = new Map(current);
-          next.delete(integration.id);
-          return next;
-        });
-        setConnectionAttentionState((current) =>
-          clearOwnedConnectionAttention(current, integration.id),
+      if (result.state !== "pending") {
+        activeFlowIdsRef.current.delete(id);
+        if (result.state === "failed" || result.state === "expired") {
+          setErrors((current) => ({
+            ...current,
+            [id]: result.message ?? "Plugin sign-in did not complete. Start again.",
+          }));
+        }
+        setFlows((current) => updateIntegrationFlowIfCurrent(current, id, flow.flowId, null));
+      } else if (integrationFlowIsActive(flow, Date.now())) {
+        setFlows((current) =>
+          updateIntegrationFlowIfCurrent(
+            current,
+            id,
+            flow.flowId,
+            scheduleIntegrationFlow(withIntegrationPollDelay(flow, result.retryAfterSeconds)),
+          ),
         );
+      } else {
+        activeFlowIdsRef.current.delete(id);
+        setErrors((current) => ({
+          ...current,
+          [id]: "Plugin sign-in expired. Start again.",
+        }));
+        setFlows((current) => updateIntegrationFlowIfCurrent(current, id, flow.flowId, null));
       }
+    } catch (cause) {
+      if (
+        cancelled() ||
+        environmentIdRef.current !== targetEnvironmentId ||
+        activeFlowIdsRef.current.get(id) !== flow.flowId
+      )
+        return;
+      setErrors((current) => ({ ...current, [id]: errorMessage(cause) }));
+      if (integrationFlowCanRetryAfterPollError(flow, Date.now())) {
+        setFlows((current) =>
+          updateIntegrationFlowIfCurrent(current, id, flow.flowId, scheduleIntegrationFlow(flow)),
+        );
+      } else {
+        activeFlowIdsRef.current.delete(id);
+        setFlows((current) => updateIntegrationFlowIfCurrent(current, id, flow.flowId, null));
+      }
+    }
+  };
+
+  const action = async (
+    kind: "enable" | "disable" | "connect" | "disconnect",
+    integration: IntegrationSummary,
+  ) => {
+    if (!environmentId) return;
+    const targetEnvironmentId = environmentId;
+    setBusyIds((current) => new Set(current).add(integration.id));
+    setErrors((current) => {
+      const rest = { ...current };
+      delete rest[integration.id];
+      return rest;
+    });
+    if (kind === "disable" || kind === "disconnect") {
+      activeFlowIdsRef.current.delete(integration.id);
+      setFlows((current) => {
+        const next = new Map(current);
+        next.delete(integration.id);
+        return next;
+      });
+      setConnectionAttentionState((current) =>
+        clearOwnedConnectionAttention(current, integration.id),
+      );
+    }
+    return await (async () => {
       try {
         if (kind === "connect") {
           const flow = unwrap(
@@ -1031,28 +1054,28 @@ export function PluginsSettingsPanel() {
       } catch (cause) {
         if (environmentIdRef.current !== targetEnvironmentId) return;
         setErrors((current) => ({ ...current, [integration.id]: errorMessage(cause) }));
-      } finally {
-        if (environmentIdRef.current === targetEnvironmentId) {
-          setBusyIds((current) => {
-            const next = new Set(current);
-            next.delete(integration.id);
-            return next;
-          });
-        }
       }
-    },
-    [connectCommand, disconnectCommand, enabledCommand, environmentId, installCommand, load],
-  );
+    })().finally(async () => {
+      if (environmentIdRef.current === targetEnvironmentId) {
+        setBusyIds((current) => {
+          const next = new Set(current);
+          next.delete(integration.id);
+          return next;
+        });
+      }
+    });
+  };
 
-  const submitApiKey = useCallback(
-    async (integration: IntegrationSummary, flowId: string, value: string) => {
-      if (!environmentId) return;
-      const targetEnvironmentId = environmentId;
-      setBusyIds((current) => new Set(current).add(integration.id));
-      setErrors((current) => {
-        const { [integration.id]: _, ...rest } = current;
-        return rest;
-      });
+  const submitApiKey = async (integration: IntegrationSummary, flowId: string, value: string) => {
+    if (!environmentId) return;
+    const targetEnvironmentId = environmentId;
+    setBusyIds((current) => new Set(current).add(integration.id));
+    setErrors((current) => {
+      const rest = { ...current };
+      delete rest[integration.id];
+      return rest;
+    });
+    return await (async () => {
       try {
         const result = unwrap(
           await connectCommand({
@@ -1064,9 +1087,7 @@ export function PluginsSettingsPanel() {
           }),
         );
         if (environmentIdRef.current !== targetEnvironmentId) return;
-        if (result.kind !== "connected" || result.flowId !== flowId) {
-          throw new Error("The plugin did not confirm the API-key connection.");
-        }
+        requireConfirmedApiKey(result, flowId);
         activeFlowIdsRef.current.delete(integration.id);
         setFlows((current) => {
           if (current.get(integration.id)?.flowId !== flowId) return current;
@@ -1081,28 +1102,32 @@ export function PluginsSettingsPanel() {
       } catch (cause) {
         if (environmentIdRef.current !== targetEnvironmentId) return;
         setErrors((current) => ({ ...current, [integration.id]: errorMessage(cause) }));
-      } finally {
-        if (environmentIdRef.current === targetEnvironmentId) {
-          setBusyIds((current) => {
-            const next = new Set(current);
-            next.delete(integration.id);
-            return next;
-          });
-        }
       }
-    },
-    [connectCommand, environmentId, load],
-  );
+    })().finally(async () => {
+      if (environmentIdRef.current === targetEnvironmentId) {
+        setBusyIds((current) => {
+          const next = new Set(current);
+          next.delete(integration.id);
+          return next;
+        });
+      }
+    });
+  };
 
-  const setCapabilityEnabled = useCallback(
-    async (integration: IntegrationSummary, capability: string, enabled: boolean) => {
-      if (!environmentId) return;
-      const targetEnvironmentId = environmentId;
-      setBusyIds((current) => new Set(current).add(integration.id));
-      setErrors((current) => {
-        const { [integration.id]: _, ...rest } = current;
-        return rest;
-      });
+  const setCapabilityEnabled = async (
+    integration: IntegrationSummary,
+    capability: string,
+    enabled: boolean,
+  ) => {
+    if (!environmentId) return;
+    const targetEnvironmentId = environmentId;
+    setBusyIds((current) => new Set(current).add(integration.id));
+    setErrors((current) => {
+      const rest = { ...current };
+      delete rest[integration.id];
+      return rest;
+    });
+    return await (async () => {
       try {
         const result = unwrap(
           await capabilityEnabledCommand({
@@ -1149,18 +1174,17 @@ export function PluginsSettingsPanel() {
       } catch (cause) {
         if (environmentIdRef.current !== targetEnvironmentId) return;
         setErrors((current) => ({ ...current, [integration.id]: errorMessage(cause) }));
-      } finally {
-        if (environmentIdRef.current === targetEnvironmentId) {
-          setBusyIds((current) => {
-            const next = new Set(current);
-            next.delete(integration.id);
-            return next;
-          });
-        }
       }
-    },
-    [capabilityEnabledCommand, connectCommand, environmentId, load],
-  );
+    })().finally(async () => {
+      if (environmentIdRef.current === targetEnvironmentId) {
+        setBusyIds((current) => {
+          const next = new Set(current);
+          next.delete(integration.id);
+          return next;
+        });
+      }
+    });
+  };
 
   return (
     <SettingsPageContainer>
@@ -1198,7 +1222,10 @@ export function PluginsSettingsPanel() {
             size="icon-xs"
             variant="ghost"
             aria-label="Refresh plugins"
-            onClick={() => void load()}
+            onClick={() => {
+              setLoading(true);
+              void load();
+            }}
             disabled={loading}
           >
             <RefreshCwIcon className={loading ? "animate-spin" : ""} />

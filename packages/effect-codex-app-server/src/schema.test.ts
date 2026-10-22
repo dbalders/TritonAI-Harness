@@ -1,6 +1,5 @@
 import { assert, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
-
 import * as CodexSchema from "./schema.ts";
 
 const isGetAccountResponse = Schema.is(CodexSchema.V2GetAccountResponse);
