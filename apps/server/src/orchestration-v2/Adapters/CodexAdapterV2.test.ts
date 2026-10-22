@@ -3414,7 +3414,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
-  it.effect("bounds Stop when a queued native turn never starts", () =>
+  it.effect("reports failed Stop without discarding a queued native turn that never starts", () =>
     Effect.gen(function* () {
       const nativeThreadId = "early-stop-thread";
       const nativeTurnId = "early-stop-turn";
@@ -3466,9 +3466,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         .pipe(Effect.exit, Effect.forkScoped);
       yield* TestClock.adjust("10 seconds");
       assert.equal((yield* Fiber.join(interrupt))._tag, "Failure");
-      yield* harness.firstTerminal;
-      assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
-      assert.lengthOf(harness.terminalEvents(), 1);
+      assert.lengthOf(
+        harness.terminalEvents(),
+        0,
+        "A turn that never received Stop must not be reported interrupted",
+      );
       assert.isFalse(interruptSent, "An unstarted native turn must not receive turn/interrupt");
       assert.isFalse(yield* harness.hasPendingBackgroundWork);
     }).pipe(
@@ -6687,7 +6689,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
-  it.effect("terminalizes descendants before the root when an interrupt request fails", () =>
+  it.effect("retains descendant ownership when an interrupt request fails", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeCodexReplayHarness(interruptSubagentRequestFailureTranscript);
@@ -6728,9 +6730,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           .pipe(Effect.exit);
 
         assert.equal(interruptExit._tag, "Failure");
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted root terminal");
-        assertChildProviderTerminalBeforeRoot(harness.events, harness.threadId);
-        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        assert.lengthOf(
+          harness.terminalEvents(),
+          0,
+          "A failed child interrupt must not report the root stopped",
+        );
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
@@ -7441,7 +7446,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
-  it.effect("attempts every terminal and cleans up tracking when termination fails", () =>
+  it.effect("attempts every terminal and retains tracking when termination fails", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const harness = yield* makeCodexReplayHarness(interruptTerminationFailureTranscript);
@@ -7484,9 +7489,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           .pipe(Effect.exit);
 
         assert.equal(interruptExit._tag, "Failure");
-        yield* awaitUntil(() => harness.terminalEvents().length === 1, "interrupted terminal");
-        assert.equal(harness.terminalEvents()[0]?.status, "interrupted");
-        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        assert.lengthOf(
+          harness.terminalEvents(),
+          0,
+          "A known-running command must not be reported interrupted",
+        );
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),

@@ -2133,6 +2133,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<string, Map<string, CodexDynamicToolItem>>(),
         );
         const interruptingNativeTurns = yield* Ref.make(new Set<string>());
+        const nativeInterruptCompletions = yield* Ref.make(
+          new Map<string, CodexSchema.V2TurnCompletedNotification>(),
+        );
         const terminalizedNonCompletedNativeTurns = yield* Ref.make(new Set<string>());
         // Keep the run event stream open until descendant provider state is
         // terminal, otherwise the root terminal can strand child projections.
@@ -4156,6 +4159,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if ((yield* Ref.get(settledTurns)).has(nativeTurnId)) {
                 yield* releaseSettledTurnIfIdle(nativeTurnId);
               }
+              yield* drainUnownedInterruptCompletion(nativeTurnId);
             }),
           );
 
@@ -5180,6 +5184,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   yield* releaseSettledTurnIfIdle(payload.turnId);
                 }
               }
+              // Item handlers hold the terminalization permit. Drain on the
+              // session scope after releasing it rather than re-entering it.
+              yield* drainUnownedInterruptCompletion(payload.turnId).pipe(Effect.forkIn(scope));
               return;
             }
 
@@ -5204,6 +5211,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (settled) {
                 yield* releaseSettledTurnIfIdle(payload.turnId);
               }
+              yield* drainUnownedInterruptCompletion(payload.turnId).pipe(Effect.forkIn(scope));
               return;
             }
 
@@ -6227,6 +6235,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           },
         );
 
+        // Call only while holding turnTerminalizationPermit.
         const finalizeCodexTurn = (input: {
           readonly context: ActiveCodexTurnContext;
           readonly nativeTurnId: string;
@@ -6235,255 +6244,298 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly failureMessage?: string;
           readonly failureCode?: string | null;
         }) =>
-          turnTerminalizationPermit.withPermits(1)(
-            Effect.gen(function* () {
-              const current = (yield* Ref.get(activeTurns)).get(input.nativeTurnId);
-              if (current !== input.context) {
-                return false;
+          Effect.gen(function* () {
+            const current = (yield* Ref.get(activeTurns)).get(input.nativeTurnId);
+            if (current !== input.context) {
+              return false;
+            }
+            const providerRetry = yield* Ref.modify(providerRetries, (current) => {
+              const retry = current.get(input.context.providerTurnId);
+              if (retry === undefined) {
+                return [undefined, current] as const;
               }
-              const providerRetry = yield* Ref.modify(providerRetries, (current) => {
-                const retry = current.get(input.context.providerTurnId);
-                if (retry === undefined) {
-                  return [undefined, current] as const;
-                }
-                const updated = new Map(current);
-                updated.delete(input.context.providerTurnId);
-                return [retry, updated] as const;
-              });
-              if (
-                providerRetry !== undefined &&
-                (input.status !== "failed" || input.context.subagent !== null)
-              ) {
-                yield* emitProviderEvent({
-                  type: "turn_item.updated",
-                  driver: CODEX_PROVIDER,
-                  turnItem: makeProviderRetryTurnItem({
-                    driver: CODEX_PROVIDER,
-                    threadId: input.context.projectionThreadId,
-                    runId: input.context.projectionRunId,
-                    nodeId: input.context.providerNodeId,
-                    providerThreadId: input.context.providerThread.id,
-                    providerTurnId: input.context.providerTurnId,
-                    itemOrdinal: providerRetry.itemOrdinal,
-                    failure: providerRetry.failure,
-                    retry: providerRetry.retry,
-                    status: providerTurnStatusToTerminal(input.status),
-                    startedAt: providerRetry.startedAt,
-                    updatedAt: input.completedAt,
-                  }),
-                });
-              }
-              if (input.status !== "completed") {
-                yield* Ref.update(terminalizedNonCompletedNativeTurns, (current) => {
-                  const updated = new Set(current);
-                  updated.add(input.nativeTurnId);
-                  return updated;
-                });
-              }
-              yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
-              yield* reasoningDeltas.flushTurn(input.nativeTurnId);
-              yield* planDeltas.flushTurn(input.nativeTurnId);
-              for (const [key, part] of reasoningParts) {
-                if (part.turnId === input.nativeTurnId) reasoningParts.delete(key);
-              }
-              const nativeThreadId = input.context.providerThread.nativeThreadRef?.nativeId;
-              // Codex continues an active goal with another turn, so the run stays
-              // open and this turn reads as running until that turn starts.
-              const activation =
-                nativeThreadId == null ? undefined : goalActivations.get(nativeThreadId);
-              const holdsForGoal =
-                input.context.subagent === null &&
-                input.status === "completed" &&
-                nativeThreadId != null &&
-                (goalsByNativeThread.get(nativeThreadId)?.status === "active" ||
-                  (activation !== undefined && !activation.stopped));
-              const completedTurn: OrchestrationV2ProviderTurn = {
-                id: input.context.providerTurnId,
-                providerThreadId: input.context.providerThread.id,
-                nodeId: input.context.providerNodeId,
-                runAttemptId:
-                  input.context.subagent === null ? input.context.input.attemptId : null,
-                nativeTurnRef: {
-                  driver: CODEX_PROVIDER,
-                  nativeId: input.nativeTurnId,
-                  strength: "strong",
-                },
-                ordinal: input.context.providerTurnOrdinal,
-                status: input.status,
-                startedAt: input.context.startedAt,
-                completedAt: input.completedAt,
-                turnTokenUsage: completeCodexTurnTokenUsage(
-                  usageStateForThread(
-                    input.context.providerThread.nativeThreadRef?.nativeId ??
-                      String(input.context.providerThread.id),
-                  ),
-                  input.nativeTurnId,
-                  input.status === "completed",
-                ),
-              };
-              if (!holdsForGoal) {
-                yield* emitProviderEvent({
-                  type: "provider_turn.updated",
+              const updated = new Map(current);
+              updated.delete(input.context.providerTurnId);
+              return [retry, updated] as const;
+            });
+            if (
+              providerRetry !== undefined &&
+              (input.status !== "failed" || input.context.subagent !== null)
+            ) {
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: makeProviderRetryTurnItem({
                   driver: CODEX_PROVIDER,
                   threadId: input.context.projectionThreadId,
-                  providerTurn: completedTurn,
-                });
-              }
-              if (input.context.subagent !== null) {
-                yield* emitProviderEvent({
-                  type: "node.updated",
-                  driver: CODEX_PROVIDER,
-                  node: {
-                    id: input.context.providerNodeId,
-                    threadId: input.context.projectionThreadId,
-                    runId: null,
-                    parentNodeId: null,
-                    rootNodeId: input.context.rootNodeId,
-                    kind: "root_turn",
-                    status: input.status,
-                    countsForRun: false,
-                    providerThreadId: input.context.providerThread.id,
-                    providerTurnId: input.context.providerTurnId,
-                    nativeItemRef: input.context.subagent.task.nativeTaskRef,
-                    runtimeRequestId: null,
-                    checkpointScopeId: null,
-                    startedAt: input.context.providerNodeStartedAt,
-                    completedAt: input.completedAt,
-                  },
-                });
-                yield* emitProviderEvent({
-                  type: "provider_thread.updated",
-                  driver: CODEX_PROVIDER,
-                  providerThread: {
-                    ...input.context.providerThread,
-                    status: "idle",
-                    updatedAt: input.completedAt,
-                  },
-                });
-                yield* emitProviderEvent({
-                  type: "node.updated",
-                  driver: CODEX_PROVIDER,
-                  node: {
-                    id: input.context.subagent.subagentNodeId,
-                    threadId: input.context.subagent.parentContext.projectionThreadId,
-                    runId: input.context.subagent.parentContext.projectionRunId,
-                    parentNodeId: input.context.subagent.parentContext.itemParentNodeId,
-                    rootNodeId: input.context.subagent.parentContext.rootNodeId,
-                    kind: "subagent",
-                    status: input.status,
-                    countsForRun: false,
-                    providerThreadId: input.context.providerThread.id,
-                    providerTurnId: input.context.subagent.parentContext.providerTurnId,
-                    nativeItemRef: input.context.subagent.task.nativeTaskRef,
-                    runtimeRequestId: null,
-                    checkpointScopeId: null,
-                    startedAt: input.context.subagent.startedAt,
-                    completedAt: input.completedAt,
-                  },
-                });
-                yield* emitSubagentTaskUpdate({
-                  subagent: input.context.subagent,
+                  runId: input.context.projectionRunId,
+                  nodeId: input.context.providerNodeId,
+                  providerThreadId: input.context.providerThread.id,
+                  providerTurnId: input.context.providerTurnId,
+                  itemOrdinal: providerRetry.itemOrdinal,
+                  failure: providerRetry.failure,
+                  retry: providerRetry.retry,
+                  status: providerTurnStatusToTerminal(input.status),
+                  startedAt: providerRetry.startedAt,
+                  updatedAt: input.completedAt,
+                }),
+              });
+            }
+            if (input.status !== "completed") {
+              yield* Ref.update(terminalizedNonCompletedNativeTurns, (current) => {
+                const updated = new Set(current);
+                updated.add(input.nativeTurnId);
+                return updated;
+              });
+            }
+            yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
+            yield* reasoningDeltas.flushTurn(input.nativeTurnId);
+            yield* planDeltas.flushTurn(input.nativeTurnId);
+            for (const [key, part] of reasoningParts) {
+              if (part.turnId === input.nativeTurnId) reasoningParts.delete(key);
+            }
+            const nativeThreadId = input.context.providerThread.nativeThreadRef?.nativeId;
+            // Codex continues an active goal with another turn, so the run stays
+            // open and this turn reads as running until that turn starts.
+            const activation =
+              nativeThreadId == null ? undefined : goalActivations.get(nativeThreadId);
+            const holdsForGoal =
+              input.context.subagent === null &&
+              input.status === "completed" &&
+              nativeThreadId != null &&
+              (goalsByNativeThread.get(nativeThreadId)?.status === "active" ||
+                (activation !== undefined && !activation.stopped));
+            const completedTurn: OrchestrationV2ProviderTurn = {
+              id: input.context.providerTurnId,
+              providerThreadId: input.context.providerThread.id,
+              nodeId: input.context.providerNodeId,
+              runAttemptId: input.context.subagent === null ? input.context.input.attemptId : null,
+              nativeTurnRef: {
+                driver: CODEX_PROVIDER,
+                nativeId: input.nativeTurnId,
+                strength: "strong",
+              },
+              ordinal: input.context.providerTurnOrdinal,
+              status: input.status,
+              startedAt: input.context.startedAt,
+              completedAt: input.completedAt,
+              turnTokenUsage: completeCodexTurnTokenUsage(
+                usageStateForThread(
+                  input.context.providerThread.nativeThreadRef?.nativeId ??
+                    String(input.context.providerThread.id),
+                ),
+                input.nativeTurnId,
+                input.status === "completed",
+              ),
+            };
+            if (!holdsForGoal) {
+              yield* emitProviderEvent({
+                type: "provider_turn.updated",
+                driver: CODEX_PROVIDER,
+                threadId: input.context.projectionThreadId,
+                providerTurn: completedTurn,
+              });
+            }
+            if (input.context.subagent !== null) {
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: {
+                  id: input.context.providerNodeId,
+                  threadId: input.context.projectionThreadId,
+                  runId: null,
+                  parentNodeId: null,
+                  rootNodeId: input.context.rootNodeId,
+                  kind: "root_turn",
                   status: input.status,
+                  countsForRun: false,
+                  providerThreadId: input.context.providerThread.id,
+                  providerTurnId: input.context.providerTurnId,
+                  nativeItemRef: input.context.subagent.task.nativeTaskRef,
+                  runtimeRequestId: null,
+                  checkpointScopeId: null,
+                  startedAt: input.context.providerNodeStartedAt,
                   completedAt: input.completedAt,
-                });
-              }
-              if (input.status === "interrupted" || input.status === "failed") {
-                yield* terminalizeRunningCommandItems(
-                  input.context,
-                  input.nativeTurnId,
-                  input.status,
-                  input.completedAt,
-                );
-                yield* terminalizeMcpAppCaptures(input.context, input.nativeTurnId);
-              }
-              const dynamicToolStatus: "cancelled" | "interrupted" | "failed" =
-                input.status === "interrupted" || input.status === "failed"
-                  ? input.status
-                  : "cancelled";
-              yield* terminalizeRunningDynamicTools(
+                },
+              });
+              yield* emitProviderEvent({
+                type: "provider_thread.updated",
+                driver: CODEX_PROVIDER,
+                providerThread: {
+                  ...input.context.providerThread,
+                  status: "idle",
+                  updatedAt: input.completedAt,
+                },
+              });
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: {
+                  id: input.context.subagent.subagentNodeId,
+                  threadId: input.context.subagent.parentContext.projectionThreadId,
+                  runId: input.context.subagent.parentContext.projectionRunId,
+                  parentNodeId: input.context.subagent.parentContext.itemParentNodeId,
+                  rootNodeId: input.context.subagent.parentContext.rootNodeId,
+                  kind: "subagent",
+                  status: input.status,
+                  countsForRun: false,
+                  providerThreadId: input.context.providerThread.id,
+                  providerTurnId: input.context.subagent.parentContext.providerTurnId,
+                  nativeItemRef: input.context.subagent.task.nativeTaskRef,
+                  runtimeRequestId: null,
+                  checkpointScopeId: null,
+                  startedAt: input.context.subagent.startedAt,
+                  completedAt: input.completedAt,
+                },
+              });
+              yield* emitSubagentTaskUpdate({
+                subagent: input.context.subagent,
+                status: input.status,
+                completedAt: input.completedAt,
+              });
+            }
+            if (input.status === "interrupted" || input.status === "failed") {
+              yield* terminalizeRunningCommandItems(
                 input.context,
                 input.nativeTurnId,
-                dynamicToolStatus,
+                input.status,
                 input.completedAt,
-                input.status === "interrupted" || input.status === "failed",
               );
-              if (input.context.subagent === null) {
-                yield* emitOrDeferRootTerminal({
-                  ...input,
-                  ...(providerRetry === undefined ? {} : { providerRetry }),
-                  ...(holdsForGoal ? { goalHoldTurn: completedTurn } : {}),
-                });
-              }
-              const waiter = (yield* Ref.get(turnWaiters)).get(input.nativeTurnId);
-              if (waiter !== undefined) {
-                yield* Deferred.succeed(waiter, undefined);
-              }
-              const interruptInProgress = (yield* Ref.get(interruptingNativeTurns)).has(
-                input.nativeTurnId,
-              );
-              // Completed turns can retain late background command context and
-              // leftover persistent dynamic tools. Interrupted and failed turns
-              // never wake from late item events.
-              const retainSettledContext =
-                input.status === "completed" &&
-                (yield* turnHasRetainedBackgroundWork(input.nativeTurnId));
-              if (retainSettledContext) {
-                yield* Ref.update(settledTurns, (current) => {
-                  const updated = new Map(current);
-                  updated.set(input.nativeTurnId, input.context);
-                  return updated;
-                });
-                // Background work that finished between the check above and
-                // the turn being recorded as settled saw no settled turn to
-                // release, so it is re-checked once recorded.
-                yield* releaseSettledTurnIfIdle(input.nativeTurnId);
-              }
-              yield* Ref.update(activeTurns, (current) => {
+              yield* terminalizeMcpAppCaptures(input.context, input.nativeTurnId);
+            }
+            const dynamicToolStatus: "cancelled" | "interrupted" | "failed" =
+              input.status === "interrupted" || input.status === "failed"
+                ? input.status
+                : "cancelled";
+            yield* terminalizeRunningDynamicTools(
+              input.context,
+              input.nativeTurnId,
+              dynamicToolStatus,
+              input.completedAt,
+              input.status === "interrupted" || input.status === "failed",
+            );
+            if (input.context.subagent === null) {
+              yield* emitOrDeferRootTerminal({
+                ...input,
+                ...(providerRetry === undefined ? {} : { providerRetry }),
+                ...(holdsForGoal ? { goalHoldTurn: completedTurn } : {}),
+              });
+            }
+            const waiter = (yield* Ref.get(turnWaiters)).get(input.nativeTurnId);
+            if (waiter !== undefined) {
+              yield* Deferred.succeed(waiter, undefined);
+            }
+            const interruptInProgress = (yield* Ref.get(interruptingNativeTurns)).has(
+              input.nativeTurnId,
+            );
+            // Completed turns can retain late background command context and
+            // leftover persistent dynamic tools. Interrupted and failed turns
+            // never wake from late item events.
+            const retainSettledContext =
+              input.status === "completed" &&
+              (yield* turnHasRetainedBackgroundWork(input.nativeTurnId));
+            if (retainSettledContext) {
+              yield* Ref.update(settledTurns, (current) => {
+                const updated = new Map(current);
+                updated.set(input.nativeTurnId, input.context);
+                return updated;
+              });
+              // Background work that finished between the check above and
+              // the turn being recorded as settled saw no settled turn to
+              // release, so it is re-checked once recorded.
+              yield* releaseSettledTurnIfIdle(input.nativeTurnId);
+            }
+            yield* Ref.update(activeTurns, (current) => {
+              const updated = new Map(current);
+              updated.delete(input.nativeTurnId);
+              return updated;
+            });
+            if (input.context.nativeStartReady !== undefined) {
+              yield* Deferred.succeed(input.context.nativeStartReady, undefined);
+            }
+            yield* flushReadyRootTerminals();
+            if (!retainSettledContext && !interruptInProgress) {
+              yield* Ref.update(runningCommandItemsByTurn, (current) => {
+                if (!current.has(input.nativeTurnId)) {
+                  return current;
+                }
                 const updated = new Map(current);
                 updated.delete(input.nativeTurnId);
                 return updated;
               });
-              if (input.context.nativeStartReady !== undefined) {
-                yield* Deferred.succeed(input.context.nativeStartReady, undefined);
+              yield* Ref.update(runningDynamicToolsByTurn, (current) => {
+                if (!current.has(input.nativeTurnId)) {
+                  return current;
+                }
+                const updated = new Map(current);
+                updated.delete(input.nativeTurnId);
+                return updated;
+              });
+            }
+            if (!retainSettledContext) {
+              yield* Ref.update(completedFinalAnswerTextsByTurn, (current) => {
+                if (!current.has(input.nativeTurnId)) {
+                  return current;
+                }
+                const updated = new Map(current);
+                updated.delete(input.nativeTurnId);
+                return updated;
+              });
+              yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
+                if (!current.has(input.nativeTurnId)) {
+                  return current;
+                }
+                const updated = new Map(current);
+                updated.delete(input.nativeTurnId);
+                return updated;
+              });
+            }
+            return true;
+          });
+
+        const drainUnownedInterruptCompletion = (nativeTurnId: string) =>
+          turnTerminalizationPermit.withPermits(1)(
+            Effect.gen(function* () {
+              // A failed Stop no longer owns a waiter. Keep its command handles,
+              // but let confirmed natural completion settle it without another Stop.
+              if ((yield* Ref.get(turnWaiters)).has(nativeTurnId)) return;
+              const context = (yield* Ref.get(activeTurns)).get(nativeTurnId);
+              if (context === undefined) {
+                if ((yield* Ref.get(settledTurns)).has(nativeTurnId)) return;
+              } else {
+                const completion = (yield* Ref.get(nativeInterruptCompletions)).get(nativeTurnId);
+                if (
+                  completion === undefined ||
+                  (yield* turnHasRetainedBackgroundWork(nativeTurnId))
+                )
+                  return;
+                yield* finalizeCodexTurn({
+                  context,
+                  nativeTurnId,
+                  status: completion.turn.status === "failed" ? "failed" : "interrupted",
+                  completedAt: codexTimestamp(completion.turn.completedAt),
+                  ...(completion.turn.error?.message === undefined
+                    ? {}
+                    : {
+                        failureMessage: completion.turn.error.message,
+                        ...(completion.turn.error.codexErrorInfo == null
+                          ? {}
+                          : {
+                              failureCode: codexErrorInfoCode(completion.turn.error.codexErrorInfo),
+                            }),
+                      }),
+                });
               }
-              yield* flushReadyRootTerminals();
-              if (!retainSettledContext && !interruptInProgress) {
-                yield* Ref.update(runningCommandItemsByTurn, (current) => {
-                  if (!current.has(input.nativeTurnId)) {
-                    return current;
-                  }
-                  const updated = new Map(current);
-                  updated.delete(input.nativeTurnId);
-                  return updated;
-                });
-                yield* Ref.update(runningDynamicToolsByTurn, (current) => {
-                  if (!current.has(input.nativeTurnId)) {
-                    return current;
-                  }
-                  const updated = new Map(current);
-                  updated.delete(input.nativeTurnId);
-                  return updated;
-                });
-              }
-              if (!retainSettledContext) {
-                yield* Ref.update(completedFinalAnswerTextsByTurn, (current) => {
-                  if (!current.has(input.nativeTurnId)) {
-                    return current;
-                  }
-                  const updated = new Map(current);
-                  updated.delete(input.nativeTurnId);
-                  return updated;
-                });
-                yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
-                  if (!current.has(input.nativeTurnId)) {
-                    return current;
-                  }
-                  const updated = new Map(current);
-                  updated.delete(input.nativeTurnId);
-                  return updated;
-                });
-              }
-              return true;
+              yield* Ref.update(interruptingNativeTurns, (current) => {
+                const updated = new Set(current);
+                updated.delete(nativeTurnId);
+                return updated;
+              });
+              yield* Ref.update(nativeInterruptCompletions, (current) => {
+                const updated = new Map(current);
+                updated.delete(nativeTurnId);
+                return updated;
+              });
             }),
           );
 
@@ -6491,6 +6543,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           Effect.gen(function* () {
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context === undefined) {
+              return;
+            }
+            if (
+              (yield* Ref.get(interruptingNativeTurns)).has(payload.turn.id) &&
+              (context.nativeStartReady === undefined ||
+                (yield* Deferred.isDone(context.nativeStartReady)))
+            ) {
+              // Native turn completion does not confirm that its foreground
+              // command stopped. The interrupt owner publishes the terminal
+              // only after containing the exact tracked command handles.
+              yield* Ref.update(nativeInterruptCompletions, (current) =>
+                current.has(payload.turn.id)
+                  ? current
+                  : new Map(current).set(payload.turn.id, payload),
+              );
+              const waiter = (yield* Ref.get(turnWaiters)).get(payload.turn.id);
+              if (waiter !== undefined) yield* Deferred.succeed(waiter, undefined);
+              else yield* drainUnownedInterruptCompletion(payload.turn.id);
               return;
             }
             const nativeStatus = mapCodexTurnStatus(payload.turn.status);
@@ -6514,7 +6584,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                           failureCode: codexErrorInfoCode(payload.turn.error.codexErrorInfo),
                         }),
                   }),
-            });
+            }).pipe(turnTerminalizationPermit.withPermits(1));
           }),
         );
 
@@ -7402,6 +7472,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
 
               const cleanupInterruptState = Effect.gen(function* () {
+                const stillActive = yield* Ref.get(activeTurns);
+                const stillSettled = yield* Ref.get(settledTurns);
                 yield* Ref.update(turnWaiters, (current) => {
                   const updated = new Map(current);
                   for (const target of interruptTargets) {
@@ -7412,6 +7484,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 yield* Ref.update(interruptingNativeTurns, (current) => {
                   const updated = new Set(current);
                   for (const target of interruptTargets) {
+                    if (
+                      stillActive.get(target.context.nativeTurnId) === target.context ||
+                      stillSettled.get(target.context.nativeTurnId) === target.context
+                    )
+                      continue;
                     updated.delete(target.context.nativeTurnId);
                   }
                   return updated;
@@ -7419,12 +7496,73 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 yield* Ref.update(runningCommandItemsByTurn, (current) => {
                   const updated = new Map(current);
                   for (const target of interruptTargets) {
+                    // Failed containment must keep its owned handles for a
+                    // later Stop instead of losing the only way to stop them.
+                    if (stillActive.get(target.context.nativeTurnId) === target.context) continue;
                     if (settledTurnContexts.includes(target.context)) continue;
                     updated.delete(target.context.nativeTurnId);
                   }
                   return updated;
                 });
+                yield* Ref.update(nativeInterruptCompletions, (current) => {
+                  const updated = new Map(current);
+                  for (const target of interruptTargets) {
+                    if (stillActive.get(target.context.nativeTurnId) !== target.context)
+                      updated.delete(target.context.nativeTurnId);
+                  }
+                  return updated;
+                });
+                for (const target of interruptTargets) {
+                  yield* drainUnownedInterruptCompletion(target.context.nativeTurnId);
+                }
               });
+
+              const containedTerminalKeys = new Set<string>();
+              const attemptedTerminalKeys = new Set<string>();
+              const collectTrackedTerminals = (targets: typeof interruptTargets) =>
+                Effect.gen(function* () {
+                  const trackedTerminals = new Map<
+                    string,
+                    { readonly nativeThreadId: string; readonly processId: string }
+                  >();
+                  const runningItems = yield* Ref.get(runningCommandItemsByTurn);
+                  for (const target of targets) {
+                    const nativeThreadId = yield* getNativeThreadId(target.context.providerThread);
+                    const items = runningItems.get(target.context.nativeTurnId);
+                    for (const item of items?.values() ?? []) {
+                      if (item.processId !== undefined) {
+                        trackedTerminals.set(`${nativeThreadId}:${item.processId}`, {
+                          nativeThreadId,
+                          processId: item.processId,
+                        });
+                      }
+                    }
+                  }
+                  return trackedTerminals;
+                });
+              const terminateTrackedTerminals = (targets: typeof interruptTargets) =>
+                Effect.gen(function* () {
+                  const trackedTerminals = yield* collectTrackedTerminals(targets);
+                  const pendingTerminals = Array.from(trackedTerminals.entries())
+                    .filter(([key]) => !containedTerminalKeys.has(key))
+                    .sort(
+                      ([leftKey], [rightKey]) =>
+                        Number(attemptedTerminalKeys.has(leftKey)) -
+                        Number(attemptedTerminalKeys.has(rightKey)),
+                    );
+                  return yield* Effect.forEach(
+                    pendingTerminals,
+                    ([key, { nativeThreadId, processId }]) =>
+                      Effect.gen(function* () {
+                        attemptedTerminalKeys.add(key);
+                        yield* terminateBackgroundTerminal(nativeThreadId, processId);
+                        containedTerminalKeys.add(key);
+                      }).pipe(
+                        Effect.as({ success: true as const }),
+                        Effect.catch((error) => Effect.succeed({ success: false as const, error })),
+                      ),
+                  );
+                });
 
               const trackedInterruptNativeTurnIds = new Set(
                 interruptTargets.map((target) => target.context.nativeTurnId),
@@ -7495,14 +7633,56 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       );
                     }
                   }
+                  const terminationResults = yield* terminateTrackedTerminals(interruptTargets);
+                  const failedTermination = terminationResults.find((result) => !result.success);
+                  if (failedTermination !== undefined && !failedTermination.success) {
+                    return yield* Effect.fail(failedTermination.error);
+                  }
                   const completedAt = yield* DateTime.now;
                   for (const context of activeLineage) {
-                    yield* finalizeCodexTurn({
-                      context,
-                      nativeTurnId: context.nativeTurnId,
-                      status: "interrupted",
-                      completedAt,
-                    });
+                    const nativeCompletion = (yield* Ref.get(nativeInterruptCompletions)).get(
+                      context.nativeTurnId,
+                    );
+                    yield* turnTerminalizationPermit.withPermits(1)(
+                      Effect.gen(function* () {
+                        // A command can register while the containment RPC is
+                        // returning. Re-scan it before publishing a terminal,
+                        // while item handlers cannot add another owned handle.
+                        const nativeThreadId = yield* getNativeThreadId(context.providerThread);
+                        const commands = (yield* Ref.get(runningCommandItemsByTurn)).get(
+                          context.nativeTurnId,
+                        );
+                        for (const command of commands?.values() ?? []) {
+                          if (
+                            command.processId !== undefined &&
+                            !containedTerminalKeys.has(`${nativeThreadId}:${command.processId}`)
+                          )
+                            return;
+                        }
+                        yield* finalizeCodexTurn({
+                          context,
+                          nativeTurnId: context.nativeTurnId,
+                          status:
+                            nativeCompletion?.turn.status === "failed" ? "failed" : "interrupted",
+                          completedAt:
+                            nativeCompletion === undefined
+                              ? completedAt
+                              : codexTimestamp(nativeCompletion.turn.completedAt),
+                          ...(nativeCompletion?.turn.error?.message === undefined
+                            ? {}
+                            : {
+                                failureMessage: nativeCompletion.turn.error.message,
+                                ...(nativeCompletion.turn.error.codexErrorInfo == null
+                                  ? {}
+                                  : {
+                                      failureCode: codexErrorInfoCode(
+                                        nativeCompletion.turn.error.codexErrorInfo,
+                                      ),
+                                    }),
+                              }),
+                        });
+                      }),
+                    );
                   }
                 }
               });
@@ -7574,62 +7754,25 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   if ((yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context) {
                     continue;
                   }
-                  yield* client.request("turn/interrupt", {
-                    threadId: yield* getNativeThreadId(context.providerThread),
-                    turnId: context.nativeTurnId,
-                  });
-                }
-                const containedTerminalKeys = new Set<string>();
-                const attemptedTerminalKeys = new Set<string>();
-                const collectTrackedTerminals = (targets: typeof interruptTargets) =>
-                  Effect.gen(function* () {
-                    const trackedTerminals = new Map<
-                      string,
-                      { readonly nativeThreadId: string; readonly processId: string }
-                    >();
-                    const runningItems = yield* Ref.get(runningCommandItemsByTurn);
-                    for (const target of targets) {
-                      const nativeThreadId = yield* getNativeThreadId(
-                        target.context.providerThread,
-                      );
-                      const items = runningItems.get(target.context.nativeTurnId);
-                      for (const item of items?.values() ?? []) {
-                        if (item.processId !== undefined) {
-                          trackedTerminals.set(`${nativeThreadId}:${item.processId}`, {
-                            nativeThreadId,
-                            processId: item.processId,
-                          });
-                        }
-                      }
-                    }
-                    return trackedTerminals;
-                  });
-                const terminateTrackedTerminals = (targets: typeof interruptTargets) =>
-                  Effect.gen(function* () {
-                    const trackedTerminals = yield* collectTrackedTerminals(targets);
-                    const pendingTerminals = Array.from(trackedTerminals.entries())
-                      .filter(([key]) => !containedTerminalKeys.has(key))
-                      .sort(
-                        ([leftKey], [rightKey]) =>
-                          Number(attemptedTerminalKeys.has(leftKey)) -
-                          Number(attemptedTerminalKeys.has(rightKey)),
-                      );
-                    return yield* Effect.forEach(
-                      pendingTerminals,
-                      ([key, { nativeThreadId, processId }]) =>
-                        Effect.gen(function* () {
-                          attemptedTerminalKeys.add(key);
-                          yield* terminateBackgroundTerminal(nativeThreadId, processId);
-                          containedTerminalKeys.add(key);
-                        }).pipe(
-                          Effect.as({ success: true as const }),
-                          Effect.catch((error) =>
-                            Effect.succeed({ success: false as const, error }),
-                          ),
-                        ),
+                  // A failed containment can be retried after Codex already
+                  // completed the turn; its command handles still need stopping.
+                  if ((yield* Ref.get(nativeInterruptCompletions)).has(context.nativeTurnId)) {
+                    yield* Deferred.succeed(target.completion, undefined);
+                    continue;
+                  }
+                  yield* client
+                    .request("turn/interrupt", {
+                      threadId: yield* getNativeThreadId(context.providerThread),
+                      turnId: context.nativeTurnId,
+                    })
+                    .pipe(
+                      // Native completion can arrive before (or without) the
+                      // request acknowledgment. Do not strand owned commands
+                      // behind a response that the provider has already made moot.
+                      Effect.raceFirst(Deferred.await(target.completion)),
+                      Effect.timeout("10 seconds"),
                     );
-                  });
-
+                }
                 const [, completed] = yield* Effect.all(
                   [
                     terminateTrackedTerminals(interruptTargets),
@@ -7695,10 +7838,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }
                   }),
                 );
-              }).pipe(
-                Effect.onError(() => finalizeRemainingInterruptLineage),
-                Effect.ensuring(cleanupInterruptState),
-              );
+              }).pipe(Effect.ensuring(cleanupInterruptState));
             }).pipe(
               Effect.mapError(
                 (cause) =>
