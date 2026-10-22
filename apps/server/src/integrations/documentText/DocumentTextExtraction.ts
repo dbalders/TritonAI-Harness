@@ -104,8 +104,6 @@ class BoundedText {
   }
 }
 
-// --- PDF -----------------------------------------------------------------------------------
-
 interface PdfTextItem {
   readonly str?: unknown;
   readonly hasEOL?: unknown;
@@ -171,8 +169,6 @@ async function extractPdf(bytes: Uint8Array, maxCharacters: number): Promise<Doc
     await document.loadingTask.destroy().catch(() => undefined);
   }
 }
-
-// --- DOCX ----------------------------------------------------------------------------------
 
 class DocxLimitError extends Error {
   readonly reason: "corrupt" | "too_large" | "expanding";

@@ -1,15 +1,10 @@
 import { describe } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
-  DEFAULT_TRITONAI_CODEX_MODEL,
   DEFAULT_TRITONAI_CODEX_HOME_PATH,
-  DEFAULT_SERVER_SETTINGS,
-  ModelSelection,
   ProjectId,
-  ProjectScript,
   ProviderDriverKind,
   ProviderInstanceId,
-  resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
 } from "@t3tools/contracts";
@@ -17,12 +12,10 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
-import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";

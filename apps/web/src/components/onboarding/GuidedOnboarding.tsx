@@ -30,9 +30,7 @@ import {
   SparklesIcon,
 } from "lucide-react";
 import {
-  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -79,7 +77,7 @@ import {
 } from "../../onboarding/guidedTourState";
 import { resolveDefaultProviderModelSelection } from "../../providerInstances";
 import { useProjects, waitForThreadShell } from "../../state/entities";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironmentProviders, usePrimaryEnvironmentId } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
 import { EMPTY_SERVER_PROVIDERS, environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
@@ -138,18 +136,15 @@ function useTritonAiProject(environmentId: EnvironmentId | null) {
     label: "guided tour project create",
     reportFailure: false,
   });
-  const existing = useMemo(
-    () =>
-      projects.find(
-        (project) =>
-          project.environmentId === environmentId && isTritonAiWorkspacePath(project.workspaceRoot),
-      ) ?? null,
-    [environmentId, projects],
-  );
+  const existing =
+    projects.find(
+      (project) =>
+        project.environmentId === environmentId && isTritonAiWorkspacePath(project.workspaceRoot),
+    ) ?? null;
   // Remembers a project created here until the project list catches up, so a second
   // run never tries to create the folder again.
   const created = useRef<EnvironmentProject | null>(null);
-  return useCallback(async (): Promise<EnvironmentProject | null> => {
+  return async (): Promise<EnvironmentProject | null> => {
     if (existing) return existing;
     if (created.current?.environmentId === environmentId) return created.current;
     if (!environmentId) return null;
@@ -168,7 +163,7 @@ function useTritonAiProject(environmentId: EnvironmentId | null) {
     if (result._tag === "Failure") return null;
     created.current = await waitForProject({ environmentId, projectId, timeoutMs: 5_000 });
     return created.current;
-  }, [createProject, environmentId, existing]);
+  };
 }
 
 /** Put their own file on the message: by path when this computer runs it, else uploaded. */
@@ -214,8 +209,6 @@ async function attachOwnFile(
   }
   return { attachment: uploaded, release: () => releaseAttachmentUpload(upload.id) };
 }
-
-/* ------------------------------------------------------------------ shared pieces */
 
 function StepHeading({
   eyebrow,
@@ -305,8 +298,6 @@ function taskUses(task: OnboardingTask): string {
   }
 }
 
-/* ------------------------------------------------------------------ welcome */
-
 const WELCOME_EXAMPLES = [
   {
     tab: "Notes",
@@ -395,8 +386,6 @@ function WelcomeStep({ onNext }: { readonly onNext: () => void }) {
   );
 }
 
-/* ------------------------------------------------------------------ role */
-
 function RoleStep({
   role,
   onSelect,
@@ -449,8 +438,6 @@ function RoleStep({
     </div>
   );
 }
-
-/* ------------------------------------------------------------------ task */
 
 function TaskStep({
   role,
@@ -524,8 +511,6 @@ function TaskStep({
     </div>
   );
 }
-
-/* ------------------------------------------------------------------ connect */
 
 const SIGN_IN_HELP: ReadonlyArray<{
   readonly question: string;
@@ -837,8 +822,6 @@ function ConnectStep({
   );
 }
 
-/* ------------------------------------------------------------------ file */
-
 function SamplePreview({ task }: { readonly task: OnboardingTask }) {
   const sample = task.sample;
   if (!sample) return null;
@@ -977,8 +960,6 @@ function FileStep({
   );
 }
 
-/* ------------------------------------------------------------------ tour */
-
 const PROGRESS_INDEX: Record<GuidedTourStep, number> = {
   welcome: 0,
   role: 1,
@@ -992,6 +973,7 @@ export function GuidedOnboarding() {
   const environmentId = usePrimaryEnvironmentId();
   const ensureProject = useTritonAiProject(environmentId);
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const environmentProviders = useEnvironmentProviders();
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const tour = useGuidedTourState();
   const { step, roleId, taskId } = tour;
@@ -1021,9 +1003,9 @@ export function GuidedOnboarding() {
     mainRef.current?.focus();
   };
 
-  const exit = useCallback(() => {
+  const exit = () => {
     void navigate({ to: "/settings/general" });
-  }, [navigate]);
+  };
 
   // Outlook first, unless only Google can already do this task or Microsoft isn't here.
   const canRun = (connection: IntegrationConnection) =>
@@ -1062,94 +1044,96 @@ export function GuidedOnboarding() {
     const launch = ++launches.current;
     const abandoned = () => launches.current !== launch;
     let release = () => {};
-    try {
-      const project = await ensureProject();
-      if (abandoned()) return;
-      if (!project) throw new Error("Couldn't open your TritonAI folder. Try again.");
-      const serverConfig = serverConfigs.get(environmentId);
-      const projectSettings = resolveProjectSettings(
-        serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
-        project.id,
-        project,
-      ).settings;
-      const drafts = useComposerDraftStore.getState();
-      // The same model a new conversation here would start with.
-      const modelSelection = resolveDefaultProviderModelSelection(
-        serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS,
-        projectSettings.defaultModelSelection ??
-          (drafts.stickyActiveProvider
-            ? (drafts.stickyModelSelectionByProvider[drafts.stickyActiveProvider] ?? null)
-            : null),
-      );
-      if (!modelSelection) {
-        throw new Error("TritonAI needs an AI model set up first. Check Settings → Runtime.");
-      }
-      const attached = input.attach ? await input.attach() : null;
-      if (attached) release = attached.release;
-      if (abandoned()) {
-        release();
-        return;
-      }
-      const threadId = newThreadId();
-      const createdAt = new Date().toISOString();
-      const started = await startTurn({
-        environmentId,
-        input: {
-          threadId,
-          message: {
-            messageId: newMessageId(),
-            role: "user",
-            text: input.text,
-            attachments: attached ? [attached.attachment] : [],
-          },
-          modelSelection,
-          titleSeed: input.task.title,
-          runtimeMode: TOUR_RUNTIME_MODE,
-          interactionMode: "default",
-          bootstrap: {
-            createThread: {
-              projectId: project.id,
-              title: input.task.title,
-              modelSelection,
-              runtimeMode: TOUR_RUNTIME_MODE,
-              interactionMode: "default",
-              branch: null,
-              worktreePath: null,
-              createdAt,
+    return await (async () => {
+      return await (async () => {
+        const project = await ensureProject();
+        if (abandoned()) return;
+        if (!project) throw new Error("Couldn't open your TritonAI folder. Try again.");
+        const serverConfig = serverConfigs.get(environmentId);
+        const projectSettings = resolveProjectSettings(
+          serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
+          project.id,
+          project,
+        ).settings;
+        const drafts = useComposerDraftStore.getState();
+        // The same model a new conversation here would start with.
+        const modelSelection = resolveDefaultProviderModelSelection(
+          environmentProviders.get(environmentId) ?? EMPTY_SERVER_PROVIDERS,
+          projectSettings.defaultModelSelection ??
+            (drafts.stickyActiveProvider
+              ? (drafts.stickyModelSelectionByProvider[drafts.stickyActiveProvider] ?? null)
+              : null),
+        );
+        if (!modelSelection) {
+          throw new Error("TritonAI needs an AI model set up first. Check Settings → Runtime.");
+        }
+        const attached = input.attach ? await input.attach() : null;
+        if (attached) release = attached.release;
+        if (abandoned()) {
+          release();
+          return;
+        }
+        const threadId = newThreadId();
+        const createdAt = new Date().toISOString();
+        const started = await startTurn({
+          environmentId,
+          input: {
+            threadId,
+            message: {
+              messageId: newMessageId(),
+              role: "user",
+              text: input.text,
+              attachments: attached ? [attached.attachment] : [],
+            },
+            modelSelection,
+            titleSeed: input.task.title,
+            runtimeMode: TOUR_RUNTIME_MODE,
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: project.id,
+                title: input.task.title,
+                modelSelection,
+                runtimeMode: TOUR_RUNTIME_MODE,
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+                createdAt,
+              },
             },
           },
-        },
+        });
+        release();
+        release = () => {};
+        if (started._tag === "Failure") throw new Error("The assistant couldn't start. Try again.");
+        // The conversation exists and stays in the sidebar; only a still-open tour follows it.
+        if (abandoned()) return;
+        updateGuidedTourState({
+          roleId: role.id,
+          taskId: input.task.id,
+          taskEnvironmentId: environmentId,
+          taskThreadId: threadId,
+          provider: input.provider ?? null,
+          usedFollowUps: [],
+          chatGuideDismissed: false,
+        });
+        const threadRef = scopeThreadRef(environmentId, threadId);
+        // The chat route treats a conversation it hasn't received yet as missing.
+        await waitForThreadShell(threadRef).catch(() => false);
+        if (abandoned()) return;
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(threadRef),
+          replace: true,
+        });
+      })().catch((cause: unknown) => {
+        release();
+        setRunError(cause instanceof Error ? cause.message : "Something went wrong. Try again.");
       });
-      release();
-      release = () => {};
-      if (started._tag === "Failure") throw new Error("The assistant couldn't start. Try again.");
-      // The conversation exists and stays in the sidebar; only a still-open tour follows it.
-      if (abandoned()) return;
-      updateGuidedTourState({
-        roleId: role.id,
-        taskId: input.task.id,
-        taskEnvironmentId: environmentId,
-        taskThreadId: threadId,
-        provider: input.provider ?? null,
-        usedFollowUps: [],
-        chatGuideDismissed: false,
-      });
-      const threadRef = scopeThreadRef(environmentId, threadId);
-      // The chat route treats a conversation it hasn't received yet as missing.
-      await waitForThreadShell(threadRef).catch(() => false);
-      if (abandoned()) return;
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(threadRef),
-        replace: true,
-      });
-    } catch (cause) {
-      release();
-      setRunError(cause instanceof Error ? cause.message : "Something went wrong. Try again.");
-    } finally {
+    })().finally(async () => {
       sending.current = false;
       setRunning(false);
-    }
+    });
   };
 
   const fileTask = task.source === "file" ? task : role.tasks[1];

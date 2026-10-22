@@ -7,7 +7,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
 import { serverEnvironment } from "../../state/server";
@@ -143,14 +143,16 @@ export function useIntegrationConnection(
   // sign-in finished must not put back the "not connected" it saw.
   const requests = useRef(0);
   const appliedRequest = useRef(new Map<string, number>());
-  const applyLoaded = useCallback(
-    (forKey: string, request: number, next: IntegrationSummary | null, failed = false) => {
-      if ((appliedRequest.current.get(forKey) ?? 0) > request) return;
-      appliedRequest.current.set(forKey, request);
-      setLoaded({ key: forKey, integration: next, failed });
-    },
-    [],
-  );
+  const applyLoaded = (
+    forKey: string,
+    request: number,
+    next: IntegrationSummary | null,
+    failed = false,
+  ) => {
+    if ((appliedRequest.current.get(forKey) ?? 0) > request) return;
+    appliedRequest.current.set(forKey, request);
+    setLoaded({ key: forKey, integration: next, failed });
+  };
 
   const integration = loaded !== null && loaded.key === key ? loaded.integration : null;
   const loading = key !== null && loaded?.key !== key;
@@ -245,7 +247,7 @@ export function useIntegrationConnection(
     return () => window.clearTimeout(timer);
   }, [applyLoaded, attempt, environmentId, integrationId, key, pollCommand, scheduled]);
 
-  const connect = useCallback(async () => {
+  const connect = async () => {
     if (!environmentId || key === null) return;
     if (!integration) {
       // "Try again" after the plugin list couldn't be read checks again.
@@ -325,18 +327,7 @@ export function useIntegrationConnection(
     } catch (cause) {
       settle({ scheduled: null, error: errorMessage(cause) });
     }
-  }, [
-    applyLoaded,
-    connectCommand,
-    enabledCommand,
-    environmentId,
-    installCommand,
-    integration,
-    integrationId,
-    key,
-    listCommand,
-    loadFailed,
-  ]);
+  };
 
   const flow = scheduled;
   const starting = current?.starting ?? false;

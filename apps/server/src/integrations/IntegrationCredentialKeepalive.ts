@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
-
 import { getIntegrationRegistryOptional } from "./IntegrationRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
 
@@ -61,26 +60,27 @@ const makeIntegrationCredentialKeepalive = (options?: IntegrationCredentialKeepa
       }
     });
 
-    const start: IntegrationCredentialKeepaliveShape["start"] = () =>
-      Effect.gen(function* () {
-        yield* forkParked(
-          sweep.pipe(
-            Effect.catchDefect((defect: unknown) =>
-              Effect.logWarning("integrations.credential.keepalive.sweep-failed", { defect }),
-            ),
-            // The sweep runs outside any span; its logs reach the trace file only inside one.
-            Effect.withSpan("integrations.credential.keepalive.sweep"),
-            Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs))),
-            Effect.delay(Duration.millis(initialDelayMs)),
+    const start: IntegrationCredentialKeepaliveShape["start"] = Effect.fn(
+      "IntegrationCredentialKeepalive.start",
+    )(function* () {
+      yield* forkParked(
+        sweep.pipe(
+          Effect.catchDefect((defect: unknown) =>
+            Effect.logWarning("integrations.credential.keepalive.sweep-failed", { defect }),
           ),
-        );
+          // The sweep runs outside any span; its logs reach the trace file only inside one.
+          Effect.withSpan("integrations.credential.keepalive.sweep"),
+          Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs))),
+          Effect.delay(Duration.millis(initialDelayMs)),
+        ),
+      );
 
-        yield* Effect.logInfo("integrations.credential.keepalive.started", {
-          idleThresholdMs,
-          sweepIntervalMs,
-          initialDelayMs,
-        });
+      yield* Effect.logInfo("integrations.credential.keepalive.started", {
+        idleThresholdMs,
+        sweepIntervalMs,
+        initialDelayMs,
       });
+    });
 
     return { start } satisfies IntegrationCredentialKeepaliveShape;
   });

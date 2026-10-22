@@ -12,7 +12,6 @@ import {
   type PropsWithChildren,
   type ReactNode,
 } from "react";
-
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import { useThreadShell } from "../../state/entities";

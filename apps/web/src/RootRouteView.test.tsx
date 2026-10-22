@@ -105,6 +105,7 @@ vi.mock("./state/environments", () => ({
 vi.mock("./state/server", () => ({
   serverEnvironment: { configValueAtom: () => Symbol("config") },
   primaryServerConfigAtom: Symbol("primaryServerConfigAtom"),
+  environmentServerConfigsAtom: Symbol("environmentServerConfigsAtom"),
   primaryServerLegacyThreadMigrationAtom: Symbol("legacyMigration"),
   primaryServerConfigEventAtom: Symbol("primaryServerConfigEventAtom"),
   primaryServerEnvironmentThemesAtom: Symbol("primaryServerEnvironmentThemesAtom"),

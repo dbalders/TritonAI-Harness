@@ -131,7 +131,7 @@ function HelpQuestion({
 }) {
   return (
     <article ref={ref} className="flex scroll-mt-6 flex-col items-end not-first:mt-8">
-      <h3 className="sr-only select-none">You</h3>
+      <h3 className="mb-1.5 text-xs font-medium text-muted-foreground select-none">You</h3>
       <p className="max-w-[80%] rounded-2xl bg-message px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap text-message-foreground wrap-anywhere">
         {content}
       </p>

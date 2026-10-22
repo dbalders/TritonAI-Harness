@@ -1,15 +1,16 @@
 import * as Clock from "effect/Clock";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import { PreviewAutomationSnapshot, PreviewAutomationUnavailableError } from "@t3tools/contracts";
+import {
+  PreviewAutomationSnapshot,
+  PreviewAutomationUnavailableError,
+  type PreviewAutomationOperation,
+  type PreviewTabId,
+  type PreviewAutomationOpenInput,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { Tool } from "effect/ai";
-import type {
-  PreviewAutomationOperation,
-  PreviewTabId,
-  PreviewAutomationOpenInput,
-} from "@t3tools/contracts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";

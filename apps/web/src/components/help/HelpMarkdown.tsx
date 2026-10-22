@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ComponentProps } from "react";
 import Markdown, { type Components, type ExtraProps } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { ensureLocalApi } from "../../localApi";
 import { resolveHelpLink } from "./helpLinks";
 
@@ -50,6 +51,11 @@ const MARKDOWN_COMPONENTS: Components = {
   h4: answerHeading(4),
   h5: answerHeading(5),
   h6: answerHeading(6),
+  table: ({ node: _node, ...props }) => (
+    <div role="region" aria-label="Help table" tabIndex={0} className="max-w-full overflow-x-auto">
+      <table {...props} className="min-w-128!" />
+    </div>
+  ),
 };
 
 /** Renders a Help answer with the same prose styles as answers in a thread. */
@@ -57,6 +63,7 @@ export function HelpMarkdown({ content }: { readonly content: string }) {
   return (
     <div className="chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/[calc(80%+var(--appearance-contrast-boost)/5)] wrap-anywhere [&_p]:whitespace-pre-wrap">
       <Markdown
+        remarkPlugins={[remarkGfm]}
         skipHtml
         disallowedElements={["img"]}
         urlTransform={(url) => (resolveHelpLink(url) ? url : "")}

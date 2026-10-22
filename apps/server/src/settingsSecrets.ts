@@ -2,6 +2,7 @@ import {
   AntigravitySettings,
   ClaudeSettings,
   CodexSettings,
+  EasDeviceHostConfig,
   type ServerSettings,
   UsageLimitSourceConfig,
   isSecretSetting,
@@ -89,6 +90,7 @@ export function settingsFieldForSupport(
   return Schema.decodeUnknownOption(encoded, { onExcessProperty: "ignore" })(value);
 }
 const usageLimitSecretFields = secretSettingsFields(UsageLimitSourceConfig);
+const easDeviceHostSecretFields = secretSettingsFields(EasDeviceHostConfig);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 
 export interface SettingsSecret {
@@ -103,10 +105,6 @@ export interface SettingsSecret {
 
 type SecretValue = Pick<SettingsSecret, "value" | "redacted">;
 
-/**
- * Visits credential fields declared by schemas and dynamically sensitive environment variables.
- * Store keys and client representations stay here; callers supply only the secret operation.
- */
 export function mapSettingsSecrets(
   settings: ServerSettings,
   map: (secret: SettingsSecret) => SecretValue,
@@ -204,5 +202,16 @@ export function mapSettingsSecrets(
     ]),
   ) as ServerSettings["usageLimitSources"];
 
-  return { ...settings, providerInstances, sourceControlHosts, usageLimitSources };
+  const easDeviceHosts = settings.easDeviceHosts.map(
+    (host) =>
+      mapFields(
+        host,
+        easDeviceHostSecretFields,
+        (field, serverHost) =>
+          `device-host-${encode(host.id)}-${encode(field)}` +
+          (serverHost === null ? "" : `-${encode(serverHost)}`),
+      ) as EasDeviceHostConfig,
+  );
+
+  return { ...settings, providerInstances, sourceControlHosts, usageLimitSources, easDeviceHosts };
 }

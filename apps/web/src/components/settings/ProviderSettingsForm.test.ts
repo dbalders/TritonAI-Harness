@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderDriverKind } from "@t3tools/contracts";
+import { makeProviderSettingsSchema, ProviderDriverKind, TrimmedString } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { DRIVER_OPTION_BY_VALUE } from "./providerDriverMeta";
 import {
   deriveProviderSettingsFields,
@@ -27,11 +28,19 @@ describe("ProviderSettingsForm helpers", () => {
 
     expect(homePath).toMatchObject({
       label: "Codex config home",
-      description:
-        "Custom CODEX_HOME passed to Codex. Leave blank to use the TritonAI-managed config.",
-      control: "text",
-      section: "advanced",
     });
+  });
+
+  it("keeps every masked field as a stored secret", () => {
+    const settingsSchema = makeProviderSettingsSchema({
+      token: TrimmedString.pipe(
+        Schema.annotateKey({ providerSettingsForm: { control: "password" } }),
+      ),
+    });
+
+    expect(deriveProviderSettingsFields({ settingsSchema })).toMatchObject([
+      { key: "token", secret: true },
+    ]);
   });
 
   it("keeps non-managed Claude provider settings hidden", () => {

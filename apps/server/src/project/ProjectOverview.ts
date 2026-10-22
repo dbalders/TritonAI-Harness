@@ -118,21 +118,22 @@ export const make = Effect.gen(function* () {
   const changes = yield* PubSub.sliding<ProjectId>(32);
   const runs = new Map<ProjectId, Run>();
 
-  const projectFor = (projectId: ProjectId) =>
-    Effect.gen(function* () {
-      const rows = yield* sql<{ title: string; workspaceRoot: string }>`
+  const projectFor = Effect.fn("ProjectOverview.projectFor")(function* (projectId: ProjectId) {
+    const rows = yield* sql<{ title: string; workspaceRoot: string }>`
         SELECT title, workspace_root AS "workspaceRoot" FROM projection_projects
         WHERE project_id=${projectId} AND deleted_at IS NULL
       `.pipe(Effect.mapError(unavailable));
-      if (!rows[0])
-        return yield* new ProjectOverviewError({ message: "This project is no longer available." });
-      return rows[0];
-    });
+    if (!rows[0])
+      return yield* new ProjectOverviewError({ message: "This project is no longer available." });
+    return rows[0];
+  });
 
-  const stored = (projectId: ProjectId, workspaceRoot: string) =>
-    Effect.gen(function* () {
-      // Deleted/archived threads cannot remain visible through the cached source excerpts.
-      const rows = yield* sql<{ overview: string }>`
+  const stored = Effect.fn("ProjectOverview.stored")(function* (
+    projectId: ProjectId,
+    workspaceRoot: string,
+  ) {
+    // Deleted/archived threads cannot remain visible through the cached source excerpts.
+    const rows = yield* sql<{ overview: string }>`
         SELECT overview_json AS overview FROM project_overviews o
         WHERE project_id=${projectId} AND workspace_root=${workspaceRoot}
         AND NOT EXISTS (
@@ -145,10 +146,10 @@ export const make = Effect.gen(function* () {
           )
         )
       `.pipe(Effect.mapError(unavailable));
-      return rows[0]
-        ? yield* decodeStored(rows[0].overview).pipe(Effect.mapError(unavailable))
-        : null;
-    });
+    return rows[0]
+      ? yield* decodeStored(rows[0].overview).pipe(Effect.mapError(unavailable))
+      : null;
+  });
 
   const dismissals = (projectId: ProjectId) =>
     sql<{ stepId: string; title: string; kind: string }>`

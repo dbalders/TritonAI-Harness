@@ -1153,7 +1153,7 @@ function activateStagedVendor(stagingDir, targetDir, requirement) {
     if (!restoreFailed && previousRequirementMoved) {
       try {
         if (fs.existsSync(requirement.targetPath)) {
-          throw new Error("composition requirement restore target is occupied");
+          throw new Error("composition requirement restore target is occupied", { cause: error });
         }
         fs.renameSync(previousRequirement, requirement.targetPath);
         previousRequirementMoved = false;
@@ -1166,6 +1166,7 @@ function activateStagedVendor(stagingDir, targetDir, requirement) {
       : "";
     throw new Error(
       `Could not atomically activate managed plugin release state: ${error.message}${rollbackFailure}`,
+      { cause: error },
     );
   } finally {
     if (!previousVendorMoved && !previousRequirementMoved) {

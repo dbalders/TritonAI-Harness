@@ -5,7 +5,6 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
-
 import type * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
   structuralProtocolMethod,
@@ -126,11 +125,8 @@ export const makeAcpNativeLoggerFactory = Effect.fn("makeAcpNativeLoggerFactory"
     readonly threadId: ThreadId;
     readonly verboseProtocolLogging?: boolean;
   }): Pick<AcpSessionRuntime.AcpSessionRuntimeOptions, "requestLogger" | "protocolLogging"> => {
-    const writeNativeAcpLog = (logInput: {
-      readonly kind: "request" | "protocol";
-      readonly payload: unknown;
-    }) =>
-      Effect.gen(function* () {
+    const writeNativeAcpLog = Effect.fn("AcpNativeLogging.writeNativeAcpLog")(
+      function* (logInput: { readonly kind: "request" | "protocol"; readonly payload: unknown }) {
         if (!input.nativeEventLogger) return;
         const observedAt = DateTime.formatIso(yield* DateTime.now);
         yield* input.nativeEventLogger.write(
@@ -147,18 +143,18 @@ export const makeAcpNativeLoggerFactory = Effect.fn("makeAcpNativeLoggerFactory"
           },
           input.threadId,
         );
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterrupts(cause)
-            ? Effect.interrupt
-            : Effect.logWarning("Failed to write native ACP event log.", {
-                errorTag: causeErrorTag(cause),
-                reasonCount: cause.reasons.length,
-                provider: input.provider,
-                threadId: input.threadId,
-              }),
-        ),
-      );
+      },
+      Effect.catchCause((cause) =>
+        Cause.hasInterrupts(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("Failed to write native ACP event log.", {
+              errorTag: causeErrorTag(cause),
+              reasonCount: cause.reasons.length,
+              provider: input.provider,
+              threadId: input.threadId,
+            }),
+      ),
+    );
 
     return {
       requestLogger: (event: AcpSessionRuntime.AcpSessionRequestLogEvent) =>
