@@ -73,8 +73,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-24.04
-    # Leave room for native-library downloads before the workspace test suite.
-    timeout-minutes: 15
+    # Include browser/native setup and the expanded v0.1.1 workspace suite.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -117,8 +117,8 @@ jobs:
   test_server:
     name: Test Server ${{ matrix.shard }}
     runs-on: ubuntu-24.04
-    # Include dependency/browser setup and post-job cache/finalization around the serial tests.
-    timeout-minutes: 15
+    # Browser dependency setup can take ten minutes before the serial tests start.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
