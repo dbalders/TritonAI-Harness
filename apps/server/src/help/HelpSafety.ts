@@ -16,7 +16,7 @@ export function redactHelpText(value: string): string {
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
     .replace(/\bBearer\s+[^\s,;"'<>]+/gi, "Bearer [REDACTED]")
     .replace(
-      /((?:[a-z][a-z0-9_]*_)?(?:api[_-]?key|secret[_-]?access[_-]?key|access[_-]?key|session[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|authorization|secret|token)\s*["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)/gi,
+      /((?:[a-z][a-z0-9_]*_)?(?:api[_-]?key|management[_ -]?key|secret[_-]?access[_-]?key|access[_-]?key|session[_-]?token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|authorization|secret|token)\s*["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)/gi,
       "$1[REDACTED]",
     )
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[REDACTED]@")

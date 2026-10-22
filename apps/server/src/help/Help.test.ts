@@ -562,6 +562,20 @@ it.layer(NodeServices.layer)("Help", (it) => {
       header: "AWS_SESSION_TOKEN=aws-session-secret-value",
       credential: "aws-session-secret-value",
     },
+    {
+      header: '{"managementKey":"opaque-management-camel"}',
+      credential: "opaque-management-camel",
+    },
+    {
+      header: '{"management_key":"opaque-management-snake"}',
+      credential: "opaque-management-snake",
+    },
+    { header: "management-key='opaque-management-dash'", credential: "opaque-management-dash" },
+    { header: "management key: opaque-management-spaces", credential: "opaque-management-spaces" },
+    {
+      header: "USAGE_MANAGEMENT_KEY=opaque-management-prefixed",
+      credential: "opaque-management-prefixed",
+    },
   ])(
     "removes complete sensitive header credentials from model input and output: %o",
     ({ header, credential }) =>
@@ -573,6 +587,7 @@ it.layer(NodeServices.layer)("Help", (it) => {
           });
         }).pipe(Effect.provide(h.layer));
         assert.notInclude(JSON.stringify(h.calls), credential);
+        assert.notInclude(JSON.stringify(h.documentationQuestions), credential);
         assert.notInclude(result.answer, credential);
         assert.include(h.calls[0]!.messages[0]!.content, "Why did sign-in fail?");
         assert.include(result.answer, "[REDACTED]");
