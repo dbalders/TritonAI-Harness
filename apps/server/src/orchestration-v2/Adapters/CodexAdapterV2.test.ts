@@ -3777,6 +3777,104 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect(
+    "preserves native completion when Stop is canceled while waiting for a queued turn",
+    () =>
+      Effect.gen(function* () {
+        const nativeThreadId = "early-stop-thread";
+        const nativeTurnId = "early-stop-turn";
+        const prompt = "Run a command.";
+        const preamble = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt });
+        const transcript = makeCodexReplayTranscript({
+          scenario: "early-stop-canceled-before-start",
+          entries: [
+            ...preamble.slice(0, -2),
+            {
+              type: "emit_inbound",
+              label: "turn/start/queued",
+              frame: {
+                id: 3,
+                result: {
+                  turn: {
+                    ...makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }),
+                    startedAt: null,
+                  },
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/started/after-undelivered-stop",
+              afterMs: 2_000,
+              frame: {
+                method: "turn/started",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }),
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "turn/completed/after-undelivered-stop",
+              afterMs: 1_000,
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        let interruptSent = false;
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          () => Effect.void,
+          (method) =>
+            Effect.sync(() => {
+              if (method === "turn/interrupt") interruptSent = true;
+            }),
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("early-stop-attempt"),
+            text: prompt,
+          }),
+        );
+        const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+          driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+          nativeTurnId,
+        });
+        const interrupt = yield* harness.runtime
+          .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
+          .pipe(Effect.exit, Effect.forkScoped);
+        yield* TestClock.adjust("1 second");
+        yield* Fiber.interrupt(interrupt);
+        assert.lengthOf(
+          harness.terminalEvents(),
+          0,
+          "A turn that never received Stop must not be reported interrupted",
+        );
+        assert.isFalse(interruptSent, "An unstarted native turn must not receive turn/interrupt");
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+        yield* TestClock.adjust("1 second");
+        yield* TestClock.adjust("1 second");
+        yield* harness.firstTerminal;
+        assert.lengthOf(harness.terminalEvents(), 1);
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
   it.effect("sends currency-sigil skill mentions to Codex as $ mentions", () =>
     Effect.gen(function* () {
       const nativeThreadId = "skill-sigil-thread";

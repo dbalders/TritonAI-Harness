@@ -7585,6 +7585,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
 
               const undeliveredQueuedInterrupts = new Set<string>();
+              const markQueuedStopUndelivered = Effect.fn(
+                "CodexAdapterV2.markQueuedStopUndelivered",
+              )(function* (nativeTurnId: string) {
+                undeliveredQueuedInterrupts.add(nativeTurnId);
+                yield* Ref.update(undeliveredStopNativeTurns, (current) =>
+                  new Set(current).add(nativeTurnId),
+                );
+              });
               const cleanupInterruptState = Effect.gen(function* () {
                 const stillActive = yield* Ref.get(activeTurns);
                 const stillSettled = yield* Ref.get(settledTurns);
@@ -7929,12 +7937,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   if (context.nativeStartReady !== undefined) {
                     const ready = yield* Deferred.await(context.nativeStartReady).pipe(
                       Effect.timeoutOption("10 seconds"),
+                      // A canceled waiter never delivered Stop either. Record
+                      // that outcome before cleanup can release its claim.
+                      Effect.onInterrupt(() => markQueuedStopUndelivered(context.nativeTurnId)),
                     );
                     if (Option.isNone(ready)) {
-                      undeliveredQueuedInterrupts.add(context.nativeTurnId);
-                      yield* Ref.update(undeliveredStopNativeTurns, (current) =>
-                        new Set(current).add(context.nativeTurnId),
-                      );
+                      yield* markQueuedStopUndelivered(context.nativeTurnId);
                       return yield* toProtocolError(
                         "Codex did not start the queued turn within 10 seconds; Stop could not be delivered.",
                       );
