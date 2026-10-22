@@ -253,6 +253,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
         catalogKey: instanceId,
         environment: processEnv,
         customModelMetadata: enabled ? effectiveConfig.customModelMetadata : {},
+        managedGateway: enabled && isManagedGateway,
       }).pipe(
         Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
         Effect.mapError(

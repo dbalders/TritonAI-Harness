@@ -93,6 +93,7 @@ function managedModelFromTemplate(input: {
 export function buildTritonAiCodexModelCatalog(
   bundledCatalogJson: string,
   customModelMetadata: CodexSettings["customModelMetadata"],
+  options: { readonly managedGateway: boolean } = { managedGateway: false },
 ): string {
   const parsed: unknown = JSON.parse(bundledCatalogJson);
   if (!isJsonObject(parsed) || !Array.isArray(parsed.models)) {
@@ -101,7 +102,13 @@ export function buildTritonAiCodexModelCatalog(
 
   const models = parsed.models
     .filter(isJsonObject)
-    .filter((model) => model.slug !== CODEX_AUTO_REVIEW_SLUG);
+    .filter((model) => model.slug !== CODEX_AUTO_REVIEW_SLUG)
+    .map((model) =>
+      // Codex honors this override even when its target is absent from the catalog.
+      options.managedGateway && model.auto_review_model_override === CODEX_AUTO_REVIEW_SLUG
+        ? { ...model, auto_review_model_override: null }
+        : model,
+    );
   const template =
     models.find((model) => model.slug === MODEL_TEMPLATE_SLUG) ??
     models.find((model) => model.tool_mode == null && model.use_responses_lite === false) ??
@@ -177,11 +184,13 @@ export const materializeTritonAiCodexModelCatalog = Effect.fn(
   readonly catalogKey: string;
   readonly environment: NodeJS.ProcessEnv;
   readonly customModelMetadata: CodexSettings["customModelMetadata"];
+  readonly managedGateway?: boolean;
 }) {
   const hasExplicitModalities = Object.values(input.customModelMetadata).some(
     (metadata) => explicitInputModalities(metadata) !== undefined,
   );
-  if (!hasExplicitModalities) return undefined;
+  // Managed routes also need reviewer sanitation when no modality injection is needed.
+  if (!input.managedGateway && !hasExplicitModalities) return undefined;
 
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const path = yield* Path.Path;
@@ -210,7 +219,10 @@ export const materializeTritonAiCodexModelCatalog = Effect.fn(
   }
 
   const contents = yield* Effect.try({
-    try: () => buildTritonAiCodexModelCatalog(output.stdout, input.customModelMetadata),
+    try: () =>
+      buildTritonAiCodexModelCatalog(output.stdout, input.customModelMetadata, {
+        managedGateway: input.managedGateway === true,
+      }),
     catch: (cause) =>
       new CodexModelCatalogError({
         operation: "buildCatalog",
