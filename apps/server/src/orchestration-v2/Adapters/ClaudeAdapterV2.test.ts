@@ -592,6 +592,55 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     assert.isFalse(overrides.allowedTools?.includes(ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD));
   });
 
+  it("leaves browser navigation to the permission callback when one is installed", () => {
+    const mcpSession = mcpSessionFor(ThreadId.make("thread-claude-mcp-browser-callback"));
+    const withCallback = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession,
+      readOnlySandbox: false,
+      browserApprovalViaCallback: true,
+    });
+    for (const tool of ClaudeAdapterV2.CLAUDE_T3_MCP_BROWSER_NAVIGATION_TOOLS) {
+      assert.isFalse(withCallback.allowedTools?.includes(tool), tool);
+    }
+    assert.isTrue(withCallback.allowedTools?.includes("mcp__t3-code__preview_snapshot"));
+    const withoutCallback = ClaudeAdapterV2.claudeMcpQueryOverrides({
+      mcpSession,
+      readOnlySandbox: false,
+      browserApprovalViaCallback: false,
+    });
+    assert.deepEqual(withoutCallback.allowedTools, [
+      ...ClaudeAdapterV2.claudeT3McpHostAllowedTools(),
+    ]);
+  });
+
+  it("plans browser approval with the complete URL under the one session browsing grant", () => {
+    const url = "https://example.test/path?token=abc&next=%2Fsecret#frag";
+    const external = ClaudeAdapterV2.claudeBrowserNavigationApproval(
+      "mcp__t3-code__preview_navigate",
+      { url },
+    );
+    assert.equal(external?.requiresApproval, true);
+    assert.equal(external?.grantKey, "browser-navigation");
+    assert.include(external?.requiresApproval ? external.prompt : "", `URL: ${url}`);
+    const local = ClaudeAdapterV2.claudeBrowserNavigationApproval("mcp__t3-code__preview_open", {
+      url: "http://localhost:5173/",
+    });
+    assert.deepEqual(local, { requiresApproval: false, grantKey: "browser-navigation" });
+    const profiled = ClaudeAdapterV2.claudeBrowserNavigationApproval("mcp__t3-code__preview_open", {
+      profileId: "work",
+    });
+    assert.equal(profiled?.requiresApproval, true);
+    assert.equal(profiled?.grantKey, "browser-navigation");
+    assert.include(
+      profiled?.requiresApproval ? profiled.prompt : "",
+      "any tab or browser profile in this thread",
+    );
+    assert.isUndefined(
+      ClaudeAdapterV2.claudeBrowserNavigationApproval("mcp__t3-code__preview_snapshot", {}),
+    );
+    assert.isUndefined(ClaudeAdapterV2.claudeBrowserNavigationApproval("Bash", { url }));
+  });
+
   it("extends an explicit allowlist with the Harness's own t3-code tools", () => {
     const threadId = ThreadId.make("thread-claude-mcp-with-allowlist");
     const mcpSession = mcpSessionFor(threadId);
@@ -1288,6 +1337,210 @@ describe("ClaudeAdapterV2 plugin tool approvals", () => {
           decision: "decline",
         });
         assert.equal((yield* Fiber.join(decision))?.behavior, "deny");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+});
+
+describe("ClaudeAdapterV2 browser navigation approvals", () => {
+  it.effect("asks with the full URL, runs local tabs, and shares one session browsing grant", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-claude-browser-approval-",
+        });
+        let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
+          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CLAUDE_SETTINGS,
+          environment: {},
+          attachmentsDir,
+          fileSystem,
+          path: yield* Path.Path,
+          crypto: yield* Crypto.Crypto,
+          idAllocator,
+          queryRunner: {
+            allocateSessionId: Effect.succeed("native-thread-claude-browser-approval"),
+            open: (input) =>
+              Effect.sync(() => {
+                openedOptions = input.options;
+                return {
+                  messages: Stream.never,
+                  offer: () => Effect.void,
+                  setModel: () => Effect.void,
+                  applyFlagSettings: () => Effect.void,
+                  setPermissionMode: () => Effect.void,
+                  backgroundTasks: () => Effect.succeed(false),
+                  stopTask: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                };
+              }),
+            forkSession: () => Effect.die("unused"),
+            subagentLaunchToolUseId: () => Effect.succeed(null),
+            assertComplete: Effect.void,
+          },
+        });
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: "/workspace",
+        });
+        const threadId = ThreadId.make("thread-claude-browser-approval");
+        const runtime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-claude-browser-approval"),
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy,
+        });
+        const providerThread = yield* runtime.ensureThread({
+          threadId,
+          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+          runtimePolicy,
+        });
+        const now = yield* DateTime.now;
+        yield* runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId,
+            providerThread,
+            now,
+            attemptId: RunAttemptId.make("attempt-claude-browser-approval"),
+            text: "Open the page.",
+            attachments: [],
+            runtimePolicy,
+          }),
+        );
+        const canUseTool = openedOptions?.canUseTool;
+        assert.isFunction(canUseTool);
+
+        let callCount = 0;
+        const call = (toolName: string, input: Record<string, unknown>) => {
+          callCount += 1;
+          return Effect.promise(() =>
+            canUseTool!(toolName, input, {
+              signal: new AbortController().signal,
+              toolUseID: `tool-browser-${callCount}`,
+              requestId: `request-browser-${callCount}`,
+              title: `Claude wants to use ${toolName}`,
+            }),
+          );
+        };
+        const askAndAnswer = (
+          toolName: string,
+          input: Record<string, unknown>,
+          decision: "accept" | "acceptForSession" | "decline",
+        ) =>
+          Effect.gen(function* () {
+            // runtime.events drains one shared queue, so use a single consumer
+            // that stops once it has seen both the request and its turn item.
+            const eventsFiber = yield* runtime.events.pipe(
+              Stream.mapAccum(
+                () => ({ request: false, item: false }),
+                (seen, event) => {
+                  const next = {
+                    request: seen.request || event.type === "runtime_request.updated",
+                    item:
+                      seen.item ||
+                      (event.type === "turn_item.updated" &&
+                        event.turnItem.type === "approval_request"),
+                  };
+                  return [next, [{ event, done: next.request && next.item }]] as const;
+                },
+              ),
+              Stream.takeUntil((entry) => entry.done),
+              Stream.runCollect,
+              Effect.forkScoped,
+            );
+            const result = yield* call(toolName, input).pipe(Effect.forkScoped);
+            const events = [...(yield* Fiber.join(eventsFiber))].map((entry) => entry.event);
+            const request = events.find((event) => event.type === "runtime_request.updated");
+            if (request?.type !== "runtime_request.updated") return assert.fail("no request");
+            const item = events.find(
+              (event) =>
+                event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+            );
+            if (item?.type !== "turn_item.updated" || item.turnItem.type !== "approval_request") {
+              return assert.fail("no approval request");
+            }
+            yield* runtime.respondToRuntimeRequest({
+              requestId: request.runtimeRequest.id,
+              decision,
+            });
+            return { prompt: item.turnItem.prompt, result: yield* Fiber.join(result) };
+          });
+        const directly = (toolName: string, input: Record<string, unknown>) =>
+          Effect.gen(function* () {
+            const requestEvent = yield* runtime.events.pipe(
+              Stream.filter((event) => event.type === "runtime_request.updated"),
+              Stream.runHead,
+              Effect.forkScoped,
+            );
+            const decision = yield* call(toolName, input).pipe(Effect.forkScoped);
+            const first = yield* Effect.raceFirst(
+              Fiber.join(requestEvent).pipe(Effect.as("request" as const)),
+              Fiber.join(decision).pipe(Effect.map((result) => result)),
+            );
+            yield* Fiber.interrupt(requestEvent);
+            if (first === "request") return assert.fail(`${toolName} asked unexpectedly`);
+            return first;
+          });
+
+        // The browser tools are not pre-approved while the permission callback asks.
+        assert.notInclude(openedOptions?.allowedTools ?? [], "mcp__t3-code__preview_navigate");
+
+        const local = yield* directly("mcp__t3-code__preview_open", {
+          url: "http://localhost:5173/",
+        });
+        assert.equal(local?.behavior, "allow");
+
+        const declined = yield* askAndAnswer(
+          "mcp__t3-code__preview_open",
+          { profileId: "work" },
+          "decline",
+        );
+        assert.include(declined.prompt, "Browser profile: work");
+        assert.include(declined.prompt, "any tab or browser profile in this thread");
+        assert.equal(declined.result?.behavior, "deny");
+
+        const url = "https://example.test/landing?campaign=x&id=1234567890#section";
+        const first = yield* askAndAnswer(
+          "mcp__t3-code__preview_navigate",
+          { url },
+          "acceptForSession",
+        );
+        assert.include(first.prompt, `URL: ${url}`);
+        assert.include(first.prompt, "Site: example.test");
+        assert.equal(first.result?.behavior, "allow");
+        assert.isUndefined(
+          first.result?.behavior === "allow" ? first.result.updatedPermissions : undefined,
+          "a browser session grant must not become a whole-tool SDK rule",
+        );
+
+        const second = yield* directly("mcp__t3-code__preview_navigate", {
+          url: "https://another.test/",
+        });
+        assert.equal(second?.behavior, "allow");
+
+        assert.include(first.prompt, "any tab or browser profile in this thread");
+
+        // The session grant is the documented browsing authority for the thread: a later tab
+        // under a named profile, or navigation of an existing tab by id, does not ask again.
+        const profiled = yield* directly("mcp__t3-code__preview_open", {
+          url: "https://example.test/",
+          profileId: "work",
+        });
+        assert.equal(profiled?.behavior, "allow");
+        const byTab = yield* directly("mcp__t3-code__preview_navigate", {
+          tabId: "tab-work",
+          url: "https://third.test/",
+        });
+        assert.equal(byTab?.behavior, "allow");
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),

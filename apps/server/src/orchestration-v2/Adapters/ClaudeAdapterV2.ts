@@ -110,6 +110,14 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { describeToolCallForApproval } from "../../integrations/IntegrationToolPreview.ts";
+import {
+  BROWSER_NAVIGATION_GRANT,
+  browserNavigationRequest,
+  browserProfileRequest,
+  describeBrowserNavigationForApproval,
+  describeBrowserProfileOpenForApproval,
+  isBrowserNavigationTool,
+} from "../../preview/BrowserNavigationApproval.ts";
 import { HOST_MCP_TOOL_NAMES } from "../../mcp/hostToolNames.ts";
 import { resolveClaudeSdkExecutablePath } from "../../provider/Drivers/ClaudeExecutable.ts";
 import { planClaudeSkillDispatch } from "../../provider/Drivers/ClaudeSkillDispatch.ts";
@@ -1207,15 +1215,57 @@ export function makeClaudeQueryOptions(input: {
 }
 
 export const CLAUDE_T3_MCP_TOOL_WILDCARD = "mcp__t3-code__*";
+const CLAUDE_T3_MCP_TOOL_PREFIX = "mcp__t3-code__";
 
 /** The name Claude Code gives a t3-code MCP tool; it replaces characters it does not allow. */
 function claudeT3McpToolName(toolName: string): string {
-  return `mcp__t3-code__${toolName.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  return `${CLAUDE_T3_MCP_TOOL_PREFIX}${toolName.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
 
 /** Every Harness-owned t3-code tool, which Claude may use without asking outside read-only work. */
 export function claudeT3McpHostAllowedTools(): ReadonlyArray<string> {
   return HOST_MCP_TOOL_NAMES.map(claudeT3McpToolName);
+}
+
+/** The browser tools that load pages; they are left to the permission callback when one exists. */
+export const CLAUDE_T3_MCP_BROWSER_NAVIGATION_TOOLS: ReadonlyArray<string> = [
+  claudeT3McpToolName("preview_open"),
+  claudeT3McpToolName("preview_navigate"),
+];
+
+/**
+ * What a Claude browser call needs before it runs, or undefined for any other tool. An external
+ * address asks with the complete URL; opening a tab under a named profile with saved sign-ins also
+ * asks; a blank or local tab runs directly. All share the one session browsing grant.
+ */
+export function claudeBrowserNavigationApproval(
+  toolName: string,
+  toolInput: unknown,
+):
+  | { readonly requiresApproval: false; readonly grantKey: string }
+  | { readonly requiresApproval: true; readonly grantKey: string; readonly prompt: string }
+  | undefined {
+  if (!toolName.startsWith(CLAUDE_T3_MCP_TOOL_PREFIX)) return undefined;
+  const name = toolName.slice(CLAUDE_T3_MCP_TOOL_PREFIX.length);
+  if (!isBrowserNavigationTool(name)) return undefined;
+  const profileId = browserProfileRequest(name, toolInput);
+  const grantKey = BROWSER_NAVIGATION_GRANT;
+  const navigation = browserNavigationRequest(name, toolInput);
+  if (navigation) {
+    return {
+      requiresApproval: true,
+      grantKey,
+      prompt: describeBrowserNavigationForApproval(navigation),
+    };
+  }
+  if (profileId) {
+    return {
+      requiresApproval: true,
+      grantKey,
+      prompt: describeBrowserProfileOpenForApproval(profileId),
+    };
+  }
+  return { requiresApproval: false, grantKey };
 }
 
 /** The included plugin tool behind a Claude tool name, if it is one. */
@@ -1284,6 +1334,11 @@ export function claudeMcpQueryOverrides(input: {
   readonly allowedTools?: ReadonlyArray<string>;
   /** Canonical names of included read-only plugin tools. */
   readonly readOnlyIntegrationTools?: ReadonlyArray<string>;
+  /**
+   * The permission callback is installed, so browser navigation is left to it: the callback asks
+   * with the complete destination instead of the SDK running the call pre-approved.
+   */
+  readonly browserApprovalViaCallback?: boolean;
 }): {
   readonly allowedTools?: ReadonlyArray<string>;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
@@ -1295,7 +1350,11 @@ export function claudeMcpQueryOverrides(input: {
   const mcpAllowedTools = input.readOnlySandbox
     ? CLAUDE_READ_ONLY_T3_MCP_ALLOWED_TOOLS
     : [
-        ...claudeT3McpHostAllowedTools(),
+        ...claudeT3McpHostAllowedTools().filter(
+          (tool) =>
+            input.browserApprovalViaCallback !== true ||
+            !CLAUDE_T3_MCP_BROWSER_NAVIGATION_TOOLS.includes(tool),
+        ),
         ...(input.readOnlyIntegrationTools ?? []).map(claudeT3McpToolName),
       ];
   return {
@@ -3616,6 +3675,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const pendingRuntimeRequests = yield* Ref.make(
           new Map<string, PendingClaudeRuntimeRequest>(),
         );
+        // Browser session grants, by Harness thread then grant key (one per browser profile).
+        const browserNavigationGrants = yield* Ref.make(new Map<string, ReadonlySet<string>>());
         // Background-task wake support. Claude can settle a turn while a
         // local_bash background task keeps running; the CLI later re-invokes
         // the model (a "wake turn") on the same query stream with no active
@@ -8323,14 +8384,35 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             } satisfies PermissionResult;
           }
 
+          // Browsing asks only for an external address or a signed-in profile, and remembers
+          // "Allow for this session" per profile here rather than as an SDK rule for the whole tool.
+          const browserApproval = claudeBrowserNavigationApproval(toolName, toolInput);
+          const browserGrantThread = String(context.input.threadId);
+          if (
+            browserApproval !== undefined &&
+            (!browserApproval.requiresApproval ||
+              (yield* Ref.get(browserNavigationGrants))
+                .get(browserGrantThread)
+                ?.has(browserApproval.grantKey) === true)
+          ) {
+            return {
+              behavior: "allow",
+              updatedInput: toolInput,
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          }
+
           const requestKind = providerRequestKindFromClaudeTool(toolName);
           // A plugin write shows the change it will make, with secret-looking arguments hidden.
+          // Opening a website shows the complete destination.
           const prompt = integrationTool
             ? describeToolCallForApproval(integrationTool.name, toolInput)
-            : (callbackOptions.title ??
-              callbackOptions.description ??
-              callbackOptions.decisionReason ??
-              summarizeClaudeToolRequest(toolName, nativeToolInput));
+            : browserApproval?.requiresApproval === true
+              ? browserApproval.prompt
+              : (callbackOptions.title ??
+                callbackOptions.description ??
+                callbackOptions.decisionReason ??
+                summarizeClaudeToolRequest(toolName, nativeToolInput));
           const artifacts = yield* buildApprovalRequestArtifacts({
             context,
             nativeItemId: nativeRequestId,
@@ -8382,6 +8464,26 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }),
             ),
           );
+
+          if (browserApproval !== undefined) {
+            if (resolvedDecision === "acceptForSession") {
+              const grantKey = browserApproval.grantKey;
+              yield* Ref.update(browserNavigationGrants, (current) => {
+                const updated = new Map(current);
+                updated.set(
+                  browserGrantThread,
+                  new Set([...(current.get(browserGrantThread) ?? []), grantKey]),
+                );
+                return updated;
+              });
+            }
+            return permissionResultFromDecision({
+              toolName,
+              decision: resolvedDecision === "acceptForSession" ? "accept" : resolvedDecision,
+              toolInput,
+              toolUseID: callbackOptions.toolUseID,
+            });
+          }
 
           return permissionResultFromDecision({
             toolName,
@@ -8513,6 +8615,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             readOnlySandbox:
               sandboxPolicyKindForClaudeRuntimePolicy(turnInput.runtimePolicy) === "readOnly",
             readOnlyIntegrationTools: claudeReadOnlyIntegrationToolNames(),
+            browserApprovalViaCallback: queryPolicy.installPermissionCallback,
             ...(queryPolicy.allowedTools === undefined
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),

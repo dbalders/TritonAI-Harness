@@ -3,9 +3,12 @@ import { vi } from "vite-plus/test";
 import * as Clock from "effect/Clock";
 import * as IntegrationRegistry from "../../integrations/IntegrationRegistry.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
+import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
+import type { PreviewAutomationInvokeInput } from "../../mcp/PreviewAutomationBroker.ts";
 import type { IntegrationManifest } from "../../integrations/manifest.ts";
 import { EmptyIntegrationToolInput } from "../../integrations/IntegrationTool.ts";
 import { tritonAiCommonsDynamicToolDefinition } from "../../mcp/TritonAiCommonsTool.ts";
+import { getCodexPreviewDynamicToolDefinitions } from "../../provider/CodexPreviewDynamicTools.ts";
 import * as NodeOS from "node:os";
 
 import { historyResponseItems } from "@t3tools/provider-core/server/handoffBudget";
@@ -55,6 +58,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -71,6 +75,8 @@ import * as Orchestrator from "../Orchestrator.ts";
 import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
+import { BROWSER_SESSION_SCOPE } from "../../preview/BrowserNavigationApproval.ts";
+import * as BrowserNavigationGate from "../../preview/BrowserNavigationGate.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
@@ -691,6 +697,11 @@ describe("CodexAdapterV2 process spawning", () => {
               tool_timeout_sec: 3_900,
               http_headers: {
                 Authorization: "Bearer secret-codex-token",
+              },
+              // The adapter's browser navigation gate approves these, not Codex's reviewer.
+              tools: {
+                preview_open: { approval_mode: "approve" },
+                preview_navigate: { approval_mode: "approve" },
               },
             },
           },
@@ -2052,7 +2063,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       Effect.void,
     onRequest: (method: string, params: unknown) => Effect.Effect<void> = () => Effect.void,
     readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
-    overrides: Pick<CodexAdapterV2.CodexAdapterV2Options, "allowedModels"> = {},
+    overrides: Partial<
+      Pick<CodexAdapterV2.CodexAdapterV2Options, "allowedModels" | "settings">
+    > = {},
     onToolResponse: (result: unknown) => Effect.Effect<void> = () => Effect.void,
   ) =>
     Effect.gen(function* () {
@@ -2456,6 +2469,495 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             scenario === "approved",
           );
           assert.equal(invocations, scenario === "approved" ? 1 : 0);
+          assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
+  // A long, email-style destination: the approval must show all of it, not a 120-character cut.
+  const EXTERNAL_DESTINATION = `https://ic6do.example.test/Ysh5Fd_urgent_update.cmd?${"q=1&".repeat(40)}end=1`;
+  it.live.each([
+    {
+      scenario: "supervised-session",
+      runtimeMode: "approval-required",
+      decision: "acceptForSession",
+    },
+    { scenario: "supervised-declined", runtimeMode: "approval-required", decision: "decline" },
+    { scenario: "auto-once", runtimeMode: "auto", decision: "accept" },
+    { scenario: "full-access", runtimeMode: "full-access", decision: undefined },
+  ] as const)(
+    "applies the $scenario runtime mode to external browser navigation",
+    ({ scenario, runtimeMode, decision }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const name = `browser-navigation-${scenario}`;
+          const nativeThreadId = `native-${name}`;
+          const nativeTurnId = `turn-${name}`;
+          const threadId = ThreadId.make(`thread-${name}`);
+          const browserCalls: Array<PreviewAutomationInvokeInput> = [];
+          const broker = PreviewAutomationBroker.PreviewAutomationBroker.of({
+            connect: () => Effect.die("unused"),
+            focusHost: () => Effect.die("unused"),
+            respond: () => Effect.die("unused"),
+            invoke: <A>(request: PreviewAutomationInvokeInput) =>
+              Effect.sync(() => {
+                browserCalls.push(request);
+                return {
+                  available: true,
+                  visible: false,
+                  tabId: null,
+                  url: null,
+                  title: null,
+                  loading: false,
+                } as A;
+              }),
+          });
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set({
+            environmentId: EnvironmentId.make("fixture-environment"),
+            threadId,
+            providerSessionId: `provider-session-${name}`,
+            providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:1234/mcp",
+            authorizationHeader: "Bearer synthetic-fixture-token",
+            browserToolsAvailable: true,
+            capabilities: McpSessionRegistry.providerSessionCapabilities({ browser: true }),
+            expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
+          });
+          const calls = [
+            // A dev server in the current environment never asks.
+            {
+              id: 100,
+              tool: "preview_navigate",
+              arguments: { target: { kind: "environment-port", port: 5173 } },
+            },
+            { id: 101, tool: "preview_navigate", arguments: { url: EXTERNAL_DESTINATION } },
+            { id: 102, tool: "preview_open", arguments: { url: "second.example.test/page" } },
+            // The server cannot see an existing tab's profile, so these share the session grant.
+            {
+              id: 103,
+              tool: "preview_navigate",
+              arguments: { tabId: "tab-work", url: "https://third.example.test/" },
+            },
+            { id: 104, tool: "preview_open", arguments: { profileId: "Work" } },
+          ];
+          const previewTools = yield* getCodexPreviewDynamicToolDefinitions;
+          const preamble = codexReplayPreamble({
+            nativeThreadId,
+            nativeTurnId,
+            prompt: "Open the link.",
+          }).map((entry) =>
+            entry.type === "expect_outbound" && entry.label === "thread/start"
+              ? {
+                  ...entry,
+                  frame: {
+                    id: 2,
+                    method: "thread/start",
+                    params: {
+                      config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+                      dynamicTools: [...previewTools, tritonAiCommonsDynamicToolDefinition].map(
+                        ({ name, description, inputSchema }) => ({
+                          name,
+                          description,
+                          inputSchema,
+                        }),
+                      ),
+                    },
+                  },
+                }
+              : entry,
+          );
+          const transcript = makeCodexReplayTranscript({
+            scenario: name,
+            entries: [
+              ...preamble,
+              ...calls.flatMap((call) => [
+                {
+                  type: "emit_inbound" as const,
+                  label: `call-${call.id}`,
+                  frame: {
+                    id: call.id,
+                    method: "item/tool/call",
+                    params: {
+                      threadId: nativeThreadId,
+                      turnId: nativeTurnId,
+                      callId: `call-${call.id}`,
+                      tool: call.tool,
+                      arguments: call.arguments,
+                    },
+                  },
+                },
+                {
+                  type: "expect_outbound" as const,
+                  label: `result-${call.id}`,
+                  frame: { id: call.id },
+                },
+              ]),
+              {
+                type: "emit_inbound",
+                label: "complete",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          });
+          const prompts: Array<string> = [];
+          const requests = yield* Queue.unbounded<string>();
+          const results: Array<unknown> = [];
+          const harness = yield* makeCodexReplayHarness(
+            transcript,
+            (event) => {
+              if (event.type !== "turn_item.updated") return Effect.void;
+              const item = event.turnItem;
+              return item.type === "approval_request" && item.status === "waiting"
+                ? Effect.sync(() => prompts.push(item.prompt ?? "")).pipe(
+                    Effect.andThen(Queue.offer(requests, String(item.requestId))),
+                  )
+                : Effect.void;
+            },
+            (method, params) =>
+              Effect.sync(() => {
+                // This fixture exercises dispatch, not the orchestration instruction text.
+                if (method !== "turn/start") return;
+                const expected = preamble.find(
+                  (entry) => entry.type === "expect_outbound" && entry.label === "turn/start",
+                );
+                if (expected?.type === "expect_outbound" && Predicate.isObject(expected.frame))
+                  Object.assign(expected.frame, { params });
+              }),
+            undefined,
+            {
+              settings: {
+                ...DEFAULT_CODEX_SETTINGS,
+                customModels: [CODEX_TEST_MODEL_SELECTION.model],
+              },
+            },
+            (result) =>
+              Effect.sync(() => {
+                results.push(result);
+                const response = transcript.entries.find(
+                  (entry) =>
+                    entry.type === "expect_outbound" &&
+                    entry.label === `result-${calls[results.length - 1]?.id}`,
+                );
+                if (response?.type === "expect_outbound" && Predicate.isObject(response.frame))
+                  Object.assign(response.frame, { result });
+              }),
+          ).pipe(Effect.provideService(PreviewAutomationBroker.PreviewAutomationBroker, broker));
+          assert.includeMembers(
+            [...(harness.providerThread.dynamicToolNames ?? [])],
+            ["preview_open", "preview_navigate"],
+          );
+          yield* harness.runtime.startTurn({
+            ...makeCodexTestTurnInput({
+              threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-${name}`),
+              text: "Open the link.",
+            }),
+            runtimePolicy: { ...CODEX_TEST_RUNTIME_POLICY, runtimeMode },
+          });
+          const expectedPrompts =
+            decision === undefined ? 0 : decision === "acceptForSession" ? 1 : 4;
+          for (let index = 0; index < expectedPrompts; index += 1) {
+            const requestId = yield* Queue.take(requests);
+            yield* harness.runtime.respondToRuntimeRequest({
+              requestId: requestId as never,
+              decision: decision!,
+            });
+          }
+          yield* harness.firstTerminal;
+          assert.equal(prompts.length, expectedPrompts);
+          if (expectedPrompts > 0) {
+            assert.equal(
+              prompts[0],
+              [
+                "Open a website in the browser (preview_navigate)",
+                "Site: ic6do.example.test",
+                `URL: ${EXTERNAL_DESTINATION}`,
+                BROWSER_SESSION_SCOPE,
+              ].join("\n"),
+            );
+          }
+          if (expectedPrompts === 4) {
+            assert.include(prompts[1], "URL: https://second.example.test/page");
+            assert.include(prompts[2], "URL: https://third.example.test/");
+            assert.include(prompts[3], "Browser profile: Work (its saved sign-ins)");
+            assert.include(prompts[3], BROWSER_SESSION_SCOPE);
+          }
+          const successes = results.map((result) => Predicate.isObject(result) && result.success);
+          assert.deepEqual(
+            successes,
+            decision === "decline"
+              ? [true, false, false, false, false]
+              : [true, true, true, true, true],
+          );
+          assert.deepEqual(
+            browserCalls.map((call) => call.operation),
+            decision === "decline"
+              ? ["navigate"]
+              : ["navigate", "navigate", "open", "navigate", "open"],
+          );
+          assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
+  // Codex's MCP copy of the browser tools reaches the server without passing the adapter's
+  // dynamic-tool approval, and in Auto Codex's own reviewer approves it. The adapter's gate must
+  // apply the same runtime mode, prompt and session grant there. A standard (non-custom) model has
+  // no direct browser tools at all, so the MCP route is its only one.
+  it.live.each([
+    {
+      scenario: "supervised-session",
+      runtimeMode: "approval-required",
+      decision: "acceptForSession",
+      prompts: 1,
+    },
+    {
+      scenario: "supervised-declined",
+      runtimeMode: "approval-required",
+      decision: "decline",
+      prompts: 3,
+    },
+    { scenario: "auto-once", runtimeMode: "auto", decision: "accept", prompts: 3 },
+    { scenario: "full-access", runtimeMode: "full-access", decision: undefined, prompts: 0 },
+  ] as const)(
+    "gates MCP browser navigation in the $scenario runtime mode",
+    ({ scenario, runtimeMode, decision, prompts: expectedPrompts }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const name = `mcp-browser-${scenario}`;
+          const nativeThreadId = `native-${name}`;
+          const nativeTurnId = `turn-${name}`;
+          const threadId = ThreadId.make(`thread-${name}`);
+          const credentialId = `credential-${name}`;
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set({
+            environmentId: EnvironmentId.make("fixture-environment"),
+            threadId,
+            providerSessionId: credentialId,
+            providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:1234/mcp",
+            authorizationHeader: "Bearer synthetic-fixture-token",
+            browserToolsAvailable: true,
+            capabilities: McpSessionRegistry.providerSessionCapabilities({ browser: true }),
+            expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
+          });
+          const preamble = codexReplayPreamble({
+            nativeThreadId,
+            nativeTurnId,
+            prompt: "Open the link.",
+          }).map((entry) =>
+            entry.type === "expect_outbound" && entry.label === "thread/start"
+              ? {
+                  ...entry,
+                  frame: {
+                    id: 2,
+                    method: "thread/start",
+                    params: {
+                      config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+                      dynamicTools: [tritonAiCommonsDynamicToolDefinition].map(
+                        ({ name, description, inputSchema }) => ({
+                          name,
+                          description,
+                          inputSchema,
+                        }),
+                      ),
+                    },
+                  },
+                }
+              : entry,
+          );
+          // A pending command approval keeps the turn active while the MCP calls arrive.
+          const transcript = makeCodexReplayTranscript({
+            scenario: name,
+            entries: [
+              ...preamble,
+              {
+                type: "emit_inbound",
+                label: "hold",
+                frame: {
+                  id: 50,
+                  method: "item/commandExecution/requestApproval",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    itemId: "hold-item",
+                    reason: "fixture-hold",
+                    command: "true",
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "hold-response",
+                frame: { id: 50, result: { decision: "decline" } },
+              },
+              {
+                type: "emit_inbound",
+                label: "complete",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          });
+          const hold = yield* Deferred.make<string>();
+          const gatePrompts: Array<string> = [];
+          const gateRequests = yield* Queue.unbounded<string>();
+          const harness = yield* makeCodexReplayHarness(
+            transcript,
+            (event) => {
+              if (event.type !== "turn_item.updated") return Effect.void;
+              const item = event.turnItem;
+              if (item.type !== "approval_request" || item.status !== "waiting") return Effect.void;
+              return item.prompt === "fixture-hold"
+                ? Deferred.succeed(hold, String(item.requestId))
+                : Effect.sync(() => gatePrompts.push(item.prompt ?? "")).pipe(
+                    Effect.andThen(Queue.offer(gateRequests, String(item.requestId))),
+                  );
+            },
+            (method, params) =>
+              Effect.sync(() => {
+                if (method !== "turn/start") return;
+                const expected = preamble.find(
+                  (entry) => entry.type === "expect_outbound" && entry.label === "turn/start",
+                );
+                if (expected?.type === "expect_outbound" && Predicate.isObject(expected.frame))
+                  Object.assign(expected.frame, { params });
+              }),
+          );
+          assert.notInclude([...(harness.providerThread.dynamicToolNames ?? [])], "preview_open");
+          yield* harness.runtime.startTurn({
+            ...makeCodexTestTurnInput({
+              threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-${name}`),
+              text: "Open the link.",
+            }),
+            runtimePolicy: { ...CODEX_TEST_RUNTIME_POLICY, runtimeMode },
+          });
+          const holdRequestId = yield* Deferred.await(hold);
+
+          const admit = (
+            toolName: "preview_open" | "preview_navigate",
+            args: unknown,
+            overrides: { readonly credentialId?: string; readonly threadId?: ThreadId } = {},
+          ) =>
+            BrowserNavigationGate.admitBrowserNavigation(CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID, {
+              threadId: overrides.threadId ?? threadId,
+              credentialId: overrides.credentialId ?? credentialId,
+              toolName,
+              arguments: args,
+            });
+          // Answers the prompt the call raises, if the scenario expects one for it.
+          const admitAnswering = (
+            toolName: "preview_open" | "preview_navigate",
+            args: unknown,
+            asks: boolean,
+          ) =>
+            Effect.gen(function* () {
+              const fiber = yield* admit(toolName, args).pipe(Effect.forkChild);
+              if (asks) {
+                const requestId = yield* Queue.take(gateRequests);
+                yield* harness.runtime.respondToRuntimeRequest({
+                  requestId: requestId as never,
+                  decision: decision!,
+                });
+              }
+              return yield* Fiber.join(fiber).pipe(Effect.timeout("5 seconds"));
+            });
+
+          const admitted = { admitted: true };
+          // Local dev servers and blank tabs never ask.
+          assert.deepEqual(
+            yield* admitAnswering(
+              "preview_navigate",
+              { target: { kind: "environment-port", port: 5173 } },
+              false,
+            ),
+            admitted,
+          );
+          assert.deepEqual(
+            yield* admitAnswering("preview_open", { url: "http://localhost:5173/" }, false),
+            admitted,
+          );
+          assert.deepEqual(yield* admitAnswering("preview_open", {}, false), admitted);
+
+          const asks = (index: number) =>
+            decision !== undefined && (decision !== "acceptForSession" || index === 0);
+          const external = [
+            yield* admitAnswering(
+              "preview_navigate",
+              { tabId: "tab-1", url: EXTERNAL_DESTINATION },
+              asks(0),
+            ),
+            yield* admitAnswering("preview_open", { url: "second.example.test/page" }, asks(1)),
+            yield* admitAnswering("preview_open", { profileId: "Work" }, asks(2)),
+          ];
+          assert.deepEqual(
+            external.map((result) => result.admitted),
+            decision === "decline" ? [false, false, false] : [true, true, true],
+          );
+          assert.equal(gatePrompts.length, expectedPrompts);
+          if (expectedPrompts > 0)
+            assert.equal(
+              gatePrompts[0],
+              [
+                "Open a website in the browser (preview_navigate)",
+                "Site: ic6do.example.test",
+                `URL: ${EXTERNAL_DESTINATION}`,
+                BROWSER_SESSION_SCOPE,
+              ].join("\n"),
+            );
+          if (expectedPrompts === 3) {
+            assert.include(gatePrompts[1], "URL: https://second.example.test/page");
+            assert.include(gatePrompts[2], "Browser profile: Work (its saved sign-ins)");
+          }
+
+          // A replaced credential, or a thread this session does not run, is refused without asking.
+          const stale = yield* admit(
+            "preview_navigate",
+            { url: "https://fourth.example.test/" },
+            { credentialId: "replaced-credential" },
+          );
+          assert.isFalse(stale.admitted);
+          const foreign = yield* admit(
+            "preview_navigate",
+            { url: "https://fourth.example.test/" },
+            { threadId: ThreadId.make("thread-not-run-here") },
+          );
+          assert.isFalse(foreign.admitted);
+          assert.equal(gatePrompts.length, expectedPrompts);
+
+          yield* harness.runtime.respondToRuntimeRequest({
+            requestId: holdRequestId as never,
+            decision: "decline",
+          });
+          yield* harness.firstTerminal;
+          // With no active turn there is nobody to ask, so the call is refused.
+          const afterTurn = yield* admit("preview_open", { url: "https://fifth.example.test/" });
+          assert.isFalse(afterTurn.admitted);
           assert.equal(harness.terminalEvents()[0]?.status, "completed");
         }),
       ).pipe(
