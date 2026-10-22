@@ -257,8 +257,8 @@ function panelContainer() {
   return container;
 }
 
-function render(props: Partial<ComponentProps<typeof PullRequestDetailPanel>> = {}) {
-  return renderUi(
+function panel(props: Partial<ComponentProps<typeof PullRequestDetailPanel>> = {}) {
+  return (
     <PullRequestDetailPanel
       environmentId={threadRef.environmentId}
       reference={detail}
@@ -266,9 +266,12 @@ function render(props: Partial<ComponentProps<typeof PullRequestDetailPanel>> = 
       shortcutsEnabled={false}
       getShortcutContext={shortcutContext}
       {...props}
-    />,
-    { container: panelContainer() },
+    />
   );
+}
+
+function render(props: Partial<ComponentProps<typeof PullRequestDetailPanel>> = {}) {
+  return renderUi(panel(props), { container: panelContainer() });
 }
 
 // The mocked modules and stores are shared by the whole file, so every test starts by
@@ -750,7 +753,7 @@ it("keeps discussion counts and Timeline expansion in sync with activity refresh
       },
     ],
   };
-  await using _screen = await render({ reference: activityDetail });
+  await using screen = await render({ reference: activityDetail });
   await expect.element(page.getByText("Discussion finding", { exact: true })).toBeVisible();
   await expect.element(page.getByText("Discussion reply", { exact: true })).toBeVisible();
   expect
@@ -766,26 +769,24 @@ it("keeps discussion counts and Timeline expansion in sync with activity refresh
   expect.soft(page.getByLabelText(/^[0-9]+ comments?$/).element().textContent).toBe("2");
 
   const threadToggle = page.getByRole("button", { name: /^src\/index\.ts:1/ });
-  const expectThread = (expanded: boolean, status: string | null) => {
-    const toggle = threadToggle.element();
-    if (status) expect(toggle.textContent).toContain(status);
-    else expect(toggle.textContent).not.toMatch(/Resolved|Review dismissed/);
-    const visibleBody = (toggle.parentElement as HTMLElement).innerText;
-    expect({
-      expanded: toggle.getAttribute("aria-expanded"),
-      findingVisible: visibleBody.includes("Discussion finding"),
-      replyVisible: visibleBody.includes("Discussion reply"),
-    }).toEqual({
-      expanded: String(expanded),
-      findingVisible: expanded,
-      replyVisible: expanded,
+  const expectThread = async (expanded: boolean, status: string | null) => {
+    await vi.waitFor(() => {
+      const toggle = threadToggle.element();
+      if (status) expect(toggle.textContent).toContain(status);
+      else expect(toggle.textContent).not.toMatch(/Resolved|Review dismissed/);
+      const visibleBody = (toggle.parentElement as HTMLElement).innerText;
+      expect({
+        expanded: toggle.getAttribute("aria-expanded"),
+        findingVisible: visibleBody.includes("Discussion finding"),
+        replyVisible: visibleBody.includes("Discussion reply"),
+      }).toEqual({
+        expanded: String(expanded),
+        findingVisible: expanded,
+        replyVisible: expanded,
+      });
     });
   };
   const refreshActivity = async (isResolved: boolean, reviewState: string | null = null) => {
-    await tab("Code").click();
-    await expect
-      .element(page.getByRole("button", { name: "Expand all files", exact: true }))
-      .toBeVisible();
     const current = activityDetail!;
     activityDetail = {
       ...current,
@@ -799,22 +800,23 @@ it("keeps discussion counts and Timeline expansion in sync with activity refresh
       ),
       reviewThreads: current.reviewThreads.map((thread) => ({ ...thread, isResolved })),
     };
-    await tab("Timeline").click();
+    // Publish refreshed query data while the Timeline remains mounted.
+    await screen.rerender(panel({ reference: activityDetail }));
   };
 
-  expectThread(true, null);
+  await expectThread(true, null);
   await refreshActivity(true);
-  expectThread(false, "Resolved");
+  await expectThread(false, "Resolved");
   await threadToggle.click();
-  expectThread(true, "Resolved");
+  await expectThread(true, "Resolved");
   await refreshActivity(true);
-  expectThread(true, "Resolved");
+  await expectThread(true, "Resolved");
   await threadToggle.click();
-  expectThread(false, "Resolved");
+  await expectThread(false, "Resolved");
   await refreshActivity(false);
-  expectThread(true, null);
+  await expectThread(true, null);
   await refreshActivity(false, "DISMISSED");
-  expectThread(false, "Review dismissed");
+  await expectThread(false, "Review dismissed");
   await refreshActivity(false);
-  expectThread(true, null);
+  await expectThread(true, null);
 });
