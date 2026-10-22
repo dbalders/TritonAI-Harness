@@ -10,7 +10,7 @@ import {
   PencilLineIcon,
   RotateCcwIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { useClientSettings } from "../../hooks/useSettings";
 import { useStableCallback } from "../../hooks/useStableCallback";
@@ -132,29 +132,21 @@ export function useGuidedTourChatGuide(
   const { run, isWorking, hasPendingApproval, hasPendingQuestion, timelineEntries, send } = input;
   const runId = run?.runId ?? null;
   const stopped = run !== null && FAILED_RUN_STATUSES.has(run.status);
-  const progress = useMemo(
-    () =>
-      active && isWorking && runId
-        ? onboardingProgressLines(runWorkLog(timelineEntries, runId))
-        : [],
-    [active, isWorking, runId, timelineEntries],
-  );
-  const latestUserMessage = useMemo(
-    () => (active && stopped ? latestUserMessageText(timelineEntries) : null),
-    [active, stopped, timelineEntries],
-  );
+  const progress =
+    active && isWorking && runId ? onboardingProgressLines(runWorkLog(timelineEntries, runId)) : [];
+  const latestUserMessage = active && stopped ? latestUserMessageText(timelineEntries) : null;
 
   const sendOnce = useStableCallback(async (text: string, onSent?: () => void) => {
     if (sending) return;
     setSending(true);
-    try {
+    return await (async () => {
       if (await send(text)) onSent?.();
-    } finally {
+    })().finally(async () => {
       setSending(false);
-    }
+    });
   });
 
-  return useMemo<ComposerBannerStackItem | null>(() => {
+  return (() => {
     if (!active || input.threadId === null) return null;
     const id = `guided-tour:${input.threadId}`;
     const shared = { id, dismissLabel: "Hide tour suggestions", onDismiss: dismiss } as const;
@@ -296,20 +288,5 @@ export function useGuidedTourChatGuide(
         </div>
       ),
     };
-  }, [
-    active,
-    hasPendingApproval,
-    hasPendingQuestion,
-    input.threadId,
-    isWorking,
-    latestUserMessage,
-    progress,
-    run,
-    sendOnce,
-    sending,
-    stopped,
-    tour.roleId,
-    tour.taskId,
-    tour.usedFollowUps,
-  ]);
+  })();
 }

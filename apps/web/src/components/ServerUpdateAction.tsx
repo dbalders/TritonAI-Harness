@@ -119,7 +119,7 @@ export function canUpdateServer(
 ): boolean {
   return false;
 }
-export function useServerUpdate() {
+export function createServerUpdate() {
   return async (
     _target: ServerUpdateTarget,
     _options?: { readonly quiet?: boolean },

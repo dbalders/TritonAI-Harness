@@ -9,7 +9,6 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
-
 import { useProjects, useServerConfigs } from "../../state/entities";
 import {
   createDraft,
@@ -19,7 +18,6 @@ import {
 } from "./scheduledTaskDraft";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { settingsTargetsForProject } from "./settings-environment-filter.logic";
-
 import {
   scheduledTaskEditorSessionAtom,
   startScheduledTaskEditor,

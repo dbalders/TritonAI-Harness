@@ -206,6 +206,7 @@ describe("source control writer provider policy", () => {
 });
 
 vi.mock("../../state/environments", () => ({
+  useEnvironmentProviders: () => new Map([["env", componentState.providers]]),
   usePrimaryEnvironment: () => null,
   usePrimaryEnvironmentId: () => null,
 }));

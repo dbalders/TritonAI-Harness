@@ -13,7 +13,6 @@ import {
   resolveServerSelfUpdateCapability,
   resolveVersionMismatch,
   serverUpdateGuidance,
-  supportsDesktopAppUpdate,
 } from "./versionSkew";
 
 // Pinned so the direction cases below read as fixed versions instead of

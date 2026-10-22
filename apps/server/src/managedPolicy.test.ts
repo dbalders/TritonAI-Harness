@@ -9,7 +9,6 @@ import {
   type TritonAiManagedConfig,
 } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-
 import {
   applyManagedHarnessPolicy,
   getManagedCodexSettings,

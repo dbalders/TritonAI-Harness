@@ -10,7 +10,7 @@ import type {
   ProjectNextStepFeedbackKind,
   ProjectOverviewSnapshot,
 } from "@t3tools/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -63,65 +63,60 @@ export function useProjectOverview({
     label: "Restore project next steps",
     reportFailure: false,
   });
-  useEffect(() => {
+  const [lastQueryData, setLastQueryData] = useState(query.data);
+  if (query.data !== lastQueryData) {
+    setLastQueryData(query.data);
     if (query.data) setSaved(query.data);
-  }, [query.data]);
-  const restore = useCallback(
-    async (stepId?: string) => {
-      const result = await sendRestore({
-        environmentId,
-        input: stepId === undefined ? { projectId } : { projectId, stepId },
-      });
-      if (result._tag === "Success") {
-        setRequestError(null);
-      } else if (!isAtomCommandInterrupted(result)) {
-        setRequestError(failureMessage(result, "Couldn't restore suggestions. Try again."));
-      }
-    },
-    [environmentId, projectId, sendRestore],
-  );
-  const dismiss = useCallback(
-    async (step: ProjectNextStep, kind: ProjectNextStepFeedbackKind) => {
-      const result = await sendDismiss({
-        environmentId,
-        input: { projectId, stepId: step.id, kind },
-      });
-      if (result._tag !== "Success") {
-        if (!isAtomCommandInterrupted(result)) {
-          setRequestError(failureMessage(result, "Couldn't save that change. Try again."));
-        }
-        return;
-      }
+  }
+  const restore = async (stepId?: string) => {
+    const result = await sendRestore({
+      environmentId,
+      input: stepId === undefined ? { projectId } : { projectId, stepId },
+    });
+    if (result._tag === "Success") {
       setRequestError(null);
-      toastManager.add({
-        type: "success",
-        title: kind === "done" ? "Marked as done" : "Suggestion hidden",
-        description: "It won't be suggested again for this project.",
-        actionProps: { children: "Undo", onClick: () => void restore(step.id) },
-      });
-    },
-    [environmentId, projectId, restore, sendDismiss],
-  );
-  const refresh = useCallback(
-    async (force = false) => {
-      if (!connected || !supported || !allowed || inFlight.current) return;
-      inFlight.current = true;
-      setChecking(true);
-      setRequestError(null);
+    } else if (!isAtomCommandInterrupted(result)) {
+      setRequestError(failureMessage(result, "Couldn't restore suggestions. Try again."));
+    }
+  };
+  const dismiss = async (step: ProjectNextStep, kind: ProjectNextStepFeedbackKind) => {
+    const result = await sendDismiss({
+      environmentId,
+      input: { projectId, stepId: step.id, kind },
+    });
+    if (result._tag !== "Success") {
+      if (!isAtomCommandInterrupted(result)) {
+        setRequestError(failureMessage(result, "Couldn't save that change. Try again."));
+      }
+      return;
+    }
+    setRequestError(null);
+    toastManager.add({
+      type: "success",
+      title: kind === "done" ? "Marked as done" : "Suggestion hidden",
+      description: "It won't be suggested again for this project.",
+      actionProps: { children: "Undo", onClick: () => void restore(step.id) },
+    });
+  };
+  const refresh = async (force = false) => {
+    if (!connected || !supported || !allowed || inFlight.current) return;
+    inFlight.current = true;
+    setChecking(true);
+    setRequestError(null);
+    return await (async () => {
       try {
         const result = await ensure({ environmentId, input: { projectId, force } });
         if (result._tag !== "Success") setRequestError("Couldn't check next steps. Try again.");
       } catch {
         setRequestError("Couldn't check next steps. Try again.");
-      } finally {
-        inFlight.current = false;
-        setChecking(false);
       }
-    },
-    [allowed, connected, ensure, environmentId, projectId, supported],
-  );
+    })().finally(async () => {
+      inFlight.current = false;
+      setChecking(false);
+    });
+  };
   useEffect(() => {
-    void refresh();
+    void Promise.resolve().then(() => refresh());
   }, [refresh]);
   const snapshot = connected ? (query.data ?? saved) : saved;
   return {

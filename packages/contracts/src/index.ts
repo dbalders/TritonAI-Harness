@@ -66,6 +66,7 @@ export * from "./preview.ts";
 export * from "./previewAutomation.ts";
 export * from "./integrations.ts";
 export * from "./integrationManifest.ts";
+export * from "./previewCapture.ts";
 export * from "./resourceTelemetry.ts";
 export * from "./usage.ts";
 export * from "./scheduledTask.ts";

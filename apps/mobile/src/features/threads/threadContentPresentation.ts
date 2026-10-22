@@ -1,4 +1,4 @@
-import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 
 export type ThreadContentPresentation =
   | { readonly kind: "ready" }
@@ -37,8 +37,6 @@ export function projectThreadContentPresentation(input: {
     input.connectionState === "connecting" ||
     input.connectionState === "reconnecting"
   ) {
-    // Messages will arrive once the (re)connection completes — present as
-    // loading; the composer's connection pill reports the connection phase.
     return { kind: "loading" };
   }
   return {
