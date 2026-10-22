@@ -3,8 +3,8 @@
   "kind": "tritonai-managed-plugin-catalog",
   "source": {
     "repository": "https://github.com/dbalders/TritonAI-Plugins.git",
-    "ref": "refs/tags/v0.1.15",
-    "commit": "2d8bb3c8758010681596473c8b8b4be3576d3c9c"
+    "ref": "refs/tags/v0.1.16",
+    "commit": "8708b029586fbc7fabdb0e3cb5d3fd68370d2b35"
   },
   "packages": [
     {
@@ -39,9 +39,9 @@
     },
     {
       "pluginId": "microsoft-365",
-      "version": "1.4.0",
-      "digest": "43a6712eb72e6d4b2ab6f4c9eebbcc1c41ba92d7c1f95244c332e6e7472e02b3",
-      "manifestDigest": "089527f1cc7114f1464cc6e1b5d5bf6cac5054737b502b5ae934a810b294d550"
+      "version": "1.5.0",
+      "digest": "4a10ac424aa23ec542b812ecd05af6ce0056dcd757aaf627c032c65cff7a17cb",
+      "manifestDigest": "5199dea770525f8a56477f24da5970470fd9ceb0fb9ce65d30d08c84adcebda7"
     },
     {
       "pluginId": "n8n",
