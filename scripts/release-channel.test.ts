@@ -5,46 +5,41 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { parse } from "yaml";
 
 it.layer(NodeServices.layer)("release workflow channel", (it) => {
-  it.effect("uses one immutable composition producer for stable and nightly builds", () =>
+  it.effect("builds stable and nightly plugins entirely from the exact Harness source", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const pins: string[] = [];
       for (const name of ["release", "nightly"]) {
         const workflowPath = yield* path.fromFileUrl(
           new URL(`../.github/workflows/${name}.yml`, import.meta.url),
         );
-        const workflow = parse(yield* fs.readFileString(workflowPath));
-        const pin = workflow.env.TRITONAI_INSTALLER_COMPOSITION_COMMIT;
-        assert.match(pin, /^[a-f0-9]{40}$/);
-        pins.push(pin);
-        const producerCheckouts = Object.values<{
-          steps?: { with?: { repository?: string; ref?: string } }[];
-        }>(workflow.jobs).flatMap((job) =>
-          (job.steps ?? []).filter(
-            (step) => step.with?.repository === "dbalders/TritonAI-Installer",
-          ),
-        );
-        assert.isAbove(producerCheckouts.length, 0);
-        for (const step of producerCheckouts) {
-          assert.equal(step.with?.ref, "${{ env.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}");
+        const source = yield* fs.readFileString(workflowPath);
+        const workflow = parse(source);
+        assert.notInclude(source, "TRITONAI_INSTALLER_COMPOSITION_COMMIT");
+        assert.notInclude(source, "dbalders/TritonAI-Installer");
+        assert.notInclude(source, ".release-input/installer");
+        for (const jobName of ["prepare_managed_plugins", "mac"]) {
+          const checkout = workflow.jobs[jobName].steps.find((step: { uses?: string }) =>
+            step.uses?.startsWith("actions/checkout@"),
+          );
+          assert.equal(checkout.with.ref, "${{ needs.preflight.outputs.ref }}");
         }
-        // Nightly reads the Installer's nightly plugin catalog; stable must only read production.
         const compositionCommands = Object.values<{ steps?: { run?: string }[] }>(workflow.jobs)
           .flatMap((job) => job.steps ?? [])
           .flatMap((step) =>
             (step.run ?? "")
               .split("\n")
-              .filter((line) => line.includes("prepare-plugins-vendor.js")),
+              .filter((line) => line.includes("prepare-managed-plugins.cjs")),
           )
           .map((line) => line.trim());
         assert.deepEqual(compositionCommands, [
-          `node .release-input/installer/dist/scripts/prepare-plugins-vendor.js --production${
+          `node .github/scripts/prepare-managed-plugins.cjs --production${
             name === "nightly" ? " --nightly" : ""
           }`,
         ]);
+        assert.include(source, "node .github/scripts/finalize-macos-release.cjs");
+        assert.include(source, "path: .release-input/plugins");
       }
-      assert.equal(pins[0], pins[1]);
     }),
   );
 

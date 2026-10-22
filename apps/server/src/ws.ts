@@ -1323,6 +1323,8 @@ const wsRpcFirstHalfTags = [
   WS_METHODS.projectOverviewGet,
   WS_METHODS.projectOverviewSubscribe,
   WS_METHODS.projectOverviewEnsure,
+  WS_METHODS.projectOverviewDismiss,
+  WS_METHODS.projectOverviewRestore,
   WS_METHODS.serverGetProjectMemory,
   ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
   ORCHESTRATION_V2_WS_METHODS.stopWorkflow,
@@ -2526,6 +2528,8 @@ export const layerWsRpc = (
         [WS_METHODS.projectOverviewGet]: (input) => projectOverview.get(input),
         [WS_METHODS.projectOverviewSubscribe]: (input) => projectOverview.subscribe(input),
         [WS_METHODS.projectOverviewEnsure]: (input) => projectOverview.ensure(input),
+        [WS_METHODS.projectOverviewDismiss]: (input) => projectOverview.dismiss(input),
+        [WS_METHODS.projectOverviewRestore]: (input) => projectOverview.restore(input),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
@@ -3690,6 +3694,8 @@ export const layerWsRpc = (
           [WS_METHODS.projectOverviewGet]: handlers[WS_METHODS.projectOverviewGet],
           [WS_METHODS.projectOverviewSubscribe]: handlers[WS_METHODS.projectOverviewSubscribe],
           [WS_METHODS.projectOverviewEnsure]: handlers[WS_METHODS.projectOverviewEnsure],
+          [WS_METHODS.projectOverviewDismiss]: handlers[WS_METHODS.projectOverviewDismiss],
+          [WS_METHODS.projectOverviewRestore]: handlers[WS_METHODS.projectOverviewRestore],
           [WS_METHODS.serverGetProjectMemory]: handlers[WS_METHODS.serverGetProjectMemory],
           [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]:
             handlers[ORCHESTRATION_V2_WS_METHODS.dispatchCommand],

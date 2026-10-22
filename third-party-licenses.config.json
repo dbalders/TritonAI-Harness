@@ -879,6 +879,69 @@
         "licenseId": "MIT",
         "copyrights": ["Copyright (c) 2019-present Fabio Spampinato, Andrew Maney"]
       }
+    },
+    {
+      "name": "@ricky0123/vad-web",
+      "license": "ISC AND MIT",
+      "sourceUrl": "https://github.com/ricky0123/vad",
+      "generatedNotices": [
+        {
+          "licenseId": "ISC",
+          "copyrights": ["Copyright (c) 2022-present ricky0123"]
+        },
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2020-present Silero Team"],
+          "preamble": ["Includes the Silero VAD v5 model: https://github.com/snakers4/silero-vad"]
+        }
+      ]
+    },
+    {
+      "name": "onnxruntime-web",
+      "sourceUrl": "https://github.com/microsoft/onnxruntime",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) Microsoft Corporation"],
+        "preamble": [
+          "The bundled ONNX Runtime WebAssembly build includes third-party components listed at https://github.com/microsoft/onnxruntime/blob/v1.22.0/ThirdPartyNotices.txt"
+        ]
+      }
+    },
+    {
+      "name": "onnxruntime-common",
+      "sourceUrl": "https://github.com/microsoft/onnxruntime",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) Microsoft Corporation"]
+      }
+    },
+    {
+      "name": "guid-typescript",
+      "sourceUrl": "https://github.com/NicolasDeveloper/guid-typescript",
+      "generatedNotice": {
+        "licenseId": "ISC",
+        "preamble": [
+          "guid-typescript by nicolas: https://github.com/NicolasDeveloper/guid-typescript"
+        ]
+      }
+    },
+    {
+      "license": "MIT AND Apache-2.0",
+      "name": "unpdf",
+      "sourceUrl": "https://github.com/unjs/unpdf",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2023-PRESENT Johann Schopplich"]
+        },
+        {
+          "licenseId": "Apache-2.0",
+          "copyrights": ["Copyright Mozilla Foundation"],
+          "preamble": [
+            "Includes a bundled build of PDF.js, which is licensed under the Apache License 2.0: https://github.com/mozilla/pdf.js"
+          ]
+        }
+      ]
     }
   ]
 }

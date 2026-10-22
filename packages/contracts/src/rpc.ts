@@ -378,7 +378,9 @@ import {
 import {
   ProjectOverviewError,
   ProjectOverviewGetInput,
+  ProjectOverviewDismissInput,
   ProjectOverviewEnsureInput,
+  ProjectOverviewRestoreInput,
   ProjectOverviewSnapshot,
 } from "./projectOverview.ts";
 import {
@@ -612,6 +614,8 @@ export const WS_METHODS = {
   projectOverviewGet: "projectOverview.get",
   projectOverviewSubscribe: "projectOverview.subscribe",
   projectOverviewEnsure: "projectOverview.ensure",
+  projectOverviewDismiss: "projectOverview.dismiss",
+  projectOverviewRestore: "projectOverview.restore",
 
   scheduledTasksList: "scheduledTasks.list",
   scheduledTasksSubscribe: "scheduledTasks.subscribe",
@@ -2150,6 +2154,16 @@ const WsProjectOverviewEnsureRpc = Rpc.make(WS_METHODS.projectOverviewEnsure, {
   success: ProjectOverviewSnapshot,
   error: Schema.Union([ProjectOverviewError, EnvironmentAuthorizationError]),
 });
+const WsProjectOverviewDismissRpc = Rpc.make(WS_METHODS.projectOverviewDismiss, {
+  payload: ProjectOverviewDismissInput,
+  success: ProjectOverviewSnapshot,
+  error: Schema.Union([ProjectOverviewError, EnvironmentAuthorizationError]),
+});
+const WsProjectOverviewRestoreRpc = Rpc.make(WS_METHODS.projectOverviewRestore, {
+  payload: ProjectOverviewRestoreInput,
+  success: ProjectOverviewSnapshot,
+  error: Schema.Union([ProjectOverviewError, EnvironmentAuthorizationError]),
+});
 
 const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   payload: ScheduledTaskListInput,
@@ -2340,6 +2354,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectOverviewGetRpc,
   WsProjectOverviewSubscribeRpc,
   WsProjectOverviewEnsureRpc,
+  WsProjectOverviewDismissRpc,
+  WsProjectOverviewRestoreRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,

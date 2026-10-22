@@ -48,11 +48,12 @@ describe("V2 preview upgrade", () => {
         [69, "ProjectBriefDispatches"],
         [70, "ProjectBriefArchives"],
         [71, "ProjectOverviews"],
-        [72, "DropUnusedV1Projections"],
-        [73, "CanonicalizeThreadPullRequestLinks"],
-        [74, "CodexUsageNativeTurnIndex"],
-        [75, "RepairClientSettlementTimestamps"],
-        [76, "WebhookDedupe"],
+        [72, "ProjectNextStepDismissals"],
+        [73, "DropUnusedV1Projections"],
+        [74, "CanonicalizeThreadPullRequestLinks"],
+        [75, "CodexUsageNativeTurnIndex"],
+        [76, "RepairClientSettlementTimestamps"],
+        [77, "WebhookDedupe"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -144,11 +145,12 @@ describe("V2 preview upgrade", () => {
         [69, "ProjectBriefDispatches"],
         [70, "ProjectBriefArchives"],
         [71, "ProjectOverviews"],
-        [72, "DropUnusedV1Projections"],
-        [73, "CanonicalizeThreadPullRequestLinks"],
-        [74, "CodexUsageNativeTurnIndex"],
-        [75, "RepairClientSettlementTimestamps"],
-        [76, "WebhookDedupe"],
+        [72, "ProjectNextStepDismissals"],
+        [73, "DropUnusedV1Projections"],
+        [74, "CanonicalizeThreadPullRequestLinks"],
+        [75, "CodexUsageNativeTurnIndex"],
+        [76, "RepairClientSettlementTimestamps"],
+        [77, "WebhookDedupe"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

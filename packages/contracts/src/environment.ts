@@ -124,6 +124,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
   threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
   projectOverview: Schema.optionalKey(Schema.Boolean),
+  /** Server understands projectOverview.dismiss and projectOverview.restore. */
+  projectNextStepFeedback: Schema.optionalKey(Schema.Boolean),
   /** Server persists a pull request reference on thread.meta.update. */
   threadPullRequestLinking: Schema.optionalKey(Schema.Boolean),
   serverResolvedCommandContext: Schema.optionalKey(Schema.Boolean),

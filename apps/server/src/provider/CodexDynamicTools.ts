@@ -10,7 +10,14 @@ import {
   IntegrationToolUnavailableError,
 } from "../integrations/IntegrationToolFailure.ts";
 import { describeToolCallForApproval } from "../integrations/IntegrationToolPreview.ts";
-
+import {
+  BROWSER_NAVIGATION_GRANT,
+  browserNavigationRequest,
+  browserProfileRequest,
+  describeBrowserNavigationForApproval,
+  describeBrowserProfileOpenForApproval,
+  isBrowserNavigationTool,
+} from "../preview/BrowserNavigationApproval.ts";
 export interface CodexDynamicToolOptions {
   readonly threadId: ThreadId;
   readonly dynamicTools?: ReadonlyArray<CodexDynamicToolDefinition>;
@@ -277,6 +284,55 @@ export function dynamicToolApprovalPrompt(
   payload: Pick<EffectCodexSchema.DynamicToolCallParams, "tool" | "arguments">,
 ): string {
   return describeToolCallForApproval(payload.tool, payload.arguments);
+}
+
+export interface DynamicToolApprovalPlan {
+  readonly requiresApproval: boolean;
+  /** The session grant ("Allow for this session") that covers this call. */
+  readonly grantKey: string;
+  readonly prompt: string;
+}
+
+/**
+ * What a dynamic tool call needs approved. Plugin writes ask per tool. The two browser tools that
+ * load pages decide by destination instead of their static annotation (which made preview_open
+ * always ask and preview_navigate never ask): loading an external website asks, under one
+ * browsing grant shared by both tools, and a blank tab or local dev server does not. Opening a tab
+ * under a named profile (its saved sign-ins) also asks. Every browser call shares the one session
+ * grant, because an existing tab's profile is not visible here; the prompt says so.
+ * dynamicToolApprovalRequired still exempts Full access.
+ */
+export function planDynamicToolApproval(input: {
+  readonly requiresApproval: boolean | undefined;
+  readonly payload: Pick<EffectCodexSchema.DynamicToolCallParams, "tool" | "arguments">;
+}): DynamicToolApprovalPlan {
+  if (isBrowserNavigationTool(input.payload.tool)) {
+    const navigation = browserNavigationRequest(input.payload.tool, input.payload.arguments);
+    const profileId = browserProfileRequest(input.payload.tool, input.payload.arguments);
+    const grantKey = BROWSER_NAVIGATION_GRANT;
+    if (navigation)
+      return {
+        requiresApproval: true,
+        grantKey,
+        prompt: describeBrowserNavigationForApproval(navigation),
+      };
+    if (profileId)
+      return {
+        requiresApproval: true,
+        grantKey,
+        prompt: describeBrowserProfileOpenForApproval(profileId),
+      };
+    return {
+      requiresApproval: false,
+      grantKey,
+      prompt: dynamicToolApprovalPrompt(input.payload),
+    };
+  }
+  return {
+    requiresApproval: input.requiresApproval === true,
+    grantKey: input.payload.tool,
+    prompt: dynamicToolApprovalPrompt(input.payload),
+  };
 }
 
 class CodexDynamicToolInvocationError extends Data.TaggedError("CodexDynamicToolInvocationError")<{

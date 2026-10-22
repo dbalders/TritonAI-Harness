@@ -352,6 +352,18 @@ export class DesktopRuntimeDeploymentArchitectureMissingError extends Schema.Tag
   }
 }
 
+export class ForeignNativePackagesStagedError extends Schema.TaggedError<ForeignNativePackagesStagedError>()(
+  "ForeignNativePackagesStagedError",
+  {
+    target: Schema.String,
+    packages: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `The ${this.target} stage contains native packages for other platforms: ${this.packages.join(", ")}.`;
+  }
+}
+
 export class UnsupportedHostBuildPlatformError extends Schema.TaggedError<UnsupportedHostBuildPlatformError>()(
   "UnsupportedHostBuildPlatformError",
   {
@@ -1245,6 +1257,119 @@ export const RUNTIME_DEPLOY_ARGS = [
   "--prod",
   "--frozen-lockfile",
 ] as const;
+
+// The root workspace installs optional natives for every OS and CPU so one checkout can
+// build any target. A macOS stage needs only its own; the rest added ~440 MiB of staged Linux,
+// Windows, and unused-architecture binaries to sign, compress, notarize, and download.
+// Linux keeps the broad deploy because its stage declares both glibc and musl binaries.
+export function resolveRuntimeDeployArgs(input: {
+  readonly platform: "mac" | "linux";
+  readonly arch: typeof BuildArch.Type;
+  readonly stageAppDir: string;
+}): ReadonlyArray<string> {
+  if (input.platform !== "mac") return [...RUNTIME_DEPLOY_ARGS, input.stageAppDir];
+  const { os, cpu } = createStageWorkspaceConfig({
+    platform: input.platform,
+    arch: input.arch,
+  }).supportedArchitectures;
+  return [
+    ...RUNTIME_DEPLOY_ARGS,
+    ...os.map((value) => `--os=${value}`),
+    ...cpu.map((value) => `--cpu=${value}`),
+    input.stageAppDir,
+  ];
+}
+
+export interface PackagePlatformManifest {
+  readonly name: string;
+  readonly version?: string | undefined;
+  readonly os?: ReadonlyArray<string> | undefined;
+  readonly cpu?: ReadonlyArray<string> | undefined;
+}
+
+// npm `os`/`cpu` semantics: a package fits when some target value is listed (or
+// only negations are listed) and that value is not negated.
+function packageFieldAllows(
+  field: ReadonlyArray<string> | undefined,
+  targets: ReadonlyArray<string>,
+) {
+  if (!field || field.length === 0) return true;
+  const allowed = field.filter((value) => !value.startsWith("!"));
+  return targets.some(
+    (value) =>
+      !field.includes(`!${value}`) &&
+      (allowed.length === 0 || allowed.includes(value) || allowed.includes("any")),
+  );
+}
+
+export function findForeignNativePackages(
+  manifests: ReadonlyArray<PackagePlatformManifest>,
+  supported: { readonly os: ReadonlyArray<string>; readonly cpu: ReadonlyArray<string> },
+): ReadonlyArray<string> {
+  return manifests
+    .filter(
+      (manifest) =>
+        !packageFieldAllows(manifest.os, supported.os) ||
+        !packageFieldAllows(manifest.cpu, supported.cpu),
+    )
+    .map((manifest) => (manifest.version ? `${manifest.name}@${manifest.version}` : manifest.name))
+    .toSorted();
+}
+
+const decodePackageManifestJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
+
+// Read only the platform fields, tolerating unusual shapes in third-party manifests.
+function toPackagePlatformManifest(value: unknown, fallbackName: string): PackagePlatformManifest {
+  const manifest =
+    typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const strings = (field: unknown) =>
+    typeof field === "string"
+      ? [field]
+      : Array.isArray(field)
+        ? field.filter((entry): entry is string => typeof entry === "string")
+        : undefined;
+  return {
+    name: typeof manifest.name === "string" ? manifest.name : fallbackName,
+    version: typeof manifest.version === "string" ? manifest.version : undefined,
+    os: strings(manifest.os),
+    cpu: strings(manifest.cpu),
+  };
+}
+
+/** Reads each installed package manifest in a pnpm isolated `node_modules/.pnpm` store. */
+export const readStagedPackageManifests = Effect.fn("readStagedPackageManifests")(function* (
+  stageAppDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const store = path.join(stageAppDir, "node_modules", ".pnpm");
+  const manifests: PackagePlatformManifest[] = [];
+  for (const entry of yield* fs.readDirectory(store)) {
+    // The store also holds files such as lock.yaml beside its package directories.
+    if ((yield* fs.stat(path.join(store, entry))).type !== "Directory") continue;
+    const modules = path.join(store, entry, "node_modules");
+    if (!(yield* fs.exists(modules))) continue;
+    for (const name of yield* fs.readDirectory(modules)) {
+      const packageDirs = name.startsWith("@")
+        ? (yield* fs.readDirectory(path.join(modules, name))).map((child) => `${name}/${child}`)
+        : [name];
+      for (const packageDir of packageDirs) {
+        const packagePath = path.join(modules, packageDir);
+        // Symlinks are this entry's dependencies; each real package is read in its own entry.
+        if (Option.isSome(yield* fs.readLink(packagePath).pipe(Effect.option))) continue;
+        const manifestPath = path.join(packagePath, "package.json");
+        if (!(yield* fs.exists(manifestPath))) continue;
+        manifests.push(
+          toPackagePlatformManifest(
+            yield* decodePackageManifestJson(yield* fs.readFileString(manifestPath)),
+            packageDir,
+          ),
+        );
+      }
+    }
+  }
+  return manifests;
+});
 
 function removeEnvironmentKeys(environment: NodeJS.ProcessEnv, names: ReadonlyArray<string>): void {
   const excluded = new Set(names.map((name) => name.toUpperCase()));
@@ -5014,7 +5139,10 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     yield* Effect.log(
       "[desktop-artifact] Deploying production dependencies from the frozen workspace lockfile...",
     );
-    const deployCommand = yield* resolveSpawnCommand("vp", [...RUNTIME_DEPLOY_ARGS, stageAppDir]);
+    const deployCommand = yield* resolveSpawnCommand(
+      "vp",
+      resolveRuntimeDeployArgs({ platform: options.platform, arch: options.arch, stageAppDir }),
+    );
     yield* runCommand(
       ChildProcess.make(deployCommand.command, deployCommand.args, {
         cwd: repoRoot,
@@ -5022,6 +5150,19 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       }),
       { label: "Deploy frozen desktop runtime", verbose: options.verbose },
     );
+    if (options.platform === "mac") {
+      const foreignPackages = findForeignNativePackages(
+        yield* readStagedPackageManifests(stageAppDir),
+        createStageWorkspaceConfig({ platform: options.platform, arch: options.arch })
+          .supportedArchitectures,
+      );
+      if (foreignPackages.length > 0) {
+        return yield* new ForeignNativePackagesStagedError({
+          target: `mac-${options.arch}`,
+          packages: [...foreignPackages],
+        });
+      }
+    }
   }
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });

@@ -64,6 +64,7 @@
     "stream-chain": "^4.2.5",
     "stream-json": "3.6.0",
     "undici": "catalog:",
+    "unpdf": "1.8.1",
     "yaml": "catalog:",
     "yauzl": "^3.4.0"
   },

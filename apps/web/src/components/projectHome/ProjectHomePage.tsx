@@ -352,6 +352,8 @@ function ProjectOverview({
     projectId: project.id,
     connected,
     supported: overviewSupported,
+    feedbackSupported:
+      environment?.serverConfig?.environment.capabilities.projectNextStepFeedback === true,
   });
   const openNextStep = (step: ProjectNextStep) => {
     const saved = overview.snapshot?.overview;

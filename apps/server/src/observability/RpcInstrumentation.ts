@@ -126,6 +126,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.projectOverviewGet]: "projectOverview",
   [WS_METHODS.projectOverviewSubscribe]: "projectOverview",
   [WS_METHODS.projectOverviewEnsure]: "projectOverview",
+  [WS_METHODS.projectOverviewDismiss]: "projectOverview",
+  [WS_METHODS.projectOverviewRestore]: "projectOverview",
   [WS_METHODS.projectBriefGet]: "projectBrief",
   [WS_METHODS.projectBriefArchiveGet]: "projectBrief",
   [WS_METHODS.projectBriefSubscribe]: "projectBrief",

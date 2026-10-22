@@ -1,272 +1,264 @@
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { ServerMemoryStatus, ServerMemorySyncStartResult } from "@t3tools/contracts";
-import { FolderOpenIcon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AuthSettingsWriteScope,
+  type EnvironmentId,
+  type ServerMemoryStatus,
+} from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
+import { ChevronDownIcon, FolderOpenIcon } from "lucide-react";
+import { useContext, useEffect, useState } from "react";
 import { resolveAndPersistPreferredEditor } from "../../editorPreferences";
-import { useEnvironmentQuery } from "../../state/query";
+import { formatEnvironmentQueryError } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { shellEnvironment } from "../../state/shell";
+import { useEnvironmentsWithScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { DeviceCodePrompt } from "./PluginsSettings";
-import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
+import { useMemorySyncActions, type MemoryDeviceCodeFlow } from "./useMemorySyncActions";
+import { useScopedSettingsMixed, useUpdateScopedSettings } from "./useScopedSettings";
 
-function describeMemoryStatus(enabled: boolean, status: ServerMemoryStatus | null): string {
-  if (!enabled || !status?.enabled) {
-    return "Keep a daily summary of your threads that Codex agents can look back on.";
-  }
-  if (status.state === "error") {
-    return `The last update failed: ${status.message ?? "unknown error"}`;
-  }
-  if (status.state === "summarizing") {
-    return status.message ?? "Writing daily notes.";
-  }
+type MemoryEnvironment = ReturnType<typeof useSettingsScope>["environments"][number];
+
+function describeMemoryStatus(status: ServerMemoryStatus): string {
+  if (!status.enabled) return "Memory off";
+  if (status.state === "error") return `Memory update failed: ${status.message ?? "unknown error"}`;
+  if (status.state === "summarizing") return "Writing daily notes";
   return status.lastSummarizedDay
-    ? `Caught up through ${status.lastSummarizedDay}. Today's note updates every four hours while you work.`
-    : "Today's note appears a few hours into your day and updates every four hours.";
+    ? `Caught up through ${status.lastSummarizedDay}`
+    : "Waiting for the first daily note";
 }
 
 function describeSyncStatus(sync: ServerMemoryStatus["sync"]): string {
   switch (sync.state) {
     case "off":
+      return "Sync off";
     case "unavailable":
-      return "Share this computer's memory with your other computers through your OneDrive.";
+      return "OneDrive sync unavailable on this version";
     case "signed-out":
-      return sync.message ?? "Sign in with Microsoft to keep syncing.";
+      return "Microsoft sign-in required";
     case "error":
       return `Sync failed: ${sync.message ?? "unknown error"}`;
     case "syncing":
-      return "Syncing with OneDrive.";
-    case "idle": {
-      const account = sync.account ? ` as ${sync.account}` : "";
-      const when = sync.lastSyncedAt
-        ? ` Last synced ${new Date(sync.lastSyncedAt).toLocaleString()}.`
-        : "";
-      const note = sync.message ? ` ${sync.message}` : "";
-      return `Syncing${account} with ${sync.cloudFolder}.${when}${note}`;
-    }
+      return "Syncing with OneDrive";
+    case "idle":
+      return `${sync.account ? `Connected as ${sync.account}` : "Connected to OneDrive"}${sync.lastSyncedAt ? ` · Last synced ${new Date(sync.lastSyncedAt).toLocaleString()}` : ""}${sync.message ? ` · ${sync.message}` : ""}`;
   }
 }
 
-type DeviceCodeFlow = Extract<ServerMemorySyncStartResult, { readonly kind: "device_code" }>;
-
-function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0], fallback: string) {
-  const failure = squashAtomCommandFailure(result);
-  return failure instanceof Error && failure.message ? failure.message : fallback;
+function MemoryValuePicker({
+  label,
+  value,
+  disabled,
+  multiple,
+  onChange,
+}: {
+  readonly label: string;
+  readonly value: "on" | "off" | "mixed";
+  readonly disabled: boolean;
+  readonly multiple: boolean;
+  readonly onChange: (enabled: boolean) => void;
+}) {
+  return (
+    <Select
+      value={value === "mixed" ? null : value}
+      disabled={disabled}
+      onValueChange={(next) => {
+        if (next === "on" || next === "off") onChange(next === "on");
+      }}
+    >
+      <SelectTrigger size="sm" aria-label={label}>
+        <SelectValue>{value === "mixed" ? "Mixed" : value === "on" ? "On" : "Off"}</SelectValue>
+      </SelectTrigger>
+      <SelectPopup align="end">
+        <SelectItem value="on">{multiple ? "Turn on for all" : "On"}</SelectItem>
+        <SelectItem value="off">{multiple ? "Turn off for all" : "Off"}</SelectItem>
+      </SelectPopup>
+    </Select>
+  );
 }
 
-/**
- * Turning sync on either connects right away, reusing a saved or Microsoft 365
- * plugin sign-in, or shows a device code and polls until the user finishes.
- */
-function MemorySyncRow({
+/** The code belongs to the named environment; the verification page opens on this client. */
+function MemorySignIn({
   environmentId,
-  status,
-  refreshStatus,
+  label,
+  flow,
+  finish,
 }: {
-  readonly environmentId: Parameters<typeof serverEnvironment.memoryStatus>[0]["environmentId"];
-  readonly status: ServerMemoryStatus;
-  readonly refreshStatus: () => void;
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly flow: MemoryDeviceCodeFlow;
+  readonly finish: (id: EnvironmentId, error: string | null) => void;
 }) {
-  const settings = useScopedSettings();
-  const startSync = useAtomCommand(serverEnvironment.startMemorySync, { reportFailure: false });
-  const pollSync = useAtomCommand(serverEnvironment.pollMemorySync, { reportFailure: false });
-  const syncNow = useAtomCommand(serverEnvironment.syncMemoryNow, { reportFailure: false });
-  const stopSync = useAtomCommand(serverEnvironment.stopMemorySync, { reportFailure: false });
-  const signOut = useAtomCommand(serverEnvironment.signOutMemorySync, { reportFailure: false });
-  const [flow, setFlow] = useState<DeviceCodeFlow | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const turnOn = async () => {
-    setBusy(true);
-    setError(null);
-    const result = await startSync({ environmentId, input: {} });
-    setBusy(false);
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result))
-        setError(failureMessage(result, "Could not start sync."));
-      return;
-    }
-    if (result.value.kind === "device_code") setFlow(result.value);
-    refreshStatus();
-  };
-
-  // Poll the pending sign-in at the interval Microsoft asked for.
+  const poll = useAtomCommand(serverEnvironment.pollMemorySync, { reportFailure: false });
   useEffect(() => {
-    if (!flow) return;
-    let delaySeconds = flow.intervalSeconds;
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      if (cancelled) return;
+    let intervalSeconds = flow.intervalSeconds;
+    let timer: ReturnType<typeof setTimeout>;
+    const check = async () => {
       if (Date.now() >= Date.parse(flow.expiresAt)) {
-        setFlow(null);
-        setError("The sign-in code expired. Turn sync on to try again.");
+        finish(environmentId, "The sign-in code expired. Choose Sign in to try again.");
         return;
       }
-      const result = await pollSync({ environmentId, input: { flowId: flow.flowId } });
+      const result = await poll({ environmentId, input: { flowId: flow.flowId } });
       if (cancelled) return;
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
-          setFlow(null);
-          setError(failureMessage(result, "Sign-in failed."));
+          const failure = squashAtomCommandFailure(result);
+          finish(
+            environmentId,
+            failure instanceof Error ? failure.message : "Sign-in failed. Try again.",
+          );
         }
-        return;
+      } else if (result.value.state === "pending") {
+        intervalSeconds = result.value.retryAfterSeconds ?? intervalSeconds;
+        timer = setTimeout(() => void check(), intervalSeconds * 1000);
+      } else {
+        finish(
+          environmentId,
+          result.value.state === "connected"
+            ? null
+            : (result.value.message ?? "Sign-in did not finish. Try again."),
+        );
       }
-      if (result.value.state === "pending") {
-        delaySeconds = result.value.retryAfterSeconds ?? delaySeconds;
-        timer = setTimeout(() => void poll(), delaySeconds * 1000);
-        return;
-      }
-      setFlow(null);
-      if (result.value.state !== "connected") {
-        setError(result.value.message ?? "Sign-in did not finish. Turn sync on to try again.");
-      }
-      refreshStatus();
     };
-    timer = setTimeout(() => void poll(), delaySeconds * 1000);
+    timer = setTimeout(() => void check(), flow.intervalSeconds * 1000);
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
     };
-  }, [environmentId, flow, pollSync, refreshStatus]);
-
-  const runAndRefresh = async (
-    command: typeof syncNow | typeof stopSync | typeof signOut,
-    fallback: string,
-  ) => {
-    setBusy(true);
-    setError(null);
-    const result = await command({ environmentId, input: {} });
-    setBusy(false);
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      setError(failureMessage(result, fallback));
-    }
-    refreshStatus();
-  };
-
-  if (status.sync.state === "unavailable") return null;
-  const enabled = settings.memorySyncEnabled;
-  const signedIn = status.sync.signedIn ?? status.sync.account !== null;
-
+  }, [environmentId, finish, flow, poll]);
   return (
-    <SettingsRow
-      serverScoped
-      settingKeys={["memorySyncEnabled"]}
-      {...searchableSetting("memory-sync")}
-      description={describeSyncStatus(status.sync)}
-      status={error ? <span className="text-destructive">{error}</span> : undefined}
-      control={
-        <div className="flex items-center gap-2">
-          {enabled && status.sync.state !== "signed-out" ? (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={busy || status.sync.state === "syncing"}
-              onClick={() => void runAndRefresh(syncNow, "Could not sync.")}
-            >
-              <RefreshCwIcon />
-              Sync now
-            </Button>
-          ) : null}
-          {signedIn ? (
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={busy}
-              onClick={() => void runAndRefresh(signOut, "Could not sign out.")}
-            >
-              Sign out
-            </Button>
-          ) : null}
-          <ScopedSwitch
-            settingKeys={["memorySyncEnabled"]}
-            checked={enabled || flow !== null}
-            disabled={busy}
-            onCheckedChange={(checked) => {
-              if (checked) {
-                void turnOn();
-              } else {
-                // The server also cancels a sign-in still in progress.
-                setFlow(null);
-                void runAndRefresh(stopSync, "Could not turn off sync.");
-              }
-            }}
-            aria-label="Sync memory with OneDrive"
-          />
-        </div>
-      }
-    >
-      {flow ? (
-        <DeviceCodePrompt
-          title="Sign in with Microsoft to sync memory"
-          message="Enter this code on the Microsoft sign-in page with your UC San Diego account."
-          userCode={flow.userCode}
-          verificationUri={flow.verificationUri}
-        />
-      ) : status.sync.state === "signed-out" && enabled ? (
-        <Button size="xs" className="mt-2" disabled={busy} onClick={() => void turnOn()}>
-          Sign in with Microsoft
-        </Button>
-      ) : null}
-    </SettingsRow>
+    <DeviceCodePrompt
+      title={`Connect OneDrive on ${label}`}
+      message={`Open Microsoft sign-in on this computer and enter the code to authorize ${label}.`}
+      userCode={flow.userCode}
+      verificationUri={flow.verificationUri}
+    />
   );
 }
 
-/**
- * Memory is per machine: each environment keeps its own vault, so the row only
- * renders when one environment is selected.
- */
 export function MemorySettingsSection() {
-  const settings = useScopedSettings();
+  const { scope, environments, connectedEnvironments } = useSettingsScope();
   const updateSettings = useUpdateScopedSettings();
-  const { scope, environment } = useSettingsScope();
-  const environmentId = environment?.environmentId ?? null;
-  const isEnvironmentScope = scope.environmentIds.length === 1 && environmentId !== null;
-  const { data: status, refresh: refreshStatus } = useEnvironmentQuery(
-    isEnvironmentScope ? serverEnvironment.memoryStatus({ environmentId, input: {} }) : null,
-  );
-  // The status otherwise refreshes every 30 seconds; show the switch's effect right away.
-  const shownEnabled = useRef(settings.memoryEnabled);
-  useEffect(() => {
-    if (shownEnabled.current === settings.memoryEnabled) return;
-    shownEnabled.current = settings.memoryEnabled;
-    refreshStatus();
-  }, [refreshStatus, settings.memoryEnabled]);
+  const memoryMixed = useScopedSettingsMixed(["memoryEnabled"]);
+  const syncMixed = useScopedSettingsMixed(["memorySyncEnabled"]);
+  const writable = useEnvironmentsWithScope(connectedEnvironments, AuthSettingsWriteScope);
+  const registry = useContext(RegistryContext);
+  const [expanded, setExpanded] = useState(false);
+  const [folderErrors, setFolderErrors] = useState<Readonly<Record<string, string>>>({});
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, { reportFailure: false });
-  const [openError, setOpenError] = useState<string | null>(null);
+  const statusesAtom = Atom.make((get) =>
+    connectedEnvironments.map((environment) => {
+      const result = get(
+        serverEnvironment.memoryStatus({ environmentId: environment.environmentId, input: {} }),
+      );
+      return {
+        environmentId: environment.environmentId,
+        status: Option.getOrNull(AsyncResult.value(result)),
+        error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
+      };
+    }),
+  );
+  const statuses = useAtomValue(statusesAtom);
+  const refresh = (environmentId: EnvironmentId) => {
+    registry.refresh(serverEnvironment.memoryStatus({ environmentId, input: {} }));
+  };
+  const { operations, run, finishSignIn } = useMemorySyncActions(refresh);
+  const settingsKey = JSON.stringify(
+    connectedEnvironments.map((environment) => [
+      environment.environmentId,
+      environment.serverConfig?.settings.memoryEnabled,
+      environment.serverConfig?.settings.memorySyncEnabled,
+    ]),
+  );
+  useEffect(() => {
+    for (const [id] of JSON.parse(settingsKey) as [EnvironmentId, boolean, boolean][]) refresh(id);
+  }, [refresh, settingsKey]);
 
-  if (!isEnvironmentScope) return null;
+  const isEnvironmentScope = scope.kind === "all" || scope.kind === "environment";
+  const canWriteAll =
+    connectedEnvironments.length > 0 &&
+    connectedEnvironments.every((environment) => writable.has(environment.environmentId));
+  const memoryOn = connectedEnvironments.every(
+    (environment) => environment.serverConfig?.settings.memoryEnabled,
+  );
+  const syncOn = connectedEnvironments.every(
+    (environment) => environment.serverConfig?.settings.memorySyncEnabled,
+  );
+  const offline = environments.filter(
+    (environment) =>
+      !connectedEnvironments.some(
+        (connected) => connected.environmentId === environment.environmentId,
+      ),
+  );
+  const anyBusy = Object.values(operations).some((operation) => operation.busy);
+  const unavailable = statuses.filter((entry) => entry.status?.sync.state === "unavailable").length;
+  const pendingStatus = statuses.some((entry) => !entry.status || entry.error !== null);
+  const attention =
+    statuses.filter(
+      (entry) =>
+        entry.error ||
+        entry.status?.state === "error" ||
+        entry.status?.sync.state === "error" ||
+        entry.status?.sync.state === "signed-out",
+    ).length + Object.values(operations).filter((operation) => operation.error).length;
+  const syncConnected = statuses.filter(
+    (entry) => entry.status?.sync.state === "idle" || entry.status?.sync.state === "syncing",
+  ).length;
+  const pendingSignIns = Object.values(operations).filter((operation) => operation.flow).length;
+  const openDetails = expanded;
 
-  const openFolder = () => {
-    const folder = status?.generalDirectoryPath;
-    if (!folder) return;
-    // Show the vault in Finder/Explorer; fall back to the preferred editor
-    // only where the environment has no usable file manager.
-    const availableEditors = environment?.serverConfig?.availableEditors ?? [];
-    const editor = availableEditors.includes("file-manager")
+  const setSync = (enabled: boolean) => {
+    setExpanded(true);
+    for (const environment of connectedEnvironments) {
+      const id = environment.environmentId;
+      const entry = statuses.find((candidate) => candidate.environmentId === id);
+      if (
+        !writable.has(id) ||
+        !entry?.status ||
+        entry.error ||
+        (enabled && entry.status.sync.state === "unavailable")
+      )
+        continue;
+      void run(id, enabled ? "start" : "stop");
+    }
+  };
+
+  const openFolder = async (environment: MemoryEnvironment, folder: string) => {
+    const available = environment.serverConfig?.availableEditors ?? [];
+    const editor = available.includes("file-manager")
       ? "file-manager"
-      : resolveAndPersistPreferredEditor(availableEditors);
+      : resolveAndPersistPreferredEditor(available);
     if (!editor) {
-      setOpenError("No available editors found.");
+      setFolderErrors((current) => ({
+        ...current,
+        [environment.environmentId]: "No available editors found.",
+      }));
       return;
     }
-    setOpenError(null);
-    void (async () => {
-      const result = await openInEditor({ environmentId, input: { cwd: folder, editor } });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        setOpenError(error instanceof Error ? error.message : "Unable to open the memory folder.");
-      }
-    })();
+    setFolderErrors((current) => ({ ...current, [environment.environmentId]: "" }));
+    const result = await openInEditor({
+      environmentId: environment.environmentId,
+      input: { cwd: folder, editor },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const failure = squashAtomCommandFailure(result);
+      setFolderErrors((current) => ({
+        ...current,
+        [environment.environmentId]:
+          failure instanceof Error ? failure.message : "Unable to open the memory folder.",
+      }));
+    }
   };
 
   return (
@@ -275,36 +267,203 @@ export function MemorySettingsSection() {
         serverScoped
         settingKeys={["memoryEnabled"]}
         {...searchableSetting("memory")}
-        description={describeMemoryStatus(settings.memoryEnabled, status)}
-        status={openError ? <span className="text-destructive">{openError}</span> : undefined}
+        description="Keep daily summaries of your threads that Codex agents can look back on."
+        status={
+          connectedEnvironments.length
+            ? `${connectedEnvironments.filter((environment) => environment.serverConfig?.settings.memoryEnabled).length} of ${connectedEnvironments.length} connected environments on`
+            : "Connect an environment to manage memory."
+        }
         control={
-          <div className="flex items-center gap-2">
-            {settings.memoryEnabled && status ? (
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={openFolder}
-                aria-label="Open memory folder"
-              >
-                <FolderOpenIcon />
-                Open folder
-              </Button>
-            ) : null}
-            <ScopedSwitch
-              settingKeys={["memoryEnabled"]}
-              checked={settings.memoryEnabled}
-              onCheckedChange={(checked) => updateSettings({ memoryEnabled: Boolean(checked) })}
-              aria-label="Memory"
-            />
-          </div>
+          <MemoryValuePicker
+            label="Memory"
+            value={memoryMixed ? "mixed" : memoryOn ? "on" : "off"}
+            disabled={!canWriteAll}
+            multiple={environments.length > 1}
+            onChange={(enabled) => updateSettings({ memoryEnabled: enabled })}
+          />
         }
       />
-      {settings.memoryEnabled && status ? (
-        <MemorySyncRow
-          environmentId={environmentId}
-          status={status}
-          refreshStatus={refreshStatus}
-        />
+      <SettingsRow
+        serverScoped
+        settingKeys={["memorySyncEnabled"]}
+        {...searchableSetting("memory-sync")}
+        description="Share memory between your computers through your OneDrive."
+        status={
+          <span role="status">
+            {syncConnected} connected to OneDrive
+            {pendingSignIns > 0 ? ` · ${pendingSignIns} waiting for sign-in` : ""}
+            {unavailable > 0 ? ` · ${unavailable} unavailable` : ""}
+            {pendingStatus ? " · Some statuses unavailable or loading" : ""}
+            {attention > 0 ? " · Needs attention below" : ""}
+            {!memoryOn || memoryMixed ? " · Sync pauses where Memory is off" : ""}
+          </span>
+        }
+        control={
+          <MemoryValuePicker
+            label="Sync memory with OneDrive"
+            value={syncMixed ? "mixed" : syncOn ? "on" : "off"}
+            disabled={!canWriteAll || anyBusy || pendingStatus}
+            multiple={environments.length > 1}
+            onChange={setSync}
+          />
+        }
+      />
+      {isEnvironmentScope ? (
+        <div className="px-3 py-3 sm:px-4">
+          {offline.length > 0 ? (
+            <p className="mb-3 text-xs text-muted-foreground" role="status">
+              {offline.map((environment) => environment.label).join(", ")}: offline. Reconnect to
+              apply changes.
+            </p>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full justify-between"
+            aria-expanded={openDetails}
+            aria-controls="memory-environments"
+            onClick={() => setExpanded(!openDetails)}
+          >
+            Manage environments <ChevronDownIcon className={openDetails ? "rotate-180" : ""} />
+          </Button>
+          <div id="memory-environments" hidden={!openDetails}>
+            {environments.map((environment) => {
+              const id = environment.environmentId;
+              const entry = statuses.find((candidate) => candidate.environmentId === id);
+              const operation = operations[id];
+              const status = entry?.status;
+              const connected = connectedEnvironments.some(
+                (candidate) => candidate.environmentId === id,
+              );
+              const canWrite = writable.has(id);
+              const disabled =
+                !connected || !canWrite || operation?.busy === true || !status || !!entry?.error;
+              const signedIn =
+                status?.sync.signedIn ??
+                (status?.sync.account !== null && status?.sync.account !== undefined);
+              const enabled = environment.serverConfig?.settings.memorySyncEnabled === true;
+              return (
+                <div key={id} className="border-t border-border/60 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1 text-sm">
+                      <p className="break-words font-medium">{environment.label}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {!connected
+                          ? "Offline · Reconnect to manage memory"
+                          : (entry?.error ??
+                            (status ? describeMemoryStatus(status) : "Loading memory status…"))}
+                      </p>
+                      {status && !entry?.error && connected ? (
+                        <p className="mt-1 break-words text-xs text-muted-foreground">
+                          {!environment.serverConfig?.settings.memoryEnabled && enabled
+                            ? "Sync paused while Memory is off · "
+                            : ""}
+                          {describeSyncStatus(status.sync)}
+                        </p>
+                      ) : null}
+                      {connected && !canWrite ? (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          This connection cannot change settings.
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {connected && entry?.error ? (
+                        <Button size="xs" variant="outline" onClick={() => refresh(id)}>
+                          Retry
+                        </Button>
+                      ) : null}
+                      {status && connected && !entry?.error ? (
+                        <>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() =>
+                              void openFolder(environment, status.generalDirectoryPath)
+                            }
+                            aria-label={`Open memory folder on ${environment.label}`}
+                          >
+                            <FolderOpenIcon />
+                            Open folder
+                          </Button>
+                          {operation?.flow ? (
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              disabled={operation.busy || !canWrite}
+                              onClick={() => void run(id, "stop")}
+                            >
+                              Cancel sign-in
+                            </Button>
+                          ) : status.sync.state !== "unavailable" ? (
+                            <>
+                              {enabled && status.sync.state !== "signed-out" ? (
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  disabled={
+                                    disabled || !status.enabled || status.sync.state === "syncing"
+                                  }
+                                  onClick={() => void run(id, "sync")}
+                                >
+                                  Sync now
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  disabled={disabled}
+                                  onClick={() => void run(id, "start")}
+                                >
+                                  {status.sync.state === "signed-out" || !signedIn
+                                    ? "Sign in"
+                                    : "Turn on sync"}
+                                </Button>
+                              )}
+                              {enabled ? (
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  disabled={disabled}
+                                  onClick={() => void run(id, "stop")}
+                                >
+                                  Turn off sync
+                                </Button>
+                              ) : null}
+                              {signedIn ? (
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  disabled={disabled}
+                                  onClick={() => void run(id, "sign-out")}
+                                >
+                                  Sign out
+                                </Button>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                  {operation?.error || folderErrors[id] ? (
+                    <p role="alert" className="mt-2 break-words text-xs text-destructive">
+                      {operation?.error ?? folderErrors[id]}
+                    </p>
+                  ) : null}
+                  {operation?.flow && connected ? (
+                    <MemorySignIn
+                      environmentId={id}
+                      label={environment.label}
+                      flow={operation.flow}
+                      finish={finishSignIn}
+                    />
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       ) : null}
     </SettingsSection>
   );

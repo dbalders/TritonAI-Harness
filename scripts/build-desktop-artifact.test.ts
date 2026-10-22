@@ -43,6 +43,8 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_EXTRA_RESOURCES,
   DESKTOP_FILE_EXCLUSIONS,
+  findForeignNativePackages,
+  readStagedPackageManifests,
   findMissingRuntimeDeploymentArchitectures,
   InvalidAzureTrustedSigningEndpointError,
   LINUX_CAPTURE_EXTRA_RESOURCES,
@@ -97,6 +99,7 @@ import {
   resolveWindowsServerAsarIgnoreGlobs,
   resourceMonitorExecutableName,
   RUNTIME_DEPLOY_ARGS,
+  resolveRuntimeDeployArgs,
   stageDesktopDmgBackground,
   stageLinuxIconSize,
   stageResourceMonitor,
@@ -1020,6 +1023,108 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       {},
     );
   });
+
+  it("deploys only the target's optional natives into a macOS stage", () => {
+    assert.deepStrictEqual(
+      resolveRuntimeDeployArgs({ platform: "mac", arch: "arm64", stageAppDir: "/stage/app" }),
+      [...RUNTIME_DEPLOY_ARGS, "--os=darwin", "--cpu=arm64", "/stage/app"],
+    );
+    assert.deepStrictEqual(
+      resolveRuntimeDeployArgs({ platform: "mac", arch: "universal", stageAppDir: "/stage/app" }),
+      [...RUNTIME_DEPLOY_ARGS, "--os=darwin", "--cpu=arm64", "--cpu=x64", "/stage/app"],
+    );
+    // Linux declares both glibc and musl binaries, so it keeps the unfiltered deploy.
+    assert.deepStrictEqual(
+      resolveRuntimeDeployArgs({ platform: "linux", arch: "x64", stageAppDir: "/stage/app" }),
+      [...RUNTIME_DEPLOY_ARGS, "/stage/app"],
+    );
+  });
+
+  it("finds staged packages whose os or cpu excludes the target", () => {
+    const manifests = [
+      { name: "plain", version: "1.0.0" },
+      {
+        name: "@trycua/cua-driver-darwin-arm64",
+        version: "0.19.3",
+        os: ["darwin"],
+        cpu: ["arm64"],
+      },
+      { name: "@trycua/cua-driver-darwin-x64", version: "0.19.3", os: ["darwin"], cpu: ["x64"] },
+      { name: "@napi-rs/keyring-win32-x64-msvc", version: "1.3.0", os: ["win32"], cpu: ["x64"] },
+      { name: "@cursor/sdk-linux-arm64", version: "1.0.35", os: ["linux"], cpu: ["arm64"] },
+      { name: "not-windows", version: "1.0.0", os: ["!win32"] },
+      { name: "not-darwin", version: "1.0.0", os: ["!darwin"] },
+      { name: "fsevents", version: "2.3.3", os: ["darwin"] },
+    ];
+    assert.deepStrictEqual(
+      findForeignNativePackages(manifests, { os: ["darwin"], cpu: ["arm64"] }),
+      [
+        "@cursor/sdk-linux-arm64@1.0.35",
+        "@napi-rs/keyring-win32-x64-msvc@1.3.0",
+        "@trycua/cua-driver-darwin-x64@0.19.3",
+        "not-darwin@1.0.0",
+      ],
+    );
+    assert.deepStrictEqual(
+      findForeignNativePackages(manifests, { os: ["darwin"], cpu: ["arm64", "x64"] }),
+      [
+        "@cursor/sdk-linux-arm64@1.0.35",
+        "@napi-rs/keyring-win32-x64-msvc@1.3.0",
+        "not-darwin@1.0.0",
+      ],
+    );
+  });
+
+  it.effect("reads real packages from a pnpm store and skips links and store files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageAppDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-stage-manifests-" });
+      const store = path.join(stageAppDir, "node_modules", ".pnpm");
+      const writePackage = (entry: string, name: string, manifest: object) =>
+        Effect.gen(function* () {
+          const packageDir = path.join(store, entry, "node_modules", name);
+          yield* fs.makeDirectory(packageDir, { recursive: true });
+          yield* fs.writeFileString(
+            path.join(packageDir, "package.json"),
+            JSON.stringify({ name, ...manifest }),
+          );
+          return packageDir;
+        });
+      yield* fs.makeDirectory(store, { recursive: true });
+      yield* fs.writeFileString(path.join(store, "lock.yaml"), "lockfileVersion: '9.0'\n");
+      const keyring = yield* writePackage("@napi-rs+keyring@1.3.0", "@napi-rs/keyring", {
+        version: "1.3.0",
+      });
+      const windows = yield* writePackage(
+        "@napi-rs+keyring-win32-x64-msvc@1.3.0",
+        "@napi-rs/keyring-win32-x64-msvc",
+        { version: "1.3.0", os: ["win32"], cpu: ["x64"] },
+      );
+      // pnpm links each dependency beside the package that requires it.
+      yield* fs.symlink(windows, path.join(path.dirname(keyring), "keyring-win32-x64-msvc"));
+      yield* writePackage("odd@1.0.0", "odd", { version: 1, os: "darwin", cpu: [7, "arm64"] });
+
+      const manifests = yield* readStagedPackageManifests(stageAppDir);
+      assert.deepStrictEqual(
+        manifests.toSorted((left, right) => left.name.localeCompare(right.name)),
+        [
+          { name: "@napi-rs/keyring", version: "1.3.0", os: undefined, cpu: undefined },
+          {
+            name: "@napi-rs/keyring-win32-x64-msvc",
+            version: "1.3.0",
+            os: ["win32"],
+            cpu: ["x64"],
+          },
+          { name: "odd", version: undefined, os: ["darwin"], cpu: ["arm64"] },
+        ],
+      );
+      assert.deepStrictEqual(
+        findForeignNativePackages(manifests, { os: ["darwin"], cpu: ["arm64"] }),
+        ["@napi-rs/keyring-win32-x64-msvc@1.3.0"],
+      );
+    }),
+  );
 
   it("installs optional native dependencies for the target desktop architecture", () => {
     assert.deepStrictEqual(RUNTIME_DEPLOY_ARGS, [

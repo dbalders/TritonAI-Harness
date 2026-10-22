@@ -3,14 +3,29 @@ import {
   DEFAULT_VOICE_TRANSCRIPTION_MODEL,
   type ServerVoiceTranscribeInput,
 } from "@t3tools/contracts";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+import { detectVoiceSpeech } from "./voiceActivity";
 import {
-  analyzeAudioBufferSignal,
   encodeAudioBufferAsWav,
-  hasSpeechLikeSignal,
   isVoiceInputSilenceError,
   transcribeVoiceBlob,
 } from "./voiceInput";
+
+vi.mock("./voiceActivity", () => ({ detectVoiceSpeech: vi.fn() }));
+
+const RATE = 16_000;
+
+beforeEach(() => {
+  vi.mocked(detectVoiceSpeech).mockImplementation(async (samples) => [
+    { start: 0, end: samples.length },
+  ]);
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.unstubAllGlobals();
+});
 
 function ascii(arrayBuffer: ArrayBuffer, offset: number, length: number): string {
   return String.fromCharCode(...new Uint8Array(arrayBuffer, offset, length));
@@ -28,26 +43,34 @@ function fakeAudioBuffer(input: {
   };
 }
 
-function speechLikeAudioBuffer(): AudioBuffer {
-  const samples = new Float32Array(16_000);
+function speechLikeSamples(): Float32Array<ArrayBuffer> {
+  const samples = new Float32Array(RATE);
   for (let index = 2_000; index < 6_000; index += 1) {
     samples[index] = Math.sin(index / 8) * 0.08;
   }
-  return fakeAudioBuffer({ channels: [samples], sampleRate: 16_000 }) as AudioBuffer;
+  return samples;
 }
 
-function installFakeAudioContext(audioBuffer: AudioBuffer): void {
-  class FakeAudioContext {
-    decodeAudioData = vi.fn(async () => audioBuffer);
-    close = vi.fn(async () => undefined);
+/** Stands in for the browser decoding a recording into the 16 kHz context. */
+function installDecodedRecording(...channels: Float32Array<ArrayBuffer>[]): void {
+  const decoded = fakeAudioBuffer({ channels, sampleRate: RATE });
+  class FakeOfflineAudioContext {
+    decodeAudioData = vi.fn(async () => decoded);
   }
-
-  vi.stubGlobal("AudioContext", FakeAudioContext as unknown as typeof AudioContext);
+  vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
 }
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+function decodeUploadedWav(input: ServerVoiceTranscribeInput | undefined) {
+  const bytes = Uint8Array.from(atob(input?.audioBase64 ?? ""), (value) => value.charCodeAt(0));
+  const view = new DataView(bytes.buffer);
+  const sampleCount = view.getUint32(40, true) / 2;
+  return {
+    channels: view.getUint16(22, true),
+    sampleRate: view.getUint32(24, true),
+    seconds: sampleCount / view.getUint32(24, true),
+    sampleAt: (seconds: number) => view.getInt16(44 + Math.round(seconds * RATE) * 2, true),
+  };
+}
 
 describe("encodeAudioBufferAsWav", () => {
   it("writes a PCM WAV header and interleaves stereo samples", () => {
@@ -80,8 +103,45 @@ describe("encodeAudioBufferAsWav", () => {
 });
 
 describe("transcribeVoiceBlob", () => {
+  it("uploads speech on both sides of a long pause without the thirty-second gap", async () => {
+    const samples = new Float32Array(34 * RATE);
+    samples.fill(0.08, 1 * RATE, 2 * RATE);
+    samples.fill(-0.08, 32 * RATE, 33 * RATE);
+    installDecodedRecording(samples);
+    vi.mocked(detectVoiceSpeech).mockResolvedValue([
+      { start: 1 * RATE, end: 2 * RATE },
+      { start: 32 * RATE, end: 33 * RATE },
+    ]);
+    let uploaded: ServerVoiceTranscribeInput | undefined;
+
+    await transcribeVoiceBlob(new Blob(["recording"], { type: "audio/webm" }), async (input) => {
+      uploaded = input;
+      return { text: "Both sentences." };
+    });
+
+    expect(uploaded?.mimeType).toBe("audio/wav");
+    const wav = decodeUploadedWav(uploaded);
+    expect(wav).toMatchObject({ channels: 1, sampleRate: RATE, seconds: 4.7 });
+    // The first sentence keeps its position; the second follows 0.7 s of retained padding.
+    expect(wav.sampleAt(1.5)).toBeGreaterThan(2_000);
+    expect(wav.sampleAt(3.2)).toBeLessThan(-2_000);
+  });
+
+  it("mixes a stereo recording to mono before detecting speech", async () => {
+    installDecodedRecording(new Float32Array(RATE).fill(0.2), new Float32Array(RATE).fill(0.1));
+    let uploaded: ServerVoiceTranscribeInput | undefined;
+
+    await transcribeVoiceBlob(new Blob(["voice"]), async (input) => {
+      uploaded = input;
+      return { text: "stereo" };
+    });
+
+    expect(vi.mocked(detectVoiceSpeech).mock.calls[0]?.[0][0]).toBeCloseTo(0.15);
+    expect(decodeUploadedWav(uploaded)).toMatchObject({ channels: 1, seconds: 1 });
+  });
+
   it("uses default transcription settings when no voice settings are supplied", async () => {
-    installFakeAudioContext(speechLikeAudioBuffer());
+    installDecodedRecording(speechLikeSamples());
     let capturedInput: ServerVoiceTranscribeInput | undefined;
 
     const text = await transcribeVoiceBlob(
@@ -102,7 +162,7 @@ describe("transcribeVoiceBlob", () => {
   });
 
   it("passes configured voice transcription settings to the server command", async () => {
-    installFakeAudioContext(speechLikeAudioBuffer());
+    installDecodedRecording(speechLikeSamples());
     let capturedInput: ServerVoiceTranscribeInput | undefined;
 
     await transcribeVoiceBlob(
@@ -126,58 +186,69 @@ describe("transcribeVoiceBlob", () => {
     });
   });
 
-  it("rejects silent recordings before sending audio for transcription", async () => {
-    installFakeAudioContext(
-      fakeAudioBuffer({
-        channels: [new Float32Array(16_000)],
-        sampleRate: 16_000,
-      }) as AudioBuffer,
-    );
-    const transcribe = vi.fn(async () => ({ text: "should not be used" }));
-    let caught: unknown;
+  it("rejects a muted recording without loading the speech detector", async () => {
+    installDecodedRecording(new Float32Array(RATE));
+    const transcribe = vi.fn();
 
-    try {
-      await transcribeVoiceBlob(new Blob(["voice"], { type: "audio/wav" }), transcribe);
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(isVoiceInputSilenceError(caught)).toBe(true);
+    await expect(
+      transcribeVoiceBlob(new Blob(["voice"], { type: "audio/wav" }), transcribe),
+    ).rejects.toSatisfy(isVoiceInputSilenceError);
+    expect(detectVoiceSpeech).not.toHaveBeenCalled();
     expect(transcribe).not.toHaveBeenCalled();
   });
-});
 
-describe("voice audio signal detection", () => {
-  it("rejects silent recordings", () => {
-    const signal = analyzeAudioBufferSignal(
-      fakeAudioBuffer({
-        channels: [new Float32Array(16_000)],
-        sampleRate: 16_000,
-      }),
-    );
+  it("does not upload room noise when the speech detector finds no speech", async () => {
+    installDecodedRecording(speechLikeSamples());
+    vi.mocked(detectVoiceSpeech).mockResolvedValue([]);
+    const transcribe = vi.fn();
 
-    expect(signal.peakAmplitude).toBe(0);
-    expect(signal.rmsAmplitude).toBe(0);
-    expect(signal.activeDurationSeconds).toBe(0);
-    expect(hasSpeechLikeSignal(signal)).toBe(false);
+    await expect(
+      transcribeVoiceBlob(new Blob(["noise"], { type: "audio/mp4" }), transcribe),
+    ).rejects.toSatisfy(isVoiceInputSilenceError);
+    expect(transcribe).not.toHaveBeenCalled();
   });
 
-  it("accepts speech-like recordings", () => {
-    const samples = new Float32Array(16_000);
-    for (let index = 2_000; index < 6_000; index += 1) {
-      samples[index] = Math.sin(index / 8) * 0.08;
-    }
+  it("uploads quiet speech the detector recognizes regardless of its overall volume", async () => {
+    const samples = new Float32Array(10 * RATE);
+    samples.fill(0.001, 1 * RATE, 2 * RATE);
+    installDecodedRecording(samples);
+    vi.mocked(detectVoiceSpeech).mockResolvedValue([{ start: 1 * RATE, end: 2 * RATE }]);
+    const transcribe = vi.fn(async () => ({ text: "Quiet speech." }));
 
-    const signal = analyzeAudioBufferSignal(
-      fakeAudioBuffer({
-        channels: [samples],
-        sampleRate: 16_000,
-      }),
-    );
+    await expect(
+      transcribeVoiceBlob(new Blob(["voice"], { type: "audio/wav" }), transcribe),
+    ).resolves.toBe("Quiet speech.");
+    expect(transcribe).toHaveBeenCalledOnce();
+  });
 
-    expect(signal.peakAmplitude).toBeGreaterThan(0.015);
-    expect(signal.rmsAmplitude).toBeGreaterThan(0.002);
-    expect(signal.activeDurationSeconds).toBeGreaterThan(0.22);
-    expect(hasSpeechLikeSignal(signal)).toBe(true);
+  it("does not upload untreated audio if speech detection fails", async () => {
+    installDecodedRecording(speechLikeSamples());
+    const detectorError = new Error("no available backend found");
+    vi.mocked(detectVoiceSpeech).mockRejectedValue(detectorError);
+    const transcribe = vi.fn();
+
+    await expect(
+      transcribeVoiceBlob(new Blob(["voice"], { type: "audio/mp4" }), transcribe),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("the recording was not sent"),
+      cause: detectorError,
+    });
+    expect(transcribe).not.toHaveBeenCalled();
+  });
+
+  it("does not upload a recording canceled while speech detection was running", async () => {
+    installDecodedRecording(speechLikeSamples());
+    const abort = new AbortController();
+    vi.mocked(detectVoiceSpeech).mockImplementation(async (_samples, signal) => {
+      abort.abort();
+      signal?.throwIfAborted();
+      return [];
+    });
+    const transcribe = vi.fn();
+
+    await expect(
+      transcribeVoiceBlob(new Blob(["voice"]), transcribe, undefined, { signal: abort.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(transcribe).not.toHaveBeenCalled();
   });
 });

@@ -22,8 +22,6 @@ permissions:
 concurrency:
   group: harness-nightly
   cancel-in-progress: false
-env:
-  TRITONAI_INSTALLER_COMPOSITION_COMMIT: 181eb3e317f4a1f1e25f0356de81462f7ec04c1e
 jobs:
   preflight:
     runs-on: ubuntu-24.04
@@ -106,6 +104,9 @@ jobs:
         run: vp check
       - name: Typecheck
         run: vp run typecheck
+      - name: Managed plugin build tools
+        run: vp run test:release-inputs
+
       - name: Release publication guards
         run: node --test .github/scripts/check-gitlinks.test.cjs .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs
   prepare_managed_plugins:
@@ -125,21 +126,6 @@ jobs:
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
-      - name: Validate managed plugin release pins
-        shell: bash
-        env:
-          INSTALLER_COMMIT: ${{ env.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
-        run: |
-          set -euo pipefail
-          [[ "$INSTALLER_COMMIT" =~ ^[a-f0-9]{40}$ ]]
-      - name: Checkout pinned composition producer
-        uses: actions/checkout@v6
-        with:
-          repository: dbalders/TritonAI-Installer
-          ref: ${{ env.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
-          fetch-depth: 1
-          persist-credentials: false
-          path: .release-input/installer
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -150,13 +136,12 @@ jobs:
         shell: bash
         run: |-
           set -euo pipefail
-          vp exec tsc --project .release-input/installer/tsconfig.plugin-producer.json --typeRoots "$GITHUB_WORKSPACE/node_modules/@types"
-          node .release-input/installer/dist/scripts/prepare-plugins-vendor.js --production --nightly
+          node .github/scripts/prepare-managed-plugins.cjs --production --nightly
       - name: Upload exact pinned composition before provider execution
         uses: actions/upload-artifact@v7
         with:
           name: managed-plugin-composition
-          path: .release-input/installer/vendor/plugins
+          path: .release-input/plugins
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 3
@@ -188,10 +173,10 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: managed-plugin-composition
-          path: .release-input/installer/vendor/plugins
+          path: .release-input/plugins
       - name: Execute managed plugin configuration validation
         env:
-          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
           TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
         run: |
           node scripts/validate-managed-plugin-configuration.ts \
@@ -234,13 +219,13 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: managed-plugin-composition
-          path: .release-input/installer/vendor/plugins
+          path: .release-input/plugins
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Build matching managed WSL runtime
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
-          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
           TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
         run: |
           set -euo pipefail
@@ -328,7 +313,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: managed-plugin-composition
-          path: .release-input/installer/vendor/plugins
+          path: .release-input/plugins
       - name: Download managed plugin validation receipt
         uses: actions/download-artifact@v7
         with:
@@ -407,7 +392,7 @@ jobs:
         name: Build desktop artifact
         shell: bash
         env:
-          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
           TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
           T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
@@ -465,7 +450,7 @@ jobs:
           }
           $verification = @{
             InstallerPath = $artifact[0].FullName
-            ExpectedPluginIds = @((Get-Content .release-input/installer/vendor/plugins/manifest.json -Raw | ConvertFrom-Json).packages.id)
+            ExpectedPluginIds = @((Get-Content .release-input/plugins/manifest.json -Raw | ConvertFrom-Json).packages.id)
           }
           $verification.ExpectedPublisherName = $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
           ./scripts/verify-windows-packaged-boot.ps1 @verification
@@ -546,13 +531,6 @@ jobs:
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
-      - name: Checkout pinned finalizer
-        uses: actions/checkout@v6
-        with:
-          repository: dbalders/TritonAI-Installer
-          ref: ${{ env.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
-          persist-credentials: false
-          path: .release-input/installer
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -574,7 +552,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: managed-plugin-composition
-          path: .release-input/installer/vendor/plugins
+          path: .release-input/plugins
       - uses: actions/download-artifact@v7
         with:
           name: managed-plugin-validation-receipt
@@ -585,7 +563,7 @@ jobs:
         run: node scripts/update-release-package-versions.ts "$NIGHTLY_VERSION"
       - name: Prepare source once
         env:
-          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
           TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
           UCSD_AI_BASE_URL: ${{ secrets.NIGHTLY_UCSD_AI_BASE_URL }}
           T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: ${{ steps.resource_monitor_cache.outputs.cache-hit == 'true' }}
@@ -622,7 +600,7 @@ jobs:
           # Keep the key private without making the distributed app owner-only.
           (umask 077; printf "%s" "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY")
           umask 022
-          node .release-input/installer/scripts/local-release-mac.cjs "$GITHUB_WORKSPACE" "$RUNNER_TEMP/nightly-stage" "$NIGHTLY_VERSION" "$GITHUB_WORKSPACE/release"
+          node .github/scripts/finalize-macos-release.cjs "$GITHUB_WORKSPACE" "$RUNNER_TEMP/nightly-stage" "$NIGHTLY_VERSION" "$GITHUB_WORKSPACE/release"
           node scripts/verify-macos-update-zip.cjs "$GITHUB_WORKSPACE/release/TritonAI-Harness-$NIGHTLY_VERSION-arm64.zip"
       - name: Remove signing inputs
         if: always()

@@ -88,6 +88,10 @@ const PLAUSIBLE_EVENT_PROPERTIES = {
   "provider.request.responded": ["provider", "decision"],
   "provider.conversation.rolled_back": ["provider", "turns"],
   "provider.sessions.stopped_all": ["sessionCount"],
+  "ideas.viewed": ["visibleCount", "personalCount", "toolCount", "starterCount"],
+  "ideas.feedback": ["kind", "section"],
+  "ideas.sent": ["section"],
+  "ideas.generated": ["requested", "outcome", "generatedCount", "starterCount"],
 } as const satisfies Readonly<Record<string, ReadonlyArray<string>>>;
 
 const TelemetryEnvConfig = Config.all({

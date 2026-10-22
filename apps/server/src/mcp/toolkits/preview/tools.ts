@@ -49,6 +49,14 @@ const PreviewActionResult = Schema.Struct(presentationFields).annotate({
   description: "The preview action completed successfully.",
 });
 
+/** Browser status plus the notice reported when a page ended on a different site than requested. */
+const PreviewNavigationStatus = Schema.Struct({
+  ...PreviewAutomationStatus.fields,
+  redirectedFrom: Schema.optional(Schema.String),
+  redirectNotice: Schema.optional(Schema.String),
+});
+
+/** Drives the real browser and can destroy page state. */
 const browserTool = <T extends Tool.Any>(tool: T): T =>
   tool.annotate(Tool.OpenWorld, true).annotate(Tool.Destructive, true) as T;
 
@@ -76,7 +84,7 @@ const PreviewOpenTool = browserTool(
     description:
       "Initialize a collaborative browser tab and open its thread-bound inline preview by default. Set open=false for background-only automation. Pass tabId to reuse a specific existing tab, set reuseExistingTab=false to create another tab, or omit both to use this agent session's current tab. Parallel subagents sharing a provider session must each open with reuseExistingTab=false and pass their returned tabId on every call. Pass profileId (an id or name from preview_status profiles) to open under a browser profile and its saved logins; omit it for the user's default profile. Another agent session's tabs can be read but not operated.",
     parameters: PreviewAutomationOpenInput,
-    success: PreviewAutomationStatus,
+    success: PreviewNavigationStatus,
     failure: PreviewToolFailure,
     dependencies,
   })
@@ -100,7 +108,7 @@ const PreviewNavigateTool = safeBrowserTool(
     description:
       "Navigate a collaborative browser tab. Pass tabId to target a specific tab, plus {url:'https://t3.chat'} for a website or {target:{kind:'environment-port',port:5173}} for a dev server. Exactly one of url or target is required.",
     parameters: PreviewAutomationNavigateInput,
-    success: PreviewAutomationStatus,
+    success: PreviewNavigationStatus,
     failure: PreviewToolFailure,
     dependencies,
   }).annotate(Tool.Title, "Navigate browser preview"),

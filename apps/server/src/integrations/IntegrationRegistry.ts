@@ -12,8 +12,10 @@ import {
   type IntegrationsListResult,
 } from "@t3tools/contracts";
 import { compareSemverVersions } from "@t3tools/shared/semver";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as NodeCrypto from "node:crypto";
@@ -47,6 +49,13 @@ import {
   type IntegrationProviderTool,
 } from "./IntegrationTool.ts";
 
+import {
+  makeDocumentTextExtractor,
+  type DocumentTextRequest,
+  type DocumentTextResult,
+  type IntegrationDocumentTextExtractor,
+} from "./IntegrationDocumentText.ts";
+
 export type { IntegrationProviderTool } from "./IntegrationTool.ts";
 
 export interface IntegrationProviderStatus {
@@ -60,6 +69,12 @@ export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
   /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
+  /**
+   * Present for read invocations. Extracts bounded text from PDF or DOCX bytes in an isolated,
+   * time- and memory-limited process bound to this invocation's signal, so a provider never has
+   * to hand raw document bytes to the model. Older hosts omit it.
+   */
+  extractDocumentText?(request: DocumentTextRequest): Promise<DocumentTextResult>;
   /**
    * Present only for a write invocation. Providers must await this immediately before their
    * narrow external mutation and use the returned signal for every fallible commit-tail step.
@@ -253,6 +268,8 @@ export type IntegrationToolAvailability =
 export interface RegistryRuntimeOptions {
   readonly providerStatusTimeoutMs?: number;
   readonly providerOperationTimeoutMs?: number;
+  /** Defaults to the isolated `__document-text` process extractor. */
+  readonly documentText?: IntegrationDocumentTextExtractor;
   /** Observes every provider fault, which otherwise surfaces only as a reset prompt. */
   readonly onProviderFault?: (fault: IntegrationProviderFault) => void;
 }
@@ -904,6 +921,7 @@ export class RegistryRuntime {
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
   readonly #providerSummaryRefreshWork = new Map<IntegrationProvider, Set<Promise<void>>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
+  readonly #documentText: IntegrationDocumentTextExtractor;
   #closing = false;
   #closePromise: Promise<void> | null = null;
 
@@ -925,6 +943,7 @@ export class RegistryRuntime {
     this.#providerOperationTimeoutMs =
       options.providerOperationTimeoutMs ?? DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS;
     this.#onProviderFault = options.onProviderFault;
+    this.#documentText = options.documentText ?? makeDocumentTextExtractor();
     if (
       !Number.isSafeInteger(this.#providerStatusTimeoutMs) ||
       this.#providerStatusTimeoutMs <= 0 ||
@@ -3504,7 +3523,11 @@ export class RegistryRuntime {
                     return commitSignal;
                   },
                 }
-              : { signal },
+              : {
+                  signal,
+                  extractDocumentText: (request: DocumentTextRequest) =>
+                    this.#documentText(request, signal),
+                },
           );
         };
         const invocationWork = Promise.resolve().then(() =>
@@ -3640,6 +3663,23 @@ export function getIntegrationRegistry(): RegistryRuntime {
 export function getIntegrationRegistryOptional(): RegistryRuntime | null {
   return activeRegistry;
 }
+
+/** Installed, enabled integrations; empty when the registry is not running or does not answer in time. */
+export const listEnabledIntegrations = Effect.suspend(() => {
+  const registry = activeRegistry;
+  if (!registry) return Effect.succeed<ReadonlyArray<IntegrationSummary>>([]);
+  return Effect.tryPromise(() => registry.list()).pipe(
+    Effect.timeoutOption(Duration.seconds(5)),
+    Effect.map(
+      Option.match({
+        onNone: (): ReadonlyArray<IntegrationSummary> => [],
+        onSome: (listed) =>
+          listed.integrations.filter((integration) => integration.installed && integration.enabled),
+      }),
+    ),
+    Effect.orElseSucceed((): ReadonlyArray<IntegrationSummary> => []),
+  );
+});
 
 export function awaitIntegrationRegistry(): Promise<RegistryRuntime> {
   if (activeRegistry) return Promise.resolve(activeRegistry);

@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { EnvironmentId, ProjectNextStep } from "@t3tools/contracts";
-import { ArrowRightIcon } from "lucide-react";
+import { ArrowRightIcon, CheckIcon, XIcon } from "lucide-react";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { RefreshIcon } from "../ui/refresh-icon";
@@ -139,18 +139,39 @@ export function ProjectNextSteps({
                         ),
                       )}
                   </div>
-                  <Button
-                    className="mt-3"
-                    variant="outline"
-                    size="xs"
-                    disabled={!connected || opening !== null}
-                    aria-busy={opening === step.id}
-                    onClick={() => onOpen(step)}
-                  >
-                    {opening === step.id ? <Spinner aria-hidden /> : null}
-                    {opening === step.id ? "Opening thread…" : "Open in new thread"}
-                    {opening !== step.id ? <ArrowRightIcon aria-hidden /> : null}
-                  </Button>
+                  <div className="mt-3 flex flex-wrap items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      disabled={!connected || opening !== null}
+                      aria-busy={opening === step.id}
+                      onClick={() => onOpen(step)}
+                    >
+                      {opening === step.id ? <Spinner aria-hidden /> : null}
+                      {opening === step.id ? "Opening thread…" : "Open in new thread"}
+                      {opening !== step.id ? <ArrowRightIcon aria-hidden /> : null}
+                    </Button>
+                    {view.canGiveFeedback ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => void view.dismiss(step, "done")}
+                        >
+                          <CheckIcon aria-hidden />
+                          Already done
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => void view.dismiss(step, "not-relevant")}
+                        >
+                          <XIcon aria-hidden />
+                          Not relevant
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
               </li>
             ))}
@@ -173,6 +194,15 @@ export function ProjectNextSteps({
                 ? "Start a thread to give this project context. Next steps will appear here when you return."
                 : "Next steps will appear here after the project context is ready."}
           </p>
+        ) : null}
+        {view.canGiveFeedback && view.snapshot?.dismissedCount ? (
+          <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+            {view.snapshot.dismissedCount} hidden{" "}
+            {view.snapshot.dismissedCount === 1 ? "suggestion" : "suggestions"}
+            <Button variant="link" size="xs" onClick={() => void view.restore()}>
+              Restore
+            </Button>
+          </div>
         ) : null}
       </div>
     </section>

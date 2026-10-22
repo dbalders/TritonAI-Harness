@@ -54,6 +54,7 @@ node_modules/
 # Local agent/runtime artifacts
 .agent/
 release-local-*/
+.release-input/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/

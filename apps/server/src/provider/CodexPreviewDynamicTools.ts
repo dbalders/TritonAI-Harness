@@ -14,6 +14,7 @@ import { Tool } from "effect/ai";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
+import { withBrowserNavigationOutcome } from "../preview/BrowserNavigationApproval.ts";
 
 export interface CodexPreviewDynamicToolDefinition {
   readonly name: string;
@@ -185,9 +186,9 @@ export const invokeAuthorizedCodexPreviewDynamicTool = Effect.fn(
   );
   const value =
     operation === "evaluate" ? { value: result ?? null } : sanitizePreviewToolResult(result);
-  return value !== null && typeof value === "object"
-    ? { ...value, ...(toolIcon ? { toolIcon } : {}) }
-    : value;
+  if (value === null || typeof value !== "object") return value;
+  const reported = withBrowserNavigationOutcome(input.name, input.arguments, value);
+  return { ...reported, ...(toolIcon ? { toolIcon } : {}) };
 });
 
 export const invokeCodexPreviewDynamicTool = Effect.fn("invokeCodexPreviewDynamicTool")(

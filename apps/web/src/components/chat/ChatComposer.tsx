@@ -2691,6 +2691,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const mobileComposerExpandReleaseFrameRef = useRef<number | null>(null);
   const mobileComposerExpandInFlightRef = useRef(false);
   const voiceRecorderRef = useRef<VoiceRecorderSession | null>(null);
+  const voiceProcessingAbortRef = useRef<AbortController | null>(null);
   const voiceVolumeUnsubscribeRef = useRef<(() => void) | null>(null);
   const voiceReadyTimeoutRef = useRef<number | null>(null);
   const voiceStartTokenRef = useRef(0);
@@ -3685,6 +3686,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useEffect(() => {
     return () => {
       voiceStartTokenRef.current += 1;
+      voiceProcessingAbortRef.current?.abort();
       voiceStartInFlightRef.current = false;
       voiceVolumeUnsubscribeRef.current?.();
       voiceVolumeUnsubscribeRef.current = null;
@@ -4458,6 +4460,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     voiceDraftTargetKeyRef.current = composerDraftKey;
     voiceStartTokenRef.current += 1;
+    voiceProcessingAbortRef.current?.abort();
+    voiceProcessingAbortRef.current = null;
     voiceStartInFlightRef.current = false;
     voiceRecordingTargetKeyRef.current = null;
     clearVoiceReadyTimeout();
@@ -4590,54 +4594,63 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       return false;
     };
     setVoiceStatus("processing");
+    const processingAbort = new AbortController();
+    voiceProcessingAbortRef.current = processingAbort;
     setVoiceError(null);
     setVoiceElapsedSeconds(0);
     setVoiceActivityLevels(createVoiceWaveformLevels());
-    try {
-      const audio = await recorder.stop();
-      if (!isCurrentVoiceTarget()) {
-        return discardStaleVoiceResult();
-      }
-      const transcript = await transcribeVoiceBlob(
-        audio,
-        async (input) => {
-          const result = await transcribeVoiceCommand({ environmentId, input });
-          if (result._tag === "Failure") {
-            throw Cause.squash(result.cause);
-          }
-          return result.value;
-        },
-        voiceSettings,
-      );
-      if (!isCurrentVoiceTarget()) {
-        return discardStaleVoiceResult();
-      }
-      const inserted = insertDraftTextIntoComposer(transcript);
-      requireTranscriptionInsertion(inserted);
-      voiceRecordingTargetKeyRef.current = null;
-      markVoiceReady();
-      if (options?.submitAfterInsert) {
-        if (dispatchComposerDraft(undefined, options.dispatchMode, options.intent)) {
-          blurMobileComposerAfterSend();
+    return await (async () => {
+      try {
+        const audio = await recorder.stop();
+        if (!isCurrentVoiceTarget()) {
+          return discardStaleVoiceResult();
         }
-      }
-      return true;
-    } catch (error) {
-      recorder.cancel();
-      if (!isCurrentVoiceTarget()) {
+        const transcript = await transcribeVoiceBlob(
+          audio,
+          async (input) => {
+            const result = await transcribeVoiceCommand({ environmentId, input });
+            if (result._tag === "Failure") {
+              throw Cause.squash(result.cause);
+            }
+            return result.value;
+          },
+          voiceSettings,
+          { signal: processingAbort.signal },
+        );
+        if (!isCurrentVoiceTarget()) {
+          return discardStaleVoiceResult();
+        }
+        const inserted = insertDraftTextIntoComposer(transcript);
+        requireTranscriptionInsertion(inserted);
+        voiceRecordingTargetKeyRef.current = null;
+        markVoiceReady();
+        if (options?.submitAfterInsert) {
+          if (dispatchComposerDraft(undefined, options.dispatchMode, options.intent)) {
+            blurMobileComposerAfterSend();
+          }
+        }
+        return true;
+      } catch (error) {
+        recorder.cancel();
+        if (!isCurrentVoiceTarget()) {
+          return false;
+        }
+        voiceRecordingTargetKeyRef.current = null;
+        if (isVoiceInputSilenceError(error)) {
+          setVoiceStatus("idle");
+          setVoiceError(null);
+          setVoiceElapsedSeconds(0);
+          setVoiceActivityLevels(createVoiceWaveformLevels());
+          return false;
+        }
+        showVoiceError(error);
         return false;
       }
-      voiceRecordingTargetKeyRef.current = null;
-      if (isVoiceInputSilenceError(error)) {
-        setVoiceStatus("idle");
-        setVoiceError(null);
-        setVoiceElapsedSeconds(0);
-        setVoiceActivityLevels(createVoiceWaveformLevels());
-        return false;
+    })().finally(async () => {
+      if (voiceProcessingAbortRef.current === processingAbort) {
+        voiceProcessingAbortRef.current = null;
       }
-      showVoiceError(error);
-      return false;
-    }
+    });
   };
 
   const submitComposer = (

@@ -36,6 +36,7 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import * as BrowserNavigationGate from "../preview/BrowserNavigationGate.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 
@@ -426,6 +427,120 @@ it.effect("refuses preview tools to a client outside a thread before they run", 
       { type: "text", text: expect.stringContaining("needs an agent running inside T3 Code") },
     ]);
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("asks the provider's browser navigation gate before an MCP call loads a page", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      const routed: Array<{ readonly operation: string; readonly input: unknown }> = [];
+      const events = yield* broker.connect({ clientId: "mcp-gate-client", environmentId });
+      yield* Stream.runForEach(events, (event) => {
+        if (event.type === "connected") return Effect.void;
+        routed.push({ operation: event.request.operation, input: event.request.input });
+        return broker.respond({
+          clientId: "mcp-gate-client",
+          connectionId: event.connectionId,
+          requestId: event.request.requestId,
+          ok: true,
+          result: {
+            available: true,
+            visible: true,
+            tabId,
+            url: "https://allowed.example.test/",
+            title: "Example",
+            loading: false,
+          },
+        });
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const call = (
+        name: "preview_open" | "preview_navigate",
+        args: Record<string, unknown>,
+        scope = invocation,
+      ) =>
+        server
+          .callTool({ name, arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+
+      // A provider that registers no gate (Claude approves MCP calls before they arrive) is
+      // unchanged.
+      const ungated = yield* call("preview_navigate", { url: "https://declined.example.test/" });
+      expect(ungated.isError).toBe(false);
+      expect(routed.map(({ operation }) => operation)).toEqual(["navigate"]);
+      routed.length = 0;
+
+      const asked: Array<BrowserNavigationGate.BrowserNavigationAdmissionRequest> = [];
+      yield* BrowserNavigationGate.registerBrowserNavigationGate(
+        invocation.thread.providerInstanceId,
+        (request) =>
+          Effect.sync(() => {
+            asked.push(request);
+            if (request.threadId !== threadId) return undefined;
+            const url = (request.arguments as { readonly url?: string }).url ?? "";
+            return url.includes("allowed")
+              ? { admitted: true as const }
+              : { admitted: false as const, reason: "The user declined opening this website." };
+          }),
+      );
+      const declined = yield* call("preview_navigate", {
+        tabId,
+        url: "https://declined.example.test/?q=1",
+      });
+      expect(declined.isError).toBe(true);
+      expect(declined.content).toEqual([
+        { type: "text", text: expect.stringContaining("declined opening this website") },
+      ]);
+      const declinedOpen = yield* call("preview_open", { url: "https://declined.example.test/" });
+      expect(declinedOpen.isError).toBe(true);
+      expect(routed).toEqual([]);
+      expect(
+        asked.map(({ toolName, credentialId, threadId: asker }) => ({
+          toolName,
+          credentialId,
+          asker,
+        })),
+      ).toEqual([
+        {
+          toolName: "preview_navigate",
+          credentialId: invocation.thread.providerSessionId,
+          asker: threadId,
+        },
+        {
+          toolName: "preview_open",
+          credentialId: invocation.thread.providerSessionId,
+          asker: threadId,
+        },
+      ]);
+
+      const allowed = yield* call("preview_navigate", { url: "https://allowed.example.test/" });
+      expect(allowed.isError).toBe(false);
+      expect(routed.map(({ operation }) => operation)).toEqual(["navigate"]);
+
+      // A thread no registered session runs is refused, not let through unapproved.
+      const otherThread = {
+        ...invocation,
+        thread: { ...invocation.thread, threadId: ThreadId.make("thread-mcp-other") },
+      };
+      const orphan = yield* call(
+        "preview_open",
+        { url: "https://allowed.example.test/" },
+        otherThread,
+      );
+      expect(orphan.isError).toBe(true);
+      expect(orphan.content).toEqual([
+        { type: "text", text: expect.stringContaining("needs an active turn") },
+      ]);
+
+      expect(asked).toHaveLength(4);
+      expect(routed.map(({ operation }) => operation)).toEqual(["navigate"]);
+    }),
+  ).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("rejects non-boolean snapshot image options before selecting a browser host", () =>

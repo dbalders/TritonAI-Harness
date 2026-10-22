@@ -545,14 +545,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Memory",
     to: "/settings/general",
     searchTerms: ["daily notes summary vault obsidian remember past work hivemind skill"],
-    environmentOnly: true,
+    scope: "environment-defaults",
   },
   {
     id: "memory-sync",
     title: "Sync memory with OneDrive",
     to: "/settings/general",
     searchTerms: ["onedrive microsoft sync memory other computers devices sign in"],
-    environmentOnly: true,
+    scope: "environment-defaults",
   },
   {
     id: "app-version",
