@@ -76,6 +76,7 @@ import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import { BROWSER_SESSION_SCOPE } from "../../preview/BrowserNavigationApproval.ts";
+import * as BrowserNavigationGate from "../../preview/BrowserNavigationGate.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
@@ -696,6 +697,11 @@ describe("CodexAdapterV2 process spawning", () => {
               tool_timeout_sec: 3_900,
               http_headers: {
                 Authorization: "Bearer secret-codex-token",
+              },
+              // The adapter's browser navigation gate approves these, not Codex's reviewer.
+              tools: {
+                preview_open: { approval_mode: "approve" },
+                preview_navigate: { approval_mode: "approve" },
               },
             },
           },
@@ -2702,6 +2708,256 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               ? ["navigate"]
               : ["navigate", "navigate", "open", "navigate", "open"],
           );
+          assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
+  // Codex's MCP copy of the browser tools reaches the server without passing the adapter's
+  // dynamic-tool approval, and in Auto Codex's own reviewer approves it. The adapter's gate must
+  // apply the same runtime mode, prompt and session grant there. A standard (non-custom) model has
+  // no direct browser tools at all, so the MCP route is its only one.
+  it.live.each([
+    {
+      scenario: "supervised-session",
+      runtimeMode: "approval-required",
+      decision: "acceptForSession",
+      prompts: 1,
+    },
+    {
+      scenario: "supervised-declined",
+      runtimeMode: "approval-required",
+      decision: "decline",
+      prompts: 3,
+    },
+    { scenario: "auto-once", runtimeMode: "auto", decision: "accept", prompts: 3 },
+    { scenario: "full-access", runtimeMode: "full-access", decision: undefined, prompts: 0 },
+  ] as const)(
+    "gates MCP browser navigation in the $scenario runtime mode",
+    ({ scenario, runtimeMode, decision, prompts: expectedPrompts }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const name = `mcp-browser-${scenario}`;
+          const nativeThreadId = `native-${name}`;
+          const nativeTurnId = `turn-${name}`;
+          const threadId = ThreadId.make(`thread-${name}`);
+          const credentialId = `credential-${name}`;
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set({
+            environmentId: EnvironmentId.make("fixture-environment"),
+            threadId,
+            providerSessionId: credentialId,
+            providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+            endpoint: "http://127.0.0.1:1234/mcp",
+            authorizationHeader: "Bearer synthetic-fixture-token",
+            browserToolsAvailable: true,
+            capabilities: McpSessionRegistry.providerSessionCapabilities({ browser: true }),
+            expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
+          });
+          const preamble = codexReplayPreamble({
+            nativeThreadId,
+            nativeTurnId,
+            prompt: "Open the link.",
+          }).map((entry) =>
+            entry.type === "expect_outbound" && entry.label === "thread/start"
+              ? {
+                  ...entry,
+                  frame: {
+                    id: 2,
+                    method: "thread/start",
+                    params: {
+                      config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+                      dynamicTools: [tritonAiCommonsDynamicToolDefinition].map(
+                        ({ name, description, inputSchema }) => ({
+                          name,
+                          description,
+                          inputSchema,
+                        }),
+                      ),
+                    },
+                  },
+                }
+              : entry,
+          );
+          // A pending command approval keeps the turn active while the MCP calls arrive.
+          const transcript = makeCodexReplayTranscript({
+            scenario: name,
+            entries: [
+              ...preamble,
+              {
+                type: "emit_inbound",
+                label: "hold",
+                frame: {
+                  id: 50,
+                  method: "item/commandExecution/requestApproval",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    itemId: "hold-item",
+                    reason: "fixture-hold",
+                    command: "true",
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "hold-response",
+                frame: { id: 50, result: { decision: "decline" } },
+              },
+              {
+                type: "emit_inbound",
+                label: "complete",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          });
+          const hold = yield* Deferred.make<string>();
+          const gatePrompts: Array<string> = [];
+          const gateRequests = yield* Queue.unbounded<string>();
+          const harness = yield* makeCodexReplayHarness(
+            transcript,
+            (event) => {
+              if (event.type !== "turn_item.updated") return Effect.void;
+              const item = event.turnItem;
+              if (item.type !== "approval_request" || item.status !== "waiting") return Effect.void;
+              return item.prompt === "fixture-hold"
+                ? Deferred.succeed(hold, String(item.requestId))
+                : Effect.sync(() => gatePrompts.push(item.prompt ?? "")).pipe(
+                    Effect.andThen(Queue.offer(gateRequests, String(item.requestId))),
+                  );
+            },
+            (method, params) =>
+              Effect.sync(() => {
+                if (method !== "turn/start") return;
+                const expected = preamble.find(
+                  (entry) => entry.type === "expect_outbound" && entry.label === "turn/start",
+                );
+                if (expected?.type === "expect_outbound" && Predicate.isObject(expected.frame))
+                  Object.assign(expected.frame, { params });
+              }),
+          );
+          assert.notInclude([...(harness.providerThread.dynamicToolNames ?? [])], "preview_open");
+          yield* harness.runtime.startTurn({
+            ...makeCodexTestTurnInput({
+              threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-${name}`),
+              text: "Open the link.",
+            }),
+            runtimePolicy: { ...CODEX_TEST_RUNTIME_POLICY, runtimeMode },
+          });
+          const holdRequestId = yield* Deferred.await(hold);
+
+          const admit = (
+            toolName: "preview_open" | "preview_navigate",
+            args: unknown,
+            overrides: { readonly credentialId?: string; readonly threadId?: ThreadId } = {},
+          ) =>
+            BrowserNavigationGate.admitBrowserNavigation(CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID, {
+              threadId: overrides.threadId ?? threadId,
+              credentialId: overrides.credentialId ?? credentialId,
+              toolName,
+              arguments: args,
+            });
+          // Answers the prompt the call raises, if the scenario expects one for it.
+          const admitAnswering = (
+            toolName: "preview_open" | "preview_navigate",
+            args: unknown,
+            asks: boolean,
+          ) =>
+            Effect.gen(function* () {
+              const fiber = yield* admit(toolName, args).pipe(Effect.forkChild);
+              if (asks) {
+                const requestId = yield* Queue.take(gateRequests);
+                yield* harness.runtime.respondToRuntimeRequest({
+                  requestId: requestId as never,
+                  decision: decision!,
+                });
+              }
+              return yield* Fiber.join(fiber).pipe(Effect.timeout("5 seconds"));
+            });
+
+          const admitted = { admitted: true };
+          // Local dev servers and blank tabs never ask.
+          assert.deepEqual(
+            yield* admitAnswering(
+              "preview_navigate",
+              { target: { kind: "environment-port", port: 5173 } },
+              false,
+            ),
+            admitted,
+          );
+          assert.deepEqual(
+            yield* admitAnswering("preview_open", { url: "http://localhost:5173/" }, false),
+            admitted,
+          );
+          assert.deepEqual(yield* admitAnswering("preview_open", {}, false), admitted);
+
+          const asks = (index: number) =>
+            decision !== undefined && (decision !== "acceptForSession" || index === 0);
+          const external = [
+            yield* admitAnswering(
+              "preview_navigate",
+              { tabId: "tab-1", url: EXTERNAL_DESTINATION },
+              asks(0),
+            ),
+            yield* admitAnswering("preview_open", { url: "second.example.test/page" }, asks(1)),
+            yield* admitAnswering("preview_open", { profileId: "Work" }, asks(2)),
+          ];
+          assert.deepEqual(
+            external.map((result) => result.admitted),
+            decision === "decline" ? [false, false, false] : [true, true, true],
+          );
+          assert.equal(gatePrompts.length, expectedPrompts);
+          if (expectedPrompts > 0)
+            assert.equal(
+              gatePrompts[0],
+              [
+                "Open a website in the browser (preview_navigate)",
+                "Site: ic6do.example.test",
+                `URL: ${EXTERNAL_DESTINATION}`,
+                BROWSER_SESSION_SCOPE,
+              ].join("\n"),
+            );
+          if (expectedPrompts === 3) {
+            assert.include(gatePrompts[1], "URL: https://second.example.test/page");
+            assert.include(gatePrompts[2], "Browser profile: Work (its saved sign-ins)");
+          }
+
+          // A replaced credential, or a thread this session does not run, is refused without asking.
+          const stale = yield* admit(
+            "preview_navigate",
+            { url: "https://fourth.example.test/" },
+            { credentialId: "replaced-credential" },
+          );
+          assert.isFalse(stale.admitted);
+          const foreign = yield* admit(
+            "preview_navigate",
+            { url: "https://fourth.example.test/" },
+            { threadId: ThreadId.make("thread-not-run-here") },
+          );
+          assert.isFalse(foreign.admitted);
+          assert.equal(gatePrompts.length, expectedPrompts);
+
+          yield* harness.runtime.respondToRuntimeRequest({
+            requestId: holdRequestId as never,
+            decision: "decline",
+          });
+          yield* harness.firstTerminal;
+          // With no active turn there is nobody to ask, so the call is refused.
+          const afterTurn = yield* admit("preview_open", { url: "https://fifth.example.test/" });
+          assert.isFalse(afterTurn.admitted);
           assert.equal(harness.terminalEvents()[0]?.status, "completed");
         }),
       ).pipe(

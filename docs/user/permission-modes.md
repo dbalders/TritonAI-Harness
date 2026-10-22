@@ -49,9 +49,11 @@ When an agent asks to open a website in the TritonAI browser, the approval shows
 address, so check it before you allow it. Blank tabs and local dev servers, such as
 `localhost:5173`, open without asking.
 
-- **Codex** asks in every mode except **Full access**.
+- **Codex** asks in every mode except **Full access**, whichever browser tools it uses, including
+  the ones it reaches through the TritonAI Harness tool server.
 - **Claude** asks in **Supervised** and **Auto-accept edits**. In **Auto** and **Full access**,
   Claude opens websites without asking.
+- Other providers follow their own tool approval settings for the browser.
 
 Opening a tab under a named browser profile, which uses that profile's saved sign-ins, also asks,
 and the approval names the profile.

@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import {
+  OrchestratorMcpFailure,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PREVIEW_RECORDING_STOP_TIMEOUT_MS,
   PreviewAutomationRecordingTransferError,
@@ -32,6 +33,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { withBrowserNavigationOutcome } from "../../../preview/BrowserNavigationApproval.ts";
+import { admitBrowserNavigation } from "../../../preview/BrowserNavigationGate.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
 /**
@@ -116,6 +118,27 @@ const invokeTargeted = <A extends object>(
   );
 };
 
+/**
+ * Asks the calling provider's browser navigation gate, if it registered one, before a page loads.
+ * Codex approves its MCP calls itself (in Auto, with its automatic reviewer), so the Codex adapter
+ * gates them here with the same mode, prompt and session grant as its direct browser tools.
+ */
+const admitNavigation = (toolName: "preview_open" | "preview_navigate", input: unknown) =>
+  Effect.gen(function* () {
+    const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
+    const admission = yield* admitBrowserNavigation(scope.thread.providerInstanceId, {
+      threadId: scope.thread.threadId,
+      credentialId: scope.thread.providerSessionId,
+      toolName,
+      arguments: input,
+    });
+    if (!admission.admitted)
+      return yield* new OrchestratorMcpFailure({
+        code: "capability_denied",
+        message: admission.reason,
+      });
+  });
+
 const UploadedRecordingArtifact = Schema.Struct({
   ...PreviewAutomationRecordingArtifact.fields,
   uploadedAttachmentId: Schema.optional(Schema.String),
@@ -198,12 +221,16 @@ const handlers = {
     invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   ),
   preview_open: McpToolAccess.actsAsCaller((input) =>
-    invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)).pipe(
+    admitNavigation("preview_open", input).pipe(
+      Effect.andThen(
+        invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),
+      ),
       Effect.map((result) => withBrowserNavigationOutcome("preview_open", input, result)),
     ),
   ),
   preview_navigate: McpToolAccess.actsAsCaller((input) =>
-    invokeTargeted<PreviewAutomationStatus>("navigate", input, input.timeoutMs).pipe(
+    admitNavigation("preview_navigate", input).pipe(
+      Effect.andThen(invokeTargeted<PreviewAutomationStatus>("navigate", input, input.timeoutMs)),
       Effect.map((result) => withBrowserNavigationOutcome("preview_navigate", input, result)),
     ),
   ),
