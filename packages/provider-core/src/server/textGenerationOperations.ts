@@ -17,9 +17,11 @@ import type { ProviderTextGeneration } from "./textGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildHelpPrompt,
   buildPrContentPrompt,
   buildReviewGuidePrompt,
   buildThreadTitlePrompt,
+  HELP_MAX_ANSWER_CHARS,
 } from "./textGenerationPrompts.ts";
 import {
   sanitizeCommitSubject,
@@ -44,8 +46,9 @@ export interface Request<S extends Schema.Top> {
   /**
    * Set when the model must investigate `cwd` before answering: it may read files and run
    * read-only commands there, over as many turns as it needs, and must change nothing. Absent,
-   * the prompt carries everything and the model runs with no tools at all. A runner that cannot
-   * guarantee read-only tools fails rather than answering blind.
+   * the prompt carries everything; this alone does not enforce tool or context isolation.
+   * Help separately requires an explicit prompt-only capability. A runner that cannot guarantee
+   * read-only tools fails rather than answering an investigation blind.
    */
   readonly investigate?: { readonly timeoutMs: number } | undefined;
 }
@@ -96,8 +99,40 @@ export const decodeJsonReply = <S extends Schema.Top>(
   );
 };
 
-/** The text generation service over `run`. `name` prefixes each operation's span. */
-export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
+interface RunnerCapabilities {
+  /**
+   * Opt in only when the adapter guarantees no tools and no implicit filesystem,
+   * project, user or managed instructions/context beyond the supplied Help prompt.
+   * Read-only sandboxing or refusing `investigate` alone does not establish this.
+   */
+  readonly help?: { readonly promptOnly: true };
+}
+
+/** The text generation service over `run`. Optional capabilities default to unsupported. */
+export function fromRunner(
+  name: string,
+  run: Runner,
+  capabilities: RunnerCapabilities = {},
+): ProviderTextGeneration {
+  const generateHelp: NonNullable<ProviderTextGeneration["generateHelp"]> = Effect.fn(
+    `${name}.generateHelp`,
+  )(function* (input) {
+    const generated = yield* run({
+      operation: "generateHelp",
+      cwd: input.cwd,
+      modelSelection: input.modelSelection,
+      ...buildHelpPrompt(input),
+    });
+    const answer = generated.answer.trim();
+    if (answer.length === 0 || answer.length > HELP_MAX_ANSWER_CHARS) {
+      return yield* new TextGenerationError({
+        operation: "generateHelp",
+        detail: "Help returned an empty or oversized answer.",
+      });
+    }
+    return { answer };
+  });
+
   const generateCommitMessage: ProviderTextGeneration["generateCommitMessage"] = Effect.fn(
     `${name}.generateCommitMessage`,
   )(function* (input) {
@@ -193,6 +228,7 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
   });
 
   return {
+    ...(capabilities.help?.promptOnly === true ? { generateHelp } : {}),
     generateCommitMessage,
     generatePrContent,
     generateBranchName,

@@ -64,6 +64,7 @@ import {
   CornerLeftUpIcon,
   FileSearchIcon,
   CircleDotIcon,
+  CircleHelpIcon,
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
@@ -194,6 +195,7 @@ import {
   filterPinnedBrowseEntries,
   getCommandPaletteInputPlaceholder,
   getCommandPaletteMode,
+  HELP_COMMAND_PALETTE_ACTION,
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
@@ -2252,6 +2254,14 @@ function OpenCommandPaletteDialog(props: {
     icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/settings" });
+    },
+  });
+
+  actionItems.push({
+    ...HELP_COMMAND_PALETTE_ACTION,
+    icon: <CircleHelpIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/help" });
     },
   });
 

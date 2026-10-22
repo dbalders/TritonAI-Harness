@@ -240,6 +240,7 @@ import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as Help from "./help/Help.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
 import { listLinkedPullRequestThreads } from "./pullRequest/linkedThreads.ts";
@@ -596,6 +597,8 @@ function integrationRpcEffect<A>(operation: (signal: AbortSignal) => Promise<A>)
 }
 
 const ServerWsRpcGroup = WsRpcGroup.middleware(RpcInstrumentation);
+// Keep rich Help payloads out of the main handler group's type inference budget.
+const MainWsRpcGroup = ServerWsRpcGroup.omit(WS_METHODS.helpGetContext, WS_METHODS.helpAsk);
 // When a resuming client's cursor is more than this many events behind the
 // current head, skip the per-event catch-up replay and send a fresh shell
 // snapshot instead. Replaying each intervening event costs a shell refetch;
@@ -1244,6 +1247,16 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
   },
 );
 
+const layerHelpWsRpc = Layer.unwrap(
+  Effect.gen(function* () {
+    const help = yield* Help.Help;
+    return Layer.merge(
+      ServerWsRpcGroup.toLayerHandler(WS_METHODS.helpGetContext, () => help.getContext),
+      ServerWsRpcGroup.toLayerHandler(WS_METHODS.helpAsk, (input) => help.ask(input)),
+    );
+  }),
+);
+
 const layerWsRpc = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
@@ -1251,7 +1264,7 @@ const layerWsRpc = (
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   serverBrowser: ServerBrowser.ServerBrowser["Service"],
 ) =>
-  ServerWsRpcGroup.toLayer(
+  MainWsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
@@ -1886,7 +1899,7 @@ const layerWsRpc = (
       const memorySync = yield* MemorySync.MemorySync;
       const dailyMemory = yield* DailyMemory.DailyMemory;
       const ideas = yield* Ideas.Ideas;
-      const handlers = ServerWsRpcGroup.of({
+      const handlers = MainWsRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -3291,7 +3304,7 @@ const layerWsRpc = (
       });
       return handlers;
     }),
-  );
+  ).pipe(Layer.merge(layerHelpWsRpc));
 
 // A defect in a handler's effect fails only its own request. RpcServer's default
 // sends a socket-level Defect frame instead, and the client ends every pending

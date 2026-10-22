@@ -25,6 +25,14 @@ const definitions: ReadonlyArray<SourceControlClientDefinition> = [
   GitCafe.definition,
 ];
 
+/** Support views filter nested values through the same host schemas as the Settings forms. */
+export function knownSourceControlHostSettingsFields(
+  kind: string,
+): Parameters<typeof secretSettingsFields>[0]["fields"] | undefined {
+  const definition = definitions.find((entry) => entry.kind === kind);
+  return definition?.settings?.fields;
+}
+
 /** Secret field names per host kind; a host with none is absent. */
 export const SOURCE_CONTROL_HOST_SECRET_FIELDS: ReadonlyMap<
   string,

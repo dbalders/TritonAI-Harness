@@ -224,6 +224,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
         // Interrupt the two startup checks that way (one is the sign-in listener's);
         // the disconnect below must still refresh.
         let interruptedChecks = 0;
+        let spawnedProcesses = 0;
         const startupChecksInterrupted = yield* Deferred.make<void>();
         const acquire = () =>
           Effect.suspend(() => {
@@ -263,12 +264,18 @@ it.layer(layerTest)("CodexDriver", (it) => {
           Effect.provideService(
             ChildProcessSpawner.ChildProcessSpawner,
             ChildProcessSpawner.make(() =>
-              Effect.fail(
-                PlatformError.badArgument({
-                  module: "ChildProcessSpawner",
-                  method: "spawn",
-                  description: "The fixture app-server is unavailable",
-                }),
+              Effect.sync(() => {
+                spawnedProcesses += 1;
+              }).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    PlatformError.badArgument({
+                      module: "ChildProcessSpawner",
+                      method: "spawn",
+                      description: "The fixture app-server is unavailable",
+                    }),
+                  ),
+                ),
               ),
             ),
           ),
@@ -322,6 +329,36 @@ it.layer(layerTest)("CodexDriver", (it) => {
         expect(after.installed).toBe(true);
         expect(after.models).toEqual([]);
         expect(Option.isNone(yield* store.get)).toBe(true);
+        // Managed text generation must retain Help and recheck account access after sign-out.
+        const generateHelp = instance.textGeneration.generateHelp;
+        if (!generateHelp) return yield* Effect.die("Managed Codex lost its Help capability");
+        const beforeHelpProcesses = spawnedProcesses;
+        const helpError = yield* generateHelp({
+          cwd: serverConfig.stateDir,
+          modelSelection: { instanceId, model: "gpt-5.4" },
+          messages: [{ role: "user", content: "Where can I check provider settings?" }],
+          context: {
+            capturedAt: "2026-10-22T12:00:00.000Z",
+            environmentId: EnvironmentId.make("help-host"),
+            environmentName: "Host",
+            version: "test",
+            platform: "test",
+            mode: "desktop",
+            paths: [],
+            providers: [],
+            modelLabel: "Test model",
+            diagnostics: {
+              recordCount: 0,
+              failureCount: 0,
+              slowSpanCount: 0,
+              partial: true,
+              recentFailures: [],
+            },
+          },
+        }).pipe(Effect.flip);
+        expect(helpError._tag).toBe("TextGenerationError");
+        expect(spawnedProcesses).toBe(beforeHelpProcesses);
+        expect(helpError.detail).not.toContain("dummy-owned-access");
       }).pipe(
         Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
         Effect.provideService(

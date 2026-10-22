@@ -17,6 +17,10 @@ import {
   AuthRelayWriteScope,
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
+  AuthSessionId,
+  EnvironmentId,
+  type AuthEnvironmentScope,
+  type HelpContext,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -32,6 +36,7 @@ import {
   requiredScopeForDeviceList,
 } from "./RpcAuthorization.ts";
 import * as RpcAuthorization from "./RpcAuthorization.ts";
+import type * as EnvironmentAuth from "./EnvironmentAuth.ts";
 
 describe("RPC authorization scopes", () => {
   it("declares exactly one scope for every RPC in the server group", () => {
@@ -300,6 +305,170 @@ describe("RPC scope middleware", () => {
         requiredPermission: missing,
       });
       expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("Help RPC authorization", () => {
+  const tested = [WS_METHODS.helpGetContext, WS_METHODS.helpAsk] as const;
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
+        !(tested as ReadonlyArray<string>).includes(tag),
+    ),
+  );
+  const context = {
+    capturedAt: "2026-10-22T12:00:00.000Z",
+    environmentId: EnvironmentId.make("help-environment"),
+    environmentName: "Help test environment",
+    version: "test",
+    platform: "darwin",
+    mode: "desktop",
+    paths: [],
+    providers: [],
+    modelLabel: "Test model",
+    diagnostics: {
+      recordCount: 1,
+      failureCount: 0,
+      slowSpanCount: 0,
+      partial: false,
+      recentFailures: [],
+    },
+  } satisfies HelpContext;
+  const question = {
+    messages: [{ role: "user" as const, content: "Where can I find provider settings?" }],
+  };
+  const authenticatedSession = (
+    scopes: ReadonlyArray<AuthEnvironmentScope>,
+  ): EnvironmentAuth.AuthenticatedSession => ({
+    sessionId: AuthSessionId.make("help-session"),
+    subject: "help-test-user",
+    method: "bearer-access-token",
+    scopes,
+  });
+  const makeClient = (session: EnvironmentAuth.AuthenticatedSession, handled: Array<string>) =>
+    RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.helpGetContext, () =>
+            Effect.sync(() => {
+              handled.push("context");
+              return context;
+            }),
+          ),
+          group.toLayerHandler(WS_METHODS.helpAsk, () =>
+            Effect.sync(() => {
+              handled.push("ask");
+              return { answer: "Open Settings > Providers.", context };
+            }),
+          ),
+          // Match /ws: grants come from the authenticated connection, not its request payload.
+          RpcAuthorization.layer(session.scopes),
+        ),
+      ),
+    );
+
+  it.effect("allows a read-and-diagnostics session to read the Help snapshot", () =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const client = yield* makeClient(
+        authenticatedSession([AuthDiagnosticsReadScope, AuthOrchestrationReadScope]),
+        handled,
+      );
+
+      expect(yield* client[WS_METHODS.helpGetContext]({})).toEqual(context);
+      expect(handled).toEqual(["context"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { scopes: [], missing: AuthOrchestrationOperateScope },
+    { scopes: [AuthDiagnosticsReadScope], missing: AuthOrchestrationOperateScope },
+    { scopes: [AuthOrchestrationOperateScope], missing: AuthDiagnosticsReadScope },
+    {
+      scopes: [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope],
+      missing: AuthOrchestrationReadScope,
+    },
+    {
+      scopes: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+      missing: AuthDiagnosticsReadScope,
+    },
+  ])("denies Help invocation without $missing before the handler runs", ({ scopes, missing }) =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const session = authenticatedSession(scopes);
+      const client = yield* makeClient(session, handled);
+      const forgedGrants = {
+        ...question,
+        scopes: [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope],
+        permissions: [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope],
+        requiredScopes: [],
+        session: {
+          ...session,
+          scopes: [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope],
+        },
+      };
+
+      for (const input of [question, forgedGrants]) {
+        expect(yield* client[WS_METHODS.helpAsk](input).pipe(Effect.flip)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: missing,
+        });
+      }
+      expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects forged snapshot grants when the session lacks diagnostics access", () =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const session = authenticatedSession([AuthOrchestrationOperateScope]);
+      const client = yield* makeClient(session, handled);
+      const forgedGrants = {
+        scopes: [AuthDiagnosticsReadScope],
+        permissions: [AuthDiagnosticsReadScope],
+        session: { ...session, scopes: [AuthDiagnosticsReadScope] },
+      };
+
+      expect(
+        yield* client[WS_METHODS.helpGetContext](forgedGrants).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: AuthDiagnosticsReadScope,
+      });
+      expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("does not expose host settings or plugin inventory to diagnostics-only sessions", () =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const client = yield* makeClient(authenticatedSession([AuthDiagnosticsReadScope]), handled);
+      expect(yield* client[WS_METHODS.helpGetContext]({}).pipe(Effect.flip)).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: AuthOrchestrationReadScope,
+      });
+      expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("allows Help invocation when the authenticated session has all required grants", () =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const client = yield* makeClient(
+        authenticatedSession([
+          AuthOrchestrationOperateScope,
+          AuthDiagnosticsReadScope,
+          AuthOrchestrationReadScope,
+        ]),
+        handled,
+      );
+
+      expect(yield* client[WS_METHODS.helpAsk](question)).toEqual({
+        answer: "Open Settings > Providers.",
+        context,
+      });
+      expect(handled).toEqual(["ask"]);
     }).pipe(Effect.scoped),
   );
 });

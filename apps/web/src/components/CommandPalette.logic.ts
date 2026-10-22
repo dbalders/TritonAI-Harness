@@ -20,6 +20,13 @@ export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
+export const HELP_COMMAND_PALETTE_ACTION = {
+  kind: "action",
+  value: "action:help",
+  title: "Open Help",
+  searchTerms: ["open help", "support", "troubleshoot", "feedback", "settings"],
+} as const;
+
 /** A PR's relations include archived threads that normal palette search omits. */
 export function buildLinkedThreadActionItems(
   input: CommandPaletteLinkedThreads & {

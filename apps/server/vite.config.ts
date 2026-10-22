@@ -13,6 +13,7 @@ import {
   readManagedPluginBuildConfiguration,
 } from "../../scripts/lib/managed-plugin-composition.ts";
 import { loadManagedHarnessConfigForBuild } from "../../scripts/lib/managed-harness-config.ts";
+import { loadHelpDocumentationForBuild } from "../../scripts/lib/help-documentation.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 import packageJson from "./package.json" with { type: "json" };
 import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.ts";
@@ -166,6 +167,7 @@ export default mergeConfig(
         js: "#!/usr/bin/env node\n",
       },
       define: {
+        __TRITONAI_HELP_DOCUMENTATION__: JSON.stringify(loadHelpDocumentationForBuild(repoRoot)),
         __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
         __TRITONAI_BUILD_SUPPORTS_INTEGRATION_FIXTURES__: "false",
         __TRITONAI_BUILD_PLUGIN_COMPOSITION__: JSON.stringify(managedPluginComposition),

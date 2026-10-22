@@ -41,6 +41,7 @@ import {
   ProviderSetupInput,
 } from "./providerSetup.ts";
 import * as Schema from "effect/Schema";
+import { HelpAskInput, HelpAskResult, HelpContext, HelpError } from "./help.ts";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
@@ -535,6 +536,8 @@ export const WS_METHODS = {
 
   // Server meta
   serverProbe: "server.probe",
+  helpGetContext: "help.getContext",
+  helpAsk: "help.ask",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -1063,6 +1066,18 @@ const WsServerLogoutAcpRegistryRpc = Rpc.make(WS_METHODS.serverLogoutAcpRegistry
   payload: AcpRegistryLogoutInput,
   success: AcpRegistryLogoutResult,
   error: Schema.Union([AcpRegistryOperationError, EnvironmentAuthorizationError]),
+});
+
+const WsHelpGetContextRpc = Rpc.make(WS_METHODS.helpGetContext, {
+  payload: Schema.Struct({}),
+  success: HelpContext,
+  error: Schema.Union([HelpError, EnvironmentAuthorizationError]),
+});
+
+const WsHelpAskRpc = Rpc.make(WS_METHODS.helpAsk, {
+  payload: HelpAskInput,
+  success: HelpAskResult,
+  error: Schema.Union([HelpError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetTraceDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetTraceDiagnostics, {
@@ -2315,6 +2330,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerDisableAcpRegistryProviderRpc,
   WsServerLogoutAcpRegistryRpc,
   WsServerGetTraceDiagnosticsRpc,
+  WsHelpGetContextRpc,
+  WsHelpAskRpc,
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetHostResourcesRpc,
   WsServerGetProcessResourceHistoryRpc,

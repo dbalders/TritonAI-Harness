@@ -29,7 +29,7 @@ export type {
 } from "@t3tools/provider-core/server/textGeneration";
 
 /**
- * TextGeneration - Service tag for commit and change request text generation.
+ * Routes supplied-context text generation to the configured provider instance.
  */
 export class TextGeneration extends Context.Service<TextGeneration, ProviderTextGeneration>()(
   "t3/textGeneration/TextGeneration",
@@ -42,7 +42,8 @@ type TextGenerationOp =
   | "generateThreadTitle"
   | "generateDailyMemory"
   | "generateIdeas"
-  | "generateReviewGuide";
+  | "generateReviewGuide"
+  | "generateHelp";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -67,6 +68,19 @@ export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   return TextGeneration.of({
+    generateHelp: (input) =>
+      resolveInstance(registry, "generateHelp", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) =>
+          textGeneration.generateHelp
+            ? textGeneration.generateHelp(input)
+            : Effect.fail(
+                new TextGenerationError({
+                  operation: "generateHelp",
+                  detail: "The configured provider does not support Help text generation.",
+                }),
+              ),
+        ),
+      ),
     generateCommitMessage: (input) =>
       resolveInstance(registry, "generateCommitMessage", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)),

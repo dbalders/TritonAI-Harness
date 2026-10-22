@@ -4,8 +4,12 @@ import {
   CodexSettings,
   type ServerSettings,
   UsageLimitSourceConfig,
+  isSecretSetting,
   secretSettingsFields,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import type * as SchemaAST from "effect/SchemaAST";
 import { acpRegistryClient } from "@t3tools/provider-acp-registry/client";
 import { cursorClient } from "@t3tools/provider-cursor/client";
 import { grokClient } from "@t3tools/provider-grok/client";
@@ -21,15 +25,69 @@ import {
 
 export const SECRET_REDACTED = "\u2022\u2022\u2022\u2022\u2022\u2022";
 
-const providerSecretFields = new Map([
-  ["codex", secretSettingsFields(CodexSettings)],
-  ["claudeAgent", secretSettingsFields(ClaudeSettings)],
-  ["antigravity", secretSettingsFields(AntigravitySettings)],
+const providerSettingsSchemas = new Map<string, Parameters<typeof secretSettingsFields>[0]>([
+  ["codex", CodexSettings],
+  ["claudeAgent", ClaudeSettings],
+  ["antigravity", AntigravitySettings],
   ...[cursorClient, grokClient, museClient, openCodeClient, piClient, acpRegistryClient].map(
-    (definition) =>
-      [definition.driverKind, secretSettingsFields(definition.settingsSchema)] as const,
+    (definition) => [definition.driverKind, definition.settingsSchema] as const,
   ),
 ]);
+const providerSecretFields = new Map(
+  [...providerSettingsSchemas].map(([driver, schema]) => [driver, secretSettingsFields(schema)]),
+);
+
+/** Support views use each field's schema to strip undeclared children at every depth. */
+export function knownProviderSettingsFields(
+  driver: string,
+): Parameters<typeof secretSettingsFields>[0]["fields"] | undefined {
+  return providerSettingsSchemas.get(driver)?.fields;
+}
+
+function inspectableSettingsShape(ast: SchemaAST.AST, nested = false): boolean {
+  // The secret mapper handles top-level schema secrets. Nested declarations have
+  // no mapped presence marker, so omit their containing field instead of exposing it.
+  if (nested && isSecretSetting(Schema.make(ast))) return false;
+  const inspect = (child: SchemaAST.AST) => inspectableSettingsShape(child, true);
+  switch (ast._tag) {
+    case "Arrays":
+      return ast.elements.every(inspect) && ast.rest.every(inspect);
+    case "Objects":
+      return (
+        ast.propertySignatures.length + ast.indexSignatures.length > 0 &&
+        ast.propertySignatures.every((property) => inspect(property.type)) &&
+        ast.indexSignatures.every((index) => inspect(index.type))
+      );
+    case "Union":
+      return ast.types.every(inspect);
+    case "String":
+    case "Number":
+    case "Boolean":
+    case "Null":
+    case "Undefined":
+    case "Literal":
+    case "Enum":
+    case "TemplateLiteral":
+      return true;
+    default:
+      // Unknown/Any, unconstrained objects and declarations are opaque to support.
+      return false;
+  }
+}
+
+/** Project an already-redacted setting through its schema without defaults or normalization. */
+export function settingsFieldForSupport(
+  schema: Schema.Top,
+  value: unknown,
+): Option.Option<unknown> {
+  const encoded = Schema.toEncoded(schema);
+  if (
+    !inspectableSettingsShape(Schema.toType(schema).ast) ||
+    !inspectableSettingsShape(encoded.ast)
+  )
+    return Option.none();
+  return Schema.decodeUnknownOption(encoded, { onExcessProperty: "ignore" })(value);
+}
 const usageLimitSecretFields = secretSettingsFields(UsageLimitSourceConfig);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 

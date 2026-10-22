@@ -8,27 +8,57 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
+import { fromRunner } from "@t3tools/provider-core/server/textGenerationOperations";
 import { createModelSelection } from "@t3tools/shared/model";
 import { expect } from "vite-plus/test";
 
 import {
   CodexSettings,
-  DEFAULT_TRITONAI_CODEX_MODEL,
+  EnvironmentId,
+  ProviderDriverKind,
   ProviderInstanceId,
+  TRITONAI_CODEX_MODEL_PROVIDER_ID,
   TextGenerationError,
 } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
-import { TRITONAI_CLIENT_VERSION } from "../tritonAiClientHeaders.ts";
 import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
+import managedHarnessConfig from "../../../../config/tritonai-managed-config.json" with { type: "json" };
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DEFAULT_TEST_MODEL_SELECTION = createModelSelection(
   ProviderInstanceId.make("codex"),
   "gpt-5.4-mini",
 );
+
+const HELP_INPUT: import("@t3tools/provider-core/server/textGeneration").HelpGenerationInput = {
+  cwd: "/must-not-read",
+  modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+  messages: [{ role: "user", content: "Read the host settings to fix my provider" }],
+  context: {
+    capturedAt: "2026-10-22T12:00:00.000Z",
+    environmentId: EnvironmentId.make("help-test"),
+    environmentName: "Test host",
+    version: "test",
+    platform: "linux",
+    mode: "local",
+    paths: [],
+    providers: [],
+    modelLabel: "Codex",
+    diagnostics: {
+      recordCount: 0,
+      failureCount: 0,
+      slowSpanCount: 0,
+      partial: true,
+      recentFailures: [],
+    },
+  },
+};
 
 const layerCodexTextGenerationTest = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-codex-text-generation-test-",
@@ -49,7 +79,12 @@ interface FakeCodexInput {
   stdinMustContain?: string;
   stdinMustNotContain?: string;
   /** What `codex mcp list --json` answers; a number exits with that code instead. */
-  mcpServers?: ReadonlyArray<{ name: string; enabled: boolean }> | number;
+  mcpServers?: ReadonlyArray<{ name: string; enabled: boolean }> | number | string;
+  unsupportedHelp?: boolean;
+  requireHelpIsolation?: boolean;
+  helpVersion?: string;
+  requireNativeAuth?: boolean;
+  forbidNativeAuth?: boolean;
 }
 
 // The stub walks argv the way the shell script it replaced did: `--image`,
@@ -69,12 +104,18 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
     stdinMustContain: input.stdinMustContain ?? null,
     stdinMustNotContain: input.stdinMustNotContain ?? null,
     mcpServers: input.mcpServers ?? [],
+    unsupportedHelp: input.unsupportedHelp ?? false,
+    requireHelpIsolation: input.requireHelpIsolation ?? false,
+    helpVersion: input.helpVersion ?? "0.156.1",
+    requireNativeAuth: input.requireNativeAuth ?? false,
+    forbidNativeAuth: input.forbidNativeAuth ?? false,
     stderr: input.stderr ?? null,
     output: input.output,
     exitCode: input.exitCode ?? 0,
   });
   return Effect.gen(function* () {
     const path = yield* Path.Path;
+    const callsPath = path.join(dir, "calls.jsonl");
     return writeFakeCli({
       directory: path.join(dir, "bin"),
       name: "codex",
@@ -82,9 +123,23 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         'import * as NodeFS from "node:fs";',
         `const check = ${check};`,
         "const args = process.argv.slice(2);",
+        `NodeFS.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({ args, cwd: process.cwd(), home: process.env.CODEX_HOME }) + "\\n");`,
+        'if (args.includes("--version")) { process.stdout.write("codex-cli " + check.helpVersion); process.exit(0); }',
+        'if (args.includes("exec") && args.includes("--help")) {',
+        '  process.stdout.write(check.unsupportedHelp ? "Unsupported CLI" : "--ignore-user-config --ignore-rules --strict-config --output-schema");',
+        "  process.exit(0);",
+        "}",
+        'if (args.includes("features") && args.includes("list")) {',
+        '  process.stdout.write(["shell_tool", "view_image", "skip_host_skill_discovery", "plugins", "apps", "code_mode", "hooks", "multi_agent"].map(name => name + " stable false").join("\\n"));',
+        "  process.exit(0);",
+        "}",
+        'if (args.includes("debug") && args.includes("models")) {',
+        '  process.stdout.write(JSON.stringify({ models: [{ slug: "template", base_instructions: "PRIVATE CATALOG INSTRUCTIONS", shell_type: "default", apply_patch_tool_type: "freeform", experimental_supported_tools: ["clock"] }] }));',
+        "  process.exit(0);",
+        "}",
         'if (args.includes("mcp") && args.includes("list")) {',
         '  if (typeof check.mcpServers === "number") process.exit(check.mcpServers);',
-        "  process.stdout.write(JSON.stringify(check.mcpServers));",
+        '  process.stdout.write(typeof check.mcpServers === "string" ? check.mcpServers : JSON.stringify(check.mcpServers));',
         "  process.exit(0);",
         "}",
         'const originalArgs = ` ${args.join(" ")} `;',
@@ -113,6 +168,27 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         '  process.stderr.write(message + "\\n");',
         "  process.exit(code);",
         "}",
+        "if (check.requireHelpIsolation) {",
+        '  for (const flag of ["--ignore-user-config", "--ignore-rules", "--strict-config"]) if (!args.includes(flag)) fail("missing isolation flag " + flag, 10);',
+        '  if (args.includes("-s") || args.includes("--sandbox")) fail("sandbox flag overrides named Help profile", 11);',
+        '  if (NodeFS.readdirSync(process.cwd()).length !== 0) fail("Help cwd must be empty", 12);',
+        '  if (originalArgs.includes("PRIVATE LAUNCH INSTRUCTIONS")) fail("arbitrary overrides reached Help", 13);',
+        '  const catalogArg = args.find(value => value.startsWith("model_catalog_json="));',
+        '  const catalog = JSON.parse(NodeFS.readFileSync(JSON.parse(catalogArg.slice("model_catalog_json=".length)), "utf8"));',
+        "  const model = catalog.models[0];",
+        '  if (model.shell_type !== "disabled" || model.apply_patch_tool_type !== null || model.experimental_supported_tools.length !== 0 || model.supports_search_tool !== false) fail("unsafe model tools", 14);',
+        '  if (model.base_instructions.includes("PRIVATE CATALOG INSTRUCTIONS")) fail("catalog instructions reached Help", 15);',
+        '  if (!originalArgs.includes(\' default_permissions="help" \') || originalArgs.includes(\'"write"\')) fail("unsafe Help profile", 16);',
+        '  if (originalArgs.includes("model_provider=tritonai") && originalArgs.includes("model_provider=openai_token_sharing")) fail("managed provider was replaced", 17);',
+        "}",
+        "if (check.requireNativeAuth) {",
+        "  const home = process.env.CODEX_HOME;",
+        '  if (NodeFS.readdirSync(home).join(",") !== "auth.json") fail("copied native context beyond auth", 18);',
+        '  if ((NodeFS.statSync(home + "/auth.json").mode & 0o777) !== 0o600) fail("auth mode must be 600", 19);',
+        '  if (!originalArgs.includes(\' model_provider="openai" \')) fail("native OAuth provider changed", 20);',
+        '  if (NodeFS.readFileSync(home + "/auth.json", "utf8") !== "OPAQUE SYNTHETIC AUTH FIXTURE") fail("native account changed", 22);',
+        "}",
+        'if (check.forbidNativeAuth && NodeFS.existsSync(process.env.CODEX_HOME + "/auth.json")) fail("native auth must not replace selected transport", 21);',
         "if (check.requireArg !== null && !originalArgs.includes(` ${check.requireArg} `)) {",
         '  fail("missing arg: " + check.requireArg, 8);',
         "}",
@@ -157,17 +233,45 @@ function withFakeCodexEnv<A, E, R>(
     models?: ReadonlyArray<string>;
     configOverrides?: Partial<CodexSettings>;
     managedRuntime?: boolean;
+    nativeAuth?: boolean;
   },
-  effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
+  effectFn: (
+    textGeneration: TextGeneration.TextGeneration["Service"],
+    callsPath: string,
+  ) => Effect.Effect<A, E, R>,
 ) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-codex-text-" });
     const codexPath = yield* makeFakeCodexBinary(tempDir, input);
+    const path = yield* Path.Path;
+    const nativeHome = path.join(tempDir, "native-home");
+    if (input.nativeAuth) {
+      yield* fs.makeDirectory(nativeHome);
+      yield* fs.writeFileString(
+        path.join(nativeHome, "auth.json"),
+        "OPAQUE SYNTHETIC AUTH FIXTURE",
+      );
+      yield* fs.writeFileString(
+        path.join(nativeHome, "config.toml"),
+        "PRIVATE CONFIG MUST NOT COPY",
+      );
+      yield* fs.writeFileString(
+        path.join(nativeHome, "AGENTS.md"),
+        "PRIVATE INSTRUCTIONS MUST NOT COPY",
+      );
+      yield* fs.writeFileString(
+        path.join(nativeHome, "history.jsonl"),
+        "PRIVATE HISTORY MUST NOT COPY",
+      );
+      yield* fs.chmod(path.join(nativeHome, "auth.json"), 0o644);
+    }
     const config = decodeCodexSettings({
       ...input.configOverrides,
+      ...(input.nativeAuth ? { homePath: nativeHome } : {}),
       binaryPath: codexPath,
-      launchArgs: input.launchArgs,
+      launchArgs:
+        input.launchArgs ?? (input.managedRuntime ? '-c model_provider="test"' : undefined),
     });
     const textGeneration = yield* makeCodexTextGeneration(
       config,
@@ -188,11 +292,431 @@ function withFakeCodexEnv<A, E, R>(
           })
         : undefined,
     );
-    return yield* effectFn(textGeneration);
+    return yield* effectFn(textGeneration, (yield* Path.Path).join(tempDir, "calls.jsonl"));
   }).pipe(Effect.scoped);
 }
 
 it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
+  it.effect("supports the managed policy's approved Codex version for isolated Help", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Approved managed runtime Help works."}',
+        managedRuntime: true,
+        helpVersion: managedHarnessConfig.provider.approvedCodexVersion,
+        requireHelpIsolation: true,
+      },
+      (generation) =>
+        Effect.gen(function* () {
+          const result = yield* generation.generateHelp!(HELP_INPUT);
+          expect(result.answer).toBe("Approved managed runtime Help works.");
+        }),
+    ),
+  );
+
+  it.effect("reuses only opaque native authentication and cleans its private copy", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Native ChatGPT Help works."}',
+        nativeAuth: true,
+        environment: { TRITONAI_API_KEY: "" },
+        requireNativeAuth: true,
+        requireHelpIsolation: true,
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sourceHome = path.join(path.dirname(callsPath), "native-home");
+          const result = yield* generation.generateHelp!(HELP_INPUT);
+          expect(result.answer).toBe("Native ChatGPT Help works.");
+          expect(yield* fs.readFileString(path.join(sourceHome, "auth.json"))).toBe(
+            "OPAQUE SYNTHETIC AUTH FIXTURE",
+          );
+          expect((yield* fs.stat(path.join(sourceHome, "auth.json"))).mode & 0o777).toBe(0o644);
+          expect((yield* fs.readDirectory(sourceHome)).sort()).toEqual([
+            "AGENTS.md",
+            "auth.json",
+            "config.toml",
+            "history.jsonl",
+          ]);
+          const calls = (yield* fs.readFileString(callsPath))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as { home: string });
+          expect(yield* fs.exists(calls[0]!.home)).toBe(false);
+        }),
+    ),
+  );
+
+  it.effect("keeps the configured gateway when native authentication also exists", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Gateway Help works."}',
+        nativeAuth: true,
+        forbidNativeAuth: true,
+        requireHelpIsolation: true,
+        helpVersion: managedHarnessConfig.provider.approvedCodexVersion,
+        environment: {
+          TRITONAI_API_KEY: "synthetic-gateway-key",
+          UCSD_AI_BASE_URL: "https://on-prem.example.invalid/v1",
+        },
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const result = yield* generation.generateHelp!(HELP_INPUT);
+          expect(result.answer).toBe("Gateway Help works.");
+          const calls = (yield* fs.readFileString(callsPath))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as { args: string[] });
+          const inference = calls.find(
+            (call) => call.args[0] === "exec" && !call.args.includes("--help"),
+          );
+          expect(inference).toBeDefined();
+          expect(inference!.args.filter((arg) => arg.startsWith("model_provider="))).toEqual([
+            `model_provider="${TRITONAI_CODEX_MODEL_PROVIDER_ID}"`,
+          ]);
+          expect(inference!.args).toContain(
+            `model_providers.${TRITONAI_CODEX_MODEL_PROVIDER_ID}.base_url="https://on-prem.example.invalid/v1"`,
+          );
+          expect(inference!.args).toContain(
+            `model_providers.${TRITONAI_CODEX_MODEL_PROVIDER_ID}.env_key="TRITONAI_API_KEY"`,
+          );
+        }),
+    ),
+  );
+
+  it.effect.each([
+    "-c model_provider=openai",
+    '-c model_provider="openai"',
+    `--config 'model_provider="openai"'`,
+    `--config="model_provider='openai'"`,
+    "--config=model_provider=openai",
+    "-c=model_provider=openai",
+    `-c 'model_provider="old_route"' --config=model_provider=openai`,
+    "-c model_provider={} --config=model_provider=openai",
+    "-c model_provider=true --config=model_provider=openai",
+    "-c model_provider.nested=selected_route --config=model_provider=openai",
+  ])("explicitly selects native auth over ambient gateway credentials (%s)", (launchArgs) =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Selected native account works."}',
+        nativeAuth: true,
+        requireNativeAuth: true,
+        requireHelpIsolation: true,
+        launchArgs,
+        environment: { TRITONAI_API_KEY: "synthetic-gateway-key" },
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          expect((yield* generation.generateHelp!(HELP_INPUT)).answer).toBe(
+            "Selected native account works.",
+          );
+          const calls = (yield* fs.readFileString(callsPath))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as { args: string[]; home: string });
+          const inference = calls.find(
+            (call) => call.args[0] === "exec" && !call.args.includes("--help"),
+          );
+          expect(inference!.args.findLast((arg) => arg.startsWith("model_provider="))).toBe(
+            'model_provider="openai"',
+          );
+          expect(inference!.args.some((arg) => arg.startsWith("model_providers."))).toBe(false);
+          expect(yield* fs.exists(inference!.home)).toBe(false);
+        }),
+    ),
+  );
+
+  it.effect("never copies native auth when custom OpenAI transport precedes the selector", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Custom OpenAI transport works."}',
+        nativeAuth: true,
+        forbidNativeAuth: true,
+        requireHelpIsolation: true,
+        launchArgs: `-c 'model_providers.openai.base_url="https://selected.example.invalid/v1"' -c 'model_providers.openai.env_key="SELECTED_API_KEY"' -c model_provider=openai`,
+        environment: {
+          TRITONAI_API_KEY: "synthetic-gateway-key",
+          SELECTED_API_KEY: "synthetic-selected-key",
+        },
+        requireArg: 'model_providers.openai.base_url="https://selected.example.invalid/v1"',
+      },
+      (generation) =>
+        Effect.gen(function* () {
+          expect((yield* generation.generateHelp!(HELP_INPUT)).answer).toBe(
+            "Custom OpenAI transport works.",
+          );
+        }),
+    ),
+  );
+
+  it.effect.each([
+    { flag: "--config ", provider: "selected_route" },
+    { flag: "--config=", provider: "selected_route" },
+    { flag: "-c=", provider: "selected_route" },
+    { flag: "-c ", provider: TRITONAI_CODEX_MODEL_PROVIDER_ID },
+    { flag: "-c ", provider: "openai" },
+  ])(
+    "preserves an explicitly selected transport with mixed credentials ($flag $provider)",
+    ({ flag, provider }) =>
+      withFakeCodexEnv(
+        {
+          output: '{"answer":"Selected endpoint Help works."}',
+          nativeAuth: true,
+          forbidNativeAuth: true,
+          requireHelpIsolation: true,
+          launchArgs: `${flag}'model_provider="${provider}"' ${flag}'model_providers.${provider}.base_url="https://selected.example.invalid/v1"' ${flag}'model_providers.${provider}.env_key="SELECTED_API_KEY"'`,
+          environment: {
+            TRITONAI_API_KEY: "synthetic-gateway-key",
+            SELECTED_API_KEY: "synthetic-selected-key",
+          },
+        },
+        (generation, callsPath) =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            expect((yield* generation.generateHelp!(HELP_INPUT)).answer).toBe(
+              "Selected endpoint Help works.",
+            );
+            const calls = (yield* fs.readFileString(callsPath))
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as { args: string[] });
+            const inference = calls.find(
+              (call) => call.args[0] === "exec" && !call.args.includes("--help"),
+            );
+            expect(inference!.args.filter((arg) => arg.startsWith("model_provider="))).toEqual([
+              `model_provider="${provider}"`,
+            ]);
+            expect(inference!.args).toContain(
+              `model_providers.${provider}.base_url="https://selected.example.invalid/v1"`,
+            );
+            expect(inference!.args).toContain(
+              `model_providers.${provider}.env_key="SELECTED_API_KEY"`,
+            );
+          }),
+      ),
+  );
+
+  it.effect("honors the last explicit selector across split and compact overrides", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Last selected route works."}',
+        nativeAuth: true,
+        forbidNativeAuth: true,
+        requireHelpIsolation: true,
+        launchArgs: `-c 'model_provider="openai"' --config='model_provider="selected_route"' -c 'model_providers.selected_route.base_url="https://selected.example.invalid/v1"'`,
+        environment: { TRITONAI_API_KEY: "synthetic-gateway-key" },
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          expect((yield* generation.generateHelp!(HELP_INPUT)).answer).toBe(
+            "Last selected route works.",
+          );
+          const calls = (yield* fs.readFileString(callsPath))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as { args: string[] });
+          const inference = calls.find(
+            (call) => call.args[0] === "exec" && !call.args.includes("--help"),
+          );
+          expect(inference!.args.findLast((arg) => arg.startsWith("model_provider="))).toBe(
+            'model_provider="selected_route"',
+          );
+          expect(inference!.args).toContain(
+            'model_providers.selected_route.base_url="https://selected.example.invalid/v1"',
+          );
+        }),
+    ),
+  );
+
+  it.effect.each([
+    '-c model_providers.selected_route.base_url="https://selected.example.invalid/v1"',
+    '--config=model_providers={openai={base_url="https://selected.example.invalid/v1"}}',
+    '-c model_provider="selected_route" --config=model_providers.selected_route={base_url="https://selected.example.invalid/v1"}',
+    "-c model_provider=true",
+    "-c model_provider={}",
+    "-c model_provider=openai --config=model_provider=true",
+    "-c model_provider=openai --config=model_provider={}",
+    "-c model_provider=",
+    "-c model_provider",
+    `-c 'model_provider="open\\u0061i"'`,
+    `-c 'model_provider="openai'`,
+    "-c model_provider=openai -c model_provider.nested=selected_route",
+    "-c model_provider=openai -c openai_base_url=https://selected.example.invalid/v1",
+    "-c model_provider=openai -c chatgpt_base_url=https://selected.example.invalid",
+  ])("refuses ambiguous transport overrides before native or gateway fallback (%s)", (launchArgs) =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Must not be generated"}',
+        nativeAuth: true,
+        launchArgs,
+        environment: { TRITONAI_API_KEY: "synthetic-gateway-key" },
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const failure = yield* Effect.flip(generation.generateHelp!(HELP_INPUT));
+          expect(failure.operation).toBe("generateHelp");
+          expect(yield* fs.exists(callsPath)).toBe(false);
+        }),
+    ),
+  );
+
+  it.effect.each([
+    { nativeAuth: false, environment: {} },
+    { nativeAuth: true, environment: { OPENAI_BASE_URL: "https://selected.example.invalid/v1" } },
+    { nativeAuth: true, environment: { CODEX_API_KEY: "synthetic-other-account-key" } },
+  ])("refuses native selection without unambiguous native auth ($environment)", (input) =>
+    withFakeCodexEnv(
+      {
+        ...input,
+        output: '{"answer":"Must not be generated"}',
+        launchArgs: "-c model_provider=openai",
+        environment: { TRITONAI_API_KEY: "synthetic-gateway-key", ...input.environment },
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const failure = yield* Effect.flip(generation.generateHelp!(HELP_INPUT));
+          expect(failure.operation).toBe("generateHelp");
+          expect(yield* fs.exists(callsPath)).toBe(false);
+        }),
+    ),
+  );
+
+  it.effect.each([false, true])(
+    "generates isolated prompt-only Help (managed runtime: %s)",
+    (managedRuntime) =>
+      withFakeCodexEnv(
+        {
+          output: '{"answer":"Check Settings > Runtime."}',
+          managedRuntime,
+          nativeAuth: true,
+          forbidNativeAuth: true,
+          requireHelpIsolation: true,
+          ...(managedRuntime
+            ? { forbidArg: '--config service_tier="priority"' }
+            : { requireServiceTier: "priority" }),
+          launchArgs:
+            '-c model_provider="openai_token_sharing" -c model_providers.openai_token_sharing.env_key="ACCESS_TOKEN" -c developer_instructions="PRIVATE LAUNCH INSTRUCTIONS"',
+          environment: {
+            ...process.env,
+            ACCESS_TOKEN: "not-a-real-token",
+            T3CODE_CODEX_LAUNCH_ARGS: "--config features.shell_tool=true",
+          },
+          stdinMustContain: "Read the host settings to fix my provider",
+        },
+        (generation, callsPath) =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const result = yield* generation.generateHelp!({
+              ...HELP_INPUT,
+              modelSelection: createModelSelection(
+                DEFAULT_TEST_MODEL_SELECTION.instanceId,
+                DEFAULT_TEST_MODEL_SELECTION.model,
+                [{ id: "serviceTier", value: "priority" }],
+              ),
+            });
+            expect(result.answer).toBe("Check Settings > Runtime.");
+            const calls = (yield* fs.readFileString(callsPath))
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as { args: string[]; cwd: string; home: string });
+            const inference = calls.filter(
+              (call) => call.args[0] === "exec" && !call.args.includes("--help"),
+            );
+            expect(inference).toHaveLength(1);
+            expect(inference[0]!.cwd).not.toBe(HELP_INPUT.cwd);
+            expect(inference[0]!.home).not.toBe(process.env.CODEX_HOME);
+            expect(yield* fs.exists(inference[0]!.home)).toBe(false);
+            expect(yield* fs.exists(inference[0]!.cwd)).toBe(false);
+          }),
+      ),
+  );
+
+  it.effect.each([
+    { name: "MCP listing failure", mcpServers: 2 },
+    { name: "malformed MCP listing", mcpServers: "not-json" },
+    { name: "unexpected enabled MCP server", mcpServers: [{ name: "unsafe", enabled: true }] },
+    { name: "unsupported isolation flags", unsupportedHelp: true },
+    { name: "unverified CLI version", helpVersion: "0.155.0" },
+  ])("refuses Help before inference after $name", (probe) =>
+    withFakeCodexEnv(
+      { output: '{"answer":"Must not be generated"}', managedRuntime: true, ...probe },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const failure = yield* Effect.flip(generation.generateHelp!(HELP_INPUT));
+          expect(failure._tag).toBe("TextGenerationError");
+          expect(failure.operation).toBe("generateHelp");
+          const calls = (yield* fs.readFileString(callsPath))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as { args: string[] });
+          expect(
+            calls.some((call) => call.args[0] === "exec" && !call.args.includes("--help")),
+          ).toBe(false);
+        }),
+    ),
+  );
+
+  it.effect("rejects oversized Help output before reading it into memory", () =>
+    withFakeCodexEnv({ output: "a".repeat(128 * 1024 + 1), managedRuntime: true }, (generation) =>
+      Effect.gen(function* () {
+        const failure = yield* Effect.flip(generation.generateHelp!(HELP_INPUT));
+        expect(failure.operation).toBe("generateHelp");
+        expect(failure.detail).not.toContain("aaaa");
+      }),
+    ),
+  );
+
+  it.effect("refuses an unproven adapter without invoking its runner", () =>
+    Effect.gen(function* () {
+      let spawns = 0;
+      const adapter = fromRunner("Unproven", () => {
+        spawns += 1;
+        return Effect.die("Unsupported Help must not discover MCP servers or run inference");
+      });
+      expect(adapter.generateHelp).toBeUndefined();
+
+      const instanceId = DEFAULT_TEST_MODEL_SELECTION.instanceId;
+      const instance: ProviderInstance = {
+        instanceId,
+        driverKind: ProviderDriverKind.make("codex"),
+        continuationIdentity: {
+          driverKind: ProviderDriverKind.make("codex"),
+          continuationKey: "help-test",
+        },
+        displayName: undefined,
+        enabled: true,
+        snapshot: {} as ProviderInstance["snapshot"],
+        orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+        textGeneration: adapter,
+      };
+      const generation = yield* TextGeneration.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+              getInstance: () => Effect.succeed(instance),
+            }),
+            Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
+              resolveLink: () => Effect.die("Unsupported Help must not resolve source links"),
+            }),
+          ),
+        ),
+      );
+      const failure = yield* Effect.flip(generation.generateHelp!(HELP_INPUT));
+      expect(failure._tag).toBe("TextGenerationError");
+      expect(failure.operation).toBe("generateHelp");
+      expect(failure.detail).toBe("The configured provider does not support Help text generation.");
+      expect(spawns).toBe(0);
+    }),
+  );
+
   it.effect.each(["gpt-5.6-luna", "openai.gpt-5.6-luna"])(
     "dispatches the qualified live model for %s",
     (selectedModel) =>
