@@ -7572,6 +7572,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
 
               const cleanupInterruptState = Effect.gen(function* () {
+                const unstartedNativeTurns = new Set<string>();
+                for (const target of interruptTargets) {
+                  const ready = target.context.nativeStartReady;
+                  if (ready !== undefined && !(yield* Deferred.isDone(ready))) {
+                    unstartedNativeTurns.add(target.context.nativeTurnId);
+                  }
+                }
                 const stillActive = yield* Ref.get(activeTurns);
                 const stillSettled = yield* Ref.get(settledTurns);
                 yield* Ref.update(turnWaiters, (current) => {
@@ -7585,8 +7592,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   const updated = new Set(current);
                   for (const target of interruptTargets) {
                     if (
-                      stillActive.get(target.context.nativeTurnId) === target.context ||
-                      stillSettled.get(target.context.nativeTurnId) === target.context
+                      !unstartedNativeTurns.has(target.context.nativeTurnId) &&
+                      (stillActive.get(target.context.nativeTurnId) === target.context ||
+                        stillSettled.get(target.context.nativeTurnId) === target.context)
                     )
                       continue;
                     updated.delete(target.context.nativeTurnId);
@@ -7943,6 +7951,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       // behind a response that the provider has already made moot.
                       Effect.raceFirst(Deferred.await(target.completion)),
                       Effect.timeout("10 seconds"),
+                      Effect.onError(() => finalizeRemainingInterruptLineage),
                     );
                 }
                 const [, completed] = yield* Effect.all(
