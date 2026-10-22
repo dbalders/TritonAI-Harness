@@ -6541,50 +6541,57 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
-            const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
-            if (context === undefined) {
-              return;
-            }
-            if (
-              (yield* Ref.get(interruptingNativeTurns)).has(payload.turn.id) &&
-              (context.nativeStartReady === undefined ||
-                (yield* Deferred.isDone(context.nativeStartReady)))
-            ) {
-              // Native turn completion does not confirm that its foreground
-              // command stopped. The interrupt owner publishes the terminal
-              // only after containing the exact tracked command handles.
-              yield* Ref.update(nativeInterruptCompletions, (current) =>
-                current.has(payload.turn.id)
-                  ? current
-                  : new Map(current).set(payload.turn.id, payload),
-              );
-              const waiter = (yield* Ref.get(turnWaiters)).get(payload.turn.id);
-              if (waiter !== undefined) yield* Deferred.succeed(waiter, undefined);
-              else yield* drainUnownedInterruptCompletion(payload.turn.id);
-              return;
-            }
-            const nativeStatus = mapCodexTurnStatus(payload.turn.status);
-            const status =
-              nativeStatus === "completed" &&
-              (yield* Ref.get(interruptingNativeTurns)).has(payload.turn.id)
-                ? "interrupted"
-                : nativeStatus;
-            yield* finalizeCodexTurn({
-              context,
-              nativeTurnId: payload.turn.id,
-              status,
-              completedAt: codexTimestamp(payload.turn.completedAt),
-              ...(payload.turn.error?.message === undefined
-                ? {}
-                : {
-                    failureMessage: payload.turn.error.message,
-                    ...(payload.turn.error.codexErrorInfo == null
-                      ? {}
-                      : {
-                          failureCode: codexErrorInfoCode(payload.turn.error.codexErrorInfo),
-                        }),
-                  }),
-            }).pipe(turnTerminalizationPermit.withPermits(1));
+            const shouldDrain = yield* turnTerminalizationPermit.withPermits(1)(
+              Effect.gen(function* () {
+                const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
+                if (context === undefined) {
+                  return;
+                }
+                if (
+                  (yield* Ref.get(interruptingNativeTurns)).has(payload.turn.id) &&
+                  (context.nativeStartReady === undefined ||
+                    (yield* Deferred.isDone(context.nativeStartReady)))
+                ) {
+                  // Native turn completion does not confirm that its foreground
+                  // command stopped. The interrupt owner publishes the terminal
+                  // only after containing the exact tracked command handles.
+                  yield* Ref.update(nativeInterruptCompletions, (current) =>
+                    current.has(payload.turn.id)
+                      ? current
+                      : new Map(current).set(payload.turn.id, payload),
+                  );
+                  const waiter = (yield* Ref.get(turnWaiters)).get(payload.turn.id);
+                  if (waiter !== undefined) yield* Deferred.succeed(waiter, undefined);
+                  return waiter === undefined;
+                }
+                const nativeStatus = mapCodexTurnStatus(payload.turn.status);
+                const status =
+                  nativeStatus === "completed" &&
+                  (yield* Ref.get(interruptingNativeTurns)).has(payload.turn.id)
+                    ? "interrupted"
+                    : nativeStatus;
+                yield* finalizeCodexTurn({
+                  context,
+                  nativeTurnId: payload.turn.id,
+                  status,
+                  completedAt: codexTimestamp(payload.turn.completedAt),
+                  ...(payload.turn.error?.message === undefined
+                    ? {}
+                    : {
+                        failureMessage: payload.turn.error.message,
+                        ...(payload.turn.error.codexErrorInfo == null
+                          ? {}
+                          : {
+                              failureCode: codexErrorInfoCode(payload.turn.error.codexErrorInfo),
+                            }),
+                      }),
+                });
+                return false;
+              }),
+            );
+            // Recovery acquires the same permit; release it before draining a
+            // completion whose failed Stop no longer owns a waiter.
+            if (shouldDrain) yield* drainUnownedInterruptCompletion(payload.turn.id);
           }),
         );
 
@@ -7395,80 +7402,84 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           interruptTurn: (requestedInput) =>
             Effect.gen(function* () {
               const { turnInput, goalTurns } = yield* resolveGoalStopTarget(requestedInput);
-              const [activeTurnContexts, settledTurnContexts] =
+              const { interruptTargets, settledTurnContexts, inLineage, lineageRoots } =
                 yield* turnTerminalizationPermit.withPermits(1)(
                   Effect.gen(function* () {
-                    return [
-                      Array.from((yield* Ref.get(activeTurns)).values()),
-                      Array.from((yield* Ref.get(settledTurns)).values()),
-                    ] as const;
+                    // Select and claim together so native completion cannot
+                    // finalize a context between the snapshot and ownership.
+                    const activeTurnContexts = Array.from((yield* Ref.get(activeTurns)).values());
+                    const settledTurnContexts = Array.from((yield* Ref.get(settledTurns)).values());
+                    const activeTurn =
+                      activeTurnContexts.find(
+                        (candidate) => candidate.providerTurnId === turnInput.providerTurnId,
+                      ) ??
+                      (turnInput.requestRuntimeRestart === true
+                        ? settledTurnContexts.find(
+                            (candidate) =>
+                              candidate.providerThread.id === turnInput.providerThread.id,
+                          )
+                        : undefined);
+                    // A goal run spans several root turns, and work an earlier one
+                    // started can outlive it.
+                    const lineageRoots = Array.from(
+                      new Set([...(activeTurn === undefined ? [] : [activeTurn]), ...goalTurns]),
+                    );
+                    const inLineage = (context: ActiveCodexTurnContext) =>
+                      lineageRoots.some(
+                        (root) => context === root || isDescendantCodexTurn(context, root),
+                      );
+                    const interruptTargetContexts = [
+                      ...(activeTurn === undefined ? [] : [activeTurn]),
+                      ...activeTurnContexts.filter(
+                        (candidate) => candidate !== activeTurn && inLineage(candidate),
+                      ),
+                      ...settledTurnContexts.filter(
+                        (candidate) =>
+                          candidate !== activeTurn &&
+                          ((turnInput.requestRuntimeRestart === true &&
+                            candidate.providerThread.id === turnInput.providerThread.id) ||
+                            inLineage(candidate)),
+                      ),
+                    ];
+                    const interruptTargets: Array<{
+                      readonly context: ActiveCodexTurnContext;
+                      readonly completion: Deferred.Deferred<void, never>;
+                    }> = [];
+                    for (const context of interruptTargetContexts) {
+                      interruptTargets.push({ context, completion: yield* Deferred.make<void>() });
+                    }
+                    yield* Ref.update(turnWaiters, (current) => {
+                      const updated = new Map(current);
+                      for (const target of interruptTargets) {
+                        updated.set(target.context.nativeTurnId, target.completion);
+                      }
+                      return updated;
+                    });
+                    yield* Ref.update(interruptingNativeTurns, (current) => {
+                      const updated = new Set(current);
+                      for (const target of interruptTargets) {
+                        updated.add(target.context.nativeTurnId);
+                      }
+                      return updated;
+                    });
+                    const registeredActiveTurns = yield* Ref.get(activeTurns);
+                    for (const target of interruptTargets) {
+                      if (
+                        registeredActiveTurns.get(target.context.nativeTurnId) !== target.context
+                      ) {
+                        yield* Deferred.succeed(target.completion, undefined);
+                      }
+                    }
+                    return { interruptTargets, settledTurnContexts, inLineage, lineageRoots };
                   }),
                 );
-              const activeTurn =
-                activeTurnContexts.find(
-                  (candidate) => candidate.providerTurnId === turnInput.providerTurnId,
-                ) ??
-                (turnInput.requestRuntimeRestart === true
-                  ? settledTurnContexts.find(
-                      (candidate) => candidate.providerThread.id === turnInput.providerThread.id,
-                    )
-                  : undefined);
-              // A goal run spans several root turns, and work an earlier one
-              // started can outlive it.
-              const lineageRoots = Array.from(
-                new Set([...(activeTurn === undefined ? [] : [activeTurn]), ...goalTurns]),
-              );
-              const inLineage = (context: ActiveCodexTurnContext) =>
-                lineageRoots.some(
-                  (root) => context === root || isDescendantCodexTurn(context, root),
-                );
-              const interruptTargetContexts = [
-                ...(activeTurn === undefined ? [] : [activeTurn]),
-                ...activeTurnContexts.filter(
-                  (candidate) => candidate !== activeTurn && inLineage(candidate),
-                ),
-                ...settledTurnContexts.filter(
-                  (candidate) =>
-                    candidate !== activeTurn &&
-                    ((turnInput.requestRuntimeRestart === true &&
-                      candidate.providerThread.id === turnInput.providerThread.id) ||
-                      inLineage(candidate)),
-                ),
-              ];
-              if (interruptTargetContexts.length === 0) {
+              if (interruptTargets.length === 0) {
                 // Stop on a settled turn this process retains nothing for
                 // (released, restarted, or every command already reported).
                 if (turnInput.requestRuntimeRestart === true) return;
                 return yield* toProtocolError(
                   `Provider turn ${turnInput.providerTurnId} is not active and cannot be interrupted.`,
                 );
-              }
-              const interruptTargets: Array<{
-                readonly context: ActiveCodexTurnContext;
-                readonly completion: Deferred.Deferred<void, never>;
-              }> = [];
-              for (const context of interruptTargetContexts) {
-                interruptTargets.push({ context, completion: yield* Deferred.make<void>() });
-              }
-              yield* Ref.update(turnWaiters, (current) => {
-                const updated = new Map(current);
-                for (const target of interruptTargets) {
-                  updated.set(target.context.nativeTurnId, target.completion);
-                }
-                return updated;
-              });
-              yield* Ref.update(interruptingNativeTurns, (current) => {
-                const updated = new Set(current);
-                for (const target of interruptTargets) {
-                  updated.add(target.context.nativeTurnId);
-                }
-                return updated;
-              });
-              const registeredActiveTurns = yield* Ref.get(activeTurns);
-              for (const target of interruptTargets) {
-                if (registeredActiveTurns.get(target.context.nativeTurnId) !== target.context) {
-                  yield* Deferred.succeed(target.completion, undefined);
-                }
               }
 
               const cleanupInterruptState = Effect.gen(function* () {

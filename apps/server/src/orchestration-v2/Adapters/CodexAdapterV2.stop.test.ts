@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CodexSettings,
@@ -26,19 +27,77 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { makeReplayServerConfig } from "./CodexAdapterV2.testkit.ts";
 
+vi.mock("effect/Semaphore", { spy: true });
+
 const defaultCodexSettings = Schema.decodeSync(CodexSettings)({});
 
-it.live.each(["success", "retry", "missing-ack", "natural-completion"] as const)(
+const PermitRaceActor = Context.Reference<"completion" | "stop" | undefined>("stop-test/actor", {
+  defaultValue: () => undefined,
+});
+
+it.live.each([
+  "success",
+  "retry",
+  "missing-ack",
+  "natural-completion",
+  "completion-waits-for-permit",
+  "stop-claims-after-snapshot",
+] as const)(
   "withholds Stop acknowledgment until the owned foreground process is contained (%s)",
   (mode) =>
     Effect.scoped(
       Effect.gen(function* () {
+        const barrierReached = yield* Deferred.make<void>();
+        const releaseBarrier = yield* Deferred.make<void>();
+        const completionHandled = yield* Deferred.make<void>();
+        const stopClaimed = yield* Deferred.make<void>();
+        const racesCompletion = mode === "completion-waits-for-permit";
+        const racesClaim = mode === "stop-claims-after-snapshot";
+        if (racesCompletion || racesClaim) {
+          // Schedule real adapter operations on opposite sides of a permit
+          // boundary. Preserve the actual semaphore, effects and process RPCs;
+          // assert the observable terminal/process behavior below.
+          const { make: makeSemaphore } = yield* Effect.promise(() =>
+            vi.importActual<typeof import("effect/Semaphore")>("effect/Semaphore"),
+          );
+          let armed = true;
+          let stopAcquisitions = 0;
+          const spy = vi.spyOn(Semaphore, "make").mockImplementation((permits) =>
+            makeSemaphore(permits).pipe(
+              Effect.map((semaphore) => {
+                const withPermits = semaphore.withPermits.bind(semaphore);
+                semaphore.withPermits = (count) => (effect) =>
+                  Effect.gen(function* () {
+                    const actor = yield* PermitRaceActor;
+                    if (armed && racesCompletion && actor === "completion") {
+                      armed = false;
+                      yield* Deferred.succeed(barrierReached, undefined);
+                      yield* Deferred.await(releaseBarrier);
+                    }
+                    const result = yield* withPermits(count)(effect);
+                    // Stop first resolves a goal target, then selects its
+                    // active/settled contexts. Pause after the latter releases.
+                    if (actor === "stop") stopAcquisitions++;
+                    if (armed && racesClaim && actor === "stop" && stopAcquisitions === 2) {
+                      armed = false;
+                      yield* Deferred.succeed(barrierReached, undefined);
+                      yield* Deferred.await(releaseBarrier);
+                    }
+                    return result;
+                  });
+                return semaphore;
+              }),
+            ),
+          );
+          yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
+        }
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "codex-stop-process-" });
@@ -51,7 +110,24 @@ it.live.each(["success", "retry", "missing-ack", "natural-completion"] as const)
           ]),
         );
         const clientContext = yield* Layer.build(CodexClient.layerChildProcess(handle));
-        const client = Context.get(clientContext, CodexClient.CodexAppServerClient);
+        const nativeClient = Context.get(clientContext, CodexClient.CodexAppServerClient);
+        const client: CodexClient.CodexAppServerClient["Service"] = {
+          ...nativeClient,
+          request: (method, params) =>
+            (method === "turn/interrupt"
+              ? Deferred.succeed(stopClaimed, undefined).pipe(Effect.asVoid)
+              : Effect.void
+            ).pipe(Effect.andThen(nativeClient.request(method, params))),
+          handleServerNotification: (method, handler) =>
+            nativeClient.handleServerNotification(method, (payload) =>
+              method === "turn/completed"
+                ? handler(payload).pipe(
+                    Effect.provideService(PermitRaceActor, "completion"),
+                    Effect.tap(() => Deferred.succeed(completionHandled, undefined)),
+                  )
+                : handler(payload),
+            ),
+        };
         const terminationPending = yield* Deferred.make<void>();
         yield* client.handleUnknownServerNotification((method) =>
           method === "fixture/terminationPending"
@@ -91,6 +167,7 @@ it.live.each(["success", "retry", "missing-ack", "natural-completion"] as const)
         const commandStarted = yield* Deferred.make<void>();
         const firstTerminal = yield* Deferred.make<void>();
         const followupCompleted = yield* Deferred.make<void>();
+        const eventFenceObserved = yield* Deferred.make<void>();
         yield* runtime.events.pipe(
           Stream.runForEach((event) =>
             Effect.gen(function* () {
@@ -101,6 +178,11 @@ it.live.each(["success", "retry", "missing-ack", "natural-completion"] as const)
                 event.turnItem.status === "running"
               )
                 yield* Deferred.succeed(commandStarted, undefined);
+              if (
+                event.type === "provider_thread.updated" &&
+                event.providerThread.goal?.objective === "event fence"
+              )
+                yield* Deferred.succeed(eventFenceObserved, undefined);
               if (event.type === "turn.terminal" && event.status === "completed")
                 yield* Deferred.succeed(followupCompleted, undefined);
               if (event.type === "turn.terminal" && event.status === "interrupted")
@@ -161,10 +243,12 @@ it.live.each(["success", "retry", "missing-ack", "natural-completion"] as const)
         const providerTurn = events.find((event) => event.type === "provider_turn.updated");
         assert.isDefined(providerTurn);
         assert.equal(providerTurn.type, "provider_turn.updated");
-        const stop = runtime.interruptTurn({
-          providerThread,
-          providerTurnId: providerTurn.providerTurn.id,
-        });
+        const stop = runtime
+          .interruptTurn({
+            providerThread,
+            providerTurnId: providerTurn.providerTurn.id,
+          })
+          .pipe(Effect.provideService(PermitRaceActor, "stop"));
         if (mode === "retry" || mode === "natural-completion") {
           assert.equal((yield* Effect.exit(stop))._tag, "Failure");
           assert.isTrue(
@@ -180,16 +264,41 @@ it.live.each(["success", "retry", "missing-ack", "natural-completion"] as const)
         if (mode === "natural-completion") {
           // Stop explicitly failed. When the process then exits naturally, its
           // actual completion must drain the buffered terminal without a retry.
+          // A duplicate native completion with no Stop waiter must return even
+          // while the owned command is still live (no reentrant drain permit).
+          yield* client.raw.request("fixture/normalCompletion", {});
+          assert.lengthOf(
+            events.filter((event) => event.type === "turn.terminal"),
+            0,
+          );
           yield* client.raw.request("fixture/completeForeground", {});
           yield* Deferred.await(firstTerminal);
           assert.equal(yield* fs.readFileString(path.join(cwd, "foreground-finish")), "FINISH\n");
           assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
         } else {
+          const completionRequest = racesCompletion
+            ? yield* client.raw.request("fixture/normalCompletion", {}).pipe(Effect.forkScoped)
+            : undefined;
+          if (racesCompletion) yield* Deferred.await(barrierReached);
           const stopping = yield* stop.pipe(Effect.forkScoped);
+          if (racesCompletion) {
+            yield* Deferred.await(stopClaimed);
+            yield* Deferred.succeed(releaseBarrier, undefined);
+            yield* Deferred.await(completionHandled);
+            if (completionRequest !== undefined) yield* Fiber.join(completionRequest);
+          }
+          if (racesClaim) {
+            yield* Deferred.await(barrierReached);
+            yield* client.raw.request("fixture/normalCompletion", {});
+            yield* Deferred.await(completionHandled);
+            yield* Deferred.succeed(releaseBarrier, undefined);
+          }
           yield* Deferred.await(terminationPending);
-          // The peer sent turn/completed before this barrier. Yield to the FIFO event
-          // consumer; no command deadline or wall-clock polling is involved.
-          yield* Effect.yieldNow;
+          // This inert paused goal projects a provider-thread marker
+          // even if completion already settled the context. Its observation
+          // drains all preceding events through the same FIFO consumer.
+          yield* client.raw.request("fixture/eventFence", {});
+          yield* Deferred.await(eventFenceObserved);
           const acknowledgedBeforeContainment = events.some(
             (event) => event.type === "turn.terminal",
           );

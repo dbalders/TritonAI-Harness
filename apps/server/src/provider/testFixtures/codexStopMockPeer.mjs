@@ -185,6 +185,27 @@ if (process.argv[3] === "worker") {
         await releaseWorker("unrelated-handle");
         respond(id, {});
         return;
+      case "fixture/eventFence":
+        notify("thread/goal/updated", {
+          threadId: nativeThreadId,
+          goal: {
+            threadId: nativeThreadId,
+            objective: "event fence",
+            status: "paused",
+            createdAt: 1782622440,
+            updatedAt: 1782622450,
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+          },
+        });
+        respond(id, {});
+        return;
+      case "fixture/normalCompletion":
+        // Native completion can race a Stop even while this owned process is
+        // still waiting for its separately controlled release/termination.
+        notify("turn/completed", { threadId: nativeThreadId, turn: turn("turn-1", "completed") });
+        respond(id, {});
+        return;
       case "fixture/lateCompletion":
         notify("item/completed", {
           threadId: nativeThreadId,
