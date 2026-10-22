@@ -2114,6 +2114,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<string, Map<string, CodexDynamicToolItem>>(),
         );
         const interruptingNativeTurns = yield* Ref.make(new Set<string>());
+        const undeliveredStopNativeTurns = yield* Ref.make(new Set<string>());
         const nativeInterruptCompletions = yield* Ref.make(
           new Map<string, CodexSchema.V2TurnCompletedNotification>(),
         );
@@ -6326,6 +6327,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           if (current !== input.context) {
             return false;
           }
+          yield* Ref.update(undeliveredStopNativeTurns, (current) => {
+            const updated = new Set(current);
+            updated.delete(input.nativeTurnId);
+            return updated;
+          });
           input.context.fileChangeKindsByItem.clear();
           const providerRetry = yield* Ref.modify(providerRetries, (current) => {
             const retry = current.get(input.context.providerTurnId);
@@ -6575,15 +6581,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           return true;
         });
 
-        const drainUnownedInterruptCompletion = (
-          nativeTurnId: string,
-          preserveNativeCompletion = false,
-        ) =>
+        const drainUnownedInterruptCompletion = (nativeTurnId: string) =>
           turnTerminalizationPermit.withPermits(1)(
             Effect.gen(function* () {
               // A failed Stop no longer owns a waiter. Keep its command handles,
               // but let confirmed natural completion settle it without another Stop.
               if ((yield* Ref.get(turnWaiters)).has(nativeTurnId)) return;
+              const preserveNativeCompletion = (yield* Ref.get(undeliveredStopNativeTurns)).has(
+                nativeTurnId,
+              );
               const context = (yield* Ref.get(activeTurns)).get(nativeTurnId);
               if (context === undefined) {
                 if ((yield* Ref.get(settledTurns)).has(nativeTurnId)) return;
@@ -7622,10 +7628,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   return updated;
                 });
                 for (const target of interruptTargets) {
-                  yield* drainUnownedInterruptCompletion(
-                    target.context.nativeTurnId,
-                    undeliveredQueuedInterrupts.has(target.context.nativeTurnId),
-                  );
+                  yield* drainUnownedInterruptCompletion(target.context.nativeTurnId);
                 }
               });
 
@@ -7929,6 +7932,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     );
                     if (Option.isNone(ready)) {
                       undeliveredQueuedInterrupts.add(context.nativeTurnId);
+                      yield* Ref.update(undeliveredStopNativeTurns, (current) =>
+                        new Set(current).add(context.nativeTurnId),
+                      );
                       return yield* toProtocolError(
                         "Codex did not start the queued turn within 10 seconds; Stop could not be delivered.",
                       );
@@ -7943,6 +7949,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     yield* Deferred.succeed(target.completion, undefined);
                     continue;
                   }
+                  yield* Ref.update(undeliveredStopNativeTurns, (current) => {
+                    const updated = new Set(current);
+                    updated.delete(context.nativeTurnId);
+                    return updated;
+                  });
                   yield* client
                     .request("turn/interrupt", {
                       threadId: yield* getNativeThreadId(context.providerThread),
@@ -7954,7 +7965,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       // behind a response that the provider has already made moot.
                       Effect.raceFirst(Deferred.await(target.completion)),
                       Effect.timeout("10 seconds"),
-                      Effect.onError(() => finalizeRemainingInterruptLineage),
+                      Effect.onError(() => finalizeRemainingInterruptLineage.pipe(Effect.ignore)),
                     );
                 }
                 const [, completed] = yield* Effect.all(
