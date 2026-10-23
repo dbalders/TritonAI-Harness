@@ -70,6 +70,8 @@ It disappears, and the project stops suggesting it. **Restore** below the list b
 hidden suggestions.
 
 Use the folder icon to expand or collapse its threads without leaving the overview.
+Projects keep their saved order by default, so starting a thread does not move its
+project to the top. Saved project sorting preferences are preserved on each device.
 Thread activity updates live. Memory notes appear as the background summarizer
 processes your conversations; their source and last update are available on the page.
 
