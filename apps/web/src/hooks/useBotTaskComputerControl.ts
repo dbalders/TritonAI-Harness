@@ -21,8 +21,10 @@ export function useBotTaskComputerControl() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const serviceUrl = resolveBotServiceUrl(setting);
+  const permissionUnknown = Boolean(hydrated && local?.state === "error" && local.apiUrl === null);
   const hiddenPairing = Boolean(
     hydrated &&
+    !permissionUnknown &&
     (!enabled || !serviceUrl) &&
     local &&
     local.state !== "off" &&
@@ -73,6 +75,7 @@ export function useBotTaskComputerControl() {
     environmentId,
     serviceUrl,
     hiddenPairing,
+    permissionUnknown,
     busy,
     error,
     change,

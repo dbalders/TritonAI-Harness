@@ -4,8 +4,17 @@ import { Button } from "../ui/button";
 
 /** Harness permission stays visible even when this client's Bot screens are hidden. */
 export function BotTaskComputerNotice() {
-  const { hiddenPairing, enabled, environmentId, serviceUrl, busy, error, change, refreshLocal } =
-    useBotTaskComputerControl();
+  const {
+    hiddenPairing,
+    permissionUnknown,
+    enabled,
+    environmentId,
+    serviceUrl,
+    busy,
+    error,
+    change,
+    refreshLocal,
+  } = useBotTaskComputerControl();
   const refreshOnArrival = useEffectEvent(() => refreshLocal());
   useEffect(() => {
     if (!environmentId) return;
@@ -19,15 +28,21 @@ export function BotTaskComputerNotice() {
       document.removeEventListener("visibilitychange", discover);
     };
   }, [environmentId]);
-  if (!hiddenPairing) return null;
+  if (!hiddenPairing && !permissionUnknown) return null;
   return (
     <aside
       aria-label="Bot task permission"
       className="fixed right-4 top-[calc(var(--workspace-topbar-height,3rem)+1rem)] z-50 w-sm max-w-[calc(100vw-2rem)] space-y-3 rounded-lg border bg-popover p-4 text-sm text-popover-foreground shadow-lg"
     >
       <p role="status">
-        Bot tasks are allowed on this Harness. Experimental Bot is {enabled ? "unavailable" : "off"}{" "}
-        in this app.
+        {permissionUnknown ? (
+          "Bot task permission on this Harness cannot currently be checked. Retrying automatically."
+        ) : (
+          <>
+            Bot tasks are allowed on this Harness. Experimental Bot is{" "}
+            {enabled ? "unavailable" : "off"} in this app.
+          </>
+        )}
       </p>
       <p>
         Stopping tasks here affects every client of this Harness. Work already running and saved
@@ -42,7 +57,7 @@ export function BotTaskComputerNotice() {
         <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(false)}>
           Stop Bot tasks here
         </Button>
-        {!enabled && serviceUrl ? (
+        {hiddenPairing && !enabled && serviceUrl ? (
           <Button size="sm" disabled={busy} onClick={() => void change(true)}>
             Turn on Experimental Bot
           </Button>

@@ -289,3 +289,52 @@ it("lets a second client enable Bot without stopping the shared current pairing,
   expect(fetch).not.toHaveBeenCalled();
   expect(experimental.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
 });
+
+it.each([false, true])(
+  "keeps unknown permission global and shows recovery with local Bot enabled=%s",
+  async (enabled) => {
+    using _test = setup();
+    state.settings = { ...state.settings!, tritonAiBotEnabled: enabled };
+    state.local = { state: "error", apiUrl: null } as ServerBotTaskComputerStatus;
+    using fetch = vi.spyOn(globalThis, "fetch");
+    await using screen = await render(
+      <AppSidebarLayout>
+        <main>
+          <ExperimentalFeaturesSection />
+        </main>
+      </AppSidebarLayout>,
+      { router: "/settings" },
+    );
+    await userEvent.click(screen.container.querySelector('[aria-label="Toggle main sidebar"]')!);
+    const experimental = screen.container.querySelector("#experimental-features")!;
+    expect(experimental.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
+    const notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
+    expect(notice.textContent).toContain("permission on this Harness cannot currently be checked");
+    expect(notice.textContent).toContain("Retrying automatically");
+    expect(notice.textContent).not.toContain("Bot tasks are allowed");
+    expect(notice.textContent).not.toContain("Turn on Experimental Bot");
+    const stop = Array.from(notice.querySelectorAll("button")).find(
+      (button) => button.textContent === "Stop Bot tasks here",
+    )!;
+    expect(stop.disabled).toBe(false);
+    expect(notice.closest("[data-app-sidebar]")).toBeNull();
+    expect(notice.getBoundingClientRect().width).toBeGreaterThan(0);
+    // Query timing is covered by the actual atom test; deliver its recovered snapshot here.
+    await act(() => {
+      state.local = { state: "running", apiUrl: currentService } as ServerBotTaskComputerStatus;
+      for (const listener of state.listeners) listener();
+    });
+    const recovered = screen.container.querySelector('aside[aria-label="Bot task permission"]');
+    if (enabled) expect(recovered).toBeNull();
+    else {
+      expect(recovered!.textContent).toContain("Bot tasks are allowed on this Harness");
+      expect(recovered!.textContent).toContain("Turn on Experimental Bot");
+      expect(recovered!.closest("[data-app-sidebar]")).toBeNull();
+    }
+    expect(experimental.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
+    expect(state.refresh).not.toHaveBeenCalled();
+    expect(state.stop).not.toHaveBeenCalled();
+    expect(state.update).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);

@@ -222,3 +222,67 @@ it("also exposes the earlier pairing when the configured service is unavailable"
   const messages = container.querySelector('[role="status"]')!.parentElement!;
   expect(Array.from(messages.children).map((child) => child.tagName)).toEqual(["P", "P"]);
 });
+
+it("keeps permission unknown while local enabling changes visibility only, then reflects recovery", async () => {
+  await using _test = await setupTest();
+  const unknown = { state: "error", apiUrl: null } as ServerBotTaskComputerStatus;
+  config.local = unknown;
+  const session = {
+    ownerToken: "synthetic-current-owner",
+    email: "own@example.test",
+    expiresAt: 4_000_000_000,
+  };
+  saveDotSession(sessionStorage, config.serviceUrl!, session);
+  const signOut = vi.spyOn(DotClient.prototype, "signOut");
+  const fetch = vi.spyOn(globalThis, "fetch");
+  await render();
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "permission on this Harness cannot currently be checked",
+  );
+  expect(container.textContent).not.toContain("Bot tasks are allowed");
+  await toggle();
+  expect(config.settings.tritonAiBotEnabled).toBe(true);
+  expect(config.update).toHaveBeenCalledExactlyOnceWith({ tritonAiBotEnabled: true });
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Retrying automatically",
+  );
+  expect(container.textContent).not.toContain("Bot tasks are allowed");
+  expect(config.local).toBe(unknown);
+  expect(config.stop).not.toHaveBeenCalled();
+  expect(signOut).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(readDotSession(sessionStorage, config.serviceUrl!)).toEqual(session);
+  config.local = { state: "idle", apiUrl: config.serviceUrl } as ServerBotTaskComputerStatus;
+  await render();
+  expect(container.textContent).not.toContain("cannot currently be checked");
+  expect(container.textContent).toContain("Open Bot");
+});
+
+it("keeps unknown permission and local sessions when Stop cannot read the journal", async () => {
+  await using _test = await setupTest();
+  config.settings.tritonAiBotEnabled = true;
+  config.local = { state: "error", apiUrl: null } as ServerBotTaskComputerStatus;
+  const session = {
+    ownerToken: "synthetic-current-owner",
+    email: "own@example.test",
+    expiresAt: 4_000_000_000,
+  };
+  saveDotSession(sessionStorage, config.serviceUrl!, session);
+  const signOut = vi.spyOn(DotClient.prototype, "signOut");
+  config.stop.mockRejectedValue(new Error("Could not stop Bot tasks. Try again."));
+  await render();
+  await act(async () =>
+    Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent === "Stop Bot tasks here")!
+      .click(),
+  );
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Could not stop");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Retrying automatically",
+  );
+  expect(container.textContent).not.toContain("Bot tasks are allowed");
+  expect(config.settings.tritonAiBotEnabled).toBe(true);
+  expect(config.update).not.toHaveBeenCalled();
+  expect(signOut).not.toHaveBeenCalled();
+  expect(readDotSession(sessionStorage, config.serviceUrl!)).toEqual(session);
+});

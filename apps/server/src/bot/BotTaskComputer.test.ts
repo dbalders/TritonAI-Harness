@@ -555,6 +555,105 @@ const recordJournalWrites = Effect.gen(function* () {
 });
 
 it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
+  it.effect.each(["read", "decode"] as const)(
+    "reports unknown permission after a journal %s failure and recovers without changing work",
+    (failure) => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "retained", title: "Private retained task", prompt: "Inspect" }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        let failRead = false;
+        let writes = 0;
+        const computer = yield* BotTaskComputer.make.pipe(
+          Effect.provideService(ServerSecretStore.ServerSecretStore, {
+            ...secrets,
+            get: (name) =>
+              Effect.suspend(() =>
+                name === "tritonai-bot-task-computer" && failRead
+                  ? Effect.fail(
+                      new ServerSecretStore.SecretStoreReadError({
+                        resource: "private-secret-resource",
+                        cause: new Error("private-lock-error"),
+                      }),
+                    )
+                  : secrets.get(name),
+              ),
+            set: (name, bytes) => {
+              writes++;
+              return secrets.set(name, bytes);
+            },
+            remove: (name) => {
+              writes++;
+              return secrets.remove(name);
+            },
+          }),
+        );
+        yield* allow(computer);
+        const before = yield* computer.getStatus;
+        assert.strictEqual(before.state, "running");
+        const journal = yield* secrets.get("tritonai-bot-task-computer");
+        const calls = [...bot.calls];
+        const commands = [...harness.commands];
+        const writesBefore = writes;
+        if (failure === "decode")
+          yield* secrets.set(
+            "tritonai-bot-task-computer",
+            new TextEncoder().encode("private-malformed-journal"),
+          );
+        const unreadableJournal = yield* secrets.get("tritonai-bot-task-computer");
+        failRead = failure === "read";
+        assert.deepEqual(yield* computer.getStatus, {
+          state: "error",
+          deviceId: before.deviceId,
+          deviceName: before.deviceName,
+          apiUrl: null,
+          userId: null,
+          projectId: null,
+          tasks: [],
+          currentTask: null,
+          lastCheckInAt: null,
+          message:
+            "Bot task permission on this Harness cannot currently be checked. Retrying automatically.",
+        });
+        assert.deepEqual(yield* secrets.get("tritonai-bot-task-computer"), unreadableJournal);
+        failRead = false;
+        // Fixture recovery restores malformed bytes; a status read must never repair them itself.
+        if (failure === "decode")
+          yield* secrets.set("tritonai-bot-task-computer", Option.getOrThrow(journal));
+        assert.deepEqual(yield* computer.getStatus, before, "the worker run state is unchanged");
+        assert.deepEqual(yield* secrets.get("tritonai-bot-task-computer"), journal);
+        assert.strictEqual(writes, writesBefore, "status never writes or removes secrets");
+        assert.deepEqual(bot.calls, calls, "status never calls the service or controls permission");
+        assert.deepEqual(harness.commands, commands, "status never dispatches or controls work");
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect("keeps confirmed missing and inactive journals off without status side effects", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    return Effect.gen(function* () {
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      assert.strictEqual((yield* computer.getStatus).state, "off");
+      assert.isTrue(Option.isNone(yield* secrets.get("tritonai-bot-task-computer")));
+      assert.isEmpty(bot.calls);
+      assert.isEmpty(harness.commands);
+      yield* allow(computer);
+      yield* writeRecoveryJournal({ ...(yield* readRecoveryJournal), active: false });
+      const journal = yield* secrets.get("tritonai-bot-task-computer");
+      const calls = [...bot.calls];
+      const off = yield* computer.getStatus;
+      assert.strictEqual(off.state, "off");
+      assert.isNull(off.apiUrl);
+      assert.deepEqual(yield* secrets.get("tritonai-bot-task-computer"), journal);
+      assert.deepEqual(bot.calls, calls);
+      assert.isEmpty(harness.commands);
+    }).pipe(Effect.provide(services(bot, harness)));
+  });
+
   for (const rejection of [400, 403, 404, 405, 409, 410, 412, 413, 414, 415, 422]) {
     it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
       `settles permanent upload ${rejection} per file and continues to the next assignment`,

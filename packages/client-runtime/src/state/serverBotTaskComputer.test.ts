@@ -177,3 +177,34 @@ it.effect.each(["idle", "running", "error", "replaced"] as const)(
       expect(harness.read).toHaveBeenCalledTimes(5);
     }),
 );
+
+it.effect.each([0, 1])(
+  "retries unknown permission through %i repeated errors and recovers at 15 seconds without refresh",
+  (repeatedErrors) =>
+    Effect.gen(function* () {
+      using _timers = timers();
+      const unknown: ServerBotTaskComputerStatus = {
+        ...OFF,
+        state: "error",
+        tasks: [],
+        message:
+          "Bot task permission on this Harness cannot currently be checked. Retrying automatically.",
+      };
+      using harness = yield* makeHarness(unknown);
+      expect(yield* harness.settled()).toEqual(unknown);
+      if (repeatedErrors) {
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(15_000));
+        expect(yield* harness.settled()).toEqual(unknown);
+        expect(harness.read).toHaveBeenCalledTimes(2);
+      }
+      harness.setStatus(ACTIVE);
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(14_999));
+      expect(harness.read).toHaveBeenCalledTimes(1 + repeatedErrors);
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(1));
+      expect(yield* harness.settled()).toEqual(ACTIVE);
+      expect(harness.read).toHaveBeenCalledTimes(2 + repeatedErrors);
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(15_000));
+      expect(yield* harness.settled()).toEqual(ACTIVE);
+      expect(harness.read).toHaveBeenCalledTimes(3 + repeatedErrors);
+    }),
+);

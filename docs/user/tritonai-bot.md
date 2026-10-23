@@ -30,6 +30,11 @@ Nightly. Choose **Turn on Experimental Bot** to show Bot in this app without
 changing the pairing. **Stop Bot tasks here** stops new assignments for every
 client of this Harness; running work and saved result delivery can finish.
 
+If Harness cannot read the saved task permission, the notice and Experimental row
+say it cannot currently be checked and is retrying automatically. Permission is
+unknown until that check succeeds. The check does not change task permission or
+stop work already running.
+
 ## Chatting with your bot
 
 TritonAI Bot is one ongoing conversation, shared with its Teams chat. Type a

@@ -448,7 +448,7 @@ export const make = Effect.gen(function* () {
     );
 
   const getStatus = Effect.gen(function* () {
-    const stored = yield* readStored.pipe(Effect.orElseSucceed(() => null));
+    const stored = yield* readStored;
     const run = yield* Ref.get(status);
     const recent = yield* Ref.get(snapshots);
     const current = stored?.held.find((task) => task.outcome === null) ?? null;
@@ -513,7 +513,23 @@ export const make = Effect.gen(function* () {
           .filter((message) => message !== null)
           .join(" ") || null,
     } satisfies ServerBotTaskComputerStatus;
-  });
+  }).pipe(
+    // An unreadable journal is unknown permission, not a confirmed off pairing.
+    // Keep discovery retrying without exposing saved work or changing the worker.
+    Effect.orElseSucceed((): ServerBotTaskComputerStatus => ({
+      state: "error",
+      deviceId,
+      deviceName,
+      apiUrl: null,
+      userId: null,
+      projectId: null,
+      tasks: [],
+      currentTask: null,
+      lastCheckInAt: null,
+      message:
+        "Bot task permission on this Harness cannot currently be checked. Retrying automatically.",
+    })),
+  );
 
   /** Saves the outcome first, so a failed delivery is retried rather than the task rerun. */
   const retainRejectedReceipt = Effect.fn("BotTaskComputer.retainRejectedReceipt")(function* (
