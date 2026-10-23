@@ -198,22 +198,24 @@ const make = Effect.gen(function* () {
         Effect.map((shell) => Option.fromNullishOr(shell ? botThreadState(shell) : null)),
         Effect.mapError(runtimeError),
       ),
-    getThreadDetailById: (id, options) =>
-      Effect.gen(function* () {
-        const shell = yield* threads.getThreadShell(id);
-        if (!shell) return Option.none();
-        const message = options?.messageId
-          ? (yield* threads.getThreadRecords(id, ["messages"], {
-              messageIds: [MessageId.make(options.messageId)],
-            })).messages[0]
-          : undefined;
-        const snapshot = yield* threads.getThreadSnapshotWindow(id, {
-          rowLimit: 100,
-          userTurnLimit: 8,
-          ...(message?.runId ? { requiredRunId: message.runId } : {}),
-        });
-        return Option.some(botThreadState(shell, snapshot.projection, options?.messageId));
-      }).pipe(Effect.mapError(runtimeError)),
+    getThreadDetailById: Effect.fn("BotTaskRuntime.getThreadDetailById")(function* (
+      id: ThreadId,
+      options?: { readonly messageId?: string; readonly activityKinds?: ReadonlyArray<string> },
+    ) {
+      const shell = yield* threads.getThreadShell(id);
+      if (!shell) return Option.none();
+      const message = options?.messageId
+        ? (yield* threads.getThreadRecords(id, ["messages"], {
+            messageIds: [MessageId.make(options.messageId)],
+          })).messages[0]
+        : undefined;
+      const snapshot = yield* threads.getThreadSnapshotWindow(id, {
+        rowLimit: 100,
+        userTurnLimit: 8,
+        ...(message?.runId ? { requiredRunId: message.runId } : {}),
+      });
+      return Option.some(botThreadState(shell, snapshot.projection, options?.messageId));
+    }, Effect.mapError(runtimeError)),
     dispatch: (command) => threads.dispatch(command).pipe(Effect.mapError(runtimeError)),
   });
 });
