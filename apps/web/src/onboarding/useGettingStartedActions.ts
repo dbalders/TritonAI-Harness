@@ -1,6 +1,6 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, GettingStartedChapterId } from "@t3tools/contracts";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { environmentServerConfigsAtom } from "../state/server";
@@ -16,6 +16,13 @@ import { getGettingStartedPreparationRevision, updateGettingStarted } from "./ge
 export function useGettingStartedActions(environmentId: EnvironmentId | null) {
   const router = useRouter();
   const preparingRef = useRef(false);
+  const lifetime = useRef<{ environmentId: EnvironmentId | null } | null>(null);
+  useLayoutEffect(() => {
+    lifetime.current = { environmentId };
+    return () => {
+      lifetime.current = null;
+    };
+  }, [environmentId]);
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const handleNewThread = useNewThreadHandler();
   const openPracticeProject = useTritonAiProject(environmentId);
@@ -34,12 +41,14 @@ export function useGettingStartedActions(environmentId: EnvironmentId | null) {
     )
       return;
     preparingRef.current = true;
+    const owner = lifetime.current;
     const generation = getClientSettings().gettingStarted.generation;
     const preparationRevision = getGettingStartedPreparationRevision();
     const originHref = router.state.location.href;
     const stillOwned = () => {
       const current = getClientSettings().gettingStarted;
       return (
+        lifetime.current === owner &&
         getGettingStartedPreparationRevision() === preparationRevision &&
         getClientSettings().experimentalGuidedTourEnabled &&
         current.generation === generation &&
@@ -50,7 +59,7 @@ export function useGettingStartedActions(environmentId: EnvironmentId | null) {
     };
     setPending(true);
     setError(null);
-    try {
+    await (async () => {
       const config = serverConfigs.get(environmentId);
       if (!config) throw new Error("Still connecting to the assistant. Try again in a moment.");
       if (
@@ -89,12 +98,16 @@ export function useGettingStartedActions(environmentId: EnvironmentId | null) {
       ) {
         await updateGettingStarted({ type: "close", generation, fromChapter: chapter });
       }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not prepare this task. Try again.");
-    } finally {
-      preparingRef.current = false;
-      setPending(false);
-    }
+    })()
+      .catch((cause: unknown) => {
+        setError(
+          cause instanceof Error ? cause.message : "Could not prepare this task. Try again.",
+        );
+      })
+      .finally(() => {
+        preparingRef.current = false;
+        setPending(false);
+      });
   };
   return { prepare, pending, error };
 }

@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => ({
   newThread: vi.fn<
     (
       project: unknown,
-      options?: { newDraftPrompt?: string },
+      options?: { newDraftPrompt?: string; isCurrent?: () => boolean },
     ) => Promise<{
       draftId: DraftId;
       threadId: ThreadId;
@@ -82,8 +82,8 @@ vi.mock("../state/environments", async (original) => ({
 vi.mock("../components/onboarding/useIntegrationConnection", () => ({
   useIntegrationConnection: () => ({ status: "unavailable", integration: null }),
 }));
-vi.mock("../components/ui/button", async (original) => ({
-  ...(await original<typeof import("../components/ui/button")>()),
+vi.mock("../components/ui/button", () => ({
+  buttonVariants: () => "",
   Button: (props: ComponentProps<"button">) => createElement("button", props),
 }));
 vi.mock("../components/onboarding/GettingStartedPanel", () => ({
@@ -170,7 +170,7 @@ async function mountHook<A>(useHook: () => A): Promise<() => A> {
     return null;
   }
   await renderer!.rerender(createElement(Probe));
-  return () => value;
+  return Object.assign(() => value, { rerender: () => renderer!.rerender(createElement(Probe)) });
 }
 
 function click(label: string): Promise<void> {
@@ -206,7 +206,7 @@ function resetTestState() {
 
 const it = baseIt.extend<{ guide: Screen }>({
   guide: [
-    async (_context, use) => {
+    async ({ task: _task }, use) => {
       resetTestState();
       await using screen = await render(null, { router: false });
       renderer = screen;
@@ -493,8 +493,12 @@ describe("experimental guide toggle", () => {
     expect(await updateGettingStarted({ type: "restart" })).toBe(false);
     expect(getClientSettings().gettingStarted).toEqual(before);
     expect(mocks.setClientSettings).not.toHaveBeenCalled();
-    __setClientSettingsForTests({ ...durable, experimentalGuidedTourEnabled: true });
-    await act(async () => {});
+    await act(() =>
+      persistClientSettingsUpdate((settings) => ({
+        ...settings,
+        experimentalGuidedTourEnabled: true,
+      })),
+    );
     expect(renderer!.container.textContent).toContain("Prepare a practice conversation");
   });
 
@@ -521,4 +525,46 @@ describe("experimental guide toggle", () => {
     gate.release();
     await disabling;
   });
+});
+
+describe("preparation environment ownership", () => {
+  it.each(["workspace", "thread"] as const)(
+    "cancels pending %s work after switching computers without navigation",
+    async (phase) => {
+      let environmentId = ENVIRONMENT;
+      const gate = deferred<void>();
+      const entered = deferred<void>();
+      if (phase === "workspace") {
+        mocks.openProject.mockImplementationOnce(async () => {
+          entered.resolve();
+          await gate.promise;
+          return PROJECT;
+        });
+      } else {
+        mocks.newThread.mockImplementationOnce(async (_project, options) => {
+          entered.resolve();
+          await gate.promise;
+          if (options?.isCurrent?.() === false) return null;
+          mocks.router.state.location.href = `/draft/${DRAFT}`;
+          return { draftId: DRAFT, threadId: THREAD };
+        });
+      }
+      const actions = await mountHook(() => useGettingStartedActions(environmentId));
+      let preparing!: Promise<void>;
+      await act(async () => {
+        preparing = actions().prepare("conversation", "Original computer prompt");
+        await entered.promise;
+      });
+      environmentId = EnvironmentId.make("another-computer");
+      await actions.rerender();
+      gate.resolve();
+      await act(async () => {
+        await preparing;
+        await drainSettings();
+      });
+      expect(useComposerDraftStore.getState().getComposerDraft(DRAFT)).toBeNull();
+      expect(mocks.router.state.location.href).toBe("/getting-started");
+      expect(getClientSettings().gettingStarted.tasks).toEqual([]);
+    },
+  );
 });
