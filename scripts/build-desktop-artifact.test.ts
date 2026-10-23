@@ -21,6 +21,7 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import desktopRuntimePackageJson from "../apps/desktop-runtime/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
 import {
   ancestorNodeModulesPaths,
   assertDesktopUpdatePublishConfiguration,
@@ -105,6 +106,7 @@ import {
   stageResourceMonitor,
   stageLinuxCaptureHelper,
   stageWslRuntimeArchive,
+  stageWindowsServerSidecar,
   bundlesWslRuntime,
   UnsupportedDesktopBuildArchitectureError,
   validateManagedPluginBuildConfiguration,
@@ -148,6 +150,11 @@ import {
 const encodeModuleUrl = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
 const decodePackageVersion = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
+);
+const decodePackageDependencies = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ dependencies: Schema.Record(Schema.String, Schema.String) }),
+  ),
 );
 
 // Keeps pnpm from auto-installing TypeScript, a types-only peer, into the app.
@@ -935,6 +942,82 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(
         desktopRuntimePackageJson.optionalDependencies,
         resolveDesktopRuntimeNativeDependencies(),
+      );
+    }),
+  );
+
+  it.effect("pins the generated Windows sidecar dependency to its selected node-pty patch", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoRoot = path.join(import.meta.dirname, "..");
+      const {
+        catalog = {},
+        allowBuilds = {},
+        patchedDependencies = {},
+        overrides = {},
+      } = yield* readWorkspaceConfig();
+      const stageRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sidecar-patch-" });
+      const serverDistDir = path.join(stageRoot, "server-dist");
+      yield* fs.makeDirectory(serverDistDir);
+
+      // Stop at the install boundary to inspect the real generated inputs without packaging.
+      let installAttempts = 0;
+      const error = yield* stageWindowsServerSidecar({
+        stageRoot,
+        repoRoot,
+        serverDistDir,
+        arch: "x64",
+        appVersion: serverPackageJson.version,
+        runtimeExternalDependencies: selectCliRuntimeExternalDependencies(
+          resolveCatalogDependencies(serverPackageJson.dependencies, catalog, "apps/server"),
+        ),
+        fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
+        allowBuilds,
+        patchedDependencies,
+        overrides: resolveCatalogDependencies(overrides, catalog, "apps/desktop"),
+        asarPath: path.join(stageRoot, "server.asar"),
+        verbose: false,
+      }).pipe(
+        Effect.provideService(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => {
+            installAttempts += 1;
+            return Effect.succeed(mockProcess(1));
+          }),
+        ),
+        Effect.flip,
+      );
+      assert.instanceOf(error, BuildCommandFailedError);
+      assert.equal(error.command, "vp install --prod (server sidecar)");
+      assert.equal(installAttempts, 1);
+
+      const serverStageDir = path.join(stageRoot, "server");
+      const stagedPackage = yield* decodePackageDependencies(
+        yield* fs.readFileString(path.join(serverStageDir, "package.json")),
+      );
+      const stagedWorkspace = parseYaml(
+        yield* fs.readFileString(path.join(serverStageDir, "pnpm-workspace.yaml")),
+      ) as {
+        patchedDependencies: Record<string, string>;
+        allowBuilds: Record<string, boolean>;
+      };
+      const nodePtyPatches = Object.entries(patchedDependencies).filter(([key]) =>
+        key.startsWith("node-pty@"),
+      );
+      assert.lengthOf(nodePtyPatches, 1);
+      const [patchKey, patchPath] = nodePtyPatches[0]!;
+      assert.equal(stagedWorkspace.patchedDependencies[patchKey], patchPath);
+      assert.equal(
+        yield* fs.readFileString(path.join(serverStageDir, patchPath)),
+        yield* fs.readFileString(path.join(repoRoot, patchPath)),
+      );
+      assert.equal(stagedWorkspace.allowBuilds["node-pty"], allowBuilds["node-pty"]);
+      // This fresh install has no root lockfile to keep a range on the patched version.
+      assert.equal(`node-pty@${stagedPackage.dependencies["node-pty"]}`, patchKey);
+      assert.equal(
+        stagedPackage.dependencies["node-pty"],
+        desktopRuntimePackageJson.dependencies["node-pty"],
       );
     }),
   );
