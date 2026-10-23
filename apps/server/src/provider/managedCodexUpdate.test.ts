@@ -10,6 +10,9 @@ import * as TestClock from "effect/testing/TestClock";
 import * as PlatformError from "effect/PlatformError";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
+import { acquireManagedCodexLease } from "./managedCodexLock.ts";
 import { ChildProcessSpawner } from "effect/process";
 
 import type { ProcessRunOutput, ProcessRunner } from "../processRunner.ts";
@@ -23,6 +26,7 @@ import {
   makeTritonAiManagedCodexMaintenanceResolver,
   parseCodexCliVersion,
   ManagedCodexApprovedVersion,
+  recoverTritonAiManagedCodex,
   resolveTritonAiManagedCodexInstallation,
   updateTritonAiManagedCodex,
 } from "./managedCodexUpdate.ts";
@@ -247,6 +251,201 @@ const fixtureLayer = Layer.merge(
 );
 
 it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
+  it.effect.each(["failure", "timeout"])(
+    "preserves an existing newer engine instead of recovering after a transient %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const backup = yield* fixture.fs.makeTempDirectory({
+          directory: fixture.runtimeRoot,
+          prefix: ".tritonai-codex-backup.",
+        });
+        const backupRoot = fixture.path.join(backup, "openai-codex-0.146.0");
+        yield* fixture.fs.makeDirectory(fixture.path.join(backupRoot, "bin"), { recursive: true });
+        yield* fixture.fs.copyFile(
+          fixture.binaryPath,
+          fixture.path.join(backupRoot, "bin", "codex"),
+        );
+        yield* fixture.fs.writeFileString(fixture.path.join(backupRoot, "version.txt"), "0.146.0");
+        yield* fixture.fs.writeFileString(
+          fixture.path.join(fixture.installRoot, "version.txt"),
+          "0.160.0",
+        );
+        const runner = yield* makeFakeRunner();
+        let probes = 0;
+        const run: ProcessRunner["Service"]["run"] = (input) => {
+          probes++;
+          return probes === 1
+            ? Effect.succeed({
+                ...failure("transient probe failure"),
+                timedOut: scenario === "timeout",
+              })
+            : runner(input);
+        };
+
+        yield* recoverTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run });
+
+        expect(
+          yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+        ).toBe("0.160.0");
+        expect(yield* fixture.fs.readFileString(fixture.path.join(backupRoot, "version.txt"))).toBe(
+          "0.146.0",
+        );
+        expect(probes).toBe(0);
+      }),
+  );
+
+  it.effect(
+    "allows the full activation verification timeout when restoring a missing launcher",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const backup = yield* fixture.fs.makeTempDirectory({
+          directory: fixture.runtimeRoot,
+          prefix: ".tritonai-codex-backup.",
+        });
+        yield* fixture.fs.rename(
+          fixture.installRoot,
+          fixture.path.join(backup, "openai-codex-0.146.0"),
+        );
+        const runner = yield* makeFakeRunner();
+        const timeouts: Array<unknown> = [];
+        const run: ProcessRunner["Service"]["run"] = (input) => {
+          timeouts.push(input.timeout);
+          return runner(input);
+        };
+
+        yield* recoverTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run });
+
+        expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
+        expect(yield* fixture.fs.exists(backup)).toBe(false);
+        expect(timeouts).toEqual(["30 seconds"]);
+      }),
+  );
+
+  it.effect.each(["before backup", "after backup", "after activation", "verification", "rollback"])(
+    "keeps a usable engine after interruption during %s",
+    (phase) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const paused = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        const pause = Deferred.succeed(paused, undefined).pipe(
+          Effect.andThen(Deferred.await(resume)),
+        );
+        const runner = yield* makeFakeRunner({ failActivatedVerification: phase === "rollback" });
+        const fs = FileSystem.FileSystem.of({
+          ...fixture.fs,
+          rename: (source, destination) =>
+            Effect.gen(function* () {
+              if (phase === "before backup" && source === fixture.installRoot) yield* pause;
+              yield* fixture.fs.rename(source, destination);
+              if (
+                (phase === "after backup" && source === fixture.installRoot) ||
+                (phase === "after activation" &&
+                  source.includes(".tritonai-codex-stage.") &&
+                  destination === fixture.installRoot)
+              )
+                yield* pause;
+            }),
+          remove: (target, options) =>
+            Effect.gen(function* () {
+              if (phase === "rollback" && target === fixture.installRoot) yield* pause;
+              yield* fixture.fs.remove(target, options);
+            }),
+        });
+        const fiber = yield* updateTritonAiManagedCodex({
+          binaryPath: fixture.binaryPath,
+          run: (input) =>
+            Effect.gen(function* () {
+              if (
+                phase === "verification" &&
+                input.command === fixture.binaryPath &&
+                (yield* fixture.fs.readFileString(
+                  fixture.path.join(fixture.installRoot, "version.txt"),
+                )) === "0.151.0"
+              )
+                yield* pause;
+              return yield* runner(input);
+            }).pipe(Effect.orDie),
+        }).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.scoped, Effect.forkChild);
+        yield* Deferred.await(paused);
+        fiber.interruptUnsafe();
+        yield* Deferred.succeed(resume, undefined);
+        yield* Fiber.await(fiber);
+        expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
+        expect(["0.146.0", "0.151.0"]).toContain(
+          yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+        );
+      }).pipe(Effect.scoped),
+  );
+  it.effect("restores the launcher when shutdown interrupts activation after the backup move", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const paused = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const fs = FileSystem.FileSystem.of({
+        ...fixture.fs,
+        rename: (source, destination) =>
+          Effect.gen(function* () {
+            if (source.includes(".tritonai-codex-stage.") && destination === fixture.installRoot) {
+              yield* Deferred.succeed(paused, undefined);
+              yield* Deferred.await(resume);
+            }
+            return yield* fixture.fs.rename(source, destination);
+          }),
+      });
+      const fiber = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: yield* makeFakeRunner(),
+      }).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.scoped, Effect.forkChild);
+      yield* Deferred.await(paused);
+      fiber.interruptUnsafe();
+      yield* Deferred.succeed(resume, undefined);
+      yield* Fiber.await(fiber);
+      expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
+      expect(["0.146.0", "0.151.0"]).toContain(
+        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+      );
+    }).pipe(Effect.scoped),
+  );
+  it.effect("admits a session during staging and safely defers activation", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const staged = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const runner = yield* makeFakeRunner();
+      const fiber = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: (input) =>
+          runner(input).pipe(
+            Effect.tap(() =>
+              input.command === "npm"
+                ? Deferred.succeed(staged, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+                : Effect.void,
+            ),
+          ),
+      }).pipe(Effect.scoped, Effect.result, Effect.forkChild);
+      yield* Deferred.await(staged);
+      const session = yield* Scope.make();
+      yield* acquireManagedCodexLease(fixture.runtimeRoot).pipe(
+        Effect.provideService(Scope.Scope, session),
+      );
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(fiber);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(String(result.failure)).toContain("deferred");
+      expect(
+        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+      ).toBe("0.146.0");
+      yield* Scope.close(session, Exit.void);
+      expect(
+        yield* updateTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run: runner }).pipe(
+          Effect.scoped,
+        ),
+      ).toBe("0.151.0");
+    }).pipe(Effect.scoped),
+  );
   it.effect("stages, verifies, atomically activates, and retains the managed launcher", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();
@@ -263,6 +462,91 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
       expect((yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toSorted()).toEqual([
         "openai-codex-0.146.0",
       ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("serializes two manual updates that finish staging together", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const staged = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      let copies = 0;
+      const observedFs = FileSystem.FileSystem.of({
+        ...fixture.fs,
+        copyFile: (source, destination) =>
+          fixture.fs.copyFile(source, destination).pipe(
+            Effect.tap(() =>
+              destination.includes(".tritonai-codex-stage.")
+                ? Effect.gen(function* () {
+                    copies += 1;
+                    if (copies === 2) yield* Deferred.succeed(staged, undefined);
+                    yield* Deferred.await(resume);
+                  })
+                : Effect.void,
+            ),
+          ),
+      });
+      const runner = yield* makeFakeRunner();
+      const update = updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: runner,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, observedFs), Effect.scoped);
+      const first = yield* update.pipe(Effect.forkChild);
+      const second = yield* update.pipe(Effect.forkChild);
+      yield* Deferred.await(staged);
+      yield* Deferred.succeed(resume, undefined);
+      expect(yield* Fiber.join(first)).toBe("0.151.0");
+      expect(yield* Fiber.join(second)).toBe("0.151.0");
+      expect((yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toSorted()).toEqual([
+        "openai-codex-0.146.0",
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("admits a waiting session only after activation restores a verified launcher", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const paused = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const prepared = yield* Deferred.make<void>();
+      const observedFs = FileSystem.FileSystem.of({
+        ...fixture.fs,
+        rename: (source, destination) =>
+          fixture.fs
+            .rename(source, destination)
+            .pipe(
+              Effect.tap(() =>
+                destination.includes(".tritonai-codex-backup.")
+                  ? Deferred.succeed(paused, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+                  : Effect.void,
+              ),
+            ),
+      });
+      const update = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: yield* makeFakeRunner(),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, observedFs),
+        Effect.scoped,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(paused);
+      expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(false);
+      const session = yield* acquireManagedCodexLease(
+        fixture.runtimeRoot,
+        fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")).pipe(
+          Effect.tap((version) => Effect.sync(() => expect(version).toBe("0.151.0"))),
+          Effect.andThen(Deferred.succeed(prepared, undefined)),
+          Effect.asVoid,
+        ),
+      ).pipe(Effect.scoped, Effect.forkChild);
+      // The lock uses native timers; allow its first acquisition attempt while activation is paused.
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      expect(yield* Deferred.isDone(prepared)).toBe(false);
+      yield* Deferred.succeed(resume, undefined);
+      expect(yield* Fiber.join(update)).toBe("0.151.0");
+      yield* Fiber.join(session);
+      expect(yield* Deferred.isDone(prepared)).toBe(true);
     }).pipe(Effect.scoped),
   );
 
@@ -429,11 +713,13 @@ it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
             "unrelated error",
             "rollback removal lock",
             "rollback restoration lock",
+            "lock ownership lost during retry",
           ],
           (scenario) => ({ scenario }),
         ),
       )("case $scenario", ({ scenario }) => {
         const rollbackFailure = scenario.startsWith("rollback");
+        const ownershipLost = scenario === "lock ownership lost during retry";
         const failActivation = scenario === "verification failure" || rollbackFailure;
         const shouldFail = scenario !== "success" && scenario !== "temporary lock";
         it.effect(`${layout}: ${scenario}`, () =>
@@ -511,7 +797,15 @@ it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
                   }
                   if (source.includes(".tritonai-codex-stage.") && destination === installRoot) {
                     activationAttempts++;
+                    if (ownershipLost && activationAttempts === 1) {
+                      yield* fs.rename(`${runtimeRoot}.lock`, `${runtimeRoot}.retired-lock`);
+                      yield* fs.makeDirectory(`${runtimeRoot}.lock`);
+                      yield* fs.makeDirectory(path.dirname(activeEntry), { recursive: true });
+                      yield* fs.writeFileString(activeEntry, "0.160.0");
+                      yield* fs.writeFileString(binaryPath, launcher);
+                    }
                     if (
+                      ownershipLost ||
                       scenario === "persistent lock" ||
                       scenario === "unrelated error" ||
                       (scenario === "temporary lock" && activationAttempts === 1)
@@ -559,7 +853,7 @@ it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
             );
             expect(installs).toBe(1);
             expect(result._tag).toBe(shouldFail ? "Failure" : "Success");
-            if (rollbackFailure) {
+            if (rollbackFailure || ownershipLost) {
               const entries = yield* fs.readDirectory(runtimeRoot);
               const backup = entries.find((entry) => entry.startsWith(".tritonai-codex-backup."));
               expect(backup).toBeDefined();
@@ -568,7 +862,9 @@ it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
                 "0.146.0",
               );
               expect(yield* fs.readFileString(path.join(savedRoot, "codex.cmd"))).toBe(launcher);
-              if (result._tag === "Failure") expect(result.failure.message).toContain(savedRoot);
+              if (ownershipLost) expect(yield* fs.readFileString(activeEntry)).toBe("0.160.0");
+              else if (result._tag === "Failure")
+                expect(result.failure.message).toContain(savedRoot);
             } else {
               expect(yield* fs.readFileString(activeEntry)).toBe(
                 shouldFail ? "0.146.0" : "0.151.0",

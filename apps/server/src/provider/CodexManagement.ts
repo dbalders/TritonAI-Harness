@@ -36,7 +36,7 @@ import * as ServerConfig from "../config.ts";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProcessRunner from "../processRunner.ts";
-import { resolveManagedCodexBinary } from "./managedCodexRuntime.ts";
+import { resolveManagedCodexBinary, leaseManagedCodexRuntime } from "./managedCodexRuntime.ts";
 import { materializeCodexShadowHome, resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
 import { makeTritonAiCodexConfigArgs } from "./Drivers/TritonAiCodexConfig.ts";
 import { resolveCodexAppServerCommand } from "./Drivers/CodexAppServerCommand.ts";
@@ -339,6 +339,11 @@ const withCodexClient = Effect.fn("CodexManagement.withCodexClient")(function* <
     environment,
     run: processRunner.run,
   }).pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
+  const runtimeScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+  const runtimeLease = yield* leaseManagedCodexRuntime(binaryPath, processRunner.run).pipe(
+    Effect.provideService(Scope.Scope, runtimeScope),
+    Effect.mapError((cause) => codexOperationError(operation, cause)),
+  );
   const spawnCommand = yield* resolveCodexAppServerCommand(
     binaryPath,
     ["app-server", ...makeTritonAiCodexConfigArgs(environment)],
@@ -358,6 +363,7 @@ const withCodexClient = Effect.fn("CodexManagement.withCodexClient")(function* <
       }),
     )
     .pipe(
+      Effect.provideService(Scope.Scope, runtimeScope),
       Effect.mapError((cause) =>
         codexOperationError(
           operation,
@@ -368,6 +374,10 @@ const withCodexClient = Effect.fn("CodexManagement.withCodexClient")(function* <
         ),
       ),
     );
+  if (runtimeLease)
+    yield* runtimeLease
+      .bindChild(Number(child.pid))
+      .pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
   const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child)).pipe(
     Effect.mapError((cause) => codexOperationError(operation, cause)),
   );

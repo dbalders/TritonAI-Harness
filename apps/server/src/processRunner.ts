@@ -26,6 +26,8 @@ export interface ProcessRunInput {
   readonly stdin?: string | undefined;
   /** Receives every stdout chunk, including bytes beyond the buffered output limit. */
   readonly onStdoutChunk?: ((chunk: Uint8Array) => void) | undefined;
+  /** Record ownership before starting process I/O. */
+  readonly onSpawn?: ((pid: number) => Effect.Effect<void>) | undefined;
   readonly maxOutputBytes?: number | undefined;
   readonly outputMode?: "error" | "truncate" | undefined;
   readonly truncatedMarker?: string | undefined;
@@ -317,6 +319,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
       Effect.catchDefect((cause) => Effect.fail(toSpawnError(cause))),
     );
 
+  if (input.onSpawn) yield* input.onSpawn(Number(child.pid));
   const stdin = input.stdin;
   const onStdoutChunk = input.onStdoutChunk;
   const writeStdin =
