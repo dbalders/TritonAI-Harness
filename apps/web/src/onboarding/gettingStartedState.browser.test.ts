@@ -160,7 +160,9 @@ async function drainSettings() {
   await persistClientSettingsUpdate((settings) => settings);
 }
 
-async function mountHook<A>(useHook: () => A): Promise<() => A> {
+async function mountHook<A>(
+  useHook: () => A,
+): Promise<(() => A) & { rerender: () => Promise<void> }> {
   let value!: A;
   function Probe() {
     const current = useHook();
