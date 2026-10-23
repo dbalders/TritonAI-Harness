@@ -89,7 +89,6 @@ const CODEX_DISCOVERY_MARGIN_MS = 250;
 const CODEX_PRESENTATION = {
   displayName: "TritonAI",
   showInteractionModeToggle: true,
-  supportsThreadGoals: true,
   // TritonAI's managed catalog spans Responses API backends with different
   // continuation formats. In particular, hosted models cannot consume the
   // encrypted reasoning items returned by OpenAI models. Keep the existing

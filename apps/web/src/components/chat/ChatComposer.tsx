@@ -375,7 +375,6 @@ import {
   MicIcon,
   ShieldIcon,
   SquareIcon,
-  TargetIcon,
   XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "@t3tools/shared/proposedPlanText";
@@ -1599,7 +1598,6 @@ const VoiceDictationControl = memo(function VoiceDictationControl(props: {
 export interface ChatComposerHandle {
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
-  setGoalMode: (armed: boolean, objective?: string) => boolean;
   /** Expand the desktop composer at the timeline end without taking focus. */
   restoreAfterTimelineReachedEnd: () => void;
   collapseForTimelineScrollKey: (key: string) => void;
@@ -1649,8 +1647,6 @@ export interface ChatComposerHandle {
     multipleModelSelections: ReadonlyArray<ModelSelection> | null;
     providerAvailable: boolean;
     selectedProvider: ProviderDriverKind;
-    supportsThreadGoals: boolean;
-    goalArmed: boolean;
     selectedModel: string;
     selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
     interactionMode: ProviderInteractionMode;
@@ -2641,12 +2637,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
     null,
   );
-  const [goalArmed, setGoalArmed] = useState(false);
-  const [goalDraftKey, setGoalDraftKey] = useState(composerDraftTargetKey);
-  if (goalDraftKey !== composerDraftTargetKey) {
-    setGoalDraftKey(composerDraftTargetKey);
-    setGoalArmed(false);
-  }
   const voiceSettings = settings.voiceInput;
   const [voiceStatus, setVoiceStatus] = useState<VoiceDictationStatus>("idle");
   const [voiceError, setVoiceError] = useState<string | null>(null);
@@ -2926,17 +2916,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           label: "/model",
           description: "Switch response model for this thread",
         },
-        ...(selectedProviderStatus?.supportsThreadGoals === true
-          ? ([
-              {
-                id: "slash:goal",
-                type: "slash-command",
-                command: "goal",
-                label: "/goal",
-                description: "Set or manage an autonomous goal",
-              },
-            ] as const)
-          : []),
         ...(planModeUiEnabled
           ? ([
               {
@@ -3652,10 +3631,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   if (providerInputInputs.some((value, index) => value !== providerInputValidatedFor[index])) {
     setProviderInputValidatedFor(providerInputInputs);
     setProviderInputSubmissionError(null);
-  }
-
-  if (goalArmed && selectedProviderStatus?.supportsThreadGoals !== true) {
-    setGoalArmed(false);
   }
 
   useEffect(() => {
@@ -6739,22 +6714,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       focusAt: (cursor: number) => {
         composerEditorRef.current?.focusAt(cursor);
       },
-      setGoalMode: (armed: boolean, objective?: string) => {
-        if (objective === undefined) {
-          setGoalArmed(armed);
-          if (armed) {
-            window.requestAnimationFrame(() => composerEditorRef.current?.focusAtEnd());
-          }
-          return true;
-        }
-        const applied = applyPromptReplacement(0, promptRef.current.length, objective, {
-          expectedText: promptRef.current,
-        });
-        if (applied) {
-          setGoalArmed(armed);
-        }
-        return applied;
-      },
       restoreAfterTimelineReachedEnd,
       collapseForTimelineScrollKey: (key) => {
         const scrollNode = getTimelineScrollableNode();
@@ -6959,8 +6918,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           multipleModelSelections !== null ||
           (!noProviderAvailable && providerSendBlockReason === null),
         selectedProvider,
-        supportsThreadGoals: selectedProviderStatus?.supportsThreadGoals === true,
-        goalArmed,
         selectedModel,
         selectedProviderModels,
         interactionMode,
@@ -6989,7 +6946,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerCursor,
       activePendingProgress,
       composerTerminalContexts,
-      goalArmed,
       insertComposerDraftTerminalContext,
       insertComposerTextStable,
       insertComposerTextAtEndStable,
@@ -7027,7 +6983,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       providerSendBlockReason,
       selectedPromptEffort,
       selectedProvider,
-      selectedProviderStatus?.supportsThreadGoals,
       selectedProviderModels,
       interactionMode,
       planModeUiEnabled,
@@ -7271,11 +7226,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   aria-label="Expand composer"
                 >
                   {prompt.trim() ||
-                    (showProviderUnavailable
-                      ? "Enable a provider in Settings"
-                      : goalArmed
-                        ? "Describe the goal to keep pursuing"
-                        : "Ask anything...")}
+                    (showProviderUnavailable ? "Enable a provider in Settings" : "Ask anything...")}
                 </button>
                 {collapsedComposerImagePreviews}
                 {voiceSettings.enabled ? (
@@ -7749,27 +7700,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   </div>
                 )}
 
-              {goalArmed && !isComposerApprovalState && pendingUserInputs.length === 0 ? (
-                <div className="mb-2 flex items-center">
-                  <button
-                    type="button"
-                    className="group inline-flex h-7 items-center gap-1.5 rounded-full border border-primary/25 bg-primary/10 px-2.5 text-xs font-medium text-primary transition-colors hover:border-primary/40 hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 motion-reduce:transition-none"
-                    aria-label="Exit goal mode"
-                    onClick={() => {
-                      setGoalArmed(false);
-                      window.requestAnimationFrame(() => composerEditorRef.current?.focusAtEnd());
-                    }}
-                  >
-                    <TargetIcon className="size-3.5" aria-hidden="true" />
-                    <span>Goal</span>
-                    <XIcon
-                      className="ml-0.5 size-3 text-primary/70 transition-colors group-hover:text-primary motion-reduce:transition-none"
-                      aria-hidden="true"
-                    />
-                  </button>
-                </div>
-              ) : null}
-
               <div
                 className={cn("relative", isComposerResting && "flex min-w-0 items-center gap-1")}
                 style={
@@ -7871,17 +7801,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           ? isChoiceOnlyPendingQuestion
                             ? "Choose an option above"
                             : "Type your own answer, or leave this blank to use the selected option"
-                          : goalArmed
-                            ? "Describe the goal to keep pursuing"
-                            : showPlanFollowUpPrompt && activeProposedPlan
-                              ? "Add feedback to refine the plan, or leave this blank to implement it"
-                              : projectSelectionRequired
-                                ? "Choose a project above to start a thread"
-                                : showProviderUnavailable
-                                  ? "Enable a provider in Settings to send a message"
-                                  : phase === "disconnected"
-                                    ? DISCONNECTED_COMPOSER_PLACEHOLDER
-                                    : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                          : showPlanFollowUpPrompt && activeProposedPlan
+                            ? "Add feedback to refine the plan, or leave this blank to implement it"
+                            : projectSelectionRequired
+                              ? "Choose a project above to start a thread"
+                              : showProviderUnavailable
+                                ? "Enable a provider in Settings to send a message"
+                                : phase === "disconnected"
+                                  ? DISCONNECTED_COMPOSER_PLACEHOLDER
+                                  : "Ask anything, @tag files/folders, $use skills, or / for commands"
                     }
                     disabled={
                       isConnecting ||

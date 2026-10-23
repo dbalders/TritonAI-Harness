@@ -219,4 +219,24 @@ describe("searchSlashCommandItems", () => {
       "skill:claudeAgent:unslop",
     ]);
   });
+
+  it("offers native goal commands only at the start of a message", () => {
+    for (const provider of [claudeDriver, ProviderDriverKind.make("codex")]) {
+      const goal = {
+        id: `provider-slash-command:${provider}:goal`,
+        type: "provider-slash-command",
+        provider,
+        command: { name: "goal" },
+        label: "/goal",
+        description: "Set a native goal",
+      } satisfies ComposerCommandItem;
+
+      expect(
+        searchSlashCommandItems(slashCommandItemsForPromptPosition([goal], true), "go"),
+      ).toEqual([goal]);
+      expect(
+        searchSlashCommandItems(slashCommandItemsForPromptPosition([goal], false), "go"),
+      ).toEqual([]);
+    }
+  });
 });
