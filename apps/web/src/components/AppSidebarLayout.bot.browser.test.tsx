@@ -40,6 +40,13 @@ vi.mock("../state/environments", async (original) => ({
   usePrimaryEnvironmentId: () => "own-harness",
   usePrimaryEnvironment: () => null,
 }));
+// SettingsRow's Harness permission reads can leave primary discovery running
+// after an earlier settings render unmounts, racing the Bot zero-fetch assertions.
+vi.mock("../state/session", async (original) => ({
+  ...(await original<typeof import("../state/session")>()),
+  useEnvironmentScope: () => false,
+  useEnvironmentsWithScope: () => new Set(),
+}));
 vi.mock("../state/server", async (original) => {
   const source = await original<typeof import("../state/server")>();
   const { Atom } = await import("effect/reactivity");
