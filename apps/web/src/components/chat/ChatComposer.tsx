@@ -185,6 +185,7 @@ import {
   shouldHandleComposerAttachmentPaste,
 } from "./composerAttachmentFiles";
 import {
+  awaitAttachmentUploads,
   readAttachmentUpload,
   releaseAttachmentUpload,
   releaseDraftAttachment,
@@ -5253,7 +5254,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       return;
     }
-    const stashedFiles: PersistedComposerFileAttachment[] = [];
     for (const file of files) {
       if (composerFileNeedsReattach(file)) {
         toastManager.add({
@@ -5262,23 +5262,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         });
         return;
       }
-      const upload = readAttachmentUpload(file.id);
-      if (upload?.status !== "ready" || upload.environmentId !== environmentId) {
-        toastManager.add({
-          type: "error",
-          title: "Wait for file uploads before stashing this prompt",
-        });
+    }
+    if (files.length > 0) {
+      const fileLimit = fileAttachmentStagingLimit({
+        attachmentUploadsCapabilityKnown,
+        supportsAttachmentUploads,
+        maxFileAttachmentBytes,
+      });
+      const oversizedFile =
+        fileLimit === null ? undefined : files.find((file) => file.sizeBytes > fileLimit);
+      const reason = !canOperateThread
+        ? "Reconnect with permission to upload files, then try Stash again."
+        : !attachmentUploadsCapabilityKnown
+          ? "Wait for the server to connect, then try Stash again."
+          : fileLimit === null
+            ? "This server cannot upload files for a stash. Send local files directly, or remove them before stashing."
+            : oversizedFile
+              ? `${fileAttachmentTooLargeMessage(oversizedFile.name, fileLimit)} Remove that file before stashing.`
+              : null;
+      if (reason) {
+        toastManager.add({ type: "error", title: "Could not stash files", description: reason });
         return;
       }
-      stashedFiles.push({
-        id: file.id,
-        name: file.name,
-        mimeType: file.mimeType,
-        sizeBytes: file.sizeBytes,
-        attachmentId: upload.attachmentId,
-        environmentId,
-        ...(file.source ? { source: file.source } : {}),
-      });
     }
     // A repeat ⌘S on the *same* still-unencoded snapshot would stash it
     // twice. Guard on the snapshot itself rather than a bare boolean: once
@@ -5295,22 +5300,92 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
     const stashTarget = composerDraftTarget;
     const entryId = randomUUID();
+    const snapshot = composerDraft;
     const stashAndEncode = async () => {
+      // Native paths stay direct until the user explicitly asks for a durable stash.
+      // Reuse the queue so restored files follow the existing environment-scoped contract.
+      const stashedFiles: PersistedComposerFileAttachment[] = [];
+      if (files.length > 0) {
+        for (const file of files) {
+          const upload = readAttachmentUpload(file.id);
+          (upload?.status === "failed" && upload.environmentId === environmentId
+            ? retryAttachmentUpload
+            : startAttachmentUpload)({ environmentId, image: file, draftTarget: stashTarget });
+        }
+        await awaitAttachmentUploads(files.map((file) => file.id));
+        const current = getComposerDraft(stashTarget);
+        // Upload completion stamps IDs onto files, but may not consume edits or a new route.
+        if (
+          isRevertingCheckpointRef.current ||
+          composerTargetKey(stashTarget) !== composerDraftTargetKeyRef.current ||
+          pendingDraftWork.has(composerTargetKey(stashTarget)) ||
+          !current ||
+          current.prompt !== snapshot.prompt ||
+          current.images !== snapshot.images ||
+          current.terminalContexts !== snapshot.terminalContexts ||
+          current.threadContexts !== snapshot.threadContexts ||
+          current.reviewComments !== snapshot.reviewComments ||
+          current.previewAnnotations !== snapshot.previewAnnotations ||
+          current.files.length !== files.length ||
+          current.files.some((file, index) => {
+            const original = files[index]!;
+            return (
+              file.id !== original.id ||
+              file.file !== original.file ||
+              file.path !== original.path ||
+              file.name !== original.name ||
+              file.mimeType !== original.mimeType ||
+              file.sizeBytes !== original.sizeBytes ||
+              file.source !== original.source
+            );
+          })
+        ) {
+          toastManager.add({
+            type: "info",
+            title: "Draft changed while preparing the stash",
+            description: "Your draft was kept. Try Stash again when you are ready.",
+          });
+          return;
+        }
+        for (const file of files) {
+          const upload = readAttachmentUpload(file.id);
+          if (upload?.status !== "ready" || upload.environmentId !== environmentId) {
+            toastManager.add({
+              type: "error",
+              title: "File upload did not finish for the stash",
+              description: "Your draft was kept. Reconnect and retry Stash, or remove the file.",
+            });
+            return;
+          }
+          stashedFiles.push({
+            id: file.id,
+            name: file.name,
+            mimeType: file.mimeType,
+            sizeBytes: file.sizeBytes,
+            attachmentId: upload.attachmentId,
+            environmentId,
+            ...(file.source ? { source: file.source } : {}),
+          });
+        }
+      }
       // Ordering matters in both directions: writing before clearing means a
       // crash or closed tab mid-encode still leaves the prompt recoverable,
       // while clearing before the async image work means edits typed during
       // encoding are not wiped.
-      const { evicted, written, durable } = stashEntryToQueue({
-        id: entryId,
-        createdAt: new Date().toISOString(),
-        prompt,
-        attachments: [],
-        ...(stashedFiles.length > 0 ? { files: stashedFiles } : {}),
-        droppedImageNames: [],
-        unreadableImageNames: [],
-        pendingImageCount: images.length,
-        ...(stashedRecords.length > 0 ? { records: stashedRecords } : {}),
-      });
+      const { evicted, written, durable } = stashEntryToQueue(
+        {
+          id: entryId,
+          createdAt: new Date().toISOString(),
+          prompt,
+          attachments: [],
+          ...(stashedFiles.length > 0 ? { files: stashedFiles } : {}),
+          droppedImageNames: [],
+          unreadableImageNames: [],
+          pendingImageCount: images.length,
+          ...(stashedRecords.length > 0 ? { records: stashedRecords } : {}),
+        },
+        { requireDurable: true },
+      );
 
       // If it was rejected (quota) the store has already rolled itself back,
       // so leave the composer untouched rather than making it the second
@@ -5324,15 +5399,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           data: { hideCopyButton: true },
         });
         return;
-      }
-      if (!durable) {
-        toastManager.add({
-          type: "warning",
-          title: "Stashed prompt will not survive a reload",
-          description:
-            "Browser storage is unavailable, so this stash is kept in memory only for this session.",
-          data: { hideCopyButton: true },
-        });
       }
 
       promptRef.current = "";
