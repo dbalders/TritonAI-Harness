@@ -135,7 +135,8 @@ public static class CodexDirectoryLock {
  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
 }
 '@
-$handle = [CodexDirectoryLock]::CreateFile($env:TRITONAI_TEST_RUNTIME_ROOT, 0, 3, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
+# FILE_LIST_DIRECTORY makes Windows apply the sharing checks; metadata-only access does not.
+$handle = [CodexDirectoryLock]::CreateFile($env:TRITONAI_TEST_RUNTIME_ROOT, 1, 3, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
 if ($handle -eq [IntPtr]::new(-1)) { throw 'Could not open the disposable directory handle' }
 [Console]::WriteLine('locked')
 [Console]::Out.Flush()
