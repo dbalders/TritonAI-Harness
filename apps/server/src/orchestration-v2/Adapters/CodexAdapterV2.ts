@@ -16,6 +16,11 @@ import {
   type DynamicToolApprovalPlan,
 } from "../../provider/CodexDynamicTools.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
+import * as ProcessRunner from "../../processRunner.ts";
+import {
+  leaseManagedCodexRuntime,
+  resolveManagedCodexLaunchPath,
+} from "../../provider/managedCodexRuntime.ts";
 import { registerBrowserNavigationGate } from "../../preview/BrowserNavigationGate.ts";
 import {
   UCSD_AI_BASE_URL_ENV,
@@ -1612,17 +1617,23 @@ function isSensitiveCodexProtocolKey(key: string): boolean {
 export const layerAppServerClientFactory: Layer.Layer<
   CodexAppServerClientFactory,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | ProviderEventLoggers.ProviderEventLoggers
+  | ChildProcessSpawner.ChildProcessSpawner
+  | ProviderEventLoggers.ProviderEventLoggers
+  | FileSystem.FileSystem
+  | Path.Path
 > = Layer.effect(
   CodexAppServerClientFactory,
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
+    const runner = yield* ProcessRunner.make();
+    const runtimeFs = yield* FileSystem.FileSystem;
+    const runtimePath = yield* Path.Path;
 
     return CodexAppServerClientFactory.of({
       open: Effect.fn("CodexAdapterV2.open")(function* (input) {
-        const scope = yield* Scope.Scope;
+        const scope = yield* Scope.fork(yield* Scope.Scope, "sequential");
         const environment: NodeJS.ProcessEnv = {
           ...codexAppServerEnvironment(input.environment),
           ...(input.settings.homePath ? { CODEX_HOME: input.settings.homePath } : {}),
@@ -1645,8 +1656,30 @@ export const layerAppServerClientFactory: Layer.Layer<
           .filter(Boolean)
           .join(",");
         const childEnvironment = { ...environment, NO_PROXY: noProxy, no_proxy: noProxy };
+        const binaryPath = yield* resolveManagedCodexLaunchPath({
+          binaryPath: input.settings.binaryPath,
+          homeDirectory: yield* HostProcess.HomeDirectory,
+          platform: yield* HostProcess.Platform,
+          environment: childEnvironment,
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, runtimeFs),
+          Effect.provideService(Path.Path, runtimePath),
+        );
+        const runtimeLease = yield* leaseManagedCodexRuntime(binaryPath, runner.run).pipe(
+          Effect.provideService(Scope.Scope, scope),
+          Effect.provideService(FileSystem.FileSystem, runtimeFs),
+          Effect.provideService(Path.Path, runtimePath),
+          Effect.mapError(
+            (cause) =>
+              new ProviderAdapter.ProviderAdapterOpenSessionError({
+                driver: CODEX_PROVIDER,
+                providerSessionId: input.providerSessionId,
+                cause,
+              }),
+          ),
+        );
         const command = yield* makeCodexAppServerSpawnCommand({
-          command: input.settings.binaryPath || "codex",
+          command: binaryPath,
           args: [
             ...codexAppServerArgs(
               resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
@@ -1672,6 +1705,17 @@ export const layerAppServerClientFactory: Layer.Layer<
               }),
           ),
         );
+        if (runtimeLease)
+          yield* runtimeLease.bindChild(Number(handle.pid)).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CODEX_PROVIDER,
+                  providerSessionId: input.providerSessionId,
+                  cause,
+                }),
+            ),
+          );
         const protocolLogger = makeCodexAppServerProtocolLogger({
           nativeEventLogger,
           threadId: input.threadId,
