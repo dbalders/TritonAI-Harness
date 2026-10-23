@@ -13,6 +13,7 @@ import {
   ForwardCompatibleNullable,
   ForwardCompatibleOptional,
   OmittedWhenNull,
+  EnvironmentId,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -48,6 +49,56 @@ import {
 import { DEFAULT_TRITONAI_CODEX_HOME_PATH, DEFAULT_TRITONAI_CODEX_MODEL } from "./tritonai.ts";
 import { DEFAULT_VOICE_INPUT_SETTINGS, VoiceInputSettings } from "./voice.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
+
+// ── Client Settings (local-only) ───────────────────────────────
+
+export const GettingStartedChapterId = Schema.Literals([
+  "welcome",
+  "conversation",
+  "connect",
+  "connected-work",
+  "files",
+  "ideas",
+  "computer-use",
+  "ready",
+]);
+export type GettingStartedChapterId = typeof GettingStartedChapterId.Type;
+
+const GettingStartedTask = Schema.Struct({
+  chapter: GettingStartedChapterId,
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  after: Schema.String,
+  messageIds: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  toolNames: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  runIds: Schema.Array(Schema.String),
+  checkedSource: Schema.Boolean,
+});
+
+export const GettingStartedProgress = Schema.Struct({
+  generation: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  startedAt: Schema.NullOr(Schema.String),
+  environmentId: Schema.NullOr(EnvironmentId),
+  activeChapter: GettingStartedChapterId,
+  open: Schema.Boolean,
+  paused: Schema.Boolean,
+  completed: Schema.Array(GettingStartedChapterId),
+  deferred: Schema.Array(GettingStartedChapterId),
+  tasks: Schema.Array(GettingStartedTask),
+});
+export type GettingStartedProgress = typeof GettingStartedProgress.Type;
+
+export const DEFAULT_GETTING_STARTED_PROGRESS: GettingStartedProgress = {
+  generation: 0,
+  startedAt: null,
+  environmentId: null,
+  activeChapter: "welcome",
+  open: false,
+  paused: false,
+  completed: [],
+  deferred: [],
+  tasks: [],
+};
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -389,6 +440,9 @@ export const ClientSettingsSchema = Schema.Struct({
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   tritonAiFirstRunOnboardingCompleted: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  gettingStarted: GettingStartedProgress.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_GETTING_STARTED_PROGRESS)),
   ),
   diffLayout: DiffLayout.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_DIFF_LAYOUT))),
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
@@ -1663,6 +1717,7 @@ export const ClientSettingsPatch = Schema.Struct({
   diffFilesCollapsed: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   tritonAiFirstRunOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
+  gettingStarted: Schema.optionalKey(GettingStartedProgress),
   experimentalGuidedTourEnabled: Schema.optionalKey(Schema.Boolean),
   diffLayout: Schema.optionalKey(DiffLayout),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),

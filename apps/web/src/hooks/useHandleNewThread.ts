@@ -84,8 +84,11 @@ export function useNewThreadHandler() {
       /** Seeds only a newly created draft; reused drafts keep their existing composer content. */
       newDraftPrompt?: string;
       replace?: boolean;
+      /** Cancels an app-owned draft request while project defaults are loading. */
+      isCurrent?: () => boolean;
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
+    if (options?.isCurrent?.() === false) return Promise.resolve(null);
     const projects = readProjects();
     // Read at call time: every provider status push replaces the config map, and
     // subscribing would hand every sidebar row a new handler.
@@ -132,7 +135,9 @@ export function useNewThreadHandler() {
         candidate.environmentId === projectRef.environmentId,
     );
     const abandonedSinceRequest = () =>
-      routeChangedSinceRequest() || (project !== undefined && readProject(projectRef) === null);
+      options?.isCurrent?.() === false ||
+      routeChangedSinceRequest() ||
+      (project !== undefined && readProject(projectRef) === null);
     const projectSettings = resolveProjectSettings(
       targetServerSettings,
       project?.id ?? null,

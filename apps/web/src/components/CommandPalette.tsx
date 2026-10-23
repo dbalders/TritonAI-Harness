@@ -5,6 +5,7 @@ import { useParams } from "@tanstack/react-router";
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { openGettingStarted } from "../onboarding/gettingStartedState";
 import {
   canCreateProjectInEnvironment,
   getCloneDestinationBrowsePath,
@@ -454,6 +455,7 @@ function useProjectLookups() {
 }
 
 const selectCommandPaletteClientSettings = (settings: ClientSettings) => ({
+  experimentalGuidedTourEnabled: settings.experimentalGuidedTourEnabled,
   sidebarProjectGroupingMode: settings.sidebarProjectGroupingMode,
   sidebarProjectGroupingOverrides: settings.sidebarProjectGroupingOverrides,
   sidebarProjectSortOrder: settings.sidebarProjectSortOrder,
@@ -2037,6 +2039,19 @@ function OpenCommandPaletteDialog(props: {
       await navigate({ to: "/ideas" });
     },
   });
+
+  if (clientSettings.experimentalGuidedTourEnabled) {
+    actionItems.push({
+      kind: "action",
+      value: "action:getting-started",
+      searchTerms: ["getting started", "onboarding", "guide", "tutorial", "chapters", "learn ai"],
+      title: "Open getting started",
+      icon: <LightbulbIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        if (primaryEnvironmentId) await openGettingStarted(primaryEnvironmentId);
+      },
+    });
+  }
 
   actionItems.push({
     kind: "action",

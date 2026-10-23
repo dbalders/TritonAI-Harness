@@ -36,6 +36,7 @@ import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadc
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { useOpenIdeaDraft } from "./useOpenIdeaDraft";
+import { GettingStartedContextHint } from "../onboarding/GettingStartedContextHint";
 
 const SECTIONS: ReadonlyArray<{ readonly section: IdeaSection; readonly title: string }> = [
   { section: "continue", title: "Pick up where you left off" },
@@ -280,6 +281,7 @@ export function IdeasPage() {
         </WorkspacePageHeader>
         <ScrollArea className="min-h-0 flex-1">
           <WorkspacePageContainer className="gap-5">
+            <GettingStartedContextHint chapters={["ideas"]} />
             <p className="px-3 text-sm text-muted-foreground">
               Suggestions from your recent work, your tools, and what TritonAI can do. Opening one
               starts a draft you can change before sending.

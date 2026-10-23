@@ -1,11 +1,12 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, Idea, ScopedProjectRef, ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback } from "react";
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
 import { useProjects } from "../../state/entities";
+import { getClientSettings } from "../../hooks/useSettings";
+import { updateGettingStarted } from "../../onboarding/gettingStartedState";
 import { mergeIdeaPrompt } from "./ideaDraft";
 
 /**
@@ -25,11 +26,24 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
     if (environmentId === null) return null;
     const { action } = idea;
     const store = useComposerDraftStore.getState();
+    const guide = getClientSettings().gettingStarted;
+    const trackIdea = (threadId: ThreadId) => {
+      if (!guide.startedAt || guide.environmentId !== environmentId || guide.paused) return;
+      void updateGettingStarted({
+        type: "track",
+        chapter: "ideas",
+        environmentId,
+        threadId,
+        at: new Date().toISOString(),
+        generation: guide.generation,
+      });
+    };
 
     if (action.kind === "resume-thread") {
       const threadRef = scopeThreadRef(environmentId, action.threadId);
       const existing = store.getComposerDraft(threadRef)?.prompt ?? "";
       store.setPrompt(threadRef, mergeIdeaPrompt(existing, action.prompt));
+      trackIdea(action.threadId);
       await navigate({
         to: "/$environmentId/$threadId",
         params: { environmentId, threadId: action.threadId },
@@ -48,6 +62,7 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
     );
     if (reopened) {
       const [draftKey, session] = reopened;
+      trackIdea(session.threadId);
       await navigate({ to: "/draft/$draftId", params: { draftId: DraftId.make(draftKey) } });
       return { draftThreadId: session.threadId };
     }
@@ -74,6 +89,7 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
       useComposerDraftStore.getState().getComposerDraft(opened.draftId)?.prompt ?? "";
     const merged = mergeIdeaPrompt(existing, action.prompt);
     if (merged !== existing) store.setPrompt(opened.draftId, merged);
+    trackIdea(opened.threadId);
     return { draftThreadId: opened.threadId };
   };
 }

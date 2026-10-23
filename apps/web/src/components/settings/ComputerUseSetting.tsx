@@ -6,6 +6,7 @@ import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { watchComputerUseState } from "./watchComputerUseState";
+import { GettingStartedContextHint } from "../onboarding/GettingStartedContextHint";
 
 export function ComputerUseSetting() {
   const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
@@ -74,6 +75,7 @@ export function ComputerUseSetting() {
         />
       }
     >
+      <GettingStartedContextHint chapters={["computer-use"]} />
       <div className="my-3 rounded-lg border border-border/70 bg-muted/20 p-3 text-sm">
         <div className="flex items-center gap-2 font-medium" role="status">
           <MonitorIcon className="size-4 text-info-foreground" aria-hidden />

@@ -26,6 +26,7 @@ import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
+import { GettingStartedSidebarEntry } from "../onboarding/GettingStartedHost";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -139,7 +140,13 @@ function SidebarUtilityItem({
   render?: ReactElement;
 }) {
   const button = (
-    <SidebarMenuButton aria-label={label} onClick={onClick} render={render} size="icon">
+    <SidebarMenuButton
+      aria-label={label}
+      data-getting-started-target={label === "Settings" ? "settings" : undefined}
+      onClick={onClick}
+      render={render}
+      size="icon"
+    >
       {icon}
     </SidebarMenuButton>
   );
@@ -166,7 +173,7 @@ function SidebarIdeasItem({ onClick }: { onClick: () => void }) {
       label="Ideas"
       onClick={onClick}
       tooltip={false}
-      render={<Link to="/ideas" />}
+      render={<Link to="/ideas" data-getting-started-target="ideas" />}
     />
   );
 }
@@ -248,6 +255,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
     <SidebarFooter>
       <SidebarThreadUndoNotice />
+      <GettingStartedSidebarEntry />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />

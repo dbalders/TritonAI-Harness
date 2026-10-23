@@ -1,3 +1,4 @@
+import { GettingStartedContextHint } from "../onboarding/GettingStartedContextHint";
 import type {
   IntegrationConnectResult,
   EnvironmentId,
@@ -21,7 +22,7 @@ import {
   UnplugIcon,
   WrenchIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -497,6 +498,11 @@ function IntegrationCard({
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded}>
       <article
+        data-getting-started-target={
+          integration.id === "microsoft-365" || integration.id === "google-workspace"
+            ? "connections"
+            : undefined
+        }
         className="border-t border-border/60 p-5 first:border-t-0 sm:p-6"
         aria-labelledby={`${integration.id}-title`}
       >
@@ -856,6 +862,7 @@ function EnvironmentPluginsSettingsPanel({
         const result = unwrap(response);
         if (environmentIdRef.current !== targetEnvironmentId) return;
         setData(result);
+        window.dispatchEvent(new Event("getting-started:connections-changed"));
         setErrors((current) => {
           const rest = { ...current };
           delete rest[PANEL_ERROR];
@@ -907,6 +914,7 @@ function EnvironmentPluginsSettingsPanel({
           item.id === id ? result.integration : item,
         ),
       }));
+      window.dispatchEvent(new Event("getting-started:connections-changed"));
       if (result.integration.connectionState === "connected") {
         setConnectionAttentionState((current) => clearOwnedConnectionAttention(current, id));
       }
@@ -1032,6 +1040,7 @@ function EnvironmentPluginsSettingsPanel({
           const result = unwrap(await command);
           if (environmentIdRef.current !== targetEnvironmentId) return;
           setData(result);
+          window.dispatchEvent(new Event("getting-started:connections-changed"));
           // First-time installation is also represented by the "enable" action kind above.
           if (kind === "enable") {
             const updated = result.integrations.find(({ id }) => id === integration.id);
@@ -1137,6 +1146,7 @@ function EnvironmentPluginsSettingsPanel({
         );
         if (environmentIdRef.current !== targetEnvironmentId) return;
         setData(result);
+        window.dispatchEvent(new Event("getting-started:connections-changed"));
         const updated = result.integrations.find(({ id }) => id === integration.id);
         const updatedCapability = updated?.capabilities.find(({ id }) => id === capability);
         setConnectionAttentionState((current) =>
@@ -1188,6 +1198,7 @@ function EnvironmentPluginsSettingsPanel({
 
   return (
     <SettingsPageContainer>
+      <GettingStartedContextHint chapters={["connect", "connected-work"]} />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {connectionAnnouncement}
       </p>

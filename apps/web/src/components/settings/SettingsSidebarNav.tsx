@@ -1,3 +1,4 @@
+import { GettingStartedSidebarEntry } from "../onboarding/GettingStartedHost";
 import {
   lazy,
   Suspense,
@@ -357,6 +358,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
+        <GettingStartedSidebarEntry />
         <Suspense fallback={null}>
           <T3ConnectSidebarSignIn />
         </Suspense>

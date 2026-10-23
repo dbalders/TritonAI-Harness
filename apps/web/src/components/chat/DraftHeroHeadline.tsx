@@ -59,12 +59,14 @@ interface PickerItem {
 }
 
 interface DraftHeroHeadlineProps {
+  readonly guidedTask?: boolean;
   readonly draftId: DraftId | null;
   readonly activeProjectRef: ScopedProjectRef | null;
   readonly activeProjectTitle: string | null;
 }
 
 export function DraftHeroHeadline({
+  guidedTask = false,
   draftId,
   activeProjectRef,
   activeProjectTitle,
@@ -360,7 +362,10 @@ export function DraftHeroHeadline({
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col items-center">
       {hasResolvedProject && !isScratchDraft ? (
-        <DraftHeroProjectHeading projectName={activeProjectDisplayName ?? "Choose a project"}>
+        <DraftHeroProjectHeading
+          guidedTask={guidedTask}
+          projectName={activeProjectDisplayName ?? "Choose a project"}
+        >
           {projectSelector}
         </DraftHeroProjectHeading>
       ) : (

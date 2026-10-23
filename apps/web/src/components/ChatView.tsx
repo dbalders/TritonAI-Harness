@@ -208,7 +208,10 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { isElectron } from "../env";
 import { desktopLocalBackendId, isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
-import { useGuidedTourChatGuide } from "./onboarding/GuidedTourChatGuide";
+import * as DateTime from "effect/DateTime";
+import { useGettingStartedChatGuide } from "./onboarding/GettingStartedChatGuide";
+import { recordGettingStartedSubmission } from "../onboarding/gettingStartedState";
+import { getClientSettings } from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
@@ -5514,9 +5517,6 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
   const sendStandaloneCommandStable = useStableCallback(sendStandaloneCommand);
-  const sendGuidedTourMessage = useStableCallback((text: string) =>
-    sendStandaloneCommand(text, "That didn't send. Try again, or type it below."),
-  );
   // A native /goal keeps the agent working across turns. Stop pauses a Codex
   // goal; once the thread is idle the row offers the native follow-ups.
   const [computerUseNotice, setComputerUseNotice] = useState<{
@@ -5769,15 +5769,21 @@ export default function ChatView(props: ChatViewProps) {
           },
         })
       : null;
-  const guidedTourBannerItem = useGuidedTourChatGuide({
+  const gettingStartedBannerItem = useGettingStartedChatGuide({
     environmentId,
     threadId: activeThread?.id ?? null,
     run: activeLatestRun,
+    runs: (serverProjection?.runs ?? []).map((run) => ({
+      runId: run.id,
+      status: run.status,
+      userMessageId: run.userMessageId,
+      startedAt: run.startedAt ? DateTime.formatIso(run.startedAt) : null,
+      requestedAt: DateTime.formatIso(run.requestedAt),
+    })),
     isWorking,
     hasPendingApproval: pendingApprovals.length > 0,
     hasPendingQuestion: pendingUserInputs.length > 0,
     timelineEntries,
-    send: sendGuidedTourMessage,
   });
   const composerBannerItems = (() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
@@ -5785,7 +5791,7 @@ export default function ChatView(props: ChatViewProps) {
       childInputBannerItem,
       goalBannerItem,
       backgroundWorkBannerItem,
-      guidedTourBannerItem,
+      gettingStartedBannerItem,
     ].filter((item) => item !== null);
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
@@ -7034,6 +7040,7 @@ export default function ChatView(props: ChatViewProps) {
       composerAttachmentsSnapshot.map((attachment) => attachment.id),
     );
     const messageIdForSend = newMessageId();
+    const gettingStartedGenerationForSend = getClientSettings().gettingStarted.generation;
     const messageCreatedAt = new Date().toISOString();
     // A stale Claude session compacts before this message so the turn does not re-read the
     // old history. The message queues behind the /compact run, since steering into it is
@@ -7710,6 +7717,12 @@ export default function ChatView(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        recordGettingStartedSubmission({
+          environmentId,
+          threadId: threadIdForSend,
+          messageId: messageIdForSend,
+          generation: gettingStartedGenerationForSend,
+        });
         setKeepFullHistory(routeThreadKey, false);
         clearUsageLimitsFor(routeThreadKey);
         if (turnUsesAttachmentUploads) {
@@ -8765,6 +8778,7 @@ export default function ChatView(props: ChatViewProps) {
                         }
                       >
                         <DraftHeroHeadline
+                          guidedTask={gettingStartedBannerItem !== null}
                           draftId={draftId}
                           activeProjectRef={activeProjectRef}
                           activeProjectTitle={activeProject?.title ?? null}

@@ -1,4 +1,5 @@
 import { ComputerUseSetting } from "./ComputerUseSetting";
+import { cancelGettingStartedPreparation } from "../../onboarding/gettingStartedState";
 import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
@@ -144,7 +145,6 @@ import {
 } from "../ui/number-field";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
-import { restartGuidedTour } from "../../onboarding/guidedTourState";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -2074,7 +2074,7 @@ function ExperimentalFeaturesSection() {
     >
       <SettingsRow
         {...searchableSetting("experimental-guided-tour")}
-        description="A short walkthrough for people new to AI: it does one real task with you, then continues in a chat with suggestions. Turn it on to show Start tour."
+        description="Guided chapters for people new to AI: practice a conversation, connect your work, use files, and explore Ideas. Turn it on to show Start tour and Getting started."
         control={
           <div className="flex items-center gap-2">
             {guidedTourEnabled ? (
@@ -2082,7 +2082,6 @@ function ExperimentalFeaturesSection() {
                 size="sm"
                 variant="outline"
                 onClick={() => {
-                  restartGuidedTour();
                   void navigate({ to: "/guided-tour" });
                 }}
               >
@@ -2091,9 +2090,10 @@ function ExperimentalFeaturesSection() {
             ) : null}
             <Switch
               checked={guidedTourEnabled}
-              onCheckedChange={(checked) =>
-                updateSettings({ experimentalGuidedTourEnabled: Boolean(checked) })
-              }
+              onCheckedChange={(checked) => {
+                if (!checked) cancelGettingStartedPreparation();
+                updateSettings({ experimentalGuidedTourEnabled: Boolean(checked) });
+              }}
               aria-label="Guided tour (experimental)"
             />
           </div>
@@ -2895,7 +2895,9 @@ export function GeneralSettingsPanel() {
           }
         />
 
-        <ComputerUseSetting />
+        <div data-getting-started-target="computer-use">
+          <ComputerUseSetting />
+        </div>
 
         <SettingsRow
           {...searchableSetting("continue-threads-after-server-update")}
