@@ -104,6 +104,8 @@ const TICK_INTERVAL = Duration.seconds(10);
 const CLAIM_INTERVAL_MS = 20_000;
 /** The longest claim the bot grants; a late result is still accepted after it lapses. */
 const LEASE_SECONDS = 7200;
+/** Keep queued lease checkpoints conservative without fsyncing every progress heartbeat. */
+const LEASE_CHECKPOINT_STEP_MS = 60_000;
 const REQUEST_TIMEOUT = Duration.seconds(15);
 // A 4 MiB attachment travels as up to 5.6 MiB of JSON, in either direction.
 const TRANSFER_TIMEOUT = Duration.minutes(2);
@@ -1417,7 +1419,7 @@ export const make = Effect.gen(function* () {
     let reachable = true;
     const rejectedProgress = new Map<string, string>();
     const refusedProgress = new Set<string>();
-    const confirmedLeases = new Map<string, number>();
+    const confirmedLeases = new Map<string, { expiresAt: number; remainingSeconds: number }>();
     // Publish terminal progress before final delivery removes its active journal entry.
     if (initial.active) {
       const publishable = new Set(
@@ -1485,7 +1487,10 @@ export const make = Effect.gen(function* () {
             // Duplicate observations can be accepted without renewal. Only the
             // server's bounded remaining lease may extend the durable deadline.
             const requestElapsed = Math.max(0, receivedAt - sentAt);
-            confirmedLeases.set(task.taskId, receivedAt + ack.leaseSeconds * 1000 - requestElapsed);
+            confirmedLeases.set(task.taskId, {
+              expiresAt: receivedAt + ack.leaseSeconds * 1000 - requestElapsed,
+              remainingSeconds: ack.leaseSeconds,
+            });
           }
         }
       }
@@ -1496,10 +1501,20 @@ export const make = Effect.gen(function* () {
       );
     }
     const heldAfterRefusal = initial.held.map((original) => {
-      const leaseExpiresAt = confirmedLeases.get(original.taskId);
+      const lease = confirmedLeases.get(original.taskId);
+      const previousExpiry = claimLeaseExpiresAt(original);
       const task =
-        leaseExpiresAt !== undefined && original.progressVersion === 1
-          ? { ...original, progressLeaseExpiresAt: leaseExpiresAt }
+        lease !== undefined &&
+        original.progressVersion === 1 &&
+        !original.started &&
+        original.outcome === null &&
+        original.assignment !== undefined &&
+        // Only input retries consume this bound. Always tighten it immediately;
+        // skipped small renewals leave the durable deadline earlier, including on restart.
+        (lease.expiresAt < previousExpiry ||
+          (lease.remainingSeconds > 0 &&
+            lease.expiresAt - previousExpiry >= LEASE_CHECKPOINT_STEP_MS))
+          ? { ...original, progressLeaseExpiresAt: lease.expiresAt }
           : original;
       return !task.started && task.outcome === null && refusedProgress.has(task.taskId)
         ? {
@@ -1516,7 +1531,7 @@ export const make = Effect.gen(function* () {
         : task;
     });
     if (heldAfterRefusal.some((task, index) => task !== initial.held[index])) {
-      // Persist confirmed lease bounds and permanent unstarted refusals. Retryable,
+      // Persist conservative lease checkpoints and permanent unstarted refusals. Retryable,
       // unknown and old text-only refusals retain the gate, as does uncertain dispatch.
       initial = { ...initial, held: heldAfterRefusal };
       yield* writeStored(initial);
