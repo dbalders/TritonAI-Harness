@@ -742,7 +742,7 @@ export function emptyProjection(
     contextHandoffs: [],
     contextTransfers: [],
     visibleTurnItems: [],
-    updatedAt: event.occurredAt,
+    updatedAt: event.payload.updatedAt,
   };
 }
 
@@ -759,13 +759,15 @@ export function applyToProjection(
   projection: OrchestrationV2ThreadProjection,
   event: OrchestrationV2DomainEvent,
 ): OrchestrationV2ThreadProjection {
+  // Lazy transcript hydration appends historical events after the newer thread shell.
+  const updatedAt = DateTime.max(projection.thread.updatedAt, event.occurredAt);
   const base = {
     ...projection,
     thread: {
       ...projection.thread,
-      updatedAt: event.occurredAt,
+      updatedAt,
     },
-    updatedAt: event.occurredAt,
+    updatedAt,
   };
 
   switch (event.type) {
@@ -794,6 +796,7 @@ export function applyToProjection(
       return {
         ...base,
         thread: event.payload,
+        updatedAt: event.payload.updatedAt,
       };
     // Reordering and PR refreshes preserve the orchestrator's activity timestamp.
     case "thread.active-reordered":
@@ -982,7 +985,15 @@ function applyToProjectionReplayState(
       for (const [threadId, projection] of state.projections) {
         if (threadId === event.payload.appThreadId) {
           if (threadId !== event.threadId) {
-            state.projections.set(threadId, applyToProjection(projection, event));
+            state.projections.set(
+              threadId,
+              isQueuedProviderThreadPlaceholder(event.payload)
+                ? {
+                    ...projection,
+                    providerThreads: upsertById(projection.providerThreads, event.payload),
+                  }
+                : applyToProjection(projection, event),
+            );
           }
           continue;
         }
@@ -2343,7 +2354,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   const updatedThread = {
                     ...thread,
                     activeProviderThreadId: event.payload.id,
-                    updatedAt: event.payload.updatedAt,
+                    updatedAt: DateTime.max(thread.updatedAt, event.occurredAt),
                   };
                   const updatedThreadPayloadJson = yield* encodeThreadPayload(updatedThread);
                   yield* sql`
@@ -2785,6 +2796,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               updated_at = ${updatedAt},
               payload_json = json_set(payload_json, '$.updatedAt', ${updatedAt})
             WHERE thread_id = ${event.threadId}
+              AND updated_at < ${updatedAt}
           `;
           }
         },
