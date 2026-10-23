@@ -877,15 +877,24 @@ describe("CodexAdapterV2 process spawning", () => {
         let spawns = 0;
         let spawnedManagedBinary = false;
         let leasesAtSpawn = 0;
+        let spawnReceipt: unknown;
         const spawner = ChildProcessSpawner.make((command) =>
           Effect.gen(function* () {
             spawns += 1;
             if (ChildProcess.isStandardCommand(command)) {
+              spawnReceipt = {
+                command: command.command,
+                args: command.args,
+                shell: command.options.shell,
+              };
               spawnedManagedBinary =
                 command.command === binary ||
                 (platform === "win32" &&
                   command.options.shell === true &&
-                  command.command.replaceAll("^", "").startsWith(`"${binary}" `));
+                  command.command
+                    .replaceAll("^", "")
+                    .toLowerCase()
+                    .startsWith(`"${binary.toLowerCase()}" `));
             }
             const entries = yield* fs.readDirectory(runtimeRoot);
             leasesAtSpawn = entries.filter((entry) =>
@@ -924,8 +933,8 @@ describe("CodexAdapterV2 process spawning", () => {
           })
           .pipe(Effect.provideService(HostProcess.HomeDirectory, home), Effect.scoped, Effect.exit);
         assert.equal(spawns, 1);
-        assert.isTrue(spawnedManagedBinary);
-        assert.equal(leasesAtSpawn, 1);
+        assert.equal(leasesAtSpawn, 1, JSON.stringify(spawnReceipt));
+        assert.isTrue(spawnedManagedBinary, JSON.stringify({ binary, spawnReceipt }));
         assert.deepEqual(
           (yield* fs.readDirectory(runtimeRoot)).filter((entry) =>
             entry.startsWith(".tritonai-codex-session."),
