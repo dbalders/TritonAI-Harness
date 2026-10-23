@@ -17,7 +17,10 @@ import {
 } from "../../provider/CodexDynamicTools.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 import * as ProcessRunner from "../../processRunner.ts";
-import { leaseManagedCodexRuntime } from "../../provider/managedCodexRuntime.ts";
+import {
+  leaseManagedCodexRuntime,
+  resolveManagedCodexLaunchPath,
+} from "../../provider/managedCodexRuntime.ts";
 import { registerBrowserNavigationGate } from "../../preview/BrowserNavigationGate.ts";
 import {
   UCSD_AI_BASE_URL_ENV,
@@ -1653,10 +1656,16 @@ export const layerAppServerClientFactory: Layer.Layer<
           .filter(Boolean)
           .join(",");
         const childEnvironment = { ...environment, NO_PROXY: noProxy, no_proxy: noProxy };
-        const runtimeLease = yield* leaseManagedCodexRuntime(
-          input.settings.binaryPath,
-          runner.run,
-        ).pipe(
+        const binaryPath = yield* resolveManagedCodexLaunchPath({
+          binaryPath: input.settings.binaryPath,
+          homeDirectory: yield* HostProcess.HomeDirectory,
+          platform: yield* HostProcess.Platform,
+          environment: childEnvironment,
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, runtimeFs),
+          Effect.provideService(Path.Path, runtimePath),
+        );
+        const runtimeLease = yield* leaseManagedCodexRuntime(binaryPath, runner.run).pipe(
           Effect.provideService(Scope.Scope, scope),
           Effect.provideService(FileSystem.FileSystem, runtimeFs),
           Effect.provideService(Path.Path, runtimePath),
@@ -1670,7 +1679,7 @@ export const layerAppServerClientFactory: Layer.Layer<
           ),
         );
         const command = yield* makeCodexAppServerSpawnCommand({
-          command: input.settings.binaryPath || "codex",
+          command: binaryPath,
           args: [
             ...codexAppServerArgs(
               resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),

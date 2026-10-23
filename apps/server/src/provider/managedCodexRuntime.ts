@@ -1,6 +1,7 @@
 import { resolveCommandPath } from "@t3tools/shared/shell";
 import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -30,6 +31,27 @@ export class ManagedCodexRuntimeError extends Schema.TaggedError<ManagedCodexRun
   }
 }
 
+/** Use the managed executable's physical path for both admission and spawning. */
+export const resolveManagedCodexLaunchPath = Effect.fn("resolveManagedCodexLaunchPath")(
+  function* (input: {
+    readonly binaryPath: string;
+    readonly homeDirectory: string;
+    readonly platform: NodeJS.Platform;
+    readonly environment: NodeJS.ProcessEnv;
+  }) {
+    const requested = expandHomePath(input.binaryPath.trim() || "codex", input.homeDirectory);
+    const fs = yield* FileSystem.FileSystem;
+    const command = yield* resolveCommandPath(requested, { env: input.environment }).pipe(
+      Effect.provideService(HostProcessPlatform, input.platform),
+    );
+    if (command) {
+      const resolved = yield* fs.realPath(command).pipe(Effect.orElseSucceed(() => command));
+      if (resolveTritonAiManagedCodexInstallation(resolved)) return resolved;
+    }
+    return requested;
+  },
+);
+
 /** Resolve an executable only; profile settings, credentials and CODEX_HOME stay with the caller. */
 export const resolveManagedCodexBinary = Effect.fn("resolveManagedCodexBinary")(function* (input: {
   readonly binaryPath: string;
@@ -38,17 +60,8 @@ export const resolveManagedCodexBinary = Effect.fn("resolveManagedCodexBinary")(
   readonly environment: NodeJS.ProcessEnv;
   readonly run: ProcessRunner["Service"]["run"];
 }) {
-  let requested = input.binaryPath.trim() || "codex";
+  const requested = yield* resolveManagedCodexLaunchPath(input);
   const fs = yield* FileSystem.FileSystem;
-  {
-    const command = yield* resolveCommandPath(requested, { env: input.environment }).pipe(
-      Effect.provideService(HostProcessPlatform, input.platform),
-    );
-    if (command) {
-      const resolved = yield* fs.realPath(command).pipe(Effect.orElseSucceed(() => command));
-      if (resolveTritonAiManagedCodexInstallation(resolved)) requested = resolved;
-    }
-  }
   const configuredInstallation = resolveTritonAiManagedCodexInstallation(requested);
   // An explicit custom command is intentional, even when it is broken.
   if (requested !== "codex" && !configuredInstallation) return requested;

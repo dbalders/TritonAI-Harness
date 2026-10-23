@@ -235,6 +235,14 @@ export const acquireManagedCodexLease = Effect.fn("acquireManagedCodexLease")(fu
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const boot = bootKey(yield* yield* ManagedCodexBootId);
+  const removeLease = (directory: string) =>
+    fs
+      .remove(directory, { recursive: true, force: true })
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not remove a managed Codex session lease", { cause }),
+        ),
+      );
   let created: string | undefined;
   const directory = yield* Effect.acquireRelease(
     withManagedCodexLock(
@@ -249,15 +257,10 @@ export const acquireManagedCodexLease = Effect.fn("acquireManagedCodexLease")(fu
         });
         yield* assertManagedCodexLockOwnership();
         return created;
-      }).pipe(
-        Effect.onError(() =>
-          created
-            ? fs.remove(created, { recursive: true, force: true }).pipe(Effect.orDie)
-            : Effect.void,
-        ),
-      ),
+      }).pipe(Effect.onError(() => (created ? removeLease(created) : Effect.void))),
     ),
-    (directory) => fs.remove(directory, { recursive: true, force: true }).pipe(Effect.orDie),
+    // Failed cleanup keeps the lease conservative; idle checks can reap it once it is stale.
+    removeLease,
   );
   return {
     bindChild: (pid: number) =>

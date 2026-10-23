@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/process";
 import type { ProcessRunner, ProcessRunOutput } from "../processRunner.ts";
 import { ManagedCodexApprovedVersion, updateTritonAiManagedCodex } from "./managedCodexUpdate.ts";
@@ -45,6 +46,67 @@ const success = (version = ""): ProcessRunOutput => ({
 });
 
 it.layer(NodeServices.layer)("managed Codex activation ownership", (it) => {
+  it.effect.each(["release", "admission error"])(
+    "preserves the caller's outcome when lease cleanup is locked during %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "codex-cleanup-test-" });
+        const root = path.join(home, "codex");
+        yield* fs.makeDirectory(root);
+        let cleanupAttempts = 0;
+        const testFs = FileSystem.FileSystem.of({
+          ...fs,
+          makeTempDirectory: (options) =>
+            fs
+              .makeTempDirectory(options)
+              .pipe(
+                Effect.tap(() =>
+                  scenario === "admission error"
+                    ? fs
+                        .rename(`${root}.lock`, `${root}.retired-lock`)
+                        .pipe(Effect.andThen(fs.makeDirectory(`${root}.lock`)))
+                    : Effect.void,
+                ),
+              ),
+          remove: (target, options) => {
+            if (!String(target).includes(".tritonai-codex-session."))
+              return fs.remove(target, options);
+            cleanupAttempts += 1;
+            return Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "remove",
+                cause: Object.assign(new Error("directory temporarily locked"), { code: "EPERM" }),
+              }),
+            );
+          },
+        });
+        const result = yield* acquireManagedCodexLease(root).pipe(
+          Effect.as("session finished"),
+          Effect.provideService(FileSystem.FileSystem, testFs),
+          Effect.provideService(ManagedCodexBootId, Effect.succeed("old boot")),
+          Effect.scoped,
+          Effect.result,
+        );
+        if (scenario === "release") {
+          expect(result._tag).toBe("Success");
+          if (result._tag === "Success") expect(result.success).toBe("session finished");
+        } else {
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure") expect(result.failure._tag).toBe("ManagedCodexLockError");
+        }
+        expect(cleanupAttempts).toBe(1);
+        expect((yield* fs.readDirectory(root)).length).toBe(1);
+        yield* assertManagedCodexIdle(root).pipe(
+          Effect.provideService(ManagedCodexBootId, Effect.succeed("new boot")),
+        );
+        expect(yield* fs.readDirectory(root)).toEqual([]);
+      }).pipe(Effect.scoped),
+  );
+
   it.effect.each(["before registration", "after registration"])(
     "rejects lost admission ownership %s",
     (scenario) =>
