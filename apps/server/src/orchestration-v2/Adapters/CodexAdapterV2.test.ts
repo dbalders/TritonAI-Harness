@@ -855,6 +855,95 @@ describe("CodexAdapterV2 process spawning", () => {
     ),
   );
 
+  it.effect.each(["", "codex", "~"])(
+    "leases the same managed executable it spawns for setting '%s'",
+    (configured) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const platform = yield* HostProcess.Platform;
+        const home = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "codex-factory-lease-" }),
+        );
+        const runtimeRoot = path.join(home, ".agents", "ucsd", "runtime", "codex");
+        const binary = path.join(
+          runtimeRoot,
+          "openai-codex-0.146.0",
+          ...(platform === "win32" ? ["codex.cmd"] : ["bin", "codex"]),
+        );
+        yield* fs.makeDirectory(path.dirname(binary), { recursive: true });
+        yield* fs.writeFileString(binary, "managed launcher");
+        yield* fs.chmod(binary, 0o755);
+        let spawns = 0;
+        let spawnedManagedBinary = false;
+        let leasesAtSpawn = 0;
+        let spawnReceipt: unknown;
+        const spawner = ChildProcessSpawner.make((command) =>
+          Effect.gen(function* () {
+            spawns += 1;
+            if (ChildProcess.isStandardCommand(command)) {
+              spawnReceipt = {
+                command: command.command,
+                args: command.args,
+                shell: command.options.shell,
+              };
+              spawnedManagedBinary =
+                command.command === binary ||
+                (platform === "win32" &&
+                  command.options.shell === true &&
+                  command.command
+                    .replaceAll("^", "")
+                    .toLowerCase()
+                    .startsWith(`"${binary.toLowerCase()}" `));
+            }
+            const entries = yield* fs.readDirectory(runtimeRoot);
+            leasesAtSpawn = entries.filter((entry) =>
+              entry.startsWith(".tritonai-codex-session."),
+            ).length;
+            return yield* PlatformError.systemError({
+              _tag: "NotFound",
+              module: "ChildProcess",
+              method: "spawn",
+            });
+          }),
+        );
+        const factory = yield* CodexAdapterV2.CodexAppServerClientFactory.pipe(
+          Effect.provide(CodexAdapterV2.layerAppServerClientFactory),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        );
+        yield* factory
+          .open({
+            instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+            threadId: ThreadId.make("thread-managed-launch-path"),
+            providerSessionId: ProviderSessionId.make("session-managed-launch-path"),
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+            settings: {
+              ...DEFAULT_CODEX_SETTINGS,
+              binaryPath: configured === "~" ? `~/${path.relative(home, binary)}` : configured,
+            },
+            environment: {
+              ...(yield* HostProcess.Environment),
+              PATH: path.dirname(binary),
+              PATHEXT: ".CMD;.EXE;.BAT;.COM",
+            },
+          })
+          .pipe(Effect.provideService(HostProcess.HomeDirectory, home), Effect.scoped, Effect.exit);
+        assert.equal(spawns, 1);
+        assert.equal(leasesAtSpawn, 1, JSON.stringify(spawnReceipt));
+        assert.isTrue(spawnedManagedBinary, JSON.stringify({ binary, spawnReceipt }));
+        assert.deepEqual(
+          (yield* fs.readDirectory(runtimeRoot)).filter((entry) =>
+            entry.startsWith(".tritonai-codex-session."),
+          ),
+          [],
+        );
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("launches the app-server with the configured launch arguments", () =>
     Effect.gen(function* () {
       const spawnedArgs: Array<ReadonlyArray<string>> = [];
@@ -916,7 +1005,10 @@ describe("CodexAdapterV2 process spawning", () => {
         assert.ok(args.includes("model_providers.ucsd.supports_websockets=false"));
         assert.ok(args.includes("features.enable_request_compression=false"));
       }
-    }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provide(NodeServices.layer),
+    ),
   );
 
   it.effect("expands ~ in the configured binary path before spawning", () =>
