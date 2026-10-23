@@ -882,7 +882,10 @@ describe("CodexAdapterV2 process spawning", () => {
             spawns += 1;
             if (ChildProcess.isStandardCommand(command)) {
               spawnedManagedBinary =
-                command.command === binary || command.args.some((arg) => arg.includes(binary));
+                command.command === binary ||
+                (platform === "win32" &&
+                  command.options.shell === true &&
+                  command.command.replaceAll("^", "").startsWith(`"${binary}" `));
             }
             const entries = yield* fs.readDirectory(runtimeRoot);
             leasesAtSpawn = entries.filter((entry) =>

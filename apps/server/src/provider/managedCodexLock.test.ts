@@ -159,6 +159,23 @@ it.layer(NodeServices.layer)("managed Codex activation ownership", (it) => {
       expect(yield* fs.exists(lease)).toBe(false);
     }).pipe(Effect.scoped),
   );
+  it.effect("retains a recorded live child even when the boot identity differs", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "codex-live-boot-test-" });
+      const boot = NodeCrypto.createHash("sha256").update("old boot").digest("hex");
+      const lease = path.join(root, `.tritonai-codex-session.999999.${boot}.recorded`);
+      yield* fs.makeDirectory(lease);
+      yield* fs.writeFileString(path.join(lease, "child.pid"), String(NodeProcess.pid));
+      const result = yield* withManagedCodexLock(root, assertManagedCodexIdle(root)).pipe(
+        Effect.provideService(ManagedCodexBootId, Effect.succeed("different boot")),
+        Effect.result,
+      );
+      expect(result._tag).toBe("Failure");
+      expect(yield* fs.exists(lease)).toBe(true);
+    }).pipe(Effect.scoped),
+  );
   it.effect.each(["compromised heartbeat", "replacement before heartbeat"])(
     "preserves a peer engine after %s",
     (scenario) =>
@@ -227,3 +244,4 @@ it.layer(NodeServices.layer)("managed Codex activation ownership", (it) => {
 });
 // @effect-diagnostics nodeBuiltinImport:off - Regression fixtures identify retained leases across boots.
 import * as NodeCrypto from "node:crypto";
+import * as NodeProcess from "node:process";

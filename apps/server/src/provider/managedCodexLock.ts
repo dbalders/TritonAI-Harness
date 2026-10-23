@@ -133,6 +133,27 @@ export const withManagedCodexLock = <A, E, R>(runtimeRoot: string, task: Effect.
   );
 
 const SESSION_PREFIX = ".tritonai-codex-session.";
+// SystemBootEnvironmentInformation (90) returns the kernel's boot GUID, independent of wall time.
+// Layout: https://github.com/winsiderss/phnt/blob/master/ntexapi.h
+const WINDOWS_BOOT_ID_COMMAND = `
+$ErrorActionPreference = 'Stop'
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class TritonAIBootIdentity {
+ [DllImport("ntdll.dll")] private static extern int NtQuerySystemInformation(int kind, [Out] byte[] data, int length, out int returned);
+ public static string Read() {
+  byte[] data = new byte[32]; int returned;
+  int status = NtQuerySystemInformation(90, data, data.Length, out returned);
+  if (status != 0 || returned < 16) throw new InvalidOperationException("Boot identity unavailable");
+  byte[] identity = new byte[16]; Array.Copy(data, identity, identity.Length);
+  Guid id = new Guid(identity);
+  if (id == Guid.Empty) throw new InvalidOperationException("Boot identity unavailable");
+  return id.ToString("D");
+ }
+}
+'@
+[TritonAIBootIdentity]::Read()`;
 const bootIds = new Map<NodeJS.Platform, Promise<string | null>>();
 const readBootId = Effect.fn("readManagedCodexBootId")(function* () {
   const platform = yield* HostProcessPlatform;
@@ -162,13 +183,7 @@ const readBootId = Effect.fn("readManagedCodexBootId")(function* () {
             const args =
               platform === "darwin"
                 ? ["-n", "kern.bootsessionuuid"]
-                : [
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')",
-                  ];
+                : ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_BOOT_ID_COMMAND];
             NodeChildProcess.execFile(
               command,
               args,
@@ -217,8 +232,9 @@ export const assertManagedCodexIdle = Effect.fn("assertManagedCodexIdle")(functi
       .readFileString(path.join(runtimeRoot, entry, "child.pid"))
       .pipe(Effect.orElseSucceed(() => null));
     // A dead owner with an unfinished PID handoff remains protected until the next verified boot.
+    // A recorded live PID always wins, even if boot evidence differs or a PID was reused.
     const alive =
-      !previousBoot && (child === null || (yield* Effect.sync(() => pidIsAlive(Number(child)))));
+      child === null ? !previousBoot : yield* Effect.sync(() => pidIsAlive(Number(child)));
     if (alive)
       return yield* new ManagedCodexLockError({
         message: "Codex sessions are running. The update was deferred; close them and try again.",

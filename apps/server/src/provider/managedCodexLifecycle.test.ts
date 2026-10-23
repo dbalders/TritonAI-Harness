@@ -21,11 +21,16 @@ import * as ProcessRunner from ${JSON.stringify(new URL("../processRunner.ts", i
 import { updateTritonAiManagedCodex, ManagedCodexApprovedVersion } from ${JSON.stringify(new URL("./managedCodexUpdate.ts", import.meta.url).href)};
 import { resolveManagedCodexBinary, leaseManagedCodexRuntime } from ${JSON.stringify(new URL("./managedCodexRuntime.ts", import.meta.url).href)};
 const [mode, binaryPath, homeDirectory, boundPid] = process.argv.slice(1);
-const { withManagedCodexLock } = await import(${JSON.stringify(new URL("./managedCodexLock.ts", import.meta.url).href)});
+const { withManagedCodexLock, ManagedCodexBootId } = await import(${JSON.stringify(new URL("./managedCodexLock.ts", import.meta.url).href)});
 process.on('message', () => {});
 const program = Effect.gen(function* () {
   const runner = yield* ProcessRunner.make();
   const fs = yield* FileSystem.FileSystem;
+  if (mode === 'boot-id') {
+    const identity = yield* yield* ManagedCodexBootId;
+    process.send({ phase: 'done', output: identity ?? '' });
+    return;
+  }
   if (mode === 'session' || mode === 'owner' || mode === 'unleased') {
     if (mode !== 'unleased') {
       const lease = yield* leaseManagedCodexRuntime(binaryPath, runner.run);
@@ -209,6 +214,25 @@ $null = [Threading.ManualResetEvent]::new($false).WaitOne()`;
 }
 
 describe("native managed Codex lifecycle", () => {
+  it("reads the same native boot GUID in separate processes", async () => {
+    const f = await fixture();
+    try {
+      const first = f.start("boot-id");
+      const left = await first.result;
+      await first.exited;
+      const second = f.start("boot-id");
+      const right = await second.result;
+      await second.exited;
+      expect(left).toMatchObject({
+        phase: "done",
+        output: expect.stringMatching(/^[a-f0-9-]{36}$/iu),
+      });
+      expect(right).toEqual(left);
+    } finally {
+      await f.close();
+    }
+  }, 120_000);
+
   it.each(["exit-replace", "release-replace"])(
     "preserves a replacement lock when its former owner exits (%s)",
     async (mode) => {
