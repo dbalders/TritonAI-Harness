@@ -6,7 +6,7 @@ import type {
 } from "@t3tools/contracts";
 import { compactDynamicToolOutput, toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
 import { workEntryIndicatesToolSuccess, type TimelineEntry } from "../session-logic";
-import type { GettingStartedEvent } from "./gettingStarted.logic";
+import { reduceGettingStarted, type GettingStartedEvent } from "./gettingStarted.logic";
 
 export interface GettingStartedRun {
   runId: string;
@@ -37,15 +37,15 @@ export function gettingStartedRunEvents(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
 }): GettingStartedEvent[] {
   const { state, environmentId, threadId, runs, timelineEntries } = input;
-  const tasks = state.tasks.filter(
-    (task) => task.environmentId === environmentId && task.threadId === threadId,
-  );
+  let progress = state;
   const events: GettingStartedEvent[] = [];
   for (const run of runs) {
     if (run.status !== "completed") continue;
-    const pending = tasks.filter(
+    const pending = progress.tasks.filter(
       (task) =>
-        !state.completed.includes(task.chapter) &&
+        task.environmentId === environmentId &&
+        task.threadId === threadId &&
+        !progress.completed.includes(task.chapter) &&
         task.runIds.length < 2 &&
         !task.runIds.includes(run.runId) &&
         task.messageIds.includes(run.userMessageId),
@@ -86,7 +86,7 @@ export function gettingStartedRunEvents(input: {
     const usedFile =
       userMessage?.kind === "message" &&
       (userMessage.message.attachments ?? []).some((attachment) => attachment.type === "file");
-    events.push({
+    const event: GettingStartedEvent = {
       type: "run",
       environmentId,
       threadId,
@@ -98,7 +98,13 @@ export function gettingStartedRunEvents(input: {
       connectedToolSucceeded,
       usedFile,
       generation: state.generation,
-    });
+    };
+    // Rejected evidence can become usable later; do not queue a settings write for it.
+    const next = reduceGettingStarted(progress, event);
+    if (next !== progress) {
+      events.push(event);
+      progress = next;
+    }
   }
   return events;
 }

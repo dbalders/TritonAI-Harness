@@ -1,4 +1,7 @@
 import {
+  ChatAttachmentId,
+  MessageId,
+  RunId,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -14,6 +17,8 @@ import { describe, expect, it as baseIt, vi } from "vite-plus/test";
 
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { useOpenIdeaDraft } from "../components/ideas/useOpenIdeaDraft";
+import { useGettingStartedChatGuide } from "../components/onboarding/GettingStartedChatGuide";
+import type { TimelineEntry } from "../session-logic";
 import { GettingStartedHost } from "../components/onboarding/GettingStartedHost";
 import {
   __resetClientSettingsPersistenceForTests,
@@ -567,6 +572,106 @@ describe("preparation environment ownership", () => {
       expect(useComposerDraftStore.getState().getComposerDraft(DRAFT)).toBeNull();
       expect(mocks.router.state.location.href).toBe("/getting-started");
       expect(getClientSettings().gettingStarted.tasks).toEqual([]);
+    },
+  );
+});
+
+describe("chat evidence persistence", () => {
+  it.each(["files", "connected-work"] as const)(
+    "does not save rejected %s evidence on repeated renders",
+    async (chapter) => {
+      select(chapter);
+      let progress = reduceGettingStarted(getClientSettings().gettingStarted, {
+        type: "track",
+        chapter,
+        environmentId: ENVIRONMENT,
+        threadId: THREAD,
+        at: AT,
+        toolNames: chapter === "connected-work" ? ["microsoft365_mail_search"] : [],
+      });
+      progress = reduceGettingStarted(progress, {
+        type: "submitted",
+        environmentId: ENVIRONMENT,
+        threadId: THREAD,
+        messageId: "M1",
+      });
+      durable = { ...durable, gettingStarted: progress };
+      __setClientSettingsForTests(durable);
+      const user: Extract<TimelineEntry, { kind: "message" }> = {
+        id: "M1",
+        kind: "message",
+        createdAt: AT,
+        message: {
+          id: MessageId.make("M1"),
+          runId: RunId.make("R1"),
+          role: "user",
+          text: "Please help with this task",
+          streaming: false,
+          createdAt: AT,
+          updatedAt: AT,
+        },
+      };
+      let timelineEntries: TimelineEntry[] = [
+        user,
+        {
+          id: "answer",
+          kind: "message",
+          createdAt: AT,
+          message: {
+            id: MessageId.make("answer"),
+            runId: RunId.make("R1"),
+            role: "assistant",
+            text: "Please attach a file or connect mail first.",
+            streaming: false,
+            createdAt: AT,
+            updatedAt: AT,
+          },
+        },
+      ];
+      const guide = await mountHook(() =>
+        useGettingStartedChatGuide({
+          environmentId: ENVIRONMENT,
+          threadId: THREAD,
+          runs: [{ runId: "R1", status: "completed", userMessageId: "M1", startedAt: AT }],
+          run: null,
+          timelineEntries,
+          isWorking: false,
+          hasPendingApproval: false,
+          hasPendingQuestion: false,
+        }),
+      );
+      for (let render = 0; render < 4; render++) {
+        timelineEntries = timelineEntries.slice();
+        await guide.rerender();
+      }
+      expect(mocks.setClientSettings).not.toHaveBeenCalled();
+      expect(getClientSettings().gettingStarted).toBe(progress);
+      if (chapter === "files") {
+        timelineEntries = [
+          {
+            ...user,
+            message: {
+              ...user.message,
+              attachments: [
+                {
+                  type: "file",
+                  id: ChatAttachmentId.make("notes"),
+                  name: "notes.txt",
+                  mimeType: "text/plain",
+                  sizeBytes: 30,
+                },
+              ],
+            },
+          },
+          timelineEntries[1]!,
+        ];
+        await guide.rerender();
+        await act(async () => {});
+        expect(mocks.setClientSettings).toHaveBeenCalledOnce();
+        expect(durable.gettingStarted.completed).toContain("files");
+        await guide.rerender();
+        expect(mocks.setClientSettings).toHaveBeenCalledOnce();
+      }
     },
   );
 });

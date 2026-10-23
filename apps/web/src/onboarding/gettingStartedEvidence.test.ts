@@ -249,7 +249,7 @@ describe("connected work result evidence", () => {
     const state = task("connected-work");
     const events = observe(state, [run()], [message(), mailResult(output)]);
 
-    expect(events).toMatchObject([{ runId: "R1", connectedToolSucceeded: false }]);
+    expect(events).toEqual([]);
     expect(events.reduce(reduceGettingStarted, state)).toBe(state);
     expect(state.completed).toEqual([]);
   });
@@ -268,7 +268,7 @@ describe("connected work result evidence", () => {
       const state = task("connected-work");
       const events = observe(state, [run()], [message(), mailResult({}, { toolLifecycleStatus })]);
 
-      expect(events).toMatchObject([{ connectedToolSucceeded: false }]);
+      expect(events).toEqual([]);
       expect(events.reduce(reduceGettingStarted, state)).toBe(state);
     },
   );
@@ -291,7 +291,7 @@ describe("connected work result evidence", () => {
     };
     const events = observe(state, [run()], [message(), wrongRun, unrelated]);
 
-    expect(events).toMatchObject([{ connectedToolSucceeded: false }]);
+    expect(events).toEqual([]);
     expect(events.reduce(reduceGettingStarted, state)).toBe(state);
   });
 });
@@ -326,7 +326,7 @@ describe("file evidence belongs to the submitted request", () => {
       ],
     );
 
-    expect(events).toMatchObject([{ usedFile: false }]);
+    expect(events).toEqual([]);
     expect(events.reduce(reduceGettingStarted, state)).toBe(state);
   });
 });
