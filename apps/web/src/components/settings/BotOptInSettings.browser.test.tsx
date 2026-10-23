@@ -62,7 +62,7 @@ async function setupTest() {
   sessionStorage.clear();
   container = document.createElement("div");
   document.body.append(container);
-  root = await renderTest(null, { container, router: false });
+  root = await renderTest(null, { container });
 
   return {
     async [Symbol.asyncDispose]() {
@@ -216,4 +216,9 @@ it("also exposes the earlier pairing when the configured service is unavailable"
   );
   expect(container.textContent).toContain("Stop Bot tasks here");
   expect(config.stop).not.toHaveBeenCalled();
+  expect(container.querySelector('a[href="/settings/connections"]')?.textContent).toBe(
+    "Settings → Connections",
+  );
+  const messages = container.querySelector('[role="status"]')!.parentElement!;
+  expect(Array.from(messages.children).map((child) => child.tagName)).toEqual(["P", "P"]);
 });

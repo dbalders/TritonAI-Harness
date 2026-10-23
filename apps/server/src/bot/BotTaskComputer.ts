@@ -112,10 +112,12 @@ const transferRetryDelay = (attempt: number) =>
   Math.min(30 * 60_000, 30_000 * 2 ** Math.min(attempt - 1, 16));
 /** Retry uploads for one day after capturing the completed turn, then report the missing files. */
 const OUTPUT_RETRY_WINDOW_MS = 24 * 3_600_000;
-/** Input retries must finish well inside the original two-hour claim. */
+/** Input retries have their own short window and cannot outlive a confirmed claim lease. */
 const INPUT_RETRY_WINDOW_MS = 30 * 60_000;
 const INPUT_RETRY_EXPIRED =
   "The file download retry window ended. Nothing ran. Ask your bot to try this assignment again.";
+/** Only authoritative service reason codes can retire a never-started claim. */
+const PERMANENT_PROGRESS_REFUSALS = new Set(["claim-expired", "claim-invalid", "binding-mismatch"]);
 const PROJECT_GONE = "The project for TritonAI Bot tasks no longer exists.";
 const WORKSPACE_CHANGED = "The assignment workspace changed before dispatch.";
 
@@ -210,6 +212,8 @@ const Held = Schema.Struct({
   claimedAt: Schema.String,
   /** Negotiated per claim; absent legacy claims never publish fenced progress. */
   progressVersion: Schema.optional(Schema.Literal(1)),
+  /** Local receipt time plus the service's remaining lease, never inferred from accepted:true. */
+  progressLeaseExpiresAt: Schema.optional(Schema.Number),
   startedAt: Schema.optional(Schema.String),
   started: Schema.Boolean,
   outcome: Schema.NullOr(Outcome),
@@ -284,6 +288,12 @@ const RecoveryReceipt = Schema.Struct({
 const RecoveryReceiptJson = Schema.fromJsonString(RecoveryReceipt);
 const encodeRecoveryReceipt = Schema.encodeEffect(RecoveryReceiptJson);
 const decodeRecoveryReceipt = Schema.decodeUnknownEffect(RecoveryReceiptJson);
+
+function claimLeaseExpiresAt(task: typeof Held.Type): number {
+  return task.progressVersion === 1 && task.progressLeaseExpiresAt !== undefined
+    ? task.progressLeaseExpiresAt
+    : Date.parse(task.claimedAt) + LEASE_SECONDS * 1000;
+}
 
 function recoveryReceiptKey(stored: Stored, task: HeldTask): string {
   return `tritonai-bot-result-recovery-${NodeCrypto.createHash("sha256")
@@ -1182,7 +1192,7 @@ export const make = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const inputRetryUntil = Math.min(
           held.inputRetryUntil ?? now + INPUT_RETRY_WINDOW_MS,
-          Date.parse(held.claimedAt) + LEASE_SECONDS * 1000,
+          claimLeaseExpiresAt(held),
         );
         if (now < inputRetryUntil) {
           const transferFailures = (held.transferFailures ?? 0) + 1;
@@ -1387,7 +1397,7 @@ export const make = Effect.gen(function* () {
       !task.started &&
       task.outcome === null &&
       task.inputRetryUntil !== undefined &&
-      now >= Math.min(task.inputRetryUntil, Date.parse(task.claimedAt) + LEASE_SECONDS * 1000)
+      now >= Math.min(task.inputRetryUntil, claimLeaseExpiresAt(task))
         ? {
             ...task,
             assignment: undefined,
@@ -1407,6 +1417,7 @@ export const make = Effect.gen(function* () {
     let reachable = true;
     const rejectedProgress = new Map<string, string>();
     const refusedProgress = new Set<string>();
+    const confirmedLeases = new Map<string, number>();
     // Publish terminal progress before final delivery removes its active journal entry.
     if (initial.active) {
       const publishable = new Set(
@@ -1415,6 +1426,7 @@ export const make = Effect.gen(function* () {
       const tasks = (yield* readProgress(initial, now)).filter((task) =>
         publishable.has(task.taskId),
       );
+      const sentAt = yield* Clock.currentTimeMillis;
       const reply = yield* post(`${initial.apiUrl}/harness/heartbeat`, workerHeaders(initial), {
         capabilities: BOT_TASK_CAPABILITIES,
         ...report,
@@ -1426,6 +1438,7 @@ export const make = Effect.gen(function* () {
         return;
       }
       reachable = Option.isSome(reply) && reply.value.status === 200;
+      const receivedAt = yield* Clock.currentTimeMillis;
       if (reachable && Option.isSome(reply) && reply.value.json.tasks !== undefined) {
         const acknowledgements = Array.isArray(reply.value.json.tasks)
           ? reply.value.json.tasks
@@ -1456,9 +1469,23 @@ export const make = Effect.gen(function* () {
               typeof ack === "object" &&
               ack !== null &&
               "accepted" in ack &&
-              ack.accepted === false
+              ack.accepted === false &&
+              "reasonCode" in ack &&
+              typeof ack.reasonCode === "string" &&
+              PERMANENT_PROGRESS_REFUSALS.has(ack.reasonCode)
             )
               refusedProgress.add(task.taskId);
+          } else if (
+            "leaseSeconds" in ack &&
+            typeof ack.leaseSeconds === "number" &&
+            Number.isInteger(ack.leaseSeconds) &&
+            ack.leaseSeconds >= 0 &&
+            ack.leaseSeconds <= LEASE_SECONDS
+          ) {
+            // Duplicate observations can be accepted without renewal. Only the
+            // server's bounded remaining lease may extend the durable deadline.
+            const requestElapsed = Math.max(0, receivedAt - sentAt);
+            confirmedLeases.set(task.taskId, receivedAt + ack.leaseSeconds * 1000 - requestElapsed);
           }
         }
       }
@@ -1468,8 +1495,13 @@ export const make = Effect.gen(function* () {
           : { state: "error", message: "Could not reach TritonAI Bot. Retrying." },
       );
     }
-    const heldAfterRefusal = initial.held.map((task) =>
-      !task.started && task.outcome === null && refusedProgress.has(task.taskId)
+    const heldAfterRefusal = initial.held.map((original) => {
+      const leaseExpiresAt = confirmedLeases.get(original.taskId);
+      const task =
+        leaseExpiresAt !== undefined && original.progressVersion === 1
+          ? { ...original, progressLeaseExpiresAt: leaseExpiresAt }
+          : original;
+      return !task.started && task.outcome === null && refusedProgress.has(task.taskId)
         ? {
             ...task,
             assignment: undefined,
@@ -1481,11 +1513,11 @@ export const make = Effect.gen(function* () {
                 "Your Bot could not confirm this assignment. Nothing ran. Ask your bot to try again.",
             },
           }
-        : task,
-    );
+        : task;
+    });
     if (heldAfterRefusal.some((task, index) => task !== initial.held[index])) {
-      // A refused unstarted assignment can be settled safely. An uncertain dispatch
-      // (started:true) and a missing acknowledgement must keep their existing gate.
+      // Persist confirmed lease bounds and permanent unstarted refusals. Retryable,
+      // unknown and old text-only refusals retain the gate, as does uncertain dispatch.
       initial = { ...initial, held: heldAfterRefusal };
       yield* writeStored(initial);
     }

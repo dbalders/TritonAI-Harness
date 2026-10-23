@@ -25,7 +25,10 @@ vi.mock("../../state/environments", async (original) => ({
 }));
 vi.mock("../../state/server", async (original) => ({
   ...(await original<typeof import("../../state/server")>()),
-  serverEnvironment: { stopBotTaskComputer: {} },
+  serverEnvironment: { stopBotTaskComputer: {}, botTaskComputer: vi.fn() },
+}));
+vi.mock("../../state/query", () => ({
+  useEnvironmentQuery: () => ({ data: null, refresh: vi.fn() }),
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => config.stop }));
 vi.mock("./settingsSearch", () => ({ searchableSetting: () => ({ title: "Bot service" }) }));

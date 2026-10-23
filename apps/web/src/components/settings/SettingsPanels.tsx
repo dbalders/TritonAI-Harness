@@ -2065,7 +2065,7 @@ const EXPERIMENTAL_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
  * Features still being tried out. Each stays off, with no other entry point, until it is
  * turned on here.
  */
-function ExperimentalFeaturesSection() {
+export function ExperimentalFeaturesSection() {
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const navigate = useNavigate();

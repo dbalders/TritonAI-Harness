@@ -1,21 +1,12 @@
 import { useState } from "react";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 
-import {
-  useClientSettings,
-  useClientSettingsHydrated,
-  updateClientSettings,
-} from "../../hooks/useSettings";
-import { usePrimaryEnvironmentId } from "../../state/environments";
-import { serverEnvironment } from "../../state/server";
-import { useAtomCommand } from "../../state/use-atom-command";
+import { useClientSettings, updateClientSettings } from "../../hooks/useSettings";
+import { useBotTaskComputerControl } from "../../hooks/useBotTaskComputerControl";
 import {
   BUILD_DEFAULT_BOT_SERVICE_URL,
-  clearBotSessions,
   normalizeBotServiceUrl,
   resolveBotServiceUrl,
 } from "../dot/botService";
-import { DotClient, readDotSession } from "../dot/dotClient";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -23,13 +14,9 @@ import { searchableSetting } from "./settingsSearch";
 
 /** Where the personal TritonAI Bot lives. Changing it signs out of the previous service. */
 export function TritonAiBotSettings() {
-  const enabled = useClientSettings((settings) => settings.tritonAiBotEnabled);
-  const hydrated = useClientSettingsHydrated();
+  const { enabled, hydrated, serviceUrl: active, stopPairing } = useBotTaskComputerControl();
   const setting = useClientSettings((settings) => settings.tritonAiBotUrl);
   const updateSettings = updateClientSettings;
-  const environmentId = usePrimaryEnvironmentId();
-  const stop = useAtomCommand(serverEnvironment.stopBotTaskComputer, { reportFailure: false });
-  const active = resolveBotServiceUrl(setting);
   // null shows the saved address, so a change elsewhere is never hidden behind a stale edit.
   const [edit, setEdit] = useState<string | null>(null);
   const draft = edit ?? active ?? "";
@@ -42,24 +29,14 @@ export function TritonAiBotSettings() {
     setBusy(true);
     try {
       if (resolveBotServiceUrl(value) !== active) {
-        if (!environmentId)
-          throw new Error("Connect to your Harness to stop Bot tasks before changing services.");
-        const session = active ? readDotSession(sessionStorage, active) : null;
-        const result = await stop({
-          environmentId,
-          input: { apiUrl: active, ownerToken: session?.ownerToken ?? null },
-        });
-        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-        if (active && session) await new DotClient(active).signOut(session).catch(() => undefined);
-        clearBotSessions(sessionStorage);
+        await stopPairing();
       }
       await updateSettings({ tritonAiBotUrl: value });
       setEdit(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not change the Bot service.");
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   };
   const save = () => {
     if (!draft.trim()) return void apply(null);

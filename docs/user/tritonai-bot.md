@@ -23,8 +23,9 @@ results may finish. Your cloud bot and Microsoft permissions remain; use the bot
 pause control and Microsoft connections page to manage those separately.
 
 An earlier Nightly may have saved a task-computer pairing before this switch
-existed. Experimental settings warns when that pairing remains active while
-Bot is off or unavailable. Choose **Stop Bot tasks here** to stop new assignments;
+existed. A notice in the main window warns when that pairing remains active while
+Bot is off or unavailable, even with the sidebar hidden or Experimental settings
+collapsed. Choose **Stop Bot tasks here** to stop new assignments;
 running work and saved result delivery can finish.
 
 ## Chatting with your bot
