@@ -58,12 +58,14 @@ interface PickerItem {
 }
 
 interface DraftHeroHeadlineProps {
+  readonly guidedTask?: boolean;
   readonly draftId: DraftId | null;
   readonly activeProjectRef: ScopedProjectRef | null;
   readonly activeProjectTitle: string | null;
 }
 
 export function DraftHeroHeadline({
+  guidedTask = false,
   draftId,
   activeProjectRef,
   activeProjectTitle,
@@ -386,7 +388,7 @@ export function DraftHeroHeadline({
   const headingLabel = isScratchDraft
     ? "What should we work on?"
     : hasResolvedProject
-      ? `What should we build in ${activeProjectDisplayName}?`
+      ? `What should we ${guidedTask ? "work on" : "build"} in ${activeProjectDisplayName}?`
       : canChooseProject
         ? `${activeProjectDisplayName ?? "Choose a project"} to start`
         : "Add a project to start";
@@ -427,7 +429,9 @@ export function DraftHeroHeadline({
         {isScratchDraft ? (
           <>What should we work on?</>
         ) : hasResolvedProject ? (
-          <>What should we build in {projectSelector}?</>
+          <>
+            What should we {guidedTask ? "work on" : "build"} in {projectSelector}?
+          </>
         ) : canChooseProject ? (
           <>{projectSelector} to start</>
         ) : (

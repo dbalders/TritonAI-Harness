@@ -22,6 +22,7 @@ import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { RecordSkillHost } from "../components/RecordSkill";
 import { KeybindingsConfigWarning } from "../components/KeybindingsConfigWarning";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
+import { GettingStartedHost } from "../components/onboarding/GettingStartedHost";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
@@ -224,6 +225,7 @@ function RootRouteView() {
     <CommandPalette>
       <AppSidebarLayout>
         <Outlet />
+        <GettingStartedHost />
       </AppSidebarLayout>
     </CommandPalette>
   );

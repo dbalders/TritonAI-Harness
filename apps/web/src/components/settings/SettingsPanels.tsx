@@ -1,4 +1,6 @@
 import { ComputerUseSetting } from "./ComputerUseSetting";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import { openGettingStarted } from "../../onboarding/gettingStartedState";
 import { SettingsGroup } from "./SettingsGroup";
 import {
   useScopedSettingsWriteAllowed,
@@ -2205,6 +2207,7 @@ function ExperimentalFeaturesSection() {
 }
 
 export function GeneralSettingsPanel() {
+  const guideEnvironmentId = usePrimaryEnvironmentId();
   const modifierLabel = isMacPlatform(navigator.platform) ? "⌘" : "Ctrl";
   const sendShortcutOptions = [
     { value: "enter", label: "Enter" },
@@ -2301,6 +2304,21 @@ export function GeneralSettingsPanel() {
   return (
     <SettingsPageContainer>
       <ProjectDefaultsSettings category="general" />
+      <SettingsRow
+        {...searchableSetting("getting-started")}
+        description="Learn how to talk to AI, connect your work, use files, and explore the app at your own pace."
+        control={
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (guideEnvironmentId) void openGettingStarted(guideEnvironmentId);
+            }}
+          >
+            Open guide
+          </Button>
+        }
+      />
       <SettingsSection id="organization" title="Organization">
         <SettingsRow
           {...searchableSetting("project-grouping")}
@@ -2967,7 +2985,9 @@ export function GeneralSettingsPanel() {
           }
         />
 
-        <ComputerUseSetting />
+        <div data-getting-started-target="computer-use">
+          <ComputerUseSetting />
+        </div>
 
         <SettingsRow
           {...searchableSetting("continue-threads-after-server-update")}

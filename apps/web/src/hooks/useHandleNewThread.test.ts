@@ -312,6 +312,24 @@ describe.each([
     expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])(
+    "cancels an app-owned draft while defaults load (reuse: %s)",
+    async (reuse) => {
+      testState.reset(reuse ? draft : null);
+      let current = true;
+      const pendingOpen = useNewThreadHandler()(
+        { environmentId: "environment-ssh", projectId: "project-remote" } as never,
+        { isCurrent: () => current },
+      );
+      current = false;
+      testState.completeProjectFileRead(null);
+      await expect(pendingOpen).resolves.toBeNull();
+      expect(testState.router.navigate).not.toHaveBeenCalled();
+      expect(testState.draftStore.setLogicalProjectDraftThreadId).not.toHaveBeenCalled();
+      expect(testState.draftStore.setDraftThreadContext).not.toHaveBeenCalled();
+    },
+  );
+
   it("abandons a delayed draft open when the project is removed meanwhile", async () => {
     testState.reset(draft);
     const pendingOpen = useNewThreadHandler()(

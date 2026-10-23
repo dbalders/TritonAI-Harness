@@ -62,6 +62,7 @@ function Main({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-chat-composer-main-surface="true"
+      data-getting-started-target="composer"
       className={cn(
         "group relative z-10 rounded-3xl p-px",
         // The host also wraps shoulder tabs, so its backdrop would extend above the input.

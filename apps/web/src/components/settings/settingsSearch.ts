@@ -627,6 +627,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "getting-started",
+    title: "Getting started",
+    to: "/settings/general",
+    searchTerms: ["onboarding tutorial learn assistant chapters outlook gmail ideas computer use"],
+  },
+  {
     id: "experimental-guided-tour",
     title: "Guided tour (experimental)",
     to: "/settings/general",

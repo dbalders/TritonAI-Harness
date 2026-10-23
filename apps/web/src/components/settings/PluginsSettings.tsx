@@ -3,6 +3,7 @@ import type {
   IntegrationSummary,
   IntegrationsListResult,
 } from "@t3tools/contracts";
+import { GettingStartedContextHint } from "../onboarding/GettingStartedContextHint";
 import {
   squashAtomCommandFailure,
   type AtomCommandResult,
@@ -478,6 +479,11 @@ function IntegrationCard({
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded}>
       <article
+        data-getting-started-target={
+          integration.id === "microsoft-365" || integration.id === "google-workspace"
+            ? "connections"
+            : undefined
+        }
         className="border-t border-border/60 p-5 first:border-t-0 sm:p-6"
         aria-labelledby={`${integration.id}-title`}
       >
@@ -835,6 +841,7 @@ export function PluginsSettingsPanel() {
       const result = unwrap(await listCommand({ environmentId: targetEnvironmentId, input: {} }));
       if (environmentIdRef.current !== targetEnvironmentId) return;
       setData(result);
+      window.dispatchEvent(new Event("getting-started:connections-changed"));
       setErrors((current) => {
         const { [PANEL_ERROR]: _, ...rest } = current;
         return rest;
@@ -884,6 +891,7 @@ export function PluginsSettingsPanel() {
             item.id === id ? result.integration : item,
           ),
         }));
+        window.dispatchEvent(new Event("getting-started:connections-changed"));
         if (result.integration.connectionState === "connected") {
           setConnectionAttentionState((current) => clearOwnedConnectionAttention(current, id));
         }
@@ -1009,6 +1017,7 @@ export function PluginsSettingsPanel() {
           const result = unwrap(await command);
           if (environmentIdRef.current !== targetEnvironmentId) return;
           setData(result);
+          window.dispatchEvent(new Event("getting-started:connections-changed"));
           // First-time installation is also represented by the "enable" action kind above.
           if (kind === "enable") {
             const updated = result.integrations.find(({ id }) => id === integration.id);
@@ -1112,6 +1121,7 @@ export function PluginsSettingsPanel() {
         );
         if (environmentIdRef.current !== targetEnvironmentId) return;
         setData(result);
+        window.dispatchEvent(new Event("getting-started:connections-changed"));
         const updated = result.integrations.find(({ id }) => id === integration.id);
         const updatedCapability = updated?.capabilities.find(({ id }) => id === capability);
         setConnectionAttentionState((current) =>
@@ -1164,6 +1174,7 @@ export function PluginsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <GettingStartedContextHint chapters={["connect", "connected-work"]} />
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {connectionAnnouncement}
       </p>

@@ -1,7 +1,6 @@
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   DEFAULT_SERVER_SETTINGS,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
@@ -32,7 +31,6 @@ import {
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -41,7 +39,6 @@ import {
 } from "react";
 
 import { useComposerDraftStore, type ComposerFileAttachment } from "../../composerDraftStore";
-import { waitForProject } from "../../firstRunOnboarding";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import {
   awaitAttachmentUploads,
@@ -50,8 +47,7 @@ import {
   releaseAttachmentUpload,
   startAttachmentUpload,
 } from "../../lib/attachmentUploadQueue";
-import { inferProjectTitleFromPath } from "../../lib/projectPaths";
-import { cn, newMessageId, newProjectId, newThreadId, randomUUID } from "../../lib/utils";
+import { cn, newMessageId, newThreadId, randomUUID } from "../../lib/utils";
 import {
   GOOGLE_WORKSPACE_ID,
   MICROSOFT_365_ID,
@@ -78,17 +74,13 @@ import {
   type GuidedTourStep,
 } from "../../onboarding/guidedTourState";
 import { resolveDefaultProviderModelSelection } from "../../providerInstances";
-import { useProjects, waitForThreadShell } from "../../state/entities";
+import { waitForThreadShell } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-import { projectEnvironment } from "../../state/projects";
 import { EMPTY_SERVER_PROVIDERS, environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { buildThreadRouteParams } from "../../threadRoutes";
-import {
-  isTritonAiWorkspacePath,
-  resolveTritonAiFirstRunWorkspacePath,
-} from "../../tritonAiWorkspace";
+import { useTritonAiProject } from "../../onboarding/useTritonAiProject";
 import { resolveDesktopLocalFilePath } from "../chat/localFileAttachment";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -130,46 +122,6 @@ const PROVIDER_ACCOUNT: Record<OnboardingMailProvider, string> = {
  * copy promises, so it does not follow a broader remembered composer mode.
  */
 const TOUR_RUNTIME_MODE: RuntimeMode = "approval-required";
-
-/** Find the TritonAI folder's project, creating the folder on first use. */
-function useTritonAiProject(environmentId: EnvironmentId | null) {
-  const projects = useProjects();
-  const createProject = useAtomCommand(projectEnvironment.create, {
-    label: "guided tour project create",
-    reportFailure: false,
-  });
-  const existing = useMemo(
-    () =>
-      projects.find(
-        (project) =>
-          project.environmentId === environmentId && isTritonAiWorkspacePath(project.workspaceRoot),
-      ) ?? null,
-    [environmentId, projects],
-  );
-  // Remembers a project created here until the project list catches up, so a second
-  // run never tries to create the folder again.
-  const created = useRef<EnvironmentProject | null>(null);
-  return useCallback(async (): Promise<EnvironmentProject | null> => {
-    if (existing) return existing;
-    if (created.current?.environmentId === environmentId) return created.current;
-    if (!environmentId) return null;
-    const workspacePath = resolveTritonAiFirstRunWorkspacePath();
-    const projectId = newProjectId();
-    const result = await createProject({
-      environmentId,
-      input: {
-        projectId,
-        title: inferProjectTitleFromPath(workspacePath) || "TritonAI",
-        workspaceRoot: workspacePath,
-        createWorkspaceRootIfMissing: true,
-        defaultModelSelection: null,
-      },
-    });
-    if (result._tag === "Failure") return null;
-    created.current = await waitForProject({ environmentId, projectId, timeoutMs: 5_000 });
-    return created.current;
-  }, [createProject, environmentId, existing]);
-}
 
 /** Put their own file on the message: by path when this computer runs it, else uploaded. */
 async function attachOwnFile(

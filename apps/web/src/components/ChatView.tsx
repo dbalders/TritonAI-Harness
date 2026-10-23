@@ -251,6 +251,9 @@ import * as Cause from "effect/Cause";
 import { isElectron } from "../env";
 import { desktopLocalBackendId, isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useGuidedTourChatGuide } from "./onboarding/GuidedTourChatGuide";
+import { useGettingStartedChatGuide } from "./onboarding/GettingStartedChatGuide";
+import { recordGettingStartedSubmission } from "../onboarding/gettingStartedState";
+import { getClientSettings } from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import { useActiveThreadRef } from "../hooks/useActiveThreadRef";
@@ -7836,6 +7839,22 @@ export default function ChatView(props: ChatViewProps) {
     timelineEntries,
     send: sendGuidedTourMessage,
   });
+  const gettingStartedBannerItem = useGettingStartedChatGuide({
+    environmentId,
+    threadId: activeThread?.id ?? null,
+    run: activeLatestRun,
+    runs: (serverProjection?.runs ?? []).map((run) => ({
+      runId: run.id,
+      status: run.status,
+      userMessageId: run.userMessageId,
+      startedAt: run.startedAt ? DateTime.formatIso(run.startedAt) : null,
+      requestedAt: DateTime.formatIso(run.requestedAt),
+    })),
+    isWorking,
+    hasPendingApproval: pendingApprovals.length > 0,
+    hasPendingQuestion: pendingUserInputs.length > 0,
+    timelineEntries,
+  });
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
     const backgroundWorkItems = [
@@ -7843,6 +7862,7 @@ export default function ChatView(props: ChatViewProps) {
       goalBannerItem,
       backgroundWorkBannerItem,
       guidedTourBannerItem,
+      gettingStartedBannerItem,
     ].filter((item) => item !== null);
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
@@ -7917,6 +7937,7 @@ export default function ChatView(props: ChatViewProps) {
     childInputBannerItem,
     goalBannerItem,
     guidedTourBannerItem,
+    gettingStartedBannerItem,
     localCheckoutBranchMismatch,
     projectCloneBannerItem,
     showBranchMismatchBanner,
@@ -9412,6 +9433,7 @@ export default function ChatView(props: ChatViewProps) {
       composerAttachmentsSnapshot.map((attachment) => attachment.id),
     );
     const messageIdForSend = newMessageId();
+    const gettingStartedGenerationForSend = getClientSettings().gettingStarted.generation;
     const messageCreatedAt = new Date().toISOString();
     // A stale Claude session compacts before this message so the turn does not re-read the
     // old history. The message queues behind the /compact run, since steering into it is
@@ -10156,6 +10178,12 @@ export default function ChatView(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        recordGettingStartedSubmission({
+          environmentId,
+          threadId: threadIdForSend,
+          messageId: messageIdForSend,
+          generation: gettingStartedGenerationForSend,
+        });
         setKeepFullHistory(routeThreadKey, false);
         // The turn is under way and will spend quota, so that thread's limits
         // snapshot is stale. Uploads may have outlasted a navigation, so only
@@ -11815,6 +11843,7 @@ export default function ChatView(props: ChatViewProps) {
                         }
                       >
                         <DraftHeroHeadline
+                          guidedTask={gettingStartedBannerItem !== null}
                           draftId={draftId}
                           activeProjectRef={activeProjectRef}
                           activeProjectTitle={activeProject?.title ?? null}

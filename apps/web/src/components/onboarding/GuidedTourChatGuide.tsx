@@ -121,10 +121,23 @@ export function useGuidedTourChatGuide(
   input: GuidedTourChatGuideInput,
 ): ComposerBannerStackItem | null {
   const enabled = useClientSettings((settings) => settings.experimentalGuidedTourEnabled);
+  const integratedGuideActive = useClientSettings(
+    (settings) =>
+      settings.gettingStarted.startedAt !== null &&
+      !settings.gettingStarted.paused &&
+      settings.gettingStarted.environmentId === input.environmentId &&
+      settings.gettingStarted.tasks.some(
+        (task) =>
+          task.chapter === settings.gettingStarted.activeChapter &&
+          task.environmentId === input.environmentId &&
+          task.threadId === input.threadId,
+      ),
+  );
   const tour = useGuidedTourState();
   const [sending, setSending] = useState(false);
   const active =
     enabled &&
+    !integratedGuideActive &&
     !tour.chatGuideDismissed &&
     input.threadId !== null &&
     tour.taskThreadId === input.threadId &&

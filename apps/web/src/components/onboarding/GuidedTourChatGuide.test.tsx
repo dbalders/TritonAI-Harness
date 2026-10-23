@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { DEFAULT_GETTING_STARTED_PROGRESS, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -8,10 +8,41 @@ import { restartGuidedTour, updateGuidedTourState } from "../../onboarding/guide
 import type { TimelineEntry } from "../../session-logic";
 import { useGuidedTourChatGuide, type GuidedTourChatGuideInput } from "./GuidedTourChatGuide";
 
-const mocks = vi.hoisted(() => ({ enabled: true }));
+const mocks = vi.hoisted(() => ({
+  enabled: true,
+  integratedActive: false,
+  integratedThread: "tour-thread",
+}));
 vi.mock("../../hooks/useSettings", () => ({
-  useClientSettings: <T,>(select: (settings: { experimentalGuidedTourEnabled: boolean }) => T) =>
-    select({ experimentalGuidedTourEnabled: mocks.enabled }),
+  useClientSettings: <T,>(
+    select: (settings: {
+      experimentalGuidedTourEnabled: boolean;
+      gettingStarted: typeof DEFAULT_GETTING_STARTED_PROGRESS;
+    }) => T,
+  ) =>
+    select({
+      experimentalGuidedTourEnabled: mocks.enabled,
+      gettingStarted: {
+        ...DEFAULT_GETTING_STARTED_PROGRESS,
+        startedAt: mocks.integratedActive ? "2026-10-22T10:00:00Z" : null,
+        environmentId,
+        activeChapter: "conversation",
+        tasks: mocks.integratedActive
+          ? [
+              {
+                chapter: "conversation",
+                environmentId,
+                threadId: ThreadId.make(mocks.integratedThread),
+                after: "2026-10-22T10:00:00Z",
+                messageIds: [],
+                toolNames: [],
+                runIds: [],
+                checkedSource: false,
+              },
+            ]
+          : [],
+      },
+    }),
 }));
 vi.mock("@tanstack/react-router", () => ({
   Link: ({ children }: { readonly children: ReactNode }) => (
@@ -96,6 +127,8 @@ async function click(label: string) {
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.enabled = true;
+  mocks.integratedActive = false;
+  mocks.integratedThread = "tour-thread";
   restartGuidedTour();
   updateGuidedTourState({
     roleId: "finance",
@@ -118,6 +151,19 @@ describe("guided tour chat guide", () => {
     mocks.enabled = false;
     await render(baseInput());
     expect(container.textContent).toBe("");
+  });
+
+  it("lets the integrated guide own the conversation while it is active", async () => {
+    mocks.integratedActive = true;
+    await render(baseInput());
+    expect(container.textContent).toBe("");
+  });
+
+  it("keeps the experimental coach available when the integrated exercise belongs to another conversation", async () => {
+    mocks.integratedActive = true;
+    mocks.integratedThread = "another-guide-thread";
+    await render(baseInput());
+    expect(container.textContent).not.toBe("");
   });
 
   it("only appears in the conversation the tour started", async () => {

@@ -3,6 +3,7 @@
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { openGettingStarted } from "../onboarding/gettingStartedState";
 import {
   canCreateProjectInEnvironment,
   getCloneDestinationBrowsePath,
@@ -2229,6 +2230,17 @@ function OpenCommandPaletteDialog(props: {
     icon: <LightbulbIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/ideas" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:getting-started",
+    searchTerms: ["getting started", "onboarding", "guide", "tutorial", "chapters", "learn ai"],
+    title: "Open getting started",
+    icon: <LightbulbIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      if (primaryEnvironmentId) await openGettingStarted(primaryEnvironmentId);
     },
   });
 

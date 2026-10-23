@@ -14,6 +14,7 @@ import { Atom } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { APP_BASE_NAME } from "./branding";
+import { openGettingStarted } from "./onboarding/gettingStartedState";
 import { useComposerDraftStore } from "./composerDraftStore";
 import {
   useClientSettingsHydrated,
@@ -241,6 +242,7 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
           newDraftPrompt: TRITONAI_FIRST_RUN_PROMPT,
           replace: true,
         });
+        await openGettingStarted(primaryEnvironmentId);
         updateSettings({ tritonAiFirstRunOnboardingCompleted: true });
       } catch (error) {
         console.error("[first-run-onboarding] failed", error);

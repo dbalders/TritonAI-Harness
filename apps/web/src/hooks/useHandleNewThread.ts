@@ -89,11 +89,14 @@ export function useNewThreadHandler() {
         /** Seeds only a newly created draft; reused drafts keep their existing composer content. */
         newDraftPrompt?: string;
         replace?: boolean;
+        /** Cancels an app-owned draft request while project defaults are loading. */
+        isCurrent?: () => boolean;
       },
       // Which draft the thread ended up in, so a caller that has something to put in it — a
       // prepared checkout, a task to write — addresses that one rather than looking the project
       // up again and finding whichever draft it happens to hold.
     ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
+      if (options?.isCurrent?.() === false) return Promise.resolve(null);
       const projects = readProjects();
       const targetServerSettings =
         environmentServerConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
@@ -148,7 +151,9 @@ export function useNewThreadHandler() {
       // Removal can land while the project file is read; a draft opened
       // after that belongs to a project that no longer exists.
       const abandonedSinceRequest = () =>
-        routeChangedSinceRequest() || (project !== undefined && readProject(projectRef) === null);
+        options?.isCurrent?.() === false ||
+        routeChangedSinceRequest() ||
+        (project !== undefined && readProject(projectRef) === null);
       // The resolver applies project overrides and, until the server has
       // folded them, the aggregate's own legacy fields.
       const projectSettings = resolveProjectSettings(

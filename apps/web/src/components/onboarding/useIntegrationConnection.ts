@@ -114,6 +114,7 @@ function openSignIn(url: string | null) {
 export function useIntegrationConnection(
   integrationId: string,
   environmentId: EnvironmentId | null,
+  refreshKey = "",
 ): IntegrationConnection {
   const listCommand = useAtomCommand(serverEnvironment.listIntegrations, { reportFailure: false });
   const installCommand = useAtomCommand(serverEnvironment.installIntegration, {
@@ -129,7 +130,10 @@ export function useIntegrationConnection(
 
   // Everything is stored with the environment and plugin it belongs to, so switching
   // either shows that connection's own state, and coming back resumes a sign-in.
-  const key = environmentId === null ? null : `${environmentId}:${integrationId}`;
+  const key =
+    environmentId === null
+      ? null
+      : `${environmentId}:${integrationId}${refreshKey ? `:${refreshKey}` : ""}`;
   const [loaded, setLoaded] = useState<{
     readonly key: string;
     readonly integration: IntegrationSummary | null;
