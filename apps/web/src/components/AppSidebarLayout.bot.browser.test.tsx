@@ -1,7 +1,7 @@
 import "../index.css";
 import { act, render } from "../../test/render";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 import { Cause } from "effect";
 import {
   DEFAULT_CLIENT_SETTINGS,
@@ -126,6 +126,119 @@ function setup() {
   };
 }
 
+async function showNoticeDetails(notice: Element) {
+  await act(() => notice.querySelector<HTMLButtonElement>("button[aria-expanded]")!.click());
+}
+
+it.each(["unknown", "allowed"] as const)(
+  "keeps the %s warning while collapsed details let page actions receive pointer clicks",
+  async (permission) => {
+    using _test = setup();
+    state.settings = { ...state.settings!, tritonAiBotEnabled: permission === "unknown" };
+    state.local = {
+      state: permission === "unknown" ? "error" : "running",
+      apiUrl: permission === "unknown" ? null : currentService,
+    } as ServerBotTaskComputerStatus;
+    const settings = { ...state.settings };
+    const pairing = state.local;
+    const session = {
+      ownerToken: "synthetic-current-owner",
+      email: "own@example.test",
+      expiresAt: 4_000_000_000,
+    };
+    saveDotSession(sessionStorage, currentService, session);
+    using signOut = vi.spyOn(DotClient.prototype, "signOut");
+    using fetch = vi.spyOn(globalThis, "fetch");
+    const openBot = vi.fn();
+    const previousViewport = { width: window.innerWidth, height: window.innerHeight };
+    await page.viewport(1100, 780);
+    await using _viewport = {
+      [Symbol.asyncDispose]: () => page.viewport(previousViewport.width, previousViewport.height),
+    };
+    await using screen = await render(
+      <AppSidebarLayout>
+        <main className="min-w-0 flex-1 p-8 pt-48">
+          <div className="flex justify-end">
+            <button type="button" onClick={openBot}>
+              Open TritonAI Bot
+            </button>
+          </div>
+        </main>
+      </AppSidebarLayout>,
+      { router: permission === "unknown" ? "/settings/tritonai-bot" : "/" },
+    );
+    await userEvent.click(screen.container.querySelector('[aria-label="Toggle main sidebar"]')!);
+    expect(
+      screen.container
+        .querySelector('[data-slot="sidebar-wrapper"]')
+        ?.getAttribute("data-sidebar-state"),
+    ).toBe("collapsed");
+    const notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
+    const summary = notice.querySelector('[role="status"]')!;
+    expect(summary.textContent).toContain(
+      permission === "unknown" ? "Bot task permission is unknown" : "Bot tasks are allowed",
+    );
+    const toggle = screen.getByRole("button", { name: "Show details", exact: true }).element();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const detailsId = toggle.getAttribute("aria-controls")!;
+    expect(document.getElementById(detailsId)?.hidden).toBe(true);
+    expect(notice.querySelectorAll("button")).toHaveLength(1);
+    const pageAction = screen.getByRole("button", { name: "Open TritonAI Bot", exact: true });
+    const actionRect = pageAction.element().getBoundingClientRect();
+    expect(actionRect.width).toBeGreaterThan(0);
+    expect(actionRect.height).toBeGreaterThan(0);
+    const hitPageAction = () =>
+      document.elementFromPoint(
+        actionRect.left + actionRect.width / 2,
+        actionRect.top + actionRect.height / 2,
+      );
+    expect(hitPageAction()).toBe(pageAction.element());
+    await userEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.textContent).toBe("Hide details");
+    const disclosure = screen.getByText(/Stopping tasks here signs you out/).element();
+    const stop = screen.getByRole("button", { name: "Stop Bot tasks here", exact: true });
+    expect(disclosure.textContent).toContain("turns off Experimental Bot here");
+    expect(disclosure.textContent).toContain("stops new assignments for every client");
+    expect(disclosure.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      stop.element().getBoundingClientRect().top,
+    );
+    // The expanded notice really covers this control; collapsing must remove that obstruction.
+    expect(notice.contains(hitPageAction())).toBe(true);
+    await userEvent.keyboard("{Enter}");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(toggle);
+    expect(document.getElementById(detailsId)?.querySelector("button")).toBeNull();
+    expect(summary.getBoundingClientRect().height).toBeGreaterThan(0);
+    expect(hitPageAction()).toBe(pageAction.element());
+    await userEvent.click(pageAction);
+    expect(openBot).toHaveBeenCalledOnce();
+    await userEvent.click(toggle);
+    await userEvent.keyboard(" ");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await userEvent.keyboard("{Enter}");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await expect.element(stop).toBeEnabled();
+    expect(
+      screen
+        .getByText(/Stopping tasks here signs you out/)
+        .element()
+        .getBoundingClientRect().height,
+    ).toBeGreaterThan(0);
+    if (permission === "allowed")
+      await expect
+        .element(screen.getByRole("button", { name: "Turn on Experimental Bot" }))
+        .toBeEnabled();
+    expect(state.settings).toEqual(settings);
+    expect(state.local).toBe(pairing);
+    expect(readDotSession(sessionStorage, currentService)).toEqual(session);
+    expect(state.stop).not.toHaveBeenCalled();
+    expect(state.update).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
 it("shows and stops an earlier pairing in the real app layout while Experimental stays collapsed", async () => {
   using _test = setup();
   const fetch = vi.spyOn(globalThis, "fetch");
@@ -146,6 +259,7 @@ it("shows and stops an earlier pairing in the real app layout while Experimental
   expect(experimental.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
   expect(screen.container.querySelector('[aria-label="TritonAI Bot (experimental)"]')).toBeNull();
   const notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
+  await showNoticeDetails(notice);
   expect(notice.textContent).toContain("Bot tasks are allowed");
   expect(notice.closest("[data-app-sidebar]")).toBeNull();
   expect(getComputedStyle(notice).position).toBe("fixed");
@@ -153,7 +267,9 @@ it("shows and stops an earlier pairing in the real app layout while Experimental
   expect(state.stop).not.toHaveBeenCalled();
   expect(state.update).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
-  await act(async () => (notice.querySelector("button") as HTMLButtonElement).click());
+  await act(async () =>
+    (notice.querySelector("button:not([aria-expanded])") as HTMLButtonElement).click(),
+  );
   expect(state.stop).toHaveBeenCalledWith({
     environmentId: "own-harness",
     input: { apiUrl: earlierService, ownerToken: null },
@@ -196,7 +312,7 @@ it.each(["focus", "visibilitychange"])(
   },
 );
 
-it("keeps the global Stop visible with the main sidebar hidden, and recovers after a failed stop", async () => {
+it("keeps the global Stop reachable with the main sidebar hidden, and recovers after a failed stop", async () => {
   using _test = setup();
   saveDotSession(sessionStorage, currentService, {
     ownerToken: "synthetic-other-service-owner",
@@ -211,13 +327,20 @@ it("keeps the global Stop visible with the main sidebar hidden, and recovers aft
   );
   await userEvent.click(screen.container.querySelector('[aria-label="Toggle main sidebar"]')!);
   let notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
+  await showNoticeDetails(notice);
   expect(notice.getBoundingClientRect().width).toBeGreaterThan(0);
-  await act(async () => (notice.querySelector("button") as HTMLButtonElement).click());
+  await act(async () =>
+    (notice.querySelector("button:not([aria-expanded])") as HTMLButtonElement).click(),
+  );
   expect(notice.querySelector('[role="alert"]')?.textContent).toBe("Harness is offline");
-  expect((notice.querySelector("button") as HTMLButtonElement).disabled).toBe(false);
+  expect((notice.querySelector("button:not([aria-expanded])") as HTMLButtonElement).disabled).toBe(
+    false,
+  );
   expect(readDotSession(sessionStorage, currentService)).not.toBeNull();
   expect(state.update).not.toHaveBeenCalled();
-  await act(async () => (notice.querySelector("button") as HTMLButtonElement).click());
+  await act(async () =>
+    (notice.querySelector("button:not([aria-expanded])") as HTMLButtonElement).click(),
+  );
   notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
   expect(notice).toBeNull();
   expect(state.stop).toHaveBeenCalledTimes(2);
@@ -268,6 +391,7 @@ it("lets a second client enable Bot without stopping the shared current pairing,
     secondClient.container.querySelector('[aria-label="TritonAI Bot (experimental)"]'),
   ).toBeNull();
   const notice = secondClient.container.querySelector('aside[aria-label="Bot task permission"]')!;
+  await showNoticeDetails(notice);
   expect(notice.textContent).not.toMatch(/earlier|legacy/i);
   expect(notice.textContent).toContain("Experimental Bot is off in this app");
   expect(notice.closest("[data-app-sidebar]")).toBeNull();
@@ -310,6 +434,7 @@ it.each([false, true])(
     const experimental = screen.container.querySelector("#experimental-features")!;
     expect(experimental.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
     const notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
+    await showNoticeDetails(notice);
     expect(notice.textContent).toContain("permission on this Harness cannot currently be checked");
     expect(notice.textContent).toContain("Retrying automatically");
     expect(notice.textContent).not.toContain("Bot tasks are allowed");
@@ -391,13 +516,16 @@ it("discloses the enabled unknown-permission Stop effects before stopping, signi
     </AppSidebarLayout>,
   );
   const notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
+  await showNoticeDetails(notice);
   expect(notice.textContent).toContain("cannot currently be checked");
   expect(notice.textContent).toContain("signs you out of Bot in this app");
   expect(notice.textContent).toContain("turns off Experimental Bot here");
   expect(notice.textContent).toContain("stops new assignments for every client of this Harness");
   expect(notice.getBoundingClientRect().width).toBeGreaterThan(0);
   expect(effects).toEqual([]);
-  await act(async () => (notice.querySelector("button") as HTMLButtonElement).click());
+  await act(async () =>
+    (notice.querySelector("button:not([aria-expanded])") as HTMLButtonElement).click(),
+  );
   expect(state.stop).toHaveBeenCalledExactlyOnceWith({
     environmentId: "own-harness",
     input: { apiUrl: currentService, ownerToken: ownSession.ownerToken },
@@ -449,9 +577,10 @@ it.each(["refused", "unreachable"])(
       </AppSidebarLayout>,
     );
     const notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
+    await showNoticeDetails(notice);
     expect(notice.textContent).toContain("signs you out of Bot in this app");
     expect(notice.textContent).toContain("turns off Experimental Bot here");
-    const stop = notice.querySelector("button") as HTMLButtonElement;
+    const stop = notice.querySelector("button:not([aria-expanded])") as HTMLButtonElement;
     await act(async () => stop.click());
     expect(notice.querySelector('[role="alert"]')?.textContent).toBe("Could not stop Bot tasks");
     expect(notice.textContent).toContain("cannot currently be checked");
