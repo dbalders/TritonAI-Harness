@@ -21,7 +21,7 @@ export function useBotTaskComputerControl() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const serviceUrl = resolveBotServiceUrl(setting);
-  const earlierPairing = Boolean(
+  const hiddenPairing = Boolean(
     hydrated &&
     (!enabled || !serviceUrl) &&
     local &&
@@ -31,7 +31,7 @@ export function useBotTaskComputerControl() {
   const stopPairing = async () => {
     if (!environmentId)
       throw new Error("Connect to your Harness to stop Bot tasks before disabling it.");
-    // A legacy worker can belong to another service. Never forward this service's
+    // The worker can belong to another service. Never forward this service's
     // owner token to that worker; without its matching session, stop locally.
     const pairedUrl = local?.apiUrl ?? serviceUrl;
     const session = pairedUrl ? readDotSession(sessionStorage, pairedUrl) : null;
@@ -43,6 +43,11 @@ export function useBotTaskComputerControl() {
     refreshLocal();
     if (pairedUrl && session)
       await new DotClient(pairedUrl).signOut(session).catch(() => undefined);
+    if (serviceUrl && serviceUrl !== pairedUrl) {
+      const currentSession = readDotSession(sessionStorage, serviceUrl);
+      if (currentSession)
+        await new DotClient(serviceUrl).signOut(currentSession).catch(() => undefined);
+    }
     clearBotSessions(sessionStorage);
   };
   const change = async (next: boolean) => {
@@ -62,5 +67,16 @@ export function useBotTaskComputerControl() {
     }
     setBusy(false);
   };
-  return { enabled, hydrated, serviceUrl, earlierPairing, busy, error, change, stopPairing };
+  return {
+    enabled,
+    hydrated,
+    environmentId,
+    serviceUrl,
+    hiddenPairing,
+    busy,
+    error,
+    change,
+    stopPairing,
+    refreshLocal,
+  };
 }

@@ -1106,8 +1106,9 @@ export function createServerEnvironmentAtoms<R, E>(
     botTaskComputer: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:bot-task-computer",
       tag: WS_METHODS.serverGetBotTaskComputer,
-      // Check-ins and task progress happen in the background.
+      // An off worker needs discovery on mount/focus, not a poll on every client.
       refreshIntervalMs: 15_000,
+      isFinal: (status) => status.state === "off",
     }),
     allowBotTaskComputer: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:bot-task-computer-allow",

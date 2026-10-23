@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   stop: vi.fn(),
   update: vi.fn(),
   refresh: vi.fn(),
+  listeners: new Set<() => void>(),
 }));
 vi.mock("../hooks/useSettings", async (original) => ({
   ...(await original<typeof import("../hooks/useSettings")>()),
@@ -40,8 +41,11 @@ vi.mock("../state/environments", async (original) => ({
 }));
 vi.mock("../state/server", async (original) => {
   const source = await original<typeof import("../state/server")>();
+  const { Atom } = await import("effect/reactivity");
+  const { mergeWithDefaultKeybindings } = await import("@t3tools/shared/keybindings");
   return {
     ...source,
+    primaryServerKeybindingsAtom: Atom.make(mergeWithDefaultKeybindings([])),
     serverEnvironment: {
       ...source.serverEnvironment,
       stopBotTaskComputer: {},
@@ -49,10 +53,22 @@ vi.mock("../state/server", async (original) => {
     },
   };
 });
-vi.mock("../state/query", async (original) => ({
-  ...(await original<typeof import("../state/query")>()),
-  useEnvironmentQuery: () => ({ data: state.local, refresh: state.refresh }),
-}));
+vi.mock("../state/query", async (original) => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    ...(await original<typeof import("../state/query")>()),
+    useEnvironmentQuery: () => ({
+      data: useSyncExternalStore(
+        (listener) => {
+          state.listeners.add(listener);
+          return () => state.listeners.delete(listener);
+        },
+        () => state.local,
+      ),
+      refresh: state.refresh,
+    }),
+  };
+});
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: () => state.stop }));
 vi.mock("./settings/useScopedSettings", async (original) => ({
   ...(await original<typeof import("./settings/useScopedSettings")>()),
@@ -78,7 +94,8 @@ vi.mock("./SidebarStageBackdrop", async (original) => ({
 
 import { AppSidebarLayout } from "./AppSidebarLayout";
 import { ExperimentalFeaturesSection } from "./settings/SettingsPanels";
-import { saveDotSession, readDotSession } from "./dot/dotClient";
+import { BotOptInSettings } from "./settings/BotOptInSettings";
+import { DotClient, saveDotSession, readDotSession } from "./dot/dotClient";
 
 const currentService = "https://current.example.test";
 const earlierService = "https://earlier.example.test";
@@ -97,7 +114,9 @@ function setup() {
   state.update.mockReset();
   state.update.mockImplementation(async (patch) => Object.assign(state.settings!, patch));
   state.refresh.mockReset();
+  state.listeners.clear();
   sessionStorage.clear();
+  vi.spyOn(DotClient.prototype, "signOut").mockResolvedValue({ ok: true });
   return {
     [Symbol.dispose]() {
       vi.restoreAllMocks();
@@ -126,7 +145,7 @@ it("shows and stops an earlier pairing in the real app layout while Experimental
   expect(experimental.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
   expect(screen.container.querySelector('[aria-label="TritonAI Bot (experimental)"]')).toBeNull();
   const notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
-  expect(notice.textContent).toContain("Bot tasks are still allowed");
+  expect(notice.textContent).toContain("Bot tasks are allowed");
   expect(notice.closest("[data-app-sidebar]")).toBeNull();
   expect(getComputedStyle(notice).position).toBe("fixed");
   expect(notice.getBoundingClientRect().width).toBeGreaterThan(0);
@@ -142,6 +161,39 @@ it("shows and stops an earlier pairing in the real app layout while Experimental
   expect(screen.container.querySelector('aside[aria-label="Bot task permission"]')).toBeNull();
   expect(experimental.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
 });
+
+it.each(["focus", "visibilitychange"])(
+  "discovers a current pairing once on %s even with a second settings consumer mounted",
+  async (event) => {
+    using _test = setup();
+    state.local = { state: "off", apiUrl: null } as ServerBotTaskComputerStatus;
+    await using screen = await render(
+      <AppSidebarLayout>
+        <main>
+          <BotOptInSettings />
+        </main>
+      </AppSidebarLayout>,
+      { router: "/settings" },
+    );
+    expect(screen.container.querySelector('aside[aria-label="Bot task permission"]')).toBeNull();
+    expect(state.refresh).not.toHaveBeenCalled();
+    state.refresh.mockImplementation(() => {
+      state.local = { state: "idle", apiUrl: currentService } as ServerBotTaskComputerStatus;
+      for (const listener of state.listeners) listener();
+    });
+    using _visible = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    await act(() => (event === "focus" ? window : document).dispatchEvent(new Event(event)));
+    expect(state.refresh).toHaveBeenCalledOnce();
+    const notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
+    expect(notice.textContent).toContain("Bot tasks are allowed on this Harness");
+    expect(state.settings!.tritonAiBotEnabled).toBe(false);
+    expect(state.stop).not.toHaveBeenCalled();
+    expect(state.update).not.toHaveBeenCalled();
+    await screen.unmount();
+    await act(() => (event === "focus" ? window : document).dispatchEvent(new Event(event)));
+    expect(state.refresh).toHaveBeenCalledOnce();
+  },
+);
 
 it("keeps the global Stop visible with the main sidebar hidden, and recovers after a failed stop", async () => {
   using _test = setup();
@@ -169,4 +221,71 @@ it("keeps the global Stop visible with the main sidebar hidden, and recovers aft
   expect(notice).toBeNull();
   expect(state.stop).toHaveBeenCalledTimes(2);
   expect(state.settings!.tritonAiBotEnabled).toBe(false);
+});
+
+it("lets a second client enable Bot without stopping the shared current pairing, with Experimental closed and the sidebar hidden", async () => {
+  using _test = setup();
+  const pairing = { state: "running", apiUrl: currentService } as ServerBotTaskComputerStatus;
+  state.local = pairing;
+  const firstClientSettings = { ...state.settings!, tritonAiBotEnabled: true };
+  state.settings = firstClientSettings;
+  await using firstClient = await render(
+    <AppSidebarLayout>
+      <main>
+        <ExperimentalFeaturesSection />
+      </main>
+    </AppSidebarLayout>,
+    { router: "/settings" },
+  );
+  expect(firstClient.container.querySelector('aside[aria-label="Bot task permission"]')).toBeNull();
+  await firstClient.unmount();
+
+  // The second client's opt-in is independent; both clients see the same Harness pairing.
+  state.settings = { ...DEFAULT_CLIENT_SETTINGS, tritonAiBotUrl: currentService };
+  const session = {
+    ownerToken: "synthetic-second-client-owner",
+    email: "own@example.test",
+    expiresAt: 4_000_000_000,
+  };
+  saveDotSession(sessionStorage, currentService, session);
+  using signOut = vi.spyOn(DotClient.prototype, "signOut");
+  using fetch = vi.spyOn(globalThis, "fetch");
+  await using secondClient = await render(
+    <AppSidebarLayout>
+      <main>
+        <ExperimentalFeaturesSection />
+      </main>
+    </AppSidebarLayout>,
+    { router: "/settings" },
+  );
+  await userEvent.click(
+    secondClient.container.querySelector('[aria-label="Toggle main sidebar"]')!,
+  );
+  const experimental = secondClient.container.querySelector("#experimental-features")!;
+  expect(experimental.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
+  expect(
+    secondClient.container.querySelector('[aria-label="TritonAI Bot (experimental)"]'),
+  ).toBeNull();
+  const notice = secondClient.container.querySelector('aside[aria-label="Bot task permission"]')!;
+  expect(notice.textContent).not.toMatch(/earlier|legacy/i);
+  expect(notice.textContent).toContain("Experimental Bot is off in this app");
+  expect(notice.closest("[data-app-sidebar]")).toBeNull();
+  expect(notice.getBoundingClientRect().width).toBeGreaterThan(0);
+  await act(async () =>
+    Array.from(notice.querySelectorAll("button"))
+      .find((button) => button.textContent === "Turn on Experimental Bot")!
+      .click(),
+  );
+  expect(
+    secondClient.container.querySelector('aside[aria-label="Bot task permission"]'),
+  ).toBeNull();
+  expect(state.settings!.tritonAiBotEnabled).toBe(true);
+  expect(state.update).toHaveBeenCalledExactlyOnceWith({ tritonAiBotEnabled: true });
+  expect(firstClientSettings.tritonAiBotEnabled).toBe(true);
+  expect(state.local).toBe(pairing);
+  expect(readDotSession(sessionStorage, currentService)).toEqual(session);
+  expect(state.stop).not.toHaveBeenCalled();
+  expect(signOut).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(experimental.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
 });

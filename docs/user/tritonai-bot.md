@@ -22,11 +22,13 @@ This signs out and stops new assignments here. Running work and delivery of save
 results may finish. Your cloud bot and Microsoft permissions remain; use the bot's
 pause control and Microsoft connections page to manage those separately.
 
-An earlier Nightly may have saved a task-computer pairing before this switch
-existed. A notice in the main window warns when that pairing remains active while
-Bot is off or unavailable, even with the sidebar hidden or Experimental settings
-collapsed. Choose **Stop Bot tasks here** to stop new assignments;
-running work and saved result delivery can finish.
+Task permission belongs to the Harness, while the Experimental switch is separate
+in each app or browser. A notice in the main window shows when tasks are allowed
+while Bot is off or unavailable in this app, even with the sidebar hidden or
+Experimental settings collapsed. This includes permission saved by an earlier
+Nightly. Choose **Turn on Experimental Bot** to show Bot in this app without
+changing the pairing. **Stop Bot tasks here** stops new assignments for every
+client of this Harness; running work and saved result delivery can finish.
 
 ## Chatting with your bot
 

@@ -140,7 +140,7 @@ it.each(["idle", "running", "error"] as const)(
     await render();
     expect(container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
     expect(container.querySelector('[role="status"]')?.textContent).toContain(
-      "earlier pairing is still active",
+      "Bot tasks are allowed on this Harness",
     );
     expect(config.stop).not.toHaveBeenCalled();
     expect(config.update).not.toHaveBeenCalled();
@@ -185,7 +185,7 @@ it("keeps a failed prior-pairing stop visible and never forwards another service
     input: { apiUrl: "https://earlier.example.test", ownerToken: null },
   });
   expect(config.settings.tritonAiBotEnabled).toBe(false);
-  expect(container.textContent).toContain("earlier pairing is still active");
+  expect(container.textContent).toContain("Bot tasks are allowed on this Harness");
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("Harness is offline");
   expect(readDotSession(sessionStorage, config.serviceUrl!)).not.toBeNull();
 });
@@ -212,7 +212,7 @@ it("also exposes the earlier pairing when the configured service is unavailable"
   } as ServerBotTaskComputerStatus;
   await render();
   expect(container.querySelector('[role="status"]')?.textContent).toContain(
-    "Experimental Bot is unavailable",
+    "Experimental Bot is unavailable in this app",
   );
   expect(container.textContent).toContain("Stop Bot tasks here");
   expect(config.stop).not.toHaveBeenCalled();

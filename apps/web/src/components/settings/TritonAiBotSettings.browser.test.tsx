@@ -1,6 +1,7 @@
 import { act, render as renderTest, type Screen } from "../../../test/render";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
+import type { ServerBotTaskComputerStatus } from "@t3tools/contracts";
 
 const config = vi.hoisted(() => ({
   settings: {
@@ -8,6 +9,7 @@ const config = vi.hoisted(() => ({
     tritonAiBotUrl: "https://first.example.test" as string | null,
   },
   update: vi.fn(),
+  local: null as ServerBotTaskComputerStatus | null,
   stop: vi.fn<(...args: unknown[]) => Promise<{ _tag: "Success" }>>(async () => ({
     _tag: "Success",
   })),
@@ -28,7 +30,7 @@ vi.mock("../../state/server", async (original) => ({
   serverEnvironment: { stopBotTaskComputer: {}, botTaskComputer: vi.fn() },
 }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: () => ({ data: null, refresh: vi.fn() }),
+  useEnvironmentQuery: () => ({ data: config.local, refresh: vi.fn() }),
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => config.stop }));
 vi.mock("./settingsSearch", () => ({ searchableSetting: () => ({ title: "Bot service" }) }));
@@ -45,6 +47,7 @@ let root: Screen;
 let container: HTMLDivElement;
 async function setup() {
   config.settings = { tritonAiBotEnabled: true, tritonAiBotUrl: first };
+  config.local = null;
   config.update.mockReset();
   config.update.mockImplementation(async (patch) => Object.assign(config.settings, patch));
   config.stop.mockReset();
@@ -136,4 +139,63 @@ it("keeps an unusable legacy address recoverable with opt-in off", async () => {
   });
   expect(config.settings.tritonAiBotEnabled).toBe(false);
   expect(config.settings.tritonAiBotUrl).toBe("https://recovered.example.test");
+});
+
+it.each([false, true])(
+  "signs out each own session at its own service after stopping a different worker (sign-out failure: %s)",
+  async (fails) => {
+    await using _test = await setup();
+    const paired = "https://worker.example.test";
+    const pairedSession = { ...session, ownerToken: "synthetic-worker-service-owner" };
+    config.local = { state: "running", apiUrl: paired } as ServerBotTaskComputerStatus;
+    saveDotSession(sessionStorage, paired, pairedSession);
+    const attempts: Array<{ url: string; token: string }> = [];
+    vi.mocked(DotClient.prototype.signOut).mockImplementation(async function (
+      this: DotClient,
+      ownSession,
+    ) {
+      expect(config.stop).toHaveBeenCalledExactlyOnceWith({
+        environmentId: "own-harness",
+        input: { apiUrl: paired, ownerToken: pairedSession.ownerToken },
+      });
+      expect(config.update).not.toHaveBeenCalled();
+      expect(readDotSession(sessionStorage, first)).toEqual(session);
+      expect(readDotSession(sessionStorage, paired)).toEqual(pairedSession);
+      attempts.push({ url: this.baseUrl, token: ownSession.ownerToken });
+      if (fails && this.baseUrl === paired) throw new Error("Worker service unavailable");
+      return { ok: true };
+    });
+    await act(async () => root.rerender(<TritonAiBotSettings />));
+    await edit("https://second.example.test");
+    await save();
+    expect(attempts).toEqual([
+      { url: paired, token: pairedSession.ownerToken },
+      { url: first, token: session.ownerToken },
+    ]);
+    expect(config.settings.tritonAiBotUrl).toBe("https://second.example.test");
+    expect(readDotSession(sessionStorage, first)).toBeNull();
+    expect(readDotSession(sessionStorage, paired)).toBeNull();
+  },
+);
+
+it("keeps both service sessions and the address if stopping a different worker fails", async () => {
+  await using _test = await setup();
+  const paired = "https://worker.example.test";
+  const pairedSession = { ...session, ownerToken: "synthetic-worker-service-owner" };
+  config.local = { state: "running", apiUrl: paired } as ServerBotTaskComputerStatus;
+  saveDotSession(sessionStorage, paired, pairedSession);
+  config.stop.mockRejectedValue(new Error("Harness is offline"));
+  await act(async () => root.rerender(<TritonAiBotSettings />));
+  await edit("https://second.example.test");
+  await save();
+  expect(config.stop).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "own-harness",
+    input: { apiUrl: paired, ownerToken: pairedSession.ownerToken },
+  });
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Harness is offline");
+  expect(config.update).not.toHaveBeenCalled();
+  expect(config.settings.tritonAiBotUrl).toBe(first);
+  expect(readDotSession(sessionStorage, first)).toEqual(session);
+  expect(readDotSession(sessionStorage, paired)).toEqual(pairedSession);
+  expect(DotClient.prototype.signOut).not.toHaveBeenCalled();
 });

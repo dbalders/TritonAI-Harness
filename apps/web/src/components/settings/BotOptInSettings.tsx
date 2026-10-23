@@ -7,7 +7,7 @@ import { searchableSetting } from "./settingsSearch";
 
 /** Opt-in never signs in, connects Microsoft or grants execution permission. */
 export function BotOptInSettings() {
-  const { enabled, hydrated, serviceUrl, earlierPairing, busy, error, change } =
+  const { enabled, hydrated, serviceUrl, hiddenPairing, busy, error, change } =
     useBotTaskComputerControl();
   const navigate = useNavigate();
   return (
@@ -21,11 +21,11 @@ export function BotOptInSettings() {
               {error}
             </p>
           ) : null}
-          {earlierPairing ? (
+          {hiddenPairing ? (
             <p role="status">
-              An earlier pairing is still active on this Harness while Experimental Bot is{" "}
-              {enabled ? "unavailable" : "off"}. Stop new tasks here to retire that permission. Work
-              already running and saved result delivery can finish.
+              Bot tasks are allowed on this Harness. Experimental Bot is{" "}
+              {enabled ? "unavailable" : "off"} in this app. Stopping tasks here affects every
+              client of this Harness. Work already running and saved result delivery can finish.
             </p>
           ) : null}
           {!serviceUrl ? (
@@ -41,7 +41,7 @@ export function BotOptInSettings() {
       }
       control={
         <div className="flex items-center gap-2">
-          {earlierPairing ? (
+          {hiddenPairing ? (
             <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(false)}>
               Stop Bot tasks here
             </Button>
