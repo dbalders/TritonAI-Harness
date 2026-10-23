@@ -12,6 +12,8 @@ const crypto = require("node:crypto");
 
 const { createRequire } = require("node:module");
 
+const { finished } = require("node:stream/promises");
+
 const {
   findPluginPackageRoots,
   verifyPluginArchive: verifyArchiveAtRoot,
@@ -67,7 +69,9 @@ async function fixture(t, modify = () => {}) {
   fs.writeFileSync(path.join(plugins, "packages/github/index.js"), bytes);
   modify(plugins, source, composition);
   const archive = path.join(root, "payload.asar");
-  await asar.createPackage(source, archive);
+  const writer = await asar.createPackage(source, archive);
+  // ASAR 3 resolves before the output stream has finished flushing the payload.
+  await finished(writer);
   return { archive, composition, root };
 }
 

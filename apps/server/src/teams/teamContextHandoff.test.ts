@@ -82,6 +82,7 @@ it.effect.each([false, true])(
                     id: history.itemId,
                     runId,
                     nodeId,
+                    ordinal: 0,
                     type: "user_message",
                     messageId,
                   },
@@ -132,8 +133,23 @@ it.effect.each([
       const attemptId = RunAttemptId.make("accepted-root-attempt");
       const rootNodeId = NodeId.make("accepted-root-node");
       const steeringNodeId = restart ? NodeId.make("unaccepted-restart-node") : rootNodeId;
-      const rootText = "An ordinary first question.";
+      const rootText = restart
+        ? "Confidential earlier team root instructions."
+        : "An ordinary first question.";
       const steeringText = "Confidential team steering instructions.";
+      if (restart)
+        yield* made.service.prepareOutgoingCommand("s", {
+          type: "message.dispatch",
+          dispatchMode: { type: "queue_after_active" },
+          commandId: CommandId.make("prepare-protected-root-message"),
+          messageId: rootId,
+          threadId,
+          text: rootText,
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+          teamReferences: [reference.id],
+        });
       yield* made.service.prepareOutgoingCommand("s", {
         type: "message.dispatch",
         dispatchMode: { type: "queue_after_active" },
@@ -207,6 +223,7 @@ it.effect.each([
                     id: rootItemId,
                     runId,
                     nodeId: rootNodeId,
+                    ordinal: 0,
                     type: "user_message",
                     messageId: rootId,
                   },
@@ -214,6 +231,7 @@ it.effect.each([
                     id: steeringItemId,
                     runId,
                     nodeId: steeringNodeId,
+                    ordinal: 1,
                     type: "user_message",
                     messageId: steeringId,
                     // These fields are persisted before steering delivery is attempted.

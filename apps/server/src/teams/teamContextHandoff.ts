@@ -81,9 +81,22 @@ export const makeFilter = Effect.gen(function* () {
                 )
                 .map((attempt) => attempt.id),
             );
+            // Restarts replace run.userMessageId. Each attempt's first user item is
+            // its root input; later live steering shares the node but not its acceptance.
+            const isAttemptInput =
+              item?.type === "user_message" &&
+              !source.turnItems.some(
+                (candidate) =>
+                  candidate.type === "user_message" &&
+                  candidate.id !== item.id &&
+                  candidate.runId === item.runId &&
+                  candidate.nodeId === item.nodeId &&
+                  candidate.ordinal <= item.ordinal,
+              );
             if (
               original !== undefined &&
-              original.id === run?.userMessageId &&
+              run !== undefined &&
+              isAttemptInput &&
               source.providerTurns.some(
                 (turn) =>
                   turn.runAttemptId !== null &&
