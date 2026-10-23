@@ -19,7 +19,12 @@ const post = (url: string, body: unknown = screenshotHistory) =>
   Effect.promise(() =>
     fetch(url, {
       method: "POST",
-      headers: { authorization: "Bearer test-only", "content-type": "application/json" },
+      headers: {
+        authorization: "Bearer test-only",
+        "content-type": "application/json",
+        "x-litellm-tags": "app:tritonai-harness,version:test,purpose:chat",
+        "x-litellm-end-user-id": "harness-install:0b3f1d9e-5c2a-4e7b-9a41-2f6c8d0e7a15",
+      },
       body: JSON.stringify(body),
     }),
   );
@@ -141,6 +146,12 @@ describe("TritonAI image request budget", () => {
           "data: first\n\ndata: [DONE]\n\n",
         );
         expect(f.received[0]?.headers.authorization).toBe("Bearer test-only");
+        expect(f.received[0]?.headers["x-litellm-tags"]).toBe(
+          "app:tritonai-harness,version:test,purpose:chat",
+        );
+        expect(f.received[0]?.headers["x-litellm-end-user-id"]).toBe(
+          "harness-install:0b3f1d9e-5c2a-4e7b-9a41-2f6c8d0e7a15",
+        );
         expect(JSON.stringify(f.received[0]?.body).match(/input_image/g)).toHaveLength(4);
         expect(JSON.stringify(f.received[0]?.body)).not.toContain("/4.png");
         for (const id of [5, 6, 7, 8])
