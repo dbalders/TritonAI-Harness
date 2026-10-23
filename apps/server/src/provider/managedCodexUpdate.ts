@@ -507,6 +507,9 @@ export const recoverManagedCodexUnderLock = Effect.fn("recoverManagedCodexUnderL
     const path = yield* Path.Path;
     const runtimeRoot = path.dirname(installation.installRoot);
     if (!(yield* fs.exists(runtimeRoot))) return;
+    // A failed health probe is not permission to replace a newer active engine.
+    // Existing launchers keep their installation; callers report launch/probe failures normally.
+    if (yield* fs.exists(installation.binaryPath)) return;
     const backups = (yield* fs.readDirectory(runtimeRoot))
       .filter((entry) => entry.startsWith(".tritonai-codex-backup."))
       .sort();
@@ -516,7 +519,7 @@ export const recoverManagedCodexUnderLock = Effect.fn("recoverManagedCodexUnderL
         .run({
           command: binaryPath,
           args: ["--version"],
-          timeout: "5 seconds",
+          timeout: "30 seconds",
           maxOutputBytes: 8 * 1024,
         })
         .pipe(
@@ -528,8 +531,6 @@ export const recoverManagedCodexUnderLock = Effect.fn("recoverManagedCodexUnderL
           ),
           Effect.orElseSucceed(() => false),
         );
-    if ((yield* fs.exists(installation.binaryPath)) && (yield* working(installation.binaryPath)))
-      return;
     yield* assertManagedCodexIdle(runtimeRoot);
     for (const backup of backups) {
       const backupRoot = path.join(runtimeRoot, backup, path.basename(installation.installRoot));

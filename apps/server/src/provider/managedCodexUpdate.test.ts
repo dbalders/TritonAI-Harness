@@ -26,6 +26,7 @@ import {
   makeTritonAiManagedCodexMaintenanceResolver,
   parseCodexCliVersion,
   ManagedCodexApprovedVersion,
+  recoverTritonAiManagedCodex,
   resolveTritonAiManagedCodexInstallation,
   updateTritonAiManagedCodex,
 } from "./managedCodexUpdate.ts";
@@ -250,6 +251,78 @@ const fixtureLayer = Layer.merge(
 );
 
 it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
+  it.effect.each(["failure", "timeout"])(
+    "preserves an existing newer engine instead of recovering after a transient %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const backup = yield* fixture.fs.makeTempDirectory({
+          directory: fixture.runtimeRoot,
+          prefix: ".tritonai-codex-backup.",
+        });
+        const backupRoot = fixture.path.join(backup, "openai-codex-0.146.0");
+        yield* fixture.fs.makeDirectory(fixture.path.join(backupRoot, "bin"), { recursive: true });
+        yield* fixture.fs.copyFile(
+          fixture.binaryPath,
+          fixture.path.join(backupRoot, "bin", "codex"),
+        );
+        yield* fixture.fs.writeFileString(fixture.path.join(backupRoot, "version.txt"), "0.146.0");
+        yield* fixture.fs.writeFileString(
+          fixture.path.join(fixture.installRoot, "version.txt"),
+          "0.160.0",
+        );
+        const runner = yield* makeFakeRunner();
+        let probes = 0;
+        const run: ProcessRunner["Service"]["run"] = (input) => {
+          probes++;
+          return probes === 1
+            ? Effect.succeed({
+                ...failure("transient probe failure"),
+                timedOut: scenario === "timeout",
+              })
+            : runner(input);
+        };
+
+        yield* recoverTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run });
+
+        expect(
+          yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+        ).toBe("0.160.0");
+        expect(yield* fixture.fs.readFileString(fixture.path.join(backupRoot, "version.txt"))).toBe(
+          "0.146.0",
+        );
+        expect(probes).toBe(0);
+      }),
+  );
+
+  it.effect(
+    "allows the full activation verification timeout when restoring a missing launcher",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const backup = yield* fixture.fs.makeTempDirectory({
+          directory: fixture.runtimeRoot,
+          prefix: ".tritonai-codex-backup.",
+        });
+        yield* fixture.fs.rename(
+          fixture.installRoot,
+          fixture.path.join(backup, "openai-codex-0.146.0"),
+        );
+        const runner = yield* makeFakeRunner();
+        const timeouts: Array<unknown> = [];
+        const run: ProcessRunner["Service"]["run"] = (input) => {
+          timeouts.push(input.timeout);
+          return runner(input);
+        };
+
+        yield* recoverTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run });
+
+        expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
+        expect(yield* fixture.fs.exists(backup)).toBe(false);
+        expect(timeouts).toEqual(["30 seconds"]);
+      }),
+  );
+
   it.effect.each(["before backup", "after backup", "after activation", "verification", "rollback"])(
     "keeps a usable engine after interruption during %s",
     (phase) =>
