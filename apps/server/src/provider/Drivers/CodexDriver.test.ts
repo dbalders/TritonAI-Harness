@@ -114,6 +114,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
           instanceId: ProviderInstanceId.make("blank-home-help"),
           displayName: "Blank home Help",
           enabled: false,
+          environment: [],
           config: {
             ...CodexDriver.defaultConfig(),
             setupMode: "existing",

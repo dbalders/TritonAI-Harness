@@ -84,17 +84,19 @@ it("downloads the exact preview and opens the tracker manually with no report in
   using createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:help-report");
   using revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
   const downloads: HTMLAnchorElement[] = [];
-  const deferredConsumption = Promise.withResolvers<boolean>();
+  let deferredUrlAvailable = false;
   // Records the download link instead of letting the browser save a file.
   using _download = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
     this: HTMLAnchorElement,
   ) {
     downloads.push(this);
     // Model a download consumer that starts after click returns.
-    queueMicrotask(() => deferredConsumption.resolve(revokeObjectURL.mock.calls.length === 0));
+    queueMicrotask(() => {
+      deferredUrlAvailable = revokeObjectURL.mock.calls.length === 0;
+    });
   });
   await act(() => button(screen, "Download report").click());
-  expect(await deferredConsumption.promise).toBe(true);
+  expect(deferredUrlAvailable).toBe(true);
   const blob = createObjectURL.mock.calls[0]?.[0] as Blob;
   expect(await blob.text()).toBe(preview(screen));
   expect(downloads).toHaveLength(1);

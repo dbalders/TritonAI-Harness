@@ -35,6 +35,7 @@ import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as TextGeneration from "./TextGeneration.ts";
+import { isolatedCodexHelpAuth } from "./CodexHelpAuth.ts";
 import {
   buildDailyMemoryPrompt,
   buildIdeasPrompt,
@@ -369,7 +370,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         if (selectedProvider === "openai" && !providerTransports.has(selectedProvider)) {
           // Native sign-in may be reused only for the built-in transport. A
           // custom provider (even named openai) never receives the native file.
-          // Never read/parse tokens or copy config, instructions, skills or history.
+          // Keep refresh grants with their owner. Never change that file or copy
+          // config, instructions, skills or history into the disposable home.
           if (
             effectiveEnvironment.OPENAI_BASE_URL?.trim() ||
             effectiveEnvironment.CODEX_API_KEY?.trim()
@@ -382,7 +384,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           const sourceAuth = sourceHome ? path.join(sourceHome, "auth.json") : undefined;
           if (!sourceAuth || !(yield* fileSystem.exists(sourceAuth))) return yield* fail();
           const targetAuth = path.join(home, "auth.json");
-          yield* fileSystem.copyFile(sourceAuth, targetAuth);
+          const auth = isolatedCodexHelpAuth(yield* readBoundedFile(sourceAuth, 256_000));
+          if (auth === null) return yield* fail();
+          yield* fileSystem.writeFileString(targetAuth, auth);
           yield* fileSystem.chmod(targetAuth, 0o600);
         }
 

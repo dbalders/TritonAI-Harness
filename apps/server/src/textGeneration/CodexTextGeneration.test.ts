@@ -33,6 +33,16 @@ import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 import managedHarnessConfig from "../../../../config/tritonai-managed-config.json" with { type: "json" };
 import { makeProcessProbe, processProbeSource } from "../testUtils/processProbe.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+const NATIVE_AUTH_FIXTURE = JSON.stringify({
+  auth_mode: "chatgpt",
+  tokens: {
+    id_token: "synthetic-id-token",
+    access_token: "synthetic-access-token",
+    refresh_token: "synthetic-refresh-must-stay-with-owner",
+    account_id: "synthetic-native-account",
+  },
+  last_refresh: "2020-01-01T00:00:00Z",
+});
 
 const DEFAULT_TEST_MODEL_SELECTION = createModelSelection(
   ProviderInstanceId.make("codex"),
@@ -196,7 +206,9 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         '  if (NodeFS.readdirSync(home).join(",") !== "auth.json") fail("copied native context beyond auth", 18);',
         '  if ((NodeFS.statSync(home + "/auth.json").mode & 0o777) !== 0o600) fail("auth mode must be 600", 19);',
         '  if (!originalArgs.includes(\' model_provider="openai" \')) fail("native OAuth provider changed", 20);',
-        '  if (NodeFS.readFileSync(home + "/auth.json", "utf8") !== "OPAQUE SYNTHETIC AUTH FIXTURE") fail("native account changed", 22);',
+        '  const auth = JSON.parse(NodeFS.readFileSync(home + "/auth.json", "utf8"));',
+        '  if (auth.tokens.refresh_token !== "") fail("refresh grant escaped the credential owner", 22);',
+        '  if (auth.tokens.access_token !== "synthetic-access-token" || auth.tokens.account_id !== "synthetic-native-account") fail("native account changed", 23);',
         "}",
         'if (check.forbidNativeAuth && NodeFS.existsSync(process.env.CODEX_HOME + "/auth.json")) fail("native auth must not replace selected transport", 21);',
         "if (check.requireArg !== null && !originalArgs.includes(` ${check.requireArg} `)) {",
@@ -258,10 +270,7 @@ function withFakeCodexEnv<A, E, R>(
     const nativeHome = path.join(tempDir, "native-home");
     if (input.nativeAuth) {
       yield* fs.makeDirectory(nativeHome);
-      yield* fs.writeFileString(
-        path.join(nativeHome, "auth.json"),
-        "OPAQUE SYNTHETIC AUTH FIXTURE",
-      );
+      yield* fs.writeFileString(path.join(nativeHome, "auth.json"), NATIVE_AUTH_FIXTURE);
       yield* fs.writeFileString(
         path.join(nativeHome, "config.toml"),
         "PRIVATE CONFIG MUST NOT COPY",
@@ -323,39 +332,44 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     ),
   );
 
-  it.effect("reuses only opaque native authentication and cleans its private copy", () =>
-    withFakeCodexEnv(
-      {
-        output: '{"answer":"Native ChatGPT Help works."}',
-        nativeAuth: true,
-        environment: { TRITONAI_API_KEY: "" },
-        requireNativeAuth: true,
-        requireHelpIsolation: true,
-      },
-      (generation, callsPath) =>
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          const sourceHome = path.join(path.dirname(callsPath), "native-home");
-          const result = yield* generation.generateHelp!(HELP_INPUT);
-          expect(result.answer).toBe("Native ChatGPT Help works.");
-          expect(yield* fs.readFileString(path.join(sourceHome, "auth.json"))).toBe(
-            "OPAQUE SYNTHETIC AUTH FIXTURE",
-          );
-          expect((yield* fs.stat(path.join(sourceHome, "auth.json"))).mode & 0o777).toBe(0o644);
-          expect((yield* fs.readDirectory(sourceHome)).sort()).toEqual([
-            "AGENTS.md",
-            "auth.json",
-            "config.toml",
-            "history.jsonl",
-          ]);
-          const calls = (yield* fs.readFileString(callsPath))
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line) as { home: string });
-          expect(yield* fs.exists(calls[0]!.home)).toBe(false);
-        }),
-    ),
+  it.effect(
+    "reuses current native access without sharing refresh grants or changing the owner",
+    () =>
+      withFakeCodexEnv(
+        {
+          output: '{"answer":"Native ChatGPT Help works."}',
+          nativeAuth: true,
+          environment: { TRITONAI_API_KEY: "" },
+          requireNativeAuth: true,
+          requireHelpIsolation: true,
+        },
+        (generation, callsPath) =>
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const path = yield* Path.Path;
+            const sourceHome = path.join(path.dirname(callsPath), "native-home");
+            const result = yield* generation.generateHelp!(HELP_INPUT);
+            expect(result.answer).toBe("Native ChatGPT Help works.");
+            expect((yield* generation.generateHelp!(HELP_INPUT)).answer).toBe(result.answer);
+            expect(yield* fs.readFileString(path.join(sourceHome, "auth.json"))).toBe(
+              NATIVE_AUTH_FIXTURE,
+            );
+            expect((yield* fs.stat(path.join(sourceHome, "auth.json"))).mode & 0o777).toBe(0o644);
+            expect((yield* fs.readDirectory(sourceHome)).sort()).toEqual([
+              "AGENTS.md",
+              "auth.json",
+              "config.toml",
+              "history.jsonl",
+            ]);
+            const calls = (yield* fs.readFileString(callsPath))
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as { home: string });
+            const homes = new Set(calls.map((call) => call.home));
+            expect(homes.size).toBe(2);
+            for (const home of homes) expect(yield* fs.exists(home)).toBe(false);
+          }),
+      ),
   );
 
   it.effect("keeps the configured gateway when native authentication also exists", () =>
