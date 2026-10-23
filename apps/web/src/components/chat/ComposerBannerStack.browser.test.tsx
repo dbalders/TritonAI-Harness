@@ -48,25 +48,28 @@ it("only offers notice details when the description cannot fit", async () => {
 
 it("keeps only the usage limit attached while an active goal waits in the collapsible stack", async () => {
   await using screen = await render(
-    <ComposerBannerStack
-      items={[
-        {
-          id: "goal",
-          variant: "default",
-          priority: "activity",
-          icon: null,
-          title: "Goal active",
-          description: "Finish the banner fix",
-        },
-        {
-          id: "limit",
-          variant: "default",
-          priority: "urgent",
-          icon: null,
-          title: "Usage limit reached",
-        },
-      ]}
-    />,
+    <>
+      <div data-testid="outside-banner-stack" aria-hidden="true" style={{ height: 32 }} />
+      <ComposerBannerStack
+        items={[
+          {
+            id: "goal",
+            variant: "default",
+            priority: "activity",
+            icon: null,
+            title: "Goal active",
+            description: "Finish the banner fix",
+          },
+          {
+            id: "limit",
+            variant: "default",
+            priority: "urgent",
+            icon: null,
+            title: "Usage limit reached",
+          },
+        ]}
+      />
+    </>,
   );
   const { container } = screen;
 
@@ -77,8 +80,8 @@ it("keeps only the usage limit attached while an active goal waits in the collap
   const limit = page.getByText("Usage limit reached", { exact: true });
   const goal = page.getByText("Goal active", { exact: true });
 
-  // A retained pointer can expand the stack as it mounts; start outside the hover target.
-  await userEvent.hover(limit);
+  // Keep the pointer outside both collapsed and expanded notices during the keyboard checks.
+  await userEvent.hover(page.getByTestId("outside-banner-stack"));
   await expect.poll(visibleBanners).toHaveLength(1);
   await expect.element(limit).toBeVisible();
   await expect.element(goal).not.toBeVisible();
@@ -89,12 +92,17 @@ it("keeps only the usage limit attached while an active goal waits in the collap
   const peek = page.getByRole("button", { name: "Show other notices" });
   // Hover opens the stack and hides the peek before a pointer click can finish.
   await act(() => peek.element().focus());
+  await expect.element(peek).toHaveFocus();
   await userEvent.keyboard("{Enter}");
+  await expect
+    .element(page.getByRole("group", { name: "Other notices", exact: true }))
+    .toHaveFocus();
   await expect.element(goal).toBeVisible();
   await expect.element(limit).toBeVisible();
   await expect.poll(visibleBanners).toHaveLength(2);
 
   await userEvent.keyboard("{Escape}");
+  await expect.element(peek).toHaveFocus();
   await expect.element(goal).not.toBeVisible();
   await expect.element(limit).toBeVisible();
   expect(visibleBanners()).toHaveLength(1);
