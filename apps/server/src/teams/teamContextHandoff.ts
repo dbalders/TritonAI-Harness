@@ -7,7 +7,8 @@ import * as TeamMessageGate from "./TeamMessageGate.ts";
 /**
  * A refused turn stays in local history. Do not let recovery of its failed run
  * become a second, unchecked route to the provider. Already delivered history
- * stays as history; this only withholds user text the provider never accepted.
+ * stays as history when its delivery can be established. Steering has no
+ * per-message acceptance receipt, so it must pass its own access check again.
  */
 export const makeFilter = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -25,15 +26,23 @@ export const makeFilter = Effect.gen(function* () {
         }
       const sources = new Map<
         ThreadId,
-        ProjectionStore.ProjectionRecords<"runs" | "messages" | "attempts" | "providerTurns">
+        ProjectionStore.ProjectionRecords<
+          "runs" | "messages" | "turnItems" | "attempts" | "providerTurns"
+        >
       >();
       for (const [threadId, ids] of runIdsByThread)
         sources.set(
           threadId,
           yield* projections.getThreadRecords(
             threadId,
-            ["runs", "messages", "attempts", "providerTurns"],
-            { runIds: [...ids], messageRunIds: [...ids] },
+            ["runs", "messages", "turnItems", "attempts", "providerTurns"],
+            {
+              runIds: [...ids],
+              messageRunIds: [...ids],
+              messageRoles: ["user"],
+              turnItemRunIds: [...ids],
+              turnItemTypes: ["user_message"],
+            },
           ),
         );
       return yield* Effect.forEach(handoffs, (handoff) =>
@@ -48,21 +57,33 @@ export const makeFilter = Effect.gen(function* () {
             }
             const source = sources.get(message.threadId)!;
             const run = source.runs.find((candidate) => candidate.id === message.runId);
-            if (
-              run &&
-              run.status !== "failed" &&
-              run.status !== "interrupted" &&
-              run.status !== "cancelled"
-            ) {
-              messages.push(message);
-              continue;
-            }
+            const item = source.turnItems.find(
+              (candidate) =>
+                candidate.id === message.itemId &&
+                candidate.runId === message.runId &&
+                candidate.type === "user_message",
+            );
+            const original =
+              item?.type === "user_message"
+                ? source.messages.find(
+                    (candidate) =>
+                      candidate.id === item.messageId &&
+                      candidate.runId === message.runId &&
+                      candidate.nodeId === item.nodeId &&
+                      candidate.role === "user",
+                  )
+                : undefined;
             const attempts = new Set(
               source.attempts
-                .filter((attempt) => attempt.runId === message.runId)
+                .filter(
+                  (attempt) =>
+                    attempt.runId === message.runId && attempt.rootNodeId === original?.nodeId,
+                )
                 .map((attempt) => attempt.id),
             );
             if (
+              original !== undefined &&
+              original.id === run?.userMessageId &&
               source.providerTurns.some(
                 (turn) =>
                   turn.runAttemptId !== null &&
@@ -73,10 +94,7 @@ export const makeFilter = Effect.gen(function* () {
               messages.push(message);
               continue;
             }
-            const original = source.messages.find(
-              (candidate) => candidate.id === run?.userMessageId,
-            );
-            // Missing source data cannot authorize replay of a failed user message.
+            // Missing source data cannot authorize replay of an unaccepted user message.
             if (
               !original ||
               (yield* Effect.result(

@@ -652,6 +652,174 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
       }),
   );
 
+  it.effect.each(["signed out", "another account", "unavailable"] as const)(
+    "stops later model batches and the next team after the account becomes %s",
+    (change) =>
+      Effect.gen(function* () {
+        const reached = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let first = true;
+        const harness = yield* makeHarness({
+          during: () =>
+            Effect.suspend(() => {
+              if (!first) return Effect.void;
+              first = false;
+              return Deferred.succeed(reached, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+              );
+            }),
+        });
+        yield* Effect.gen(function* () {
+          yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+          yield* seedWorld;
+          for (let index = 0; index < 14; index++) {
+            const id = `batch-${index}`;
+            yield* seedThread(id, "p-a1", id);
+            yield* say(
+              id,
+              `alpha batch work ${index}`,
+              new Date(Date.parse(at(10, 12)) + index * 1000).toISOString(),
+            );
+          }
+          yield* say("t-b", "next team must wait", at(10, 12));
+          const teams = fakeTeams();
+          teams.setWorkspaces([
+            teams.workspace(TEAM_A, [["p-a1", at(1, 9)]]),
+            teams.workspace(TEAM_B, [["p-b", at(1, 9)]]),
+          ]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          const running = yield* pass.run.pipe(Effect.forkChild);
+          yield* Deferred.await(reached);
+          teams.state.account =
+            change === "signed out"
+              ? { kind: "signed-out" }
+              : change === "unavailable"
+                ? { kind: "unavailable", message: "Account unavailable." }
+                : { kind: "signed-in", author: BOB, authorName: "Bob", workspaces: [] };
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(running);
+          assert.strictEqual(harness.prompts.length, 1);
+          assert.strictEqual(harness.prompts[0]!.threads.length, 12);
+          assert.strictEqual(teams.writes.length, 0);
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect.each([
+    "membership lost",
+    "membership held",
+    "unlinked",
+    "relinked",
+    "folder changed",
+  ] as const)("rechecks authorization before the next model batch when %s", (change) =>
+    Effect.gen(function* () {
+      const reached = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let first = true;
+      const harness = yield* makeHarness({
+        during: () =>
+          Effect.suspend(() => {
+            if (!first) return Effect.void;
+            first = false;
+            return Deferred.succeed(reached, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+            );
+          }),
+      });
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+        yield* seedWorld;
+        for (let index = 0; index < 14; index++) {
+          const id = `batch-${index}`;
+          yield* seedThread(id, "p-a1", id);
+          yield* say(
+            id,
+            `cached team work ${index}`,
+            new Date(Date.parse(at(10, 12)) + index * 1000).toISOString(),
+          );
+        }
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        const running = yield* pass.run.pipe(Effect.forkChild);
+        yield* Deferred.await(reached);
+        if (change === "folder changed") teams.state.roots.set(TEAM_A, "root-2");
+        else
+          teams.setWorkspaces([
+            teams.workspace(
+              TEAM_A,
+              change === "unlinked"
+                ? []
+                : [["p-a1", change === "relinked" ? at(10, 13) : at(1, 9)]],
+              change === "membership lost"
+                ? "lost"
+                : change === "membership held"
+                  ? "held"
+                  : "ready",
+            ),
+          ]);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(running);
+        assert.strictEqual(harness.prompts.length, 1);
+        assert.strictEqual(harness.prompts[0]!.threads.length, 12);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect.each(["withdrawn", "shared again", "deleted"] as const)(
+    "filters a %s thread from the next model batch and still summarizes eligible work",
+    (change) =>
+      Effect.gen(function* () {
+        const reached = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let first = true;
+        const harness = yield* makeHarness({
+          during: () =>
+            Effect.suspend(() => {
+              if (!first) return Effect.void;
+              first = false;
+              return Deferred.succeed(reached, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+              );
+            }),
+        });
+        yield* Effect.gen(function* () {
+          yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+          yield* seedWorld;
+          for (let index = 0; index < 14; index++) {
+            const id = `batch-${index}`;
+            yield* seedThread(id, "p-a1", id);
+            yield* say(
+              id,
+              `cached activity ${index}`,
+              new Date(Date.parse(at(10, 12)) + index * 1000).toISOString(),
+            );
+          }
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          const running = yield* pass.run.pipe(Effect.forkChild);
+          yield* Deferred.await(reached);
+          if (change === "withdrawn") yield* setSharing("batch-12", false);
+          else if (change === "shared again") yield* reshare("batch-12", at(10, 13));
+          else yield* deleteThread("batch-12");
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(running);
+          assert.strictEqual(harness.prompts.length, 2);
+          assert.strictEqual(harness.prompts[1]!.threads.length, 1);
+          assert.include(harness.prompts[1]!.threads[0]!.activity, "cached activity 13");
+          assert.isFalse(
+            harness.prompts.some((prompt) =>
+              prompt.threads.some((thread) => thread.activity.includes("cached activity 12")),
+            ),
+          );
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
   it.effect("leaves out a thread chosen as Don't share before or while the model runs", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
@@ -1028,6 +1196,108 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
         }).pipe(Effect.provide(on.layer));
       }),
   );
+  it.effect.each([false, true])(
+    "retries a failed withdrawal marker after restarting while Teams stays off (remove whole day: %s)",
+    (removeWholeDay) =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          const settings = yield* ServerSettings.ServerSettingsService;
+          yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "withdrawn old content", at(10, 12));
+          if (!removeWholeDay) yield* say("t-a1-other", "retained old content", at(10, 12));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          const device = yield* deviceIdOf(harness.baseDir);
+          const first = teams.marker(TEAM_A, device)!;
+          const prompts = harness.prompts.length;
+          yield* TestClock.adjust(90 * 24 * 60 * 60_000);
+          yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+          yield* setSharing("t-a1", false);
+          teams.state.holdPaths = /\.changes\.json$/u;
+          yield* pass.run;
+          const text = teams.file(TEAM_A, dayOf(10), device);
+          if (removeWholeDay) assert.isNull(text);
+          else {
+            assert.notInclude(text!, "withdrawn old content");
+            assert.include(text!, "retained old content");
+          }
+          assert.strictEqual(teams.marker(TEAM_A, device), first);
+          teams.state.holdPaths = null;
+          const restarted = yield* makePass(harness.baseDir);
+          yield* restarted.attach(teams.source);
+          yield* restarted.run;
+          const next = teams.marker(TEAM_A, device)!;
+          assert.notStrictEqual(next, first);
+          assert.isTrue(
+            (JSON.parse(next) as { months: Record<string, string> }).months["2026-10"]! >
+              (JSON.parse(first) as { months: Record<string, string> }).months["2026-10"]!,
+          );
+          assert.strictEqual(harness.prompts.length, prompts);
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect(
+    "keeps a withdrawal marker owed if Teams pauses just after a write with fresh work succeeds",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          const settings = yield* ServerSettings.ServerSettingsService;
+          yield* TestClock.setTime(new Date(2026, 9, 10, 12).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "withdraw this work", at(10, 10));
+          yield* say("t-a1-other", "retained baseline", at(10, 10));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          const device = yield* deviceIdOf(harness.baseDir);
+          const before = teams.marker(TEAM_A, device);
+          yield* say("t-a1-other", "fresh work before pause", at(10, 13));
+          yield* setSharing("t-a1", false);
+          yield* TestClock.adjust(PARTIAL_INTERVAL_MS + 60_000);
+          teams.state.holdPaths = /\.changes\.json$/u;
+          yield* pass.attach({
+            ...teams.source,
+            write: (request) =>
+              teams.source
+                .write(request)
+                .pipe(
+                  Effect.tap((result) =>
+                    result.kind === "written" &&
+                    request.path.endsWith(".md") &&
+                    request.text?.includes("fresh work before pause")
+                      ? settings
+                          .updateSettings({ experimentalTeamsEnabled: false })
+                          .pipe(Effect.orDie, Effect.asVoid)
+                      : Effect.void,
+                  ),
+                ),
+          });
+          yield* pass.run;
+          const text = teams.file(TEAM_A, dayOf(10), device)!;
+          assert.notInclude(text, "withdraw this work");
+          assert.include(text, "fresh work before pause");
+          assert.strictEqual(teams.marker(TEAM_A, device), before);
+          assert.isFalse((yield* settings.getSettings).experimentalTeamsEnabled);
+          const prompts = harness.prompts.length;
+          teams.state.holdPaths = null;
+          const restarted = yield* makePass(harness.baseDir);
+          yield* restarted.attach(teams.source);
+          yield* restarted.run;
+          assert.notStrictEqual(teams.marker(TEAM_A, device), before);
+          assert.strictEqual(harness.prompts.length, prompts);
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
   it.effect("marks each changed month, and publishes a marker left unpublished by an outage", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({});

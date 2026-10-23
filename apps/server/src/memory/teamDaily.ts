@@ -145,6 +145,8 @@ const Team = Schema.Struct({
       /** sha256 of the marker last published, or null before the first. */
       publishedSha: Schema.NullOr(Schema.String),
       etag: Schema.NullOr(Schema.String),
+      /** A withdrawal's stamp still needs publication, even while new sharing is paused. */
+      privacyCleanup: Schema.optionalKey(Schema.Literal(true)),
       /** The team folder the marker is in. */
       storageKey: Schema.optionalKey(Schema.NullOr(Schema.String)),
     }),

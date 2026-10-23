@@ -35,7 +35,7 @@ export function TeamInviteForm({
   const [error, setError] = useState<string | null>(null);
   const latest = useRef(0);
   const gate = inviteeGate(check, { account, teamId, email });
-  const lookUp = async () => {
+  const lookUp = () => {
     const address = email.trim().toLowerCase();
     if (!/^[^\s@]+@ucsd\.edu$/u.test(address)) {
       setError("Enter a UCSD address ending in @ucsd.edu.");
@@ -44,22 +44,24 @@ export function TeamInviteForm({
     const id = ++latest.current;
     setChecking(true);
     setError(null);
-    try {
-      const response = await request({
-        environmentId,
-        input: { action: "lookup-invitee", teamId, email: address },
+    return request({
+      environmentId,
+      input: { action: "lookup-invitee", teamId, email: address },
+    })
+      .then((response) => {
+        if (id !== latest.current) return;
+        if (response._tag !== "Success") throw squashAtomCommandFailure(response);
+        const lookup = response.value.invitee;
+        if (!lookup) throw new Error("This address couldn't be checked. Try again.");
+        setCheck({ account, teamId, lookup });
+      })
+      .catch((cause: unknown) => {
+        if (id === latest.current)
+          setError(cause instanceof Error ? cause.message : "This address couldn't be checked.");
+      })
+      .finally(() => {
+        if (id === latest.current) setChecking(false);
       });
-      if (id !== latest.current) return;
-      if (response._tag !== "Success") throw squashAtomCommandFailure(response);
-      const lookup = response.value.invitee;
-      if (!lookup) throw new Error("This address couldn't be checked. Try again.");
-      setCheck({ account, teamId, lookup });
-    } catch (cause) {
-      if (id === latest.current)
-        setError(cause instanceof Error ? cause.message : "This address couldn't be checked.");
-    } finally {
-      if (id === latest.current) setChecking(false);
-    }
   };
   return (
     <div className="space-y-2">

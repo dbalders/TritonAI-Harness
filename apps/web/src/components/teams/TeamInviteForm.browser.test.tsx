@@ -5,12 +5,14 @@ import { expect, it, vi } from "vite-plus/test";
 const mocks = vi.hoisted(() => ({
   calls: [] as TeamStorageCommand[],
   invitee: null as TeamStorageStatus["invitee"] | null,
+  failure: null as string | null,
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand:
     () =>
     async ({ input }: { input: TeamStorageCommand }) => {
       mocks.calls.push(input);
+      if (mocks.failure !== null) throw new Error(mocks.failure);
       const email = input.action === "lookup-invitee" ? input.email : "";
       return {
         _tag: "Success",
@@ -35,6 +37,7 @@ async function mount(ui: import("react").ReactNode) {
 function setup() {
   view = null;
   mocks.calls = [];
+  mocks.failure = null;
   invites.length = 0;
 }
 
@@ -112,5 +115,32 @@ it("refuses a guest account and never invites it", async () => {
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("guest account");
   await submit();
   expect(invites).toEqual([]);
+  expect(mocks.calls).toHaveLength(2);
+});
+
+it("recovers from a failed address check before allowing an invitation", async () => {
+  setup();
+  mocks.invitee = {
+    email: "",
+    status: "found",
+    displayName: "Bob Example",
+    userPrincipalName: "bob@ucsd.edu",
+    mail: null,
+  };
+  mocks.failure = "Address lookup is temporarily unavailable.";
+  await using _screen = await renderView();
+  await type("bob@ucsd.edu");
+  await submit();
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(mocks.failure);
+  expect(button().textContent).toBe("Check address");
+  expect(button().disabled).toBe(false);
+  expect(invites).toEqual([]);
+
+  mocks.failure = null;
+  await submit();
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(button().textContent).toBe("Create invitation");
+  await submit();
+  expect(invites).toEqual(["bob@ucsd.edu"]);
   expect(mocks.calls).toHaveLength(2);
 });

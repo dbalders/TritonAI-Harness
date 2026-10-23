@@ -192,8 +192,10 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
   /** Each thread's section for `day`, summarized through the model in batches. */
   const summarize = Effect.fn("teamMemory.summarize")(function* (
     day: string,
-    teamName: string,
+    workspace: TeamDailyWorkspace,
     threads: ReadonlyArray<Activity>,
+    attached: TeamDailySource,
+    author: string,
   ) {
     const generate = input.textGeneration.generateTeamDailyMemory;
     if (!generate)
@@ -203,16 +205,44 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
       });
     const settings = yield* input.settings.getSettings;
     const sections = new Map<string, string>();
+    const projects = scopeOf(workspace).projects;
     for (let index = 0; index < threads.length; index += THREADS_PER_CALL) {
       // Memory turned off: no more activity reaches the model, and nothing is recorded.
       if (!(yield* sharingEnabled)) return null;
-      const keyed = threads
-        .slice(index, index + THREADS_PER_CALL)
+      // Cached activity is not authorization for the next model request. A previous batch
+      // may have waited while the account, membership, link, or a thread's sharing changed.
+      const account = yield* attached.account([workspace.teamId]);
+      const current = workspaceOf(account, workspace.teamId);
+      if (
+        account.kind !== "signed-in" ||
+        account.author !== author ||
+        !current ||
+        current.access !== "ready" ||
+        current.storageKey !== workspace.storageKey
+      )
+        return null;
+      const batch = threads.slice(index, index + THREADS_PER_CALL);
+      const now = yield* provide(threadsNow(batch.map((thread) => thread.threadId)));
+      const linked = scopeOf(current).projects;
+      const keyed = batch
+        .filter((thread) => {
+          const live = now.get(thread.threadId);
+          return (
+            live !== undefined &&
+            !live.deleted &&
+            !live.off &&
+            live.projectId === thread.projectId &&
+            live.resumedAt === thread.sharingResumedAt &&
+            linked.get(thread.projectId) === projects.get(thread.projectId)
+          );
+        })
         .map((thread, offset) => ({ key: `T${offset + 1}`, thread }));
+      if (keyed.length === 0) continue;
+      if (!(yield* sharingEnabled)) return null;
       const result = yield* generate({
         cwd: directory,
         day,
-        teamName,
+        teamName: workspace.teamName,
         threads: keyed.map(({ key, thread }) => ({
           key,
           activity: formatMemoryActivity(
@@ -296,7 +326,7 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
       );
       if (changed.length > 0) {
         yield* setStatus(workspace.teamId, { message: `Summarizing ${entry.day}.` });
-        const summaries = yield* summarize(entry.day, workspace.teamName, changed);
+        const summaries = yield* summarize(entry.day, workspace, changed, attached, state.author);
         if (summaries === null || !(yield* sharingEnabled)) return true;
         // Anything that stopped qualifying while the model ran is dropped, not recorded.
         const after = yield* attached.account([workspace.teamId]);
@@ -357,8 +387,13 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
   });
 
   /** A confirmed late write must be announced after a teammate could have scanned its attempt. */
-  const advanceMonth = Effect.fn("teamMemory.advanceMonth")(function* (team: Team, day: string) {
+  const advanceMonth = Effect.fn("teamMemory.advanceMonth")(function* (
+    team: Team,
+    day: string,
+    withdrawal = false,
+  ) {
     const marker = (team.marker ??= { months: {}, publishedSha: null, etag: null });
+    if (withdrawal) marker.privacyCleanup = true;
     const month = day.slice(0, 7);
     const now = yield* Clock.currentTimeMillis;
     const previous = Date.parse(marker.months[month] ?? "");
@@ -373,11 +408,11 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
     state: State,
     team: Team,
     workspace: TeamDailyWorkspace,
-    privacyCleanup: boolean,
   ) {
     const current = team.marker;
-    if (!(yield* teamsEnabled) && !privacyCleanup) return "done" as const;
     if (!current) return "done" as const;
+    const privacyCleanup = current.privacyCleanup === true;
+    if (!(yield* teamsEnabled) && !privacyCleanup) return "done" as const;
     // Bound before the first write, like day files: the marker is only updated where it is.
     if ((current.storageKey ?? null) === null) {
       if (workspace.storageKey === null) return "done" as const;
@@ -390,7 +425,13 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
       months: Object.fromEntries(Object.entries(current.months).toSorted()),
     });
     const sha = sha256(text);
-    if (sha === current.publishedSha) return "done" as const;
+    if (sha === current.publishedSha) {
+      if (privacyCleanup) {
+        delete current.privacyCleanup;
+        yield* writeState(state);
+      }
+      return "done" as const;
+    }
     const result = yield* attached.write({
       teamId: workspace.teamId,
       author: state.author,
@@ -410,6 +451,7 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
     current.publishedSha = sha;
     current.etag = result.etag;
     current.storageKey = result.storageKey;
+    delete current.privacyCleanup;
     yield* writeState(state);
     return "done" as const;
   });
@@ -516,7 +558,7 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
     }
     delete record.attempt;
     if (confirmedChange) {
-      yield* advanceMonth(team, day);
+      yield* advanceMonth(team, day, privacyCleanup);
       yield* setStatus(teamId, { lastPublishedAt: yield* nowIso });
     }
     yield* writeState(state);
@@ -547,7 +589,6 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
       ]),
     );
     const problems: string[] = [];
-    let cleanedUp = false;
     for (const day of Object.keys(team.days).toSorted()) {
       const record = team.days[day]!;
       /**
@@ -603,7 +644,6 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
         workspace.teamId,
         owesWithdrawal,
       );
-      if (settled === "settled" && owesWithdrawal) cleanedUp = true;
       if (settled === "lost") return "lost" as const;
       if (settled === "held") {
         problems.push(
@@ -715,7 +755,7 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
         }
         record.storageKey = workspace.storageKey;
       }
-      yield* advanceMonth(team, day);
+      yield* advanceMonth(team, day, owesWithdrawal);
       record.attempt = {
         sha,
         conditional: true,
@@ -774,8 +814,7 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
         continue;
       }
       delete record.attempt;
-      cleanedUp ||= privacyCleanup;
-      yield* advanceMonth(team, day);
+      yield* advanceMonth(team, day, owesWithdrawal);
       settleRemovals();
       if (rendered.text === null) {
         delete team.days[day];
@@ -792,7 +831,7 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
       yield* setStatus(workspace.teamId, { lastPublishedAt: yield* nowIso });
       noteWaiting();
     }
-    const marker = yield* publishMarker(attached, state, team, workspace, cleanedUp);
+    const marker = yield* publishMarker(attached, state, team, workspace);
     if (marker === "held" && problems.length > 0)
       // A day's problem, such as text the team may still have, says more than the marker's.
       yield* setStatus(workspace.teamId, { state: "held", message: problems[0]! });
@@ -828,17 +867,19 @@ export const makeTeamDailyPass = Effect.fn("teamMemory.makeTeamDailyPass")(funct
         threadsNow([...new Set(records.flatMap((day) => Object.keys(day.sections)))]),
       );
       for (const teamId of Object.keys(stored.value.teams)) yield* setStatus(teamId, paused);
-      const owed = records.some((day) =>
-        Object.entries(day.sections).some(([threadId, section]) => {
-          const current = threads.get(threadId);
-          return (
-            section.owesRemoval === true ||
-            (current !== undefined &&
-              (current.off || current.resumedAt !== (section.sharing ?? null)) &&
-              (section.publishedText !== null || day.attempt?.included[threadId] !== undefined))
-          );
-        }),
-      );
+      const owed =
+        Object.values(stored.value.teams).some((team) => team.marker?.privacyCleanup === true) ||
+        records.some((day) =>
+          Object.entries(day.sections).some(([threadId, section]) => {
+            const current = threads.get(threadId);
+            return (
+              section.owesRemoval === true ||
+              (current !== undefined &&
+                (current.off || current.resumedAt !== (section.sharing ?? null)) &&
+                (section.publishedText !== null || day.attempt?.included[threadId] !== undefined))
+            );
+          }),
+        );
       if (!owed) return;
     }
     const account = yield* attached.account(

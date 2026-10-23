@@ -261,26 +261,34 @@ export const make = Effect.fn("TeamStorageService.make")(function* (
          * The account, membership, revision, and folder are what they were when the request
          * started; for a change, the caller can also still write to the team.
          */
+        const verifyCapturedIdentity = Effect.fn("TeamStorageService.verifyCapturedIdentity")(
+          function* () {
+            const current = yield* account
+              .getStatus(sessionId)
+              .pipe(Effect.mapError(() => failure("Your account could not be verified.")));
+            if (
+              current.status !== "signed-in" ||
+              current.profile?.issuer !== profile.issuer ||
+              current.profile.subject !== profile.subject
+            )
+              return yield* new TeamsError({
+                code: "sign_in_required",
+                message: "Your account changed. Reopen this team.",
+              });
+          },
+        );
         const verifyAuthorized = Effect.fn("TeamStorageService.verifyAuthorized")(function* (
           changing: boolean,
         ) {
           yield* allowed;
-          const current = yield* account
-            .getStatus(sessionId)
-            .pipe(Effect.mapError(() => failure("Your account could not be verified.")));
-          if (
-            current.status !== "signed-in" ||
-            current.profile?.issuer !== profile.issuer ||
-            current.profile.subject !== profile.subject
-          )
-            return yield* new TeamsError({
-              code: "sign_in_required",
-              message: "Your account changed. Reopen this team.",
-            });
+          yield* verifyCapturedIdentity();
           const refreshed = yield* account.teams(sessionId, {
             action: "get",
             teamId: command.teamId,
           });
+          // The lookup can wait while this session signs out or changes campus
+          // identity. Another member's answer cannot authorize this token or path.
+          yield* verifyCapturedIdentity();
           if (
             refreshed.team?.id !== team.id ||
             refreshed.team.revision !== team.revision ||

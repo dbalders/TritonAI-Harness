@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { AccountStatus, TeamsResult } from "@t3tools/contracts";
 import { TeamsError } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
 import { AccountService } from "../auth/AccountService.ts";
@@ -25,6 +27,9 @@ function fixture() {
   let demoteOnGraph = false;
   let switchAccountOnGraph = false;
   let subject = "alice";
+  let documentReplies = false;
+  let heldMembership: { when: () => boolean; skip: number; effect: Effect.Effect<void> } | null =
+    null;
   let teamOverride: Partial<NonNullable<TeamsResult["team"]>> = {};
   let directory: { status: number; body: unknown } = { status: 200, body: { value: [] } };
   const directoryRequests: { url: URL; token: string | undefined }[] = [];
@@ -78,11 +83,19 @@ function fixture() {
         return status();
       }),
     teams: () =>
-      Effect.suspend(() =>
-        member
-          ? Effect.succeed({ ...teams, team: { ...teams.team!, ...teamOverride } })
-          : Effect.fail(new TeamsError({ code: "not_found", message: "Team unavailable" })),
-      ),
+      Effect.gen(function* () {
+        if (!member)
+          return yield* new TeamsError({ code: "not_found", message: "Team unavailable" });
+        // Both campus identities belong to this team; a switch cannot be detected
+        // from the team's identical revision, role, or folder.
+        const answer = { ...teams, team: { ...teams.team!, ...teamOverride } };
+        if (heldMembership?.when() && heldMembership.skip-- === 0) {
+          const held = heldMembership;
+          heldMembership = null;
+          yield* held.effect;
+        }
+        return answer;
+      }),
   });
   const secrets = ServerSecretStore.of({
     get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
@@ -159,6 +172,25 @@ function fixture() {
               folder: {},
             }),
           );
+      }
+      if (documentReplies && path.startsWith("/v1.0/drives/drive/items/root:/")) {
+        const relative = decodeURIComponent(path.split("root:/")[1]!).replace(/:\/content$/u, "");
+        const parts = relative.split("/");
+        const name = parts.at(-1)!;
+        const parent = parts.length === 1 ? "root" : `folder:${parts.slice(0, -1).join("/")}`;
+        const file = request.method === "PUT";
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json(
+            {
+              id: file ? "file" : `folder:${relative}`,
+              name,
+              parentReference: { id: parent },
+              ...(file ? { file: {}, eTag: "v2" } : { folder: {} }),
+            },
+            { status: file ? 201 : 200 },
+          ),
+        );
       }
       const body = path.endsWith("/devicecode")
         ? {
@@ -248,6 +280,18 @@ function fixture() {
     values,
     graphRequests,
     graphWrites,
+    enableDocumentReplies: () => {
+      documentReplies = true;
+    },
+    holdMembershipRead: (when: () => boolean, skip: number, effect: Effect.Effect<void>) => {
+      heldMembership = { when, skip, effect };
+    },
+    switchTo: (next: string) => {
+      subject = next;
+    },
+    signOut: () => {
+      signedIn = false;
+    },
     setTeam: (override: Partial<NonNullable<TeamsResult["team"]>>) => {
       teamOverride = override;
     },
@@ -429,6 +473,44 @@ describe("Teams storage role and team binding", () => {
       expect(f.graphRequests.length).toBeGreaterThan(0);
       expect(f.graphWrites).toEqual([]);
     }),
+  );
+
+  it.effect.each(["same-account", "account-switch", "signed-out"] as const)(
+    "keeps a pending mutation bound to the campus account after membership lookup: %s",
+    (change) =>
+      Effect.gen(function* () {
+        const f = fixture();
+        const service = yield* f.make;
+        yield* f.connect(service);
+        f.enableDocumentReplies();
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        // Three folder reads finish first. Hold the last membership lookup in
+        // send's mutation authorization, after both ordinary access checks.
+        f.holdMembershipRead(
+          () => f.graphRequests.length === 3,
+          2,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+          }),
+        );
+        const writing = yield* Effect.forkChild(Effect.result(service.execute("a", publish)));
+        yield* Deferred.await(entered);
+        if (change === "account-switch") f.switchTo("bob");
+        if (change === "signed-out") f.signOut();
+        yield* Deferred.succeed(release, undefined);
+        const result = yield* Fiber.join(writing);
+        if (change === "same-account") {
+          expect(result._tag).toBe("Success");
+          expect(f.graphWrites).toHaveLength(1);
+          expect(f.graphWrites[0]).toMatch(/^PUT /u);
+        } else {
+          expect(f.graphWrites).toEqual([]);
+          expect(result._tag).toBe("Failure");
+          if (result._tag === "Failure") expect(result.failure.code).toBe("sign_in_required");
+        }
+      }),
   );
 
   it.effect("never uses storage from a membership response for a different team", () =>
