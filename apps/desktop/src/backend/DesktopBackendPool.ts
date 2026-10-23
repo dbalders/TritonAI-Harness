@@ -201,6 +201,7 @@ export const layer = Layer.effect(
             ),
           ),
           Effect.andThen(shutdown.request),
+          Effect.andThen(electronApp.quit),
         ),
       onStateDirOwned: () =>
         electronDialog
