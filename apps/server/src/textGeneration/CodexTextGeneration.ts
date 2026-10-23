@@ -16,6 +16,7 @@ import {
   TextGenerationError,
 } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -37,6 +38,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as TextGeneration from "./TextGeneration.ts";
 import { isolatedCodexHelpAuth } from "./CodexHelpAuth.ts";
 import { withCodexHelpAuthOwner } from "./CodexHelpAuthOwner.ts";
+import { readCodexHelpTransport } from "./CodexHelpTransport.ts";
 import {
   buildDailyMemoryPrompt,
   buildIdeasPrompt,
@@ -297,7 +299,21 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         // An unrelated transport must not change native authentication or be queried here.
         const providerTransports = new Map<string, string[]>();
         {
-          const args = codexExecLaunchArgs(effectiveConfig.launchArgs);
+          const launchArgs = resolved
+            ? effectiveConfig.launchArgs
+            : resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment);
+          // These switches change the configuration source or endpoint. Dropping
+          // them could turn an unsupported route into an implicit native request.
+          if (
+            tokenizeCliArgs(launchArgs ?? "").some(
+              (arg) =>
+                ["--profile", "-p", "--oss", "--local-provider", "--remote", "--cd", "-C"].some(
+                  (flag) => arg === flag || arg.startsWith(flag + "="),
+                ) || /^-(?:p|C).+/.test(arg),
+            )
+          )
+            return yield* fail();
+          const args = codexExecLaunchArgs(launchArgs);
           for (let index = 0; index < args.length; index++) {
             const arg = args[index];
             const value =
@@ -313,6 +329,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             if (separator < 0) return yield* fail();
             const key = value.slice(0, separator).trim();
             const configValue = value.slice(separator + 1).trim();
+            if (/^(?:profile|profiles|oss_provider|codex_home)(?:\.|$)/.test(key))
+              return yield* fail();
             if (key === "model_provider") {
               // Codex parses TOML, falling back to a raw string after shell
               // tokenization. Admit only unambiguous provider IDs in either
@@ -351,44 +369,17 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             }
           }
         }
+
         if (selectedProvider === null) return yield* fail();
-        if (selectedProvider === undefined) {
-          // Partial transport overrides do not identify which endpoint/account to use.
-          // A configured gateway must win over an unrelated native ChatGPT sign-in.
-          if (providerTransports.size > 0) return yield* fail();
-          if (effectiveEnvironment[TRITONAI_API_KEY_ENV]?.trim()) {
-            providerArgs.push(...makeTritonAiCodexConfigArgs(effectiveEnvironment));
-          } else {
-            selectedProvider = "openai";
-          }
-        }
-        if (selectedProvider !== undefined)
-          providerArgs.push(
-            ...(providerTransports.get(selectedProvider) ?? []),
-            "--config",
-            `model_provider=${encodeCodexConfigString(selectedProvider)}`,
-          );
-        let nativeHome: string | undefined;
-        if (selectedProvider === "openai" && !providerTransports.has(selectedProvider)) {
-          // Native sign-in may be reused only for the built-in transport. A
-          // custom provider (even named openai) never receives the native file.
-          // Keep refresh grants with their owner. Never copy config,
-          // instructions, skills or history into the disposable home.
-          if (
-            effectiveEnvironment.OPENAI_BASE_URL?.trim() ||
-            effectiveEnvironment.CODEX_API_KEY?.trim()
-          )
-            return yield* fail();
-          const sourceHome =
-            !resolved && effectiveConfig.homePath?.trim()
-              ? expandHomePath(effectiveConfig.homePath, yield* HostProcess.HomeDirectory)
-              : undefined;
-          const sourceAuth = sourceHome ? path.join(sourceHome, "auth.json") : undefined;
-          if (!sourceAuth || !(yield* fileSystem.exists(sourceAuth))) return yield* fail();
-          if (isolatedCodexHelpAuth(yield* readBoundedFile(sourceAuth, 256_000)) === null)
-            return yield* fail();
-          nativeHome = sourceHome;
-        }
+        if (selectedProvider === undefined && providerTransports.size > 0) return yield* fail();
+        if (
+          selectedProvider === "openai" &&
+          !providerTransports.has(selectedProvider) &&
+          (effectiveEnvironment.OPENAI_BASE_URL?.trim() ||
+            effectiveEnvironment.CODEX_API_KEY?.trim() ||
+            (!resolved && !effectiveConfig.homePath?.trim()))
+        )
+          return yield* fail();
 
         const commandOutput = Effect.fn("CodexTextGeneration.helpCommandOutput")(
           function* (args: ReadonlyArray<string>, prompt?: string) {
@@ -469,6 +460,56 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           "--config",
           `features.${name}=${name === "skip_host_skill_discovery" ? "true" : "false"}`,
         ]);
+        const defaultGateway =
+          selectedProvider === undefined && effectiveEnvironment[TRITONAI_API_KEY_ENV]?.trim();
+        const sourceHome =
+          !resolved && effectiveConfig.homePath?.trim()
+            ? expandHomePath(effectiveConfig.homePath, yield* HostProcess.HomeDirectory)
+            : undefined;
+        if (defaultGateway) {
+          providerArgs.push(...makeTritonAiCodexConfigArgs(effectiveEnvironment));
+        } else {
+          if (sourceHome) {
+            const transport = yield* readCodexHelpTransport({
+              binary,
+              home: sourceHome,
+              cwd,
+              environment: effectiveEnvironment,
+              configArgs:
+                selectedProvider === undefined
+                  ? []
+                  : [
+                      ...(providerTransports.get(selectedProvider) ?? []),
+                      "--config",
+                      `model_provider=${encodeCodexConfigString(selectedProvider)}`,
+                    ],
+            });
+            if (transport === null) return yield* fail();
+            selectedProvider = transport.provider;
+            providerTransports.clear();
+            if (transport.custom) providerTransports.set(transport.provider, transport.args);
+          }
+          if (selectedProvider === undefined) return yield* fail();
+          providerArgs.push(
+            ...(providerTransports.get(selectedProvider) ?? []),
+            "--config",
+            `model_provider=${encodeCodexConfigString(selectedProvider)}`,
+          );
+        }
+        let nativeHome: string | undefined;
+        if (selectedProvider === "openai" && !providerTransports.has(selectedProvider)) {
+          // Native grants are never sent to custom transports, including ones named openai.
+          if (
+            effectiveEnvironment.OPENAI_BASE_URL?.trim() ||
+            effectiveEnvironment.CODEX_API_KEY?.trim()
+          )
+            return yield* fail();
+          const sourceAuth = sourceHome ? path.join(sourceHome, "auth.json") : undefined;
+          if (!sourceAuth || !(yield* fileSystem.exists(sourceAuth))) return yield* fail();
+          if (isolatedCodexHelpAuth(yield* readBoundedFile(sourceAuth, 256_000)) === null)
+            return yield* fail();
+          nativeHome = sourceHome;
+        }
         if (nativeHome) {
           const auth = yield* withCodexHelpAuthOwner(
             { binary, home: nativeHome, cwd, environment: effectiveEnvironment },

@@ -99,6 +99,7 @@ interface FakeCodexInput {
   helpVersion?: string;
   requireNativeAuth?: boolean;
   nativeOwner?: "renew" | "fail";
+  nativeTransportConfig?: Record<string, unknown> | "unavailable";
   forbidNativeAuth?: boolean;
 }
 
@@ -120,6 +121,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
     helpVersion: input.helpVersion ?? "0.156.1",
     requireNativeAuth: input.requireNativeAuth ?? false,
     nativeOwner: input.nativeOwner ?? null,
+    nativeTransportConfig: input.nativeTransportConfig ?? { model_provider: "openai" },
     forbidNativeAuth: input.forbidNativeAuth ?? false,
     stderr: input.stderr ?? null,
     output: input.output,
@@ -170,6 +172,14 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         '    if (request.method === "initialized") continue;',
         '    if (request.method === "initialize") {',
         '      process.stdout.write(JSON.stringify({id:request.id,result:{userAgent:"codex/0.156.1",codexHome:process.env.CODEX_HOME,platformFamily:"unix",platformOs:"linux"}}) + "\\n");',
+        "      continue;",
+        "    }",
+        '    if (request.method === "config/read") {',
+        '      if (check.nativeTransportConfig === "unavailable") { process.stdout.write(JSON.stringify({id:request.id,error:{code:-32603,message:"synthetic private config failure"}}) + "\\n"); continue; }',
+        "      const config = structuredClone(check.nativeTransportConfig);",
+        '      for (const arg of args) if (arg.startsWith("model_provider=")) config.model_provider = JSON.parse(arg.slice("model_provider=".length));',
+        "      for (const arg of args) { const match = /^model_providers\\.([A-Za-z0-9_-]+)\\.([a-z_]+)=(.*)$/.exec(arg); if (!match) continue; let value; try { value = JSON.parse(match[3]); } catch { value = match[3].replace(/^'(.*)'$/, \"$1\"); } ((config.model_providers ??= {})[match[1]] ??= {})[match[2]] = value; }",
+        '      process.stdout.write(JSON.stringify({id:request.id,result:{config,origins:{}}}) + "\\n");',
         "      continue;",
         "    }",
         '    if (request.method !== "getAuthStatus" || request.params.includeToken !== false || request.params.refreshToken !== false) process.exit(34);',
@@ -412,6 +422,92 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
       ),
   );
 
+  it.effect("keeps the home-configured transport instead of sending Help to native OpenAI", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"On-premises Help works."}',
+        nativeAuth: true,
+        nativeTransportConfig: {
+          model_provider: "onprem",
+          model_providers: {
+            onprem: {
+              name: "On-premises",
+              base_url: "http://127.0.0.1:4444/v1",
+              env_key: "HELP_ONPREM_KEY",
+              wire_api: "responses",
+              requires_openai_auth: false,
+            },
+          },
+          developer_instructions: "PRIVATE CONFIG INSTRUCTIONS",
+        },
+        environment: { TRITONAI_API_KEY: "", HELP_ONPREM_KEY: "synthetic-onprem-key" },
+        forbidNativeAuth: true,
+        requireHelpIsolation: true,
+        requireArg: 'model_provider="onprem"',
+        stdinMustNotContain: "PRIVATE CONFIG INSTRUCTIONS",
+      },
+      (generation) =>
+        Effect.gen(function* () {
+          expect((yield* generation.generateHelp!(HELP_INPUT)).answer).toBe(
+            "On-premises Help works.",
+          );
+        }),
+    ),
+  );
+
+  it.effect(
+    "rejects unavailable transport discovery before native authentication or inference",
+    () =>
+      withFakeCodexEnv(
+        {
+          output: '{"answer":"Must not run."}',
+          nativeAuth: true,
+          nativeTransportConfig: "unavailable",
+          environment: { TRITONAI_API_KEY: "" },
+        },
+        (generation, callsPath) =>
+          Effect.gen(function* () {
+            const result = yield* generation.generateHelp!(HELP_INPUT).pipe(Effect.result);
+            expect(Result.isFailure(result)).toBe(true);
+            expect(JSON.stringify(result)).not.toContain("synthetic private config failure");
+            const fs = yield* FileSystem.FileSystem;
+            const calls = (yield* fs.readFileString(callsPath))
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as { args: string[] });
+            expect(calls.some((call) => call.args.includes("--output-last-message"))).toBe(false);
+            expect(
+              calls.some((call) => call.args.includes('cli_auth_credentials_store="file"')),
+            ).toBe(false);
+          }),
+      ),
+  );
+
+  it.effect("honors an environment-selected transport without admitting its tool overrides", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Environment endpoint works."}',
+        nativeAuth: true,
+        launchArgs: '-c model_provider="openai"',
+        environment: {
+          TRITONAI_API_KEY: "",
+          T3CODE_CODEX_LAUNCH_ARGS:
+            '-c model_provider="env_route" -c model_providers.env_route.base_url="https://selected.example.invalid/v1" -c features.shell_tool=true',
+        },
+        forbidNativeAuth: true,
+        requireHelpIsolation: true,
+        requireArg: 'model_provider="env_route"',
+        forbidArg: "features.shell_tool=true",
+      },
+      (generation) =>
+        Effect.gen(function* () {
+          expect((yield* generation.generateHelp!(HELP_INPUT)).answer).toBe(
+            "Environment endpoint works.",
+          );
+        }),
+    ),
+  );
+
   it.effect("renews native access through the owner and retains its rotated refresh grant", () =>
     withFakeCodexEnv(
       {
@@ -439,7 +535,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             .map((line) => JSON.parse(line) as { home: string; args: string[] });
           expect(
             calls.filter((call) => call.args.includes("app-server")).map((call) => call.home),
-          ).toEqual([yield* fs.realPath(sourceHome)]);
+          ).toEqual([yield* fs.realPath(sourceHome), yield* fs.realPath(sourceHome)]);
           for (const call of calls.filter((call) => !call.args.includes("app-server")))
             expect(yield* fs.exists(call.home)).toBe(false);
         }),
@@ -713,6 +809,36 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
   );
 
   it.effect.each([
+    "--profile private",
+    "--profile=private",
+    "-pprivate",
+    "--oss",
+    "--local-provider ollama",
+    "--remote wss://example.invalid",
+    "--cd /private/project",
+    '-c profile="private"',
+  ])(
+    "rejects unsupported configuration-source selectors before any CLI request: %s",
+    (launchArgs) =>
+      withFakeCodexEnv(
+        {
+          output: '{"answer":"Must not run."}',
+          nativeAuth: true,
+          launchArgs,
+          environment: { TRITONAI_API_KEY: "" },
+        },
+        (generation, callsPath) =>
+          Effect.gen(function* () {
+            expect(
+              Result.isFailure(yield* generation.generateHelp!(HELP_INPUT).pipe(Effect.result)),
+            ).toBe(true);
+            const fs = yield* FileSystem.FileSystem;
+            expect(yield* fs.exists(callsPath)).toBe(false);
+          }),
+      ),
+  );
+
+  it.effect.each([
     '-c model_providers.selected_route.base_url="https://selected.example.invalid/v1"',
     '--config=model_providers={openai={base_url="https://selected.example.invalid/v1"}}',
     '-c model_provider="selected_route" --config=model_providers.selected_route={base_url="https://selected.example.invalid/v1"}',
@@ -781,11 +907,12 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             ? { forbidArg: '--config service_tier="priority"' }
             : { requireServiceTier: "priority" }),
           launchArgs:
-            '-c model_provider="openai_token_sharing" -c model_providers.openai_token_sharing.env_key="ACCESS_TOKEN" -c developer_instructions="PRIVATE LAUNCH INSTRUCTIONS"',
+            '-c model_provider="openai_token_sharing" -c model_providers.openai_token_sharing.base_url="https://selected.example.invalid/v1" -c model_providers.openai_token_sharing.env_key="ACCESS_TOKEN" -c developer_instructions="PRIVATE LAUNCH INSTRUCTIONS"',
           environment: {
             ...process.env,
             ACCESS_TOKEN: "not-a-real-token",
-            T3CODE_CODEX_LAUNCH_ARGS: "--config features.shell_tool=true",
+            T3CODE_CODEX_LAUNCH_ARGS:
+              '-c model_provider="openai_token_sharing" -c model_providers.openai_token_sharing.base_url="https://selected.example.invalid/v1" -c model_providers.openai_token_sharing.env_key="ACCESS_TOKEN" --config features.shell_tool=true',
           },
           stdinMustContain: "Read the host settings to fix my provider",
         },

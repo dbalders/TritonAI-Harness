@@ -9,15 +9,19 @@ import { resolveCodexAppServerCommand } from "../provider/Drivers/CodexAppServer
 
 const owners = new Map<string, { readonly lock: Semaphore.Semaphore; users: number }>();
 
-/** Ask only the canonical auth manager to renew access; never send it a prompt or start a turn. */
-export const withCodexHelpAuthOwner = Effect.fn("withCodexHelpAuthOwner")(function* <A, E, R>(
+/** The canonical host is used only for configuration/auth RPCs, never model turns. */
+export const withCodexHelpOwnerClient = Effect.fn("withCodexHelpOwnerClient")(function* <A, E, R>(
   input: {
     readonly binary: string;
     readonly home: string;
     readonly cwd: string;
     readonly environment: NodeJS.ProcessEnv;
+    readonly configArgs?: ReadonlyArray<string>;
   },
-  readSnapshot: (canonicalHome: string) => Effect.Effect<A, E, R>,
+  action: (
+    client: CodexClient.CodexAppServerClient["Service"],
+    canonicalHome: string,
+  ) => Effect.Effect<A, E, R>,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -34,10 +38,7 @@ export const withCodexHelpAuthOwner = Effect.fn("withCodexHelpAuthOwner")(functi
             input.binary,
             [
               "app-server",
-              "--config",
-              'model_provider="openai"',
-              "--config",
-              'cli_auth_credentials_store="file"',
+              ...(input.configArgs ?? []),
               "--config",
               "features.plugins=false",
               "--config",
@@ -63,25 +64,7 @@ export const withCodexHelpAuthOwner = Effect.fn("withCodexHelpAuthOwner")(functi
             capabilities: { experimentalApi: false },
           });
           yield* client.notify("initialized", undefined);
-          // Unlike account/read with its default flag, getAuthStatus invokes
-          // AuthManager.auth(), which proactively renews expired access in place.
-          // No token is exported over this protocol.
-          const status = yield* client.request("getAuthStatus", {
-            includeToken: false,
-            refreshToken: false,
-          });
-          if (
-            status.authMethod === null ||
-            status.authToken !== null ||
-            status.requiresOpenaiAuth !== true
-          )
-            return yield* Effect.fail(
-              new TextGenerationError({
-                operation: "generateHelp",
-                detail: "Native Help authentication is unavailable.",
-              }),
-            );
-          return yield* readSnapshot(canonicalHome);
+          return yield* action(client, canonicalHome);
         }),
       ),
     )
@@ -94,4 +77,48 @@ export const withCodexHelpAuthOwner = Effect.fn("withCodexHelpAuthOwner")(functi
         }),
       ),
     );
+});
+
+/** Renew in the owner before exporting an access-only snapshot to isolated inference. */
+export const withCodexHelpAuthOwner = Effect.fn("withCodexHelpAuthOwner")(function* <A, E, R>(
+  input: {
+    readonly binary: string;
+    readonly home: string;
+    readonly cwd: string;
+    readonly environment: NodeJS.ProcessEnv;
+  },
+  readSnapshot: (canonicalHome: string) => Effect.Effect<A, E, R>,
+) {
+  return yield* withCodexHelpOwnerClient(
+    {
+      ...input,
+      configArgs: [
+        "--config",
+        'model_provider="openai"',
+        "--config",
+        'cli_auth_credentials_store="file"',
+      ],
+    },
+    (client, canonicalHome) =>
+      Effect.gen(function* () {
+        // The default account/read does not renew. This invokes AuthManager.auth()
+        // with proactive expiry handling, without exporting tokens over the RPC.
+        const status = yield* client.request("getAuthStatus", {
+          includeToken: false,
+          refreshToken: false,
+        });
+        if (
+          status.authMethod === null ||
+          status.authToken !== null ||
+          status.requiresOpenaiAuth !== true
+        )
+          return yield* Effect.fail(
+            new TextGenerationError({
+              operation: "generateHelp",
+              detail: "Native Help authentication is unavailable.",
+            }),
+          );
+        return yield* readSnapshot(canonicalHome);
+      }),
+  );
 });
