@@ -143,12 +143,16 @@ function fileRow(path: string) {
 }
 
 async function publishUrl(path: string, url: string) {
+  faviconFailure?.snapshot(`publish-before:${path}`);
   await act(async () => {
+    faviconFailure?.snapshot(`set-before:${path}`);
     appAtomRegistry.set(
       state.assets.get(path)!,
       AsyncResult.success({ relativeUrl: url, expiresAt: Date.now() + 60_000 }),
     );
+    faviconFailure?.snapshot(`set-after:${path}`);
   });
+  faviconFailure?.snapshot(`publish-after:${path}`);
 }
 
 // Decoding sets naturalWidth before the load event reaches React, so wait for both together.
@@ -161,39 +165,225 @@ async function expectPreview(row: HTMLElement) {
     .toEqual({ width: 8, fallback: false });
 }
 
+// Failure-only output; observation never reads/creates/subscribes an atom node.
+function observeFaviconFailure() {
+  const paths = ["icons/icon-0.svg", "icons/icon-39.svg"];
+  const started = performance.now();
+  const history: object[] = [];
+  const saved = new Map<string, HTMLElement>();
+  const identities = new WeakMap<object, number>();
+  let nextId = 0;
+  let dropped = 0;
+  let observerErrors = 0;
+  const id = (value: object) => {
+    let current = identities.get(value);
+    if (current === undefined) identities.set(value, (current = ++nextId));
+    return current;
+  };
+  const safely = (run: () => void) => {
+    try {
+      run();
+    } catch {
+      observerErrors++;
+    }
+  };
+  const record = (type: string, fields: object) => {
+    if (history.length < 128) history.push({ ms: performance.now() - started, type, ...fields });
+    else dropped++;
+  };
+  const currentRow = (path: string) =>
+    [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((row) =>
+      row.textContent?.includes(path),
+    ) ?? null;
+  const imageInfo = (image: HTMLImageElement | null) =>
+    image && {
+      id: id(image),
+      connected: image.isConnected,
+      complete: image.complete,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      srcMatchesFixture: image.getAttribute("src") === imageUrl,
+      currentSrcMatchesFixture: image.currentSrc === imageUrl,
+    };
+  const rowInfo = (row: HTMLElement | null | undefined) =>
+    row
+      ? {
+          id: id(row),
+          connected: row.isConnected,
+          fallback: row.querySelector("svg") !== null,
+          image: imageInfo(row.querySelector("img")),
+        }
+      : null;
+  type RegistryNode =
+    ReturnType<typeof appAtomRegistry.getNodes> extends ReadonlyMap<unknown, infer N> ? N : never;
+  const nodeInfo = (node: RegistryNode | undefined) => {
+    if (!node) return null;
+    // Both functions return stored state without rebuilding or keeping the node alive.
+    const option = node.valueOption();
+    const result = option._tag === "Some" ? (option.value as AssetResult) : null;
+    return {
+      id: id(node),
+      lifecycle: node.currentState(),
+      removable: node.canBeRemoved,
+      listeners: node.listeners.size,
+      children: node.children.size,
+      parents: node.parents.size,
+      resultTag: result?._tag ?? null,
+      waiting: result?.waiting ?? null,
+      urlMatchesFixture: result?._tag === "Success" ? result.value.relativeUrl === imageUrl : null,
+    };
+  };
+  const snapshot = (label: string) =>
+    safely(() => {
+      const nodes = appAtomRegistry.getNodes();
+      record("checkpoint", {
+        label,
+        rows: paths.map((path) => {
+          const atom = state.assets.get(path);
+          const current = currentRow(path);
+          return {
+            path,
+            saved: rowInfo(saved.get(path)),
+            current: rowInfo(current),
+            savedIsCurrent: saved.has(path) ? saved.get(path) === current : null,
+            atomId: atom ? id(atom) : null,
+            keepAlive: atom?.keepAlive ?? null,
+            idleTTL: atom?.idleTTL ?? null,
+            node: atom ? nodeInfo(nodes.get(atom)) : null,
+          };
+        }),
+      });
+    });
+  const imageEvent = (event: Event) =>
+    safely(() => {
+      if (!(event.target instanceof HTMLImageElement)) return;
+      const row = event.target.closest<HTMLElement>('[role="option"]');
+      const path = paths.find((path) => row?.textContent?.includes(path));
+      if (path)
+        record("native-image", {
+          path,
+          event: event.type,
+          trusted: event.isTrusted,
+          row: rowInfo(row),
+          image: imageInfo(event.target),
+        });
+    });
+  // Proposed passive capture only: no preventDefault/propagation changes or synthetic events.
+  safely(() => document.addEventListener("load", imageEvent, { capture: true, passive: true }));
+  safely(() => document.addEventListener("error", imageEvent, { capture: true, passive: true }));
+  const added = appAtomRegistry.onNodeAdded;
+  const removed = appAtomRegistry.onNodeRemoved;
+  const nodeEvent = (type: string, node: RegistryNode) =>
+    safely(() => {
+      const path = paths.find((path) => state.assets.get(path) === node.atom);
+      if (path) record(type, { path, node: nodeInfo(node) });
+    });
+  appAtomRegistry.onNodeAdded = function (node) {
+    nodeEvent("node-added", node);
+    return added?.call(this, node);
+  };
+  appAtomRegistry.onNodeRemoved = function (node) {
+    nodeEvent("node-removed", node);
+    return removed?.call(this, node);
+  };
+  snapshot("attached-after-render");
+  return {
+    snapshot,
+    remember(path: string, row: HTMLElement) {
+      saved.set(path, row);
+    },
+    failure(stage: string) {
+      // A reporting error must never replace the caught assertion/original error.
+      try {
+        snapshot("failure-before-render-disposal");
+        const acquisitions = state.createUrl.mock.calls.flatMap(([target], call) => {
+          const path = target.input.resource.path as string;
+          return paths.includes(path) ? [{ call, path }] : [];
+        });
+        console.error(
+          "FAVICON_FAILURE_CONTEXT",
+          JSON.stringify({
+            stage,
+            history,
+            acquisitions: acquisitions.slice(-64),
+            acquisitionCount: acquisitions.length,
+            dropped,
+            observerErrors,
+            preRenderEventHistory: "not observed",
+          }),
+        );
+      } catch {
+        /* Preserve the original error even if diagnostics fail. */
+      }
+    },
+    dispose() {
+      safely(() => document.removeEventListener("load", imageEvent, true));
+      safely(() => document.removeEventListener("error", imageEvent, true));
+      safely(() => {
+        appAtomRegistry.onNodeAdded = added;
+      });
+      safely(() => {
+        appAtomRegistry.onNodeRemoved = removed;
+      });
+    },
+  };
+}
+let faviconFailure: ReturnType<typeof observeFaviconFailure> | undefined;
+
 it("loads previews asynchronously and only acquires offscreen images after scrolling", async () => {
   using _env = setup();
   const paths = Array.from({ length: 40 }, (_, index) => `icons/icon-${index}.svg`);
   addFiles(paths);
   await using screen = await renderPicker();
-  const first = fileRow("icons/icon-0.svg");
-  const last = fileRow("icons/icon-39.svg");
+  const context = observeFaviconFailure();
+  faviconFailure = context;
+  let stage = "locate-rows";
+  try {
+    const first = fileRow("icons/icon-0.svg");
+    const last = fileRow("icons/icon-39.svg");
+    context.remember("icons/icon-0.svg", first);
+    context.remember("icons/icon-39.svg", last);
+    context.snapshot("rows-saved");
+    stage = "initial-acquisition-and-offscreen-guards";
 
-  await expect.poll(() => state.createUrl.mock.calls.length).toBeGreaterThan(0);
-  expect(first.querySelector("img")).toBeNull();
-  expect(first.querySelector("svg")).not.toBeNull();
-  expect(last.getBoundingClientRect().top).toBeGreaterThan(window.innerHeight);
-  expect(
-    state.createUrl.mock.calls.some(
-      ([target]) => target.input.resource.path === "icons/icon-39.svg",
-    ),
-  ).toBe(false);
-
-  await publishUrl("icons/icon-0.svg", imageUrl);
-  await expectPreview(first);
-
-  await act(async () => last.scrollIntoView({ block: "center" }));
-  await expect
-    .poll(() =>
+    await expect.poll(() => state.createUrl.mock.calls.length).toBeGreaterThan(0);
+    expect(first.querySelector("img")).toBeNull();
+    expect(first.querySelector("svg")).not.toBeNull();
+    expect(last.getBoundingClientRect().top).toBeGreaterThan(window.innerHeight);
+    expect(
       state.createUrl.mock.calls.some(
         ([target]) => target.input.resource.path === "icons/icon-39.svg",
       ),
-    )
-    .toBe(true);
-  await publishUrl("icons/icon-39.svg", imageUrl);
-  await expectPreview(last);
-  await act(async () => last.click());
-  expect(screen.onSelect).toHaveBeenCalledWith("icons/icon-39.svg");
+    ).toBe(false);
+
+    stage = "publish-first";
+    await publishUrl("icons/icon-0.svg", imageUrl);
+    stage = "preview-first";
+    await expectPreview(first);
+
+    stage = "scroll-and-acquire-last";
+    await act(async () => last.scrollIntoView({ block: "center" }));
+    await expect
+      .poll(() =>
+        state.createUrl.mock.calls.some(
+          ([target]) => target.input.resource.path === "icons/icon-39.svg",
+        ),
+      )
+      .toBe(true);
+    stage = "publish-last";
+    await publishUrl("icons/icon-39.svg", imageUrl);
+    stage = "preview-last";
+    await expectPreview(last);
+    stage = "select-last";
+    await act(async () => last.click());
+    expect(screen.onSelect).toHaveBeenCalledWith("icons/icon-39.svg");
+  } catch (error) {
+    context.failure(stage);
+    throw error;
+  } finally {
+    faviconFailure = undefined;
+    context.dispose();
+  }
 });
 
 it("loads without IntersectionObserver and recovers a failed image when its URL changes", async () => {

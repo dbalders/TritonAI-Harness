@@ -142,9 +142,12 @@ function readPersistedEntries(): ReadonlyArray<PromptStashEntry> | null {
 
 interface PromptStashStoreState {
   entries: ReadonlyArray<PromptStashEntry>;
-  stashEntry: (entry: PromptStashEntry) => {
+  stashEntry: (
+    entry: PromptStashEntry,
+    options?: { readonly requireDurable: boolean },
+  ) => {
     evicted: PromptStashEntry | null;
-    /** False when the write failed outright (e.g. quota); nothing was kept. */
+    /** False when the requested write fails (e.g. quota or required durability); nothing was kept. */
     written: boolean;
     /**
      * False when the write will not survive a reload: either it failed, or it
@@ -174,7 +177,10 @@ interface PromptStashStoreState {
 
 export const usePromptStashStore = create<PromptStashStoreState>()((set, get) => ({
   entries: [],
-  stashEntry: (entry) => {
+  stashEntry: (entry, options) => {
+    if (options?.requireDurable && !storageIsDurable) {
+      return { evicted: null, written: false, durable: false };
+    }
     const nextEntries = [entry, ...get().entries];
     const evicted = nextEntries.length > MAX_STASH_ENTRIES ? (nextEntries.pop() ?? null) : null;
     const { written, durable } = persistEntries(nextEntries);

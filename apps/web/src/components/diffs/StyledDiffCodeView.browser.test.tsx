@@ -24,7 +24,28 @@ import {
 } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
+type WorkerStartupObservation = {
+  stage: "first" | "reopened";
+  createdAt: number;
+  initializeId: string | null;
+  initializePosts: number;
+  initializeReplies: number;
+  initializeDelivered: number;
+  initializeErrors: number;
+  events: {
+    type: string;
+    at: number;
+    eventClass: string;
+    source: string | null;
+    line: number | null;
+    column: number | null;
+  }[];
+};
+
 const testState = vi.hoisted(() => ({
+  startupStage: null as WorkerStartupObservation["stage"] | null,
+  workerStartup: [] as WorkerStartupObservation[],
+  poolStartedAt: new Map<WorkerPoolManager, number>(),
   workers: [] as Worker[],
   terminations: 0,
   requests: [] as WorkerRequest[],
@@ -41,6 +62,59 @@ vi.mock(import("../../hooks/useTheme"), async (original) => ({
   useRenderedAppearance: (() => "dark") as never,
 }));
 
+// Metadata only: never serialize request/response payloads, source, URL queries or stacks.
+function publicWorkerResource(value: string) {
+  if (!value) return null;
+  try {
+    const url = new URL(value, location.href);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return `${url.protocol}<opaque>`;
+    const module = url.pathname.lastIndexOf("/node_modules/");
+    return module >= 0
+      ? url.pathname.slice(module + 1)
+      : url.pathname.startsWith("/@fs/")
+        ? `/@fs/<external>/${url.pathname.split("/").at(-1)}`
+        : url.pathname;
+  } catch {
+    return "<unavailable>";
+  }
+}
+
+function workerStartupFailureContext(
+  stage: WorkerStartupObservation["stage"],
+  pool: WorkerPoolManager,
+  awaitStartedAt: number,
+) {
+  const now = performance.now();
+  const initializationStartedAt = testState.poolStartedAt.get(pool) ?? awaitStartedAt;
+  const resources = (
+    performance.getEntriesByType("resource") as PerformanceResourceTiming[]
+  ).filter(
+    (entry) =>
+      entry.startTime >= initializationStartedAt && /worker|pierre|shiki|wasm/i.test(entry.name),
+  );
+  return {
+    stage,
+    initializationElapsedMs: now - initializationStartedAt,
+    awaitElapsedMs: now - awaitStartedAt,
+    fakeTimers: vi.isFakeTimers(),
+    expectedInitializeAcks: 2,
+    pool: pool.getStats(),
+    workers: testState.workerStartup.filter((worker) => worker.stage === stage),
+    resourceTimingScope: "page only; worker-internal resource timing is not visible here",
+    matchingResourceEntries: resources.length,
+    resources: resources.slice(-12).map((entry) => ({
+      resource: publicWorkerResource(entry.name),
+      initiator: entry.initiatorType,
+      startTime: entry.startTime,
+      responseStart: entry.responseStart,
+      responseEnd: entry.responseEnd,
+      duration: entry.duration,
+      transferSize: entry.transferSize,
+      responseStatus: entry.responseStatus,
+    })),
+  };
+}
+
 // Wraps Pierre's real worker so the suite can count workers, read requests and hold startup.
 // Vite's `?worker` export is a factory that returns a plain Worker, so this patches the instance.
 vi.mock("@pierre/diffs/worker/worker.js?worker", async (original) => {
@@ -54,6 +128,34 @@ vi.mock("@pierre/diffs/worker/worker.js?worker", async (original) => {
       const addEventListener = worker.addEventListener.bind(worker);
       const postMessage = worker.postMessage.bind(worker);
       const terminate = worker.terminate.bind(worker);
+      const startup: WorkerStartupObservation | null =
+        testState.startupStage === null
+          ? null
+          : {
+              stage: testState.startupStage,
+              createdAt: performance.now(),
+              initializeId: null,
+              initializePosts: 0,
+              initializeReplies: 0,
+              initializeDelivered: 0,
+              initializeErrors: 0,
+              events: [],
+            };
+      if (startup) {
+        testState.workerStartup.push(startup);
+        const observeError = (event: Event) => {
+          startup.events.push({
+            type: event.type,
+            at: performance.now(),
+            eventClass: event.constructor.name,
+            source: event instanceof ErrorEvent ? publicWorkerResource(event.filename) : null,
+            line: event instanceof ErrorEvent ? event.lineno : null,
+            column: event instanceof ErrorEvent ? event.colno : null,
+          });
+        };
+        addEventListener("error", observeError, { passive: true });
+        addEventListener("messageerror", observeError, { passive: true });
+      }
       worker.addEventListener = (type: string, listener: EventListenerOrEventListenerObject) => {
         if (type !== "message" || typeof listener !== "function") {
           addEventListener(type, listener);
@@ -61,7 +163,15 @@ vi.mock("@pierre/diffs/worker/worker.js?worker", async (original) => {
         }
         addEventListener("message", (event) => {
           const data = (event as MessageEvent<WorkerResponse>).data;
-          const deliver = () => listener(event);
+          const initializes = data.type === "success" && data.requestType === "initialize";
+          if (startup && initializes) startup.initializeReplies += 1;
+          if (startup && data.type === "error" && data.id === startup.initializeId) {
+            startup.initializeErrors += 1;
+          }
+          const deliver = () => {
+            if (startup && initializes) startup.initializeDelivered += 1;
+            listener(event);
+          };
           if (
             testState.holdInitialization &&
             data.type === "success" &&
@@ -75,6 +185,10 @@ vi.mock("@pierre/diffs/worker/worker.js?worker", async (original) => {
         });
       };
       worker.postMessage = (message: WorkerRequest) => {
+        if (startup && message.type === "initialize") {
+          startup.initializeId = message.id;
+          startup.initializePosts += 1;
+        }
         testState.requests.push(message);
         postMessage(message);
       };
@@ -152,6 +266,9 @@ const loadingViews = () => document.querySelectorAll('[role="status"]').length;
 
 describe("code-view worker lifecycle", () => {
   function setup() {
+    testState.startupStage = null;
+    testState.workerStartup = [];
+    testState.poolStartedAt.clear();
     testState.workers = [];
     testState.terminations = 0;
     testState.requests = [];
@@ -175,6 +292,9 @@ describe("code-view worker lifecycle", () => {
         this: WorkerPoolManager,
         ...args
       ) {
+        if (testState.startupStage !== null && !testState.poolStartedAt.has(this)) {
+          testState.poolStartedAt.set(this, performance.now());
+        }
         const pending = initialize.apply(this, args);
         testState.pools.set(this, pending);
         return pending;
@@ -203,6 +323,7 @@ describe("code-view worker lifecycle", () => {
   // Two cold starts can each use Pierre's 10-second initialization budget.
   it("starts workers on demand and expires idle pools", { timeout: 30_000 }, async () => {
     setup();
+    testState.startupStage = "first";
     await using workers = await workerEnvironment();
     const view = await workers.render(renderViews(0));
     const button = document.querySelector("button")!;
@@ -211,7 +332,20 @@ describe("code-view worker lifecycle", () => {
     await act(async () => button.click());
     await view.rerender(renderViews(1));
     const pool = [...testState.pools.keys()][0]!;
-    await act(async () => testState.pools.get(pool));
+    const firstAwaitStartedAt = performance.now();
+    try {
+      await act(async () => testState.pools.get(pool));
+    } catch (error) {
+      try {
+        console.error(
+          "DIFF_WORKER_STARTUP_CONTEXT",
+          JSON.stringify(workerStartupFailureContext("first", pool, firstAwaitStartedAt)),
+        );
+      } catch {
+        // Diagnostic failure must not replace the original startup rejection.
+      }
+      throw error;
+    }
     expect(pool.isInitialized()).toBe(true);
     expect(testState.workers).toHaveLength(2);
     await vi.waitFor(() => expect(codeFile("notes.txt")).toContain("Plain text is ready."));
@@ -249,9 +383,25 @@ describe("code-view worker lifecycle", () => {
       expect(testState.terminations).toBe(2);
     }
 
+    testState.startupStage = "reopened";
     await view.rerender(renderViews(1));
     const reopenedPool = [...testState.pools.keys()][1]!;
-    await act(async () => testState.pools.get(reopenedPool));
+    const reopenedAwaitStartedAt = performance.now();
+    try {
+      await act(async () => testState.pools.get(reopenedPool));
+    } catch (error) {
+      try {
+        console.error(
+          "DIFF_WORKER_STARTUP_CONTEXT",
+          JSON.stringify(
+            workerStartupFailureContext("reopened", reopenedPool, reopenedAwaitStartedAt),
+          ),
+        );
+      } catch {
+        // Diagnostic failure must not replace the original startup rejection.
+      }
+      throw error;
+    }
     expect(reopenedPool.isInitialized()).toBe(true);
     expect(testState.workers).toHaveLength(4);
     expect(document.querySelector("button")).toBe(button);

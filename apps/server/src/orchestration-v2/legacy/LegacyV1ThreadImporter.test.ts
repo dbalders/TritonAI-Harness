@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   EventId,
+  MessageId,
   ProviderThreadId,
   ProviderDriverKind,
   OrchestrationV2ProviderThread,
@@ -13,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Tracer from "effect/Tracer";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import { listLinkedPullRequestThreads } from "../../pullRequest/linkedThreads.ts";
@@ -150,6 +152,156 @@ it.effect("propagates interruption from transcript reads and retry-marker writes
       `,
       [],
     );
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("preserves newer thread activity while hydrating legacy transcripts", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const events = yield* EventStore.EventStoreV2;
+    const sink = yield* EventSink.EventSinkV2;
+    const threadId = ThreadId.make("thread:legacy-activity");
+    const shellAt = "2026-01-04T00:00:00.000Z";
+    const source = [
+      ["message:activity:1", "user", "2026-01-01T01:00:00.000Z"],
+      ["message:activity:2", "assistant", "2026-01-01T02:00:00.000Z"],
+      ["message:activity:3", "user", "2026-01-02T01:00:00.000Z"],
+      ["message:activity:4", "assistant", "2026-01-02T02:00:00.000Z"],
+    ] as const;
+    yield* sql`
+      INSERT INTO projection_projects (
+        project_id, title, workspace_root, scripts_json, created_at, updated_at
+      ) VALUES (
+        'project:legacy-activity', 'Legacy project', '/tmp/legacy-activity', '[]',
+        '2026-01-01T00:00:00.000Z', ${shellAt}
+      )
+    `;
+    yield* sql`
+      INSERT INTO projection_threads (
+        thread_id, project_id, title, model_selection_json, runtime_mode,
+        interaction_mode, created_at, updated_at
+      ) VALUES (
+        ${threadId}, 'project:legacy-activity', 'Preserved shell',
+        '{"instanceId":"codex","model":"gpt-5.4"}', 'approval-required', 'plan',
+        '2026-01-01T00:00:00.000Z', ${shellAt}
+      )
+    `;
+    for (const [id, role, at] of source) {
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id, thread_id, role, text, is_streaming, created_at, updated_at
+        ) VALUES (${id}, ${threadId}, ${role}, ${id}, 0, ${at}, ${at})
+      `;
+    }
+    const sourceRows = yield* sql`
+      SELECT * FROM projection_thread_messages WHERE thread_id = ${threadId} ORDER BY message_id
+    `;
+    yield* importer.reconcileShells;
+    const shell = yield* projections.getThread(threadId);
+    assert.deepEqual(shell.updatedAt, DateTime.makeUnsafe(shellAt));
+    assert.deepStrictEqual(
+      (yield* projections.getThreadProjection(threadId)).messages.map((message) => message.id),
+      source.slice(2).map(([id]) => MessageId.make(id)),
+    );
+
+    assert.deepStrictEqual(yield* importer.ensureTranscript(threadId), {
+      importedThreadCount: 1,
+      importedMessageCount: 2,
+    });
+    const readActivity = Effect.gen(function* () {
+      const projection = yield* projections.getThreadProjection(threadId);
+      const storedEvents = yield* events.read({ threadId }).pipe(Stream.runCollect);
+      const memory = yield* Effect.gen(function* () {
+        const store = yield* ProjectionStore.ProjectionStoreV2;
+        for (const stored of storedEvents) yield* store.apply(stored.event);
+        return yield* store.getThreadProjection(threadId);
+      }).pipe(Effect.provide(ProjectionStore.layerMemory));
+      const [row] = yield* sql<{ readonly scalar: string; readonly payload: string }>`
+        SELECT updated_at AS scalar, json_extract(payload_json, '$.updatedAt') AS payload
+        FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
+      `;
+      return {
+        scalar: row?.scalar,
+        payload: row?.payload,
+        sqlThread: DateTime.formatIso(projection.thread.updatedAt),
+        sqlProjection: DateTime.formatIso(projection.updatedAt),
+        memoryThread: DateTime.formatIso(memory.thread.updatedAt),
+        memoryProjection: DateTime.formatIso(memory.updatedAt),
+      };
+    });
+    const expectedActivity = (at: string) => ({
+      scalar: at,
+      payload: at,
+      sqlThread: at,
+      sqlProjection: at,
+      memoryThread: at,
+      memoryProjection: at,
+    });
+    assert.deepStrictEqual(yield* readActivity, expectedActivity(shellAt));
+    const hydrated = yield* projections.getThreadProjection(threadId);
+    assert.deepEqual(hydrated.thread, shell);
+    assert.deepStrictEqual(
+      hydrated.messages.map((message) => [
+        message.id,
+        DateTime.formatIso(message.createdAt),
+        DateTime.formatIso(message.updatedAt),
+      ]),
+      source.map(([id, , at]) => [id, at, at]),
+    );
+    assert.deepStrictEqual(
+      hydrated.turnItems.map((item) => [
+        item.id,
+        item.ordinal,
+        item.startedAt && DateTime.formatIso(item.startedAt),
+        item.completedAt && DateTime.formatIso(item.completedAt),
+        DateTime.formatIso(item.updatedAt),
+      ]),
+      source.map(([id, , at], index) => [`migration:v1:turn-item:${id}`, index + 1, at, at, at]),
+    );
+    const historyEvents = yield* events.read({ threadId }).pipe(Stream.runCollect);
+    for (const [id, , at] of source) {
+      assert.deepStrictEqual(
+        historyEvents
+          .filter(({ event }) =>
+            [`migration:v1:message:${id}`, `migration:v1:turn-item:${id}`].includes(event.id),
+          )
+          .map(({ event }) => DateTime.formatIso(event.occurredAt)),
+        [at, at],
+      );
+    }
+    assert.deepStrictEqual(yield* importer.ensureTranscript(threadId), {
+      importedThreadCount: 0,
+      importedMessageCount: 0,
+    });
+    assert.deepStrictEqual(yield* events.read({ threadId }).pipe(Stream.runCollect), historyEvents);
+    assert.deepStrictEqual(yield* readActivity, expectedActivity(shellAt));
+    assert.deepStrictEqual(
+      yield* sql`
+        SELECT * FROM projection_thread_messages WHERE thread_id = ${threadId} ORDER BY message_id
+      `,
+      sourceRows,
+    );
+
+    const liveAt = "2026-01-05T00:00:00.000Z";
+    const message = hydrated.messages[0]!;
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make("event:legacy-activity:live-message"),
+          type: "message.updated",
+          threadId,
+          occurredAt: DateTime.makeUnsafe(liveAt),
+          payload: { ...message, text: "Live update", updatedAt: DateTime.makeUnsafe(liveAt) },
+        },
+      ],
+    });
+    assert.deepStrictEqual(yield* readActivity, expectedActivity(liveAt));
+    assert.deepEqual(yield* projections.getThread(threadId), {
+      ...shell,
+      updatedAt: DateTime.makeUnsafe(liveAt),
+    });
   }).pipe(Effect.provide(layerTest)),
 );
 

@@ -155,6 +155,16 @@ describe("promptStashStore", () => {
     ]);
   });
 
+  it("requires durable storage before replacing the live draft", () => {
+    const store = usePromptStashStore.getState();
+    store.stashEntry(makeEntry({ id: "retained" }));
+    const result = store.stashEntry(makeEntry({ id: "needs-durability" }), {
+      requireDurable: true,
+    });
+    expect(result).toEqual({ evicted: null, written: false, durable: false });
+    expect(usePromptStashStore.getState().entries.map((entry) => entry.id)).toEqual(["retained"]);
+  });
+
   it("takeEntry removes and returns the entry; second take returns null", () => {
     const store = usePromptStashStore.getState();
     store.stashEntry(makeEntry({ id: "keep" }));

@@ -58,6 +58,149 @@ const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = modelSelection.instanceId;
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
+it.effect.each(
+  (
+    [
+      ["memory", ProjectionStore.layerMemory],
+      ["SQL", layerTest],
+    ] as const
+  ).flatMap(([engine, layer]) =>
+    [false, true].flatMap((newer) =>
+      [false, true].flatMap((crossThread) =>
+        [false, true].map((placeholder) => ({
+          engine,
+          timing: newer ? "newer" : "older",
+          scope: crossThread ? "other" : "same",
+          kind: placeholder ? "placeholder" : "loaded",
+          layer,
+          newer,
+          crossThread,
+          placeholder,
+        })),
+      ),
+    ),
+  ),
+)(
+  "$engine provider-thread activity: $timing/$scope/$kind",
+  ({ layer, newer, crossThread, placeholder }) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+      const streamId = ThreadId.make("thread:provider-activity:stream");
+      const ownerId = crossThread ? ThreadId.make("thread:provider-activity:owner") : streamId;
+      const createdAt = DateTime.makeUnsafe("2026-01-01T00:00:00.000Z");
+      const shellAt = DateTime.makeUnsafe("2026-01-04T00:00:00.000Z");
+      const historicalAt = DateTime.makeUnsafe("2026-01-01T02:00:00.000Z");
+      const occurredAt = newer ? DateTime.makeUnsafe("2026-01-05T00:00:00.000Z") : historicalAt;
+      const activityAt = newer ? occurredAt : shellAt;
+      const previousProviderId = ProviderThreadId.make(
+        "provider-thread:provider-activity:previous",
+      );
+      const thread = (id: ThreadId) => ({
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+        id,
+        projectId: ProjectId.make("project:provider-activity"),
+        title: "Preserved provider activity",
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "approval-required" as const,
+        interactionMode: "plan" as const,
+        branch: "feature/activity",
+        worktreePath: null,
+        activeProviderThreadId: previousProviderId,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: id },
+        forkedFrom: null,
+        createdAt,
+        updatedAt: shellAt,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: createdAt,
+        deletedAt: null,
+      });
+      for (const id of new Set([streamId, ownerId])) {
+        yield* store.apply({
+          id: EventId.make(`event:provider-activity:created:${id}`),
+          type: "thread.created",
+          threadId: id,
+          occurredAt: createdAt,
+          payload: thread(id),
+        });
+      }
+      const providerThread = {
+        id: ProviderThreadId.make("provider-thread:provider-activity:updated"),
+        driver,
+        providerInstanceId,
+        providerSessionId: null,
+        appThreadId: ownerId,
+        ownerNodeId: null,
+        nativeThreadRef: null,
+        nativeConversationHeadRef: null,
+        status: placeholder ? ("not_loaded" as const) : ("idle" as const),
+        firstRunOrdinal: null,
+        lastRunOrdinal: null,
+        handoffIds: [],
+        forkedFrom: null,
+        contextUsage: null,
+        goal: null,
+        nativeMetadata: null,
+        pendingBackgroundTasks: [],
+        createdAt,
+        updatedAt: historicalAt,
+      } satisfies OrchestrationV2ProviderThread;
+      yield* store.apply({
+        id: EventId.make("event:provider-activity:updated"),
+        type: "provider-thread.updated",
+        threadId: streamId,
+        driver,
+        providerInstanceId,
+        occurredAt,
+        payload: providerThread,
+      });
+      for (const id of new Set([streamId, ownerId])) {
+        const projection = yield* store.getThreadProjection(id);
+        const ownsProvider = id === ownerId && !placeholder;
+        const updatedAt = id === ownerId && crossThread && placeholder ? shellAt : activityAt;
+        assert.deepEqual(projection.thread, {
+          ...thread(id),
+          activeProviderThreadId: ownsProvider ? providerThread.id : previousProviderId,
+          updatedAt,
+        });
+        assert.deepEqual(projection.updatedAt, updatedAt);
+        assert.deepEqual((yield* store.getThreadShell(id))?.updatedAt, updatedAt);
+        assert.deepEqual(projection.providerThreads, id === ownerId ? [providerThread] : []);
+        if (sql._tag === "Some") {
+          const [row] = yield* sql.value<{
+            readonly scalar: string;
+            readonly payload: string;
+            readonly active: string;
+          }>`
+          SELECT updated_at AS scalar, json_extract(payload_json, '$.updatedAt') AS payload,
+            active_provider_thread_id AS active
+          FROM orchestration_v2_projection_threads WHERE thread_id = ${id}
+        `;
+          assert.deepStrictEqual(row, {
+            scalar: DateTime.formatIso(updatedAt),
+            payload: DateTime.formatIso(updatedAt),
+            active: ownsProvider ? providerThread.id : previousProviderId,
+          });
+        }
+      }
+      if (sql._tag === "Some") {
+        const [row] = yield* sql.value<{ readonly scalar: string; readonly payload: string }>`
+        SELECT updated_at AS scalar, json_extract(payload_json, '$.updatedAt') AS payload
+        FROM orchestration_v2_projection_provider_threads
+        WHERE provider_thread_id = ${providerThread.id}
+      `;
+        assert.deepStrictEqual(row, {
+          scalar: DateTime.formatIso(historicalAt),
+          payload: DateTime.formatIso(historicalAt),
+        });
+      }
+    }).pipe(Effect.provide(layer)),
+);
+
 const traceSqlStatements = () => {
   const statements: Array<string> = [];
   const tracer = Tracer.make({
