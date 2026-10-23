@@ -79,7 +79,7 @@ const layerCodexTextGenerationTest = ServerConfig.ServerConfig.layerTest(process
 
 interface FakeCodexInput {
   output: string;
-  lifecycle?: { port: number; command: "exec" | "mcp list" };
+  lifecycle?: { port: number; command: "exec" | "mcp list" | "app-server" };
   exitCode?: number;
   stderr?: string;
   requireImage?: boolean;
@@ -98,6 +98,7 @@ interface FakeCodexInput {
   requireHelpIsolation?: boolean;
   helpVersion?: string;
   requireNativeAuth?: boolean;
+  nativeOwner?: "renew" | "fail";
   forbidNativeAuth?: boolean;
 }
 
@@ -118,6 +119,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
     requireHelpIsolation: input.requireHelpIsolation ?? false,
     helpVersion: input.helpVersion ?? "0.156.1",
     requireNativeAuth: input.requireNativeAuth ?? false,
+    nativeOwner: input.nativeOwner ?? null,
     forbidNativeAuth: input.forbidNativeAuth ?? false,
     stderr: input.stderr ?? null,
     output: input.output,
@@ -131,6 +133,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
       name: "codex",
       source: [
         'import * as NodeFS from "node:fs";',
+        'import * as Readline from "node:readline";',
         `const check = ${check};`,
         "const args = process.argv.slice(2);",
         `NodeFS.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({ args, cwd: process.cwd(), home: process.env.CODEX_HOME }) + "\\n");`,
@@ -145,6 +148,42 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         "}",
         'if (args.includes("debug") && args.includes("models")) {',
         '  process.stdout.write(JSON.stringify({ models: [{ slug: "template", base_instructions: "PRIVATE CATALOG INSTRUCTIONS", shell_type: "default", apply_patch_tool_type: "freeform", experimental_supported_tools: ["clock"] }] }));',
+        "  process.exit(0);",
+        "}",
+        'if (args.includes("app-server")) {',
+        ...(input.lifecycle?.command !== "app-server"
+          ? []
+          : [
+              'process.on("SIGTERM", () => {});',
+              processProbeSource(input.lifecycle.port),
+              "await new Promise(() => {});",
+            ]),
+        '  if (!process.env.CODEX_HOME.endsWith("native-home")) process.exit(31);',
+        "  if (NodeFS.readdirSync(process.cwd()).length !== 0) process.exit(32);",
+        '  if (args.join(" ").includes("PRIVATE LAUNCH INSTRUCTIONS")) process.exit(33);',
+        '  const ownerLock = process.env.CODEX_HOME + "/owner-active";',
+        '  try { NodeFS.closeSync(NodeFS.openSync(ownerLock,"wx")); } catch { process.exit(35); }',
+        '  process.on("SIGTERM", () => { NodeFS.unlinkSync(ownerLock); process.exit(0); });',
+        "  const lines = Readline.createInterface({ input: process.stdin });",
+        "  for await (const line of lines) {",
+        "    const request = JSON.parse(line);",
+        '    if (request.method === "initialized") continue;',
+        '    if (request.method === "initialize") {',
+        '      process.stdout.write(JSON.stringify({id:request.id,result:{userAgent:"codex/0.156.1",codexHome:process.env.CODEX_HOME,platformFamily:"unix",platformOs:"linux"}}) + "\\n");',
+        "      continue;",
+        "    }",
+        '    if (request.method !== "getAuthStatus" || request.params.includeToken !== false || request.params.refreshToken !== false) process.exit(34);',
+        '    if (check.nativeOwner === "fail") { process.stdout.write(JSON.stringify({id:request.id,error:{code:-32603,message:"synthetic private auth failure"}}) + "\\n"); continue; }',
+        '    if (check.nativeOwner === "renew") {',
+        '      const authPath = process.env.CODEX_HOME + "/auth.json";',
+        '      const auth = JSON.parse(NodeFS.readFileSync(authPath,"utf8"));',
+        '      auth.tokens.access_token = "synthetic-renewed-access-token";',
+        '      auth.tokens.refresh_token = "synthetic-rotated-refresh-retained";',
+        "      auth.last_refresh = new Date().toISOString();",
+        "      NodeFS.writeFileSync(authPath,JSON.stringify(auth));",
+        "    }",
+        '    process.stdout.write(JSON.stringify({id:request.id,result:{authMethod:"chatgpt",authToken:null,requiresOpenaiAuth:true}}) + "\\n");',
+        "  }",
         "  process.exit(0);",
         "}",
         'const isMcpList = args.includes("mcp") && args.includes("list");',
@@ -208,7 +247,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
         '  if (!originalArgs.includes(\' model_provider="openai" \')) fail("native OAuth provider changed", 20);',
         '  const auth = JSON.parse(NodeFS.readFileSync(home + "/auth.json", "utf8"));',
         '  if (auth.tokens.refresh_token !== "") fail("refresh grant escaped the credential owner", 22);',
-        '  if (auth.tokens.access_token !== "synthetic-access-token" || auth.tokens.account_id !== "synthetic-native-account") fail("native account changed", 23);',
+        '  if (auth.tokens.access_token !== (check.nativeOwner === "renew" ? "synthetic-renewed-access-token" : "synthetic-access-token") || auth.tokens.account_id !== "synthetic-native-account") fail("native account changed or expired access reused", 23);',
         "}",
         'if (check.forbidNativeAuth && NodeFS.existsSync(process.env.CODEX_HOME + "/auth.json")) fail("native auth must not replace selected transport", 21);',
         "if (check.requireArg !== null && !originalArgs.includes(` ${check.requireArg} `)) {",
@@ -364,12 +403,126 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             const calls = (yield* fs.readFileString(callsPath))
               .trim()
               .split("\n")
-              .map((line) => JSON.parse(line) as { home: string });
+              .map((line) => JSON.parse(line) as { home: string; args: string[] })
+              .filter((call) => !call.args.includes("app-server"));
             const homes = new Set(calls.map((call) => call.home));
             expect(homes.size).toBe(2);
             for (const home of homes) expect(yield* fs.exists(home)).toBe(false);
           }),
       ),
+  );
+
+  it.effect("renews native access through the owner and retains its rotated refresh grant", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Renewed native Help works."}',
+        nativeAuth: true,
+        environment: { TRITONAI_API_KEY: "" },
+        requireNativeAuth: true,
+        requireHelpIsolation: true,
+        nativeOwner: "renew",
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sourceHome = path.join(path.dirname(callsPath), "native-home");
+          expect((yield* generation.generateHelp!(HELP_INPUT)).answer).toBe(
+            "Renewed native Help works.",
+          );
+          const owner = JSON.parse(yield* fs.readFileString(path.join(sourceHome, "auth.json")));
+          expect(owner.tokens.access_token).toBe("synthetic-renewed-access-token");
+          expect(owner.tokens.refresh_token).toBe("synthetic-rotated-refresh-retained");
+          const calls = (yield* fs.readFileString(callsPath))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as { home: string; args: string[] });
+          expect(
+            calls.filter((call) => call.args.includes("app-server")).map((call) => call.home),
+          ).toEqual([yield* fs.realPath(sourceHome)]);
+          for (const call of calls.filter((call) => !call.args.includes("app-server")))
+            expect(yield* fs.exists(call.home)).toBe(false);
+        }),
+    ),
+  );
+
+  it.effect("fails closed when the native owner cannot prepare access", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Must not run."}',
+        nativeAuth: true,
+        environment: { TRITONAI_API_KEY: "" },
+        requireNativeAuth: true,
+        nativeOwner: "fail",
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const result = yield* generation.generateHelp!(HELP_INPUT).pipe(Effect.result);
+          expect(Result.isFailure(result)).toBe(true);
+          expect(JSON.stringify(result)).not.toContain("synthetic private auth failure");
+          const calls = (yield* fs.readFileString(callsPath))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as { args: string[] });
+          expect(calls.some((call) => call.args.includes("app-server"))).toBe(true);
+          expect(calls.some((call) => call.args.includes("--output-last-message"))).toBe(false);
+        }),
+    ),
+  );
+
+  it.effect("serializes concurrent native renewals against the same canonical owner", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"answer":"Fresh access."}',
+        nativeAuth: true,
+        environment: { TRITONAI_API_KEY: "" },
+        requireNativeAuth: true,
+        requireHelpIsolation: true,
+        nativeOwner: "renew",
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const results = yield* Effect.all(
+            [generation.generateHelp!(HELP_INPUT), generation.generateHelp!(HELP_INPUT)],
+            { concurrency: "unbounded" },
+          );
+          expect(results.map((result) => result.answer)).toEqual([
+            "Fresh access.",
+            "Fresh access.",
+          ]);
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sourceHome = path.join(path.dirname(callsPath), "native-home");
+          expect(yield* fs.exists(path.join(sourceHome, "owner-active"))).toBe(false);
+          const owner = JSON.parse(yield* fs.readFileString(path.join(sourceHome, "auth.json")));
+          expect(owner.tokens.refresh_token).toBe("synthetic-rotated-refresh-retained");
+        }),
+    ),
+  );
+
+  it.effect("reaps a stalled native auth owner when Help is interrupted", () =>
+    Effect.gen(function* () {
+      const probe = yield* makeProcessProbe;
+      yield* withFakeCodexEnv(
+        {
+          output: "",
+          nativeAuth: true,
+          environment: { TRITONAI_API_KEY: "" },
+          lifecycle: { port: probe.port, command: "app-server" },
+        },
+        (generation) =>
+          Effect.gen(function* () {
+            const fiber = yield* generation.generateHelp!(HELP_INPUT).pipe(Effect.forkScoped);
+            yield* probe.started;
+            const interrupted = yield* Fiber.interrupt(fiber).pipe(Effect.forkScoped);
+            yield* probe.exited;
+            yield* Fiber.join(interrupted);
+            const exit = yield* Fiber.await(fiber);
+            expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+          }),
+      );
+    }),
   );
 
   it.effect("keeps the configured gateway when native authentication also exists", () =>
