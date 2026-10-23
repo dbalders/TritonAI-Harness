@@ -21,9 +21,17 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => vi.fn(),
 }));
+// Isolate SettingsRow's Harness reads: live connection atoms can discover the
+// environment asynchronously and race the zero-network Bot assertions.
 vi.mock("../../state/environments", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/environments")>()),
   usePrimaryEnvironmentId: () => "own-harness",
+  usePrimaryEnvironment: () => null,
+}));
+vi.mock("../../state/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/session")>()),
+  useEnvironmentScope: () => false,
+  useEnvironmentsWithScope: () => new Set(),
 }));
 vi.mock("../../state/server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/server")>()),
@@ -88,6 +96,7 @@ it("starts off and enabling never signs in, connects Microsoft or pairs a worker
   expect(container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
   await toggle();
   expect(config.settings.tritonAiBotEnabled).toBe(true);
+  expect(config.update).toHaveBeenCalledExactlyOnceWith({ tritonAiBotEnabled: true });
   expect(config.stop).not.toHaveBeenCalled();
   expect(fetch).not.toHaveBeenCalled();
   expect(container.textContent).toContain("Open Bot");
