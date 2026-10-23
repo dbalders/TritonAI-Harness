@@ -40,6 +40,8 @@ export interface DotMicrosoftHealth {
 export interface DotMicrosoftState {
   /** Older pilot services report account eligibility without connection health. */
   readonly available?: boolean;
+  /** Explicit per-owner consent state; absent on older services means unknown. */
+  readonly connected?: boolean;
   readonly message?: string;
   readonly health?: DotMicrosoftHealth;
 }

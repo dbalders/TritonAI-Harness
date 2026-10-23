@@ -167,7 +167,6 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
                   if (path !== serverConfig.environmentIdPath || remaining > 0 || value.trim()) {
                     return;
                   }
-                  // Both observe the empty file, but one repairs it after the other has finished.
                   if (++emptyReads === 2) {
                     yield* Deferred.succeed(bothReadEmpty, undefined);
                     yield* Deferred.await(firstInitialized);
@@ -303,8 +302,6 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(withFd.capabilities.serverSelfUpdate).toBe("desktop-managed");
       expect(withFd.capabilities.desktopAppUpdate).toBe(true);
       expect(withFd.capabilities.serverSelfUpdateProgress).toBe(true);
-      // v2 recovery terminalizes running runs on restart, so continuation
-      // stays unadvertised until the v2 runtime carries the markers.
       expect(withFd.capabilities.serverUpdateThreadContinuation).toBeUndefined();
 
       const withoutFd = yield* describeWith({ mode: "desktop" });

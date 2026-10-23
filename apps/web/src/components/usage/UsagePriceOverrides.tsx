@@ -25,7 +25,7 @@ import { Label } from "../ui/label";
 import { Menu, MenuCheckboxItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
-import { USAGE_PRICE_FIELDS } from "./usagePriceForm";
+import { isUsagePriceEdit, USAGE_PRICE_FIELDS } from "./usagePriceForm";
 import {
   isEmptyUsagePriceDraft,
   usageAliasCell,
@@ -92,10 +92,6 @@ type SaveAttempt = {
   >;
 };
 
-/**
- * Edits custom model prices and mappings. A mapped model's usage counts as its
- * target model. `initialModel` opens with a new row for that model.
- */
 export function UsagePriceOverrides({
   usage,
   initialSelectedEnvironmentIds,
@@ -112,7 +108,6 @@ export function UsagePriceOverrides({
   const selected = environments.filter(
     (environment) => selectedIds === null || selectedIds.has(environment.environmentId),
   );
-  // A model that already has a custom price or mapping is edited in its existing row.
   const [drafts, setDrafts] = useState<readonly UsagePriceDraft[]>(() =>
     initialModel === undefined ||
     selected.some(
@@ -146,7 +141,6 @@ export function UsagePriceOverrides({
         .flatMap((environment) => environment.summary?.buckets.map((bucket) => bucket.model) ?? []),
     ]),
   ].sort();
-  // Keep new rows in place while successful environments publish their updated settings.
   const newModels = new Set(
     drafts.filter((draft) => draft.isNew).map((draft) => draft.model.trim()),
   );
@@ -201,7 +195,6 @@ export function UsagePriceOverrides({
     );
     setAttempt(null);
   };
-  // An existing row edited back to its saved values has nothing left to save.
   const matchesSaved = (
     row: UsagePriceDraft,
     cell: { value: string; placeholder: string },
@@ -473,13 +466,15 @@ export function UsagePriceOverrides({
                             ) : (
                               USAGE_PRICE_FIELDS.map((field) => {
                                 const cell = usagePriceCell(selected, row.model, field.key);
+                                const value =
+                                  row.values[field.key] ?? (row.isNew ? "" : cell.value);
                                 return (
                                   <TableCell key={field.key}>
                                     <Input
                                       size="compact"
                                       inputMode="decimal"
                                       aria-label={`${field.label} price for ${row.model || "new model"}`}
-                                      value={row.values[field.key] ?? (row.isNew ? "" : cell.value)}
+                                      value={value}
                                       placeholder={
                                         row.isNew
                                           ? field.optional
@@ -490,9 +485,10 @@ export function UsagePriceOverrides({
                                       autoComplete="off"
                                       disabled={locked}
                                       font="mono"
-                                      onChange={(event) =>
-                                        editCell(row, field.key, event.target.value)
-                                      }
+                                      onChange={(event) => {
+                                        if (isUsagePriceEdit(value, event.target.value))
+                                          editCell(row, field.key, event.target.value);
+                                      }}
                                     />
                                   </TableCell>
                                 );

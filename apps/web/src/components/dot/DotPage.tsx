@@ -1,3 +1,4 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ArrowUpIcon,
@@ -11,15 +12,7 @@ import {
   ThumbsUpIcon,
   XIcon,
 } from "lucide-react";
-import {
-  type ComponentProps,
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ComponentProps, Fragment, useEffect, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
 import { ensureLocalApi } from "../../localApi";
@@ -51,7 +44,7 @@ import { BotHandlingPanel } from "./BotHandlingPanel";
 import { BotRoutinesPanel } from "./BotRoutinesPanel";
 import { BotFileRecipesPanel } from "./BotFileRecipesPanel";
 import type { DotFileRecipeInput } from "./dotFileRecipes";
-import { BotCapabilitiesPanel, BotMicrosoftBanner } from "./BotDiscoveryPanels";
+import { BotCapabilitiesPanel, BotMicrosoftConnection } from "./BotDiscoveryPanels";
 import type { DotHandlingItem } from "./dotHandling";
 import type { DotScheduledPrompt, DotScheduledPromptAction } from "./dotRoutines";
 import {
@@ -79,6 +72,11 @@ import {
 } from "./dotClient";
 
 const SIGNUPS_CLOSED = "TritonAI Bot isn't accepting new users right now.";
+
+// React Compiler cannot lower a throw inside a component's try block.
+function failBotAction(message: string): never {
+  throw new Error(message);
+}
 
 /** A task ID on an approval receipt is queued work, not the assignment's returned reply. */
 function returnedTaskId(run: DotRun): string | undefined {
@@ -125,7 +123,7 @@ export function DotPage() {
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <h1 className="text-lg font-semibold">TritonAI Bot is off</h1>
         <p className="max-w-sm text-sm text-muted-foreground">
-          Add a TritonAI Bot service address in Settings to use your personal bot.
+          Enable TritonAI Bot in Settings → General → Experimental to use your personal bot.
         </p>
         <Button variant="outline" render={<Link to="/settings/connections" />}>
           Open Connections settings
@@ -136,7 +134,7 @@ export function DotPage() {
 }
 
 function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
-  const client = useMemo(() => new DotClient(serviceUrl), [serviceUrl]);
+  const [client] = useState(() => new DotClient(serviceUrl));
   const navigate = useNavigate();
   const diagnostics = useBotDiagnostics();
   const [session, setSession] = useState<DotSession | null>(() => {
@@ -147,6 +145,9 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const [connected, setConnected] = useState(false);
   const [connection, setConnection] = useState<PendingConnection | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const desktopSignInAvailable = Boolean(
+    window.desktopBridge?.startDotSignIn && window.desktopBridge?.awaitDotSignIn,
+  );
   const threadId = state?.streamId ?? "dot";
   const pendingPromptRuns = useRef(new Map<string, string>());
   const [busyPause, setBusyPause] = useState(false);
@@ -186,45 +187,42 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const activeOwner = useRef(session?.ownerToken);
   const mounted = useRef(true);
 
-  const saveSession = useCallback(
-    (value: DotSession | null) => {
-      if (!mounted.current) return;
-      const storedSession = readDotSession(sessionStorage, serviceUrl);
-      // Another workspace may have replaced the persisted session while this one was waiting.
-      if (value || !storedSession || storedSession.ownerToken === activeOwner.current)
-        saveDotSession(sessionStorage, serviceUrl, value);
-      const ownerChanged = activeOwner.current !== value?.ownerToken;
-      activeOwner.current = value?.ownerToken;
-      setSession(value);
-      if (!value || ownerChanged) {
-        setState(null);
-        setDraft("");
-        setSending(false);
-        setBusyApproval(null);
-        setAttachments([]);
-        setUploading(false);
-        setUploadStatus(null);
-        setPreferenceRun(null);
-        pendingRoutine.current = null;
-        setBusyPause(false);
-        setError(null);
-        setConnected(false);
-        pendingMessage.current = null;
-        setReplyTarget(null);
-        setReplyStatus(null);
-        pendingPromptRuns.current.clear();
-        setBusyFeedback(null);
-        acceptedRunIds.current.clear();
-        taskEvidence.current.clear();
-        approvalEvidence.current.clear();
-        runEvidence.current.clear();
-        openingItems.current.clear();
-        pendingOpen.current = null;
-        latestSnapshot.current = null;
-      }
-    },
-    [serviceUrl],
-  );
+  const saveSession = useStableCallback((value: DotSession | null) => {
+    if (!mounted.current) return;
+    const storedSession = readDotSession(sessionStorage, serviceUrl);
+    // Another workspace may have replaced the persisted session while this one was waiting.
+    if (value || !storedSession || storedSession.ownerToken === activeOwner.current)
+      saveDotSession(sessionStorage, serviceUrl, value);
+    const ownerChanged = activeOwner.current !== value?.ownerToken;
+    activeOwner.current = value?.ownerToken;
+    setSession(value);
+    if (!value || ownerChanged) {
+      setState(null);
+      setDraft("");
+      setSending(false);
+      setBusyApproval(null);
+      setAttachments([]);
+      setUploading(false);
+      setUploadStatus(null);
+      setPreferenceRun(null);
+      pendingRoutine.current = null;
+      setBusyPause(false);
+      setError(null);
+      setConnected(false);
+      pendingMessage.current = null;
+      setReplyTarget(null);
+      setReplyStatus(null);
+      pendingPromptRuns.current.clear();
+      setBusyFeedback(null);
+      acceptedRunIds.current.clear();
+      taskEvidence.current.clear();
+      approvalEvidence.current.clear();
+      runEvidence.current.clear();
+      openingItems.current.clear();
+      pendingOpen.current = null;
+      latestSnapshot.current = null;
+    }
+  });
 
   useEffect(() => {
     mounted.current = true;
@@ -233,18 +231,14 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     };
   }, []);
 
-  const reportError = useCallback(
-    // Pass the owner token a request used: a late failure from a replaced session must not touch the current one.
-    (cause: unknown, ownerToken?: string) => {
-      if (!mounted.current) return;
-      if (ownerToken !== undefined && ownerToken !== activeOwner.current) return;
-      if (cause instanceof DotApiError && cause.status === 401) saveSession(null);
-      setError(cause instanceof Error ? cause.message : "Could not reach your bot.");
-    },
-    [saveSession],
-  );
+  const reportError = useStableCallback((cause: unknown, ownerToken?: string) => {
+    if (!mounted.current) return;
+    if (ownerToken !== undefined && ownerToken !== activeOwner.current) return;
+    if (cause instanceof DotApiError && cause.status === 401) saveSession(null);
+    setError(cause instanceof Error ? cause.message : "Could not reach your bot.");
+  });
 
-  const refresh = useCallback(async () => {
+  const refresh = useStableCallback(async () => {
     if (!session || activeOwner.current !== session.ownerToken || !mounted.current) return;
     const requestSequence = ++stateRequestSequence.current;
     try {
@@ -367,9 +361,10 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       setConnected(false);
       reportError(cause, session.ownerToken);
     }
-  }, [client, reportError, session]);
+  });
 
   useEffect(() => {
+    if (!session) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -381,7 +376,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [refresh]);
+  }, [refresh, session]);
 
   useEffect(() => {
     if (!connection) return;
@@ -395,15 +390,18 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
           const returned = await awaitDotSignIn(connection.redirectUri);
           if (cancelled) return;
           if (returned?.requestId !== connection.requestId)
-            throw new Error("Sign-in expired. Please try again.");
+            failBotAction("Sign-in expired. Please try again.");
           if ("error" in returned)
-            throw new Error(
+            failBotAction(
               returned.error === "signups_closed"
                 ? SIGNUPS_CLOSED
                 : "Sign-in failed. Please try again.",
             );
           result = await client.pollConnection(connection, returned.code);
-        } else result = await client.pollConnection(connection);
+        } else
+          failBotAction(
+            "Sign-in for this pilot requires the desktop Harness. Open TritonAI Bot on your computer.",
+          );
         if (cancelled) return;
         if (result) {
           saveSession(result);
@@ -431,38 +429,32 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     setError(null);
     // Owned here until the connection effect takes it over.
     let listener: string | undefined;
-    try {
-      listener = await window.desktopBridge?.startDotSignIn?.();
-      const pending = await client.startConnection(listener);
-      if (!mounted.current) return;
-      if (pending.redirectUri) listener = undefined;
-      setConnection(pending);
-      await ensureLocalApi().shell.openExternal(pending.verificationUrl);
-    } catch (cause) {
-      reportError(cause);
-    } finally {
+    await (async () => {
+      try {
+        if (!desktopSignInAvailable)
+          failBotAction("Sign-in for this pilot requires the desktop Harness.");
+        listener = await window.desktopBridge!.startDotSignIn!();
+        const pending = await client.startConnection(listener);
+        if (!mounted.current) return;
+        if (pending.redirectUri) listener = undefined;
+        setConnection(pending);
+        await ensureLocalApi().shell.openExternal(pending.verificationUrl);
+      } catch (cause) {
+        reportError(cause);
+      }
+    })().finally(() => {
       if (listener) void window.desktopBridge?.cancelDotSignIn?.(listener);
       setConnecting(false);
-    }
+    });
   };
 
-  const runs = useMemo(
-    () =>
-      (state?.runs ?? [])
-        .filter((run) => run.status !== "cancelled")
-        .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt)),
-    [state],
-  );
+  const runs = (state?.runs ?? [])
+    .filter((run) => run.status !== "cancelled")
+    .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-  const feedbackByRun = useMemo(
-    () => new Map((state?.feedback ?? []).map((item) => [item.outputId, item])),
-    [state],
-  );
+  const feedbackByRun = new Map((state?.feedback ?? []).map((item) => [item.outputId, item]));
 
-  const tasksById = useMemo(
-    () => new Map((state?.tasks ?? []).map((task) => [task.taskId, task])),
-    [state?.tasks],
-  );
+  const tasksById = new Map((state?.tasks ?? []).map((task) => [task.taskId, task]));
 
   useEffect(() => {
     if (runs.length || sending) chatEndRef.current?.scrollIntoView({ block: "end" });
@@ -494,36 +486,38 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
             ...(responsibilityId ? { responsibilityId } : {}),
           };
     pendingMessage.current = message;
-    try {
-      const accepted = await client.send(session, message);
-      if (activeOwner.current !== session.ownerToken) return;
-      acceptedRunIds.current.add(accepted.runId);
-      pendingMessage.current = null;
-      if (responsibilityId) setReplyTarget(null);
-      setReplyStatus(replyRoutingText(accepted.reply));
-      setDraft((current) => draftAfterSend(current, sentDraft));
-      setAttachments((current) =>
-        current.filter(
-          (item) => !sentAttachments.some((sent) => sent.attachmentId === item.attachmentId),
-        ),
-      );
-      setUploadStatus(null);
-      await refresh();
-    } catch (cause) {
-      // A rejected reply queued nothing: keep the draft and target, and say why beside the composer.
-      if (
-        responsibilityId &&
-        cause instanceof DotApiError &&
-        (cause.status === 404 || cause.status === 409) &&
-        activeOwner.current === session.ownerToken
-      ) {
+    await (async () => {
+      try {
+        const accepted = await client.send(session, message);
+        if (activeOwner.current !== session.ownerToken) return;
+        acceptedRunIds.current.add(accepted.runId);
         pendingMessage.current = null;
-        setReplyStatus(`Not sent: ${cause.message}`);
+        if (responsibilityId) setReplyTarget(null);
+        setReplyStatus(replyRoutingText(accepted.reply));
+        setDraft((current) => draftAfterSend(current, sentDraft));
+        setAttachments((current) =>
+          current.filter(
+            (item) => !sentAttachments.some((sent) => sent.attachmentId === item.attachmentId),
+          ),
+        );
+        setUploadStatus(null);
         await refresh();
-      } else reportError(cause, session.ownerToken);
-    } finally {
+      } catch (cause) {
+        // A rejected reply queued nothing: keep the draft and target, and say why beside the composer.
+        if (
+          responsibilityId &&
+          cause instanceof DotApiError &&
+          (cause.status === 404 || cause.status === 409) &&
+          activeOwner.current === session.ownerToken
+        ) {
+          pendingMessage.current = null;
+          setReplyStatus(`Not sent: ${cause.message}`);
+          await refresh();
+        } else reportError(cause, session.ownerToken);
+      }
+    })().finally(() => {
       if (activeOwner.current === session.ownerToken) setSending(false);
-    }
+    });
   };
 
   const rate = async (
@@ -534,28 +528,32 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     if (!session) return;
     setBusyFeedback(runId);
     setError(null);
-    try {
-      await client.rate(session, runId, rating, reasons);
-      await refresh();
-    } catch (cause) {
-      reportError(cause, session.ownerToken);
-    } finally {
+    await (async () => {
+      try {
+        await client.rate(session, runId, rating, reasons);
+        await refresh();
+      } catch (cause) {
+        reportError(cause, session.ownerToken);
+      }
+    })().finally(() => {
       if (activeOwner.current === session.ownerToken) setBusyFeedback(null);
-    }
+    });
   };
 
   const decide = async (approvalId: string, approved: boolean) => {
     if (!session) return;
     setBusyApproval(approvalId);
     setError(null);
-    try {
-      await client.decide(session, approvalId, approved);
-      await refresh();
-    } catch (cause) {
-      reportError(cause, session.ownerToken);
-    } finally {
+    await (async () => {
+      try {
+        await client.decide(session, approvalId, approved);
+        await refresh();
+      } catch (cause) {
+        reportError(cause, session.ownerToken);
+      }
+    })().finally(() => {
       if (activeOwner.current === session.ownerToken) setBusyApproval(null);
-    }
+    });
   };
 
   const stopHandling = async (item: DotHandlingItem) => {
@@ -565,7 +563,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     try {
       const result = await client.stopHandling(session, item);
       if (activeOwner.current !== session.ownerToken)
-        throw new Error("Your bot session changed. Sign in again to continue.");
+        failBotAction("Your bot session changed. Sign in again to continue.");
       await refresh();
       return result;
     } catch (cause) {
@@ -582,7 +580,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     try {
       const result = await client.markHandlingSeen(session, through);
       if (activeOwner.current !== session.ownerToken)
-        throw new Error("Your bot session changed. Sign in again to continue.");
+        failBotAction("Your bot session changed. Sign in again to continue.");
       await refresh();
       return result;
     } catch (cause) {
@@ -608,7 +606,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         requestId,
       );
       if (activeOwner.current !== session.ownerToken)
-        throw new Error("Your bot session changed. Sign in again to continue.");
+        failBotAction("Your bot session changed. Sign in again to continue.");
       if (action === "run") pendingPromptRuns.current.delete(prompt.promptId);
       if (result.runId) acceptedRunIds.current.add(result.runId);
       await refresh();
@@ -630,7 +628,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     try {
       const result = await operation(session);
       if (activeOwner.current !== session.ownerToken)
-        throw new Error("Your bot session changed. Sign in again to continue.");
+        failBotAction("Your bot session changed. Sign in again to continue.");
       await refresh();
       return result;
     } catch (cause) {
@@ -665,7 +663,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     mutate((owner) => client.responsibility(owner, input));
   const memoryEdit = (input: DotMemoryInput) => mutate((owner) => client.editMemory(owner, input));
 
-  const openItem = useCallback((kind: string, id: string) => {
+  const openItem = useStableCallback((kind: string, id: string) => {
     const element = document.getElementById(`bot-${kind}-${id}`);
     if (!element) return;
     if (element instanceof HTMLDetailsElement) element.open = true;
@@ -676,8 +674,9 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     }
     element.scrollIntoView({ block: "nearest" });
     element.focus();
-  }, []);
+  });
   useEffect(() => {
+    if (!state) return;
     const target = pendingOpen.current;
     if (!target || activeOwner.current !== target.ownerToken) return;
     if (!document.getElementById(`bot-${target.kind}-${target.id}`)) return;
@@ -703,6 +702,42 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       return { kind: "task", id: item.id };
     return undefined;
   }
+  const loadTaskEvidence = async (taskId: string, openAfterLoad = false) => {
+    if (!session || activeOwner.current !== session.ownerToken)
+      throw new Error("Sign in again to continue.");
+    try {
+      const { task } = await client.task(session, taskId);
+      if (activeOwner.current !== session.ownerToken || !mounted.current)
+        failBotAction("Your bot session changed. Sign in again to continue.");
+      if (task.taskId !== taskId || task.detail?.kind !== "harness-task")
+        failBotAction("The selected task evidence is unavailable.");
+      const knownTimes = [
+        taskEvidence.current.get(taskId)?.updatedAt,
+        latestSnapshot.current?.tasks.find((value) => value.taskId === taskId)?.updatedAt,
+        latestSnapshot.current?.handling?.items.find(
+          (value) => value.target?.kind === "task" && value.target.id === taskId,
+        )?.version,
+        ...(latestSnapshot.current?.responsibilities ?? [])
+          .filter((value) => value.source.taskId === taskId)
+          .map((value) => value.sourceEvidence?.updatedAt),
+      ];
+      if (knownTimes.some((value) => value && Date.parse(value) > Date.parse(task.updatedAt)))
+        failBotAction("The selected task evidence changed. Load it again before reviewing.");
+      stateRequestSequence.current += 1;
+      cacheEvidence(taskEvidence.current, taskId, task);
+      if (openAfterLoad)
+        pendingOpen.current = { kind: "task", id: taskId, ownerToken: session.ownerToken };
+      setState((current) =>
+        current
+          ? { ...current, tasks: [...current.tasks.filter((item) => item.taskId !== taskId), task] }
+          : current,
+      );
+    } catch (cause) {
+      reportError(cause, session.ownerToken);
+      throw cause;
+    }
+  };
+
   async function handlingOpen(item: DotHandlingItem) {
     const target = handlingTarget(item);
     if (target && document.getElementById(`bot-${target.kind}-${target.id}`)) {
@@ -720,42 +755,44 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       if (activeOwner.current !== ownerToken || openingItems.current.has(key)) return;
       openingItems.current.add(key);
       setError(null);
-      try {
-        if (target.kind === "task") {
-          await loadTaskEvidence(target.id, true);
-        } else {
-          const { approval } = await client.approval(session, target.id);
-          if (activeOwner.current !== ownerToken || !mounted.current) return;
-          if (approval.approvalId !== target.id || approval.status !== "pending")
-            throw new Error(
-              "This approval is no longer pending. Refresh the inbox before continuing.",
-            );
-          if (
-            !latestSnapshot.current?.handling?.items.some(
-              (value) => value.target?.kind === "approval" && value.target.id === target.id,
+      await (async () => {
+        try {
+          if (target.kind === "task") {
+            await loadTaskEvidence(target.id, true);
+          } else {
+            const { approval } = await client.approval(session, target.id);
+            if (activeOwner.current !== ownerToken || !mounted.current) return;
+            if (approval.approvalId !== target.id || approval.status !== "pending")
+              failBotAction(
+                "This approval is no longer pending. Refresh the inbox before continuing.",
+              );
+            if (
+              !latestSnapshot.current?.handling?.items.some(
+                (value) => value.target?.kind === "approval" && value.target.id === target.id,
+              )
             )
-          )
-            throw new Error("This approval changed. Refresh the inbox before continuing.");
-          stateRequestSequence.current += 1;
-          cacheEvidence(approvalEvidence.current, target.id, approval);
-          pendingOpen.current = { ...target, ownerToken };
-          setState((current) =>
-            current
-              ? {
-                  ...current,
-                  approvals: [
-                    ...current.approvals.filter((value) => value.approvalId !== target.id),
-                    approval,
-                  ],
-                }
-              : current,
-          );
+              failBotAction("This approval changed. Refresh the inbox before continuing.");
+            stateRequestSequence.current += 1;
+            cacheEvidence(approvalEvidence.current, target.id, approval);
+            pendingOpen.current = { ...target, ownerToken };
+            setState((current) =>
+              current
+                ? {
+                    ...current,
+                    approvals: [
+                      ...current.approvals.filter((value) => value.approvalId !== target.id),
+                      approval,
+                    ],
+                  }
+                : current,
+            );
+          }
+        } catch (cause) {
+          reportError(cause, ownerToken);
         }
-      } catch (cause) {
-        reportError(cause, ownerToken);
-      } finally {
+      })().finally(() => {
         openingItems.current.delete(key);
-      }
+      });
     } else {
       const link = botWebUrl(item.source?.link);
       if (link) void ensureLocalApi().shell.openExternal(link).catch(reportError);
@@ -794,67 +831,36 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     uploadingRef.current = true;
     setUploading(true);
     setUploadStatus(null);
-    try {
-      for (const file of Array.from(files)) {
-        setUploadStatus(`Uploading ${file.name}…`);
-        const attachment = await client.uploadAttachment(session, file);
-        if (activeOwner.current !== session.ownerToken) return;
-        setAttachments((current) =>
-          current.some((item) => item.attachmentId === attachment.attachmentId)
-            ? current
-            : [...current, attachment],
-        );
-      }
-      setUploadStatus(
-        "Files ready to send. They are shared with your bot when you send this message.",
-      );
-    } catch (cause) {
-      if (activeOwner.current === session.ownerToken)
+    await (async () => {
+      try {
+        for (const file of Array.from(files)) {
+          setUploadStatus(`Uploading ${file.name}…`);
+          const attachment = await client.uploadAttachment(session, file);
+          if (activeOwner.current !== session.ownerToken) return;
+          setAttachments((current) =>
+            current.some((item) => item.attachmentId === attachment.attachmentId)
+              ? current
+              : [...current, attachment],
+          );
+        }
         setUploadStatus(
-          cause instanceof Error ? cause.message : "Upload failed. Choose the file again to retry.",
+          "Files ready to send. They are shared with your bot when you send this message.",
         );
-      if (cause instanceof DotApiError && cause.status === 401)
-        reportError(cause, session.ownerToken);
-    } finally {
+      } catch (cause) {
+        if (activeOwner.current === session.ownerToken)
+          setUploadStatus(
+            cause instanceof Error
+              ? cause.message
+              : "Upload failed. Choose the file again to retry.",
+          );
+        if (cause instanceof DotApiError && cause.status === 401)
+          reportError(cause, session.ownerToken);
+      }
+    })().finally(() => {
       uploadingRef.current = false;
       if (activeOwner.current === session.ownerToken) setUploading(false);
       if (fileInput.current) fileInput.current.value = "";
-    }
-  }
-  async function loadTaskEvidence(taskId: string, openAfterLoad = false) {
-    if (!session || activeOwner.current !== session.ownerToken)
-      throw new Error("Sign in again to continue.");
-    try {
-      const { task } = await client.task(session, taskId);
-      if (activeOwner.current !== session.ownerToken || !mounted.current)
-        throw new Error("Your bot session changed. Sign in again to continue.");
-      if (task.taskId !== taskId || task.detail?.kind !== "harness-task")
-        throw new Error("The selected task evidence is unavailable.");
-      const knownTimes = [
-        taskEvidence.current.get(taskId)?.updatedAt,
-        latestSnapshot.current?.tasks.find((value) => value.taskId === taskId)?.updatedAt,
-        latestSnapshot.current?.handling?.items.find(
-          (value) => value.target?.kind === "task" && value.target.id === taskId,
-        )?.version,
-        ...(latestSnapshot.current?.responsibilities ?? [])
-          .filter((value) => value.source.taskId === taskId)
-          .map((value) => value.sourceEvidence?.updatedAt),
-      ];
-      if (knownTimes.some((value) => value && Date.parse(value) > Date.parse(task.updatedAt)))
-        throw new Error("The selected task evidence changed. Load it again before reviewing.");
-      stateRequestSequence.current += 1;
-      cacheEvidence(taskEvidence.current, taskId, task);
-      if (openAfterLoad)
-        pendingOpen.current = { kind: "task", id: taskId, ownerToken: session.ownerToken };
-      setState((current) =>
-        current
-          ? { ...current, tasks: [...current.tasks.filter((item) => item.taskId !== taskId), task] }
-          : current,
-      );
-    } catch (cause) {
-      reportError(cause, session.ownerToken);
-      throw cause;
-    }
+    });
   }
 
   /** Pauses or resumes against the displayed control version; a newer change since then is refused, not overwritten. */
@@ -887,23 +893,25 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     if (activeOwner.current !== ownerToken || openingItems.current.has(key)) return;
     openingItems.current.add(key);
     setError(null);
-    try {
-      const { run } = await client.run(session, runId);
-      if (activeOwner.current !== ownerToken || !mounted.current) return;
-      if (run.runId !== runId) throw new Error("That conversation message is unavailable.");
-      stateRequestSequence.current += 1;
-      if (!isPendingDotRun(run)) cacheEvidence(runEvidence.current, runId, run);
-      pendingOpen.current = { kind: "run", id: runId, ownerToken };
-      setState((current) =>
-        current
-          ? { ...current, runs: [...current.runs.filter((value) => value.runId !== runId), run] }
-          : current,
-      );
-    } catch (cause) {
-      reportError(cause, ownerToken);
-    } finally {
+    await (async () => {
+      try {
+        const { run } = await client.run(session, runId);
+        if (activeOwner.current !== ownerToken || !mounted.current) return;
+        if (run.runId !== runId) failBotAction("That conversation message is unavailable.");
+        stateRequestSequence.current += 1;
+        if (!isPendingDotRun(run)) cacheEvidence(runEvidence.current, runId, run);
+        pendingOpen.current = { kind: "run", id: runId, ownerToken };
+        setState((current) =>
+          current
+            ? { ...current, runs: [...current.runs.filter((value) => value.runId !== runId), run] }
+            : current,
+        );
+      } catch (cause) {
+        reportError(cause, ownerToken);
+      }
+    })().finally(() => {
       openingItems.current.delete(key);
-    }
+    });
   }
 
   /**
@@ -921,30 +929,32 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     if (activeOwner.current !== ownerToken || openingItems.current.has(key)) return;
     openingItems.current.add(key);
     setError(null);
-    try {
-      const { approval } = await client.approval(session, approvalId);
-      if (activeOwner.current !== ownerToken || !mounted.current) return;
-      if (approval.approvalId !== approvalId || approval.status !== "pending")
-        throw new Error("This decision is no longer pending. Refresh to see its outcome.");
-      stateRequestSequence.current += 1;
-      cacheEvidence(approvalEvidence.current, approvalId, approval);
-      pendingOpen.current = { kind: "approval", id: approvalId, ownerToken };
-      setState((current) =>
-        current
-          ? {
-              ...current,
-              approvals: [
-                ...current.approvals.filter((value) => value.approvalId !== approvalId),
-                approval,
-              ],
-            }
-          : current,
-      );
-    } catch (cause) {
-      reportError(cause, ownerToken);
-    } finally {
+    await (async () => {
+      try {
+        const { approval } = await client.approval(session, approvalId);
+        if (activeOwner.current !== ownerToken || !mounted.current) return;
+        if (approval.approvalId !== approvalId || approval.status !== "pending")
+          failBotAction("This decision is no longer pending. Refresh to see its outcome.");
+        stateRequestSequence.current += 1;
+        cacheEvidence(approvalEvidence.current, approvalId, approval);
+        pendingOpen.current = { kind: "approval", id: approvalId, ownerToken };
+        setState((current) =>
+          current
+            ? {
+                ...current,
+                approvals: [
+                  ...current.approvals.filter((value) => value.approvalId !== approvalId),
+                  approval,
+                ],
+              }
+            : current,
+        );
+      } catch (cause) {
+        reportError(cause, ownerToken);
+      }
+    })().finally(() => {
       openingItems.current.delete(key);
-    }
+    });
   }
 
   /** Recovery from a waiting status: each action goes to the existing control for it. */
@@ -1017,7 +1027,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                   ? "Your campus bot"
                   : state?.microsoft?.available === false
                     ? (state.user.email ?? session.email)
-                    : "Synced with Teams"}
+                    : (state?.user.email ?? session.email)}
               </p>
             </div>
           </div>
@@ -1066,8 +1076,8 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
           <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center gap-4 px-5 text-center">
             <h2 className="text-lg font-semibold">Connect to your TritonAI Bot</h2>
             <p className="max-w-sm text-sm text-muted-foreground">
-              Sign in with your UC San Diego account to get your own personal bot: chat, review
-              approvals, and keep your work moving.
+              Sign in with your own UC San Diego account to use your personal bot. Microsoft access
+              and running tasks on this computer each need your separate consent.
             </p>
             {connection ? (
               <>
@@ -1095,9 +1105,20 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                 </Button>
               </>
             ) : (
-              <Button onClick={() => void signIn()} disabled={connecting}>
-                {connecting ? "Opening sign-in…" : "Sign in with UC San Diego"}
-              </Button>
+              <>
+                <Button
+                  onClick={() => void signIn()}
+                  disabled={connecting || !desktopSignInAvailable}
+                >
+                  {connecting ? "Opening sign-in…" : "Sign in with UC San Diego"}
+                </Button>
+                {!desktopSignInAvailable ? (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    Sign-in for this pilot requires the desktop Harness. Open TritonAI Bot on your
+                    computer.
+                  </p>
+                ) : null}
+              </>
             )}
             {error && (
               <p role="alert" className="text-sm text-destructive">
@@ -1345,7 +1366,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                       </Button>
                     </div>
                   )}
-                  <BotMicrosoftBanner
+                  <BotMicrosoftConnection
                     microsoft={state?.microsoft}
                     connectionsUrl={`${serviceUrl}/connections`}
                   />
@@ -1518,14 +1539,14 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                     try {
                       const result = await client.readEditableMemory(session, memoryId);
                       if (activeOwner.current !== session.ownerToken || !mounted.current)
-                        throw new Error("Your bot session changed. Sign in again to continue.");
+                        failBotAction("Your bot session changed. Sign in again to continue.");
                       if (
                         result.memory.memoryId !== memoryId ||
                         !Number.isSafeInteger(result.memory.version) ||
                         result.memory.version < 1 ||
                         result.memory.status !== "active"
                       )
-                        throw new Error("The selected memory is no longer available for editing.");
+                        failBotAction("The selected memory is no longer available for editing.");
                       return result;
                     } catch (cause) {
                       reportError(cause, session.ownerToken);

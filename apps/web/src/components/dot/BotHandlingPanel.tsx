@@ -121,29 +121,31 @@ export function BotHandlingPanel({
     stopping.current = true;
     setBusy(true);
     setError(null);
-    try {
-      const result = await onStop(selected);
-      if (!result.ok) {
-        setError(`${result.message} ${REFRESH_MESSAGE}`);
-        return;
+    await (async () => {
+      try {
+        const result = await onStop(selected);
+        if (!result.ok) {
+          setError(`${result.message} ${REFRESH_MESSAGE}`);
+          return;
+        }
+        setNotice(
+          result.outcome === "stop-requested"
+            ? `${result.message} ${RUNNING_WARNING}`
+            : result.message,
+        );
+        setSelected(null);
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : "Could not stop this item.";
+        setError(
+          typeof cause === "object" && cause !== null && "status" in cause && cause.status === 409
+            ? `${message} ${REFRESH_MESSAGE}`
+            : message,
+        );
       }
-      setNotice(
-        result.outcome === "stop-requested"
-          ? `${result.message} ${RUNNING_WARNING}`
-          : result.message,
-      );
-      setSelected(null);
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "Could not stop this item.";
-      setError(
-        typeof cause === "object" && cause !== null && "status" in cause && cause.status === 409
-          ? `${message} ${REFRESH_MESSAGE}`
-          : message,
-      );
-    } finally {
+    })().finally(() => {
       stopping.current = false;
       setBusy(false);
-    }
+    });
   }
 
   return (
@@ -203,17 +205,19 @@ export function BotHandlingPanel({
               seenInFlight.current = true;
               setMarkingSeen(true);
               setSeenError(null);
-              try {
-                await onSeen(handling.generatedAt);
-                setNotice("Recent results marked seen.");
-              } catch (cause) {
-                setSeenError(
-                  cause instanceof Error ? cause.message : "Could not mark results seen.",
-                );
-              } finally {
+              await (async () => {
+                try {
+                  await onSeen(handling.generatedAt);
+                  setNotice("Recent results marked seen.");
+                } catch (cause) {
+                  setSeenError(
+                    cause instanceof Error ? cause.message : "Could not mark results seen.",
+                  );
+                }
+              })().finally(() => {
                 seenInFlight.current = false;
                 setMarkingSeen(false);
-              }
+              });
             }}
           >
             {markingSeen ? "Marking seen…" : "Mark recent results seen"}
@@ -280,23 +284,25 @@ export function BotHandlingPanel({
                                   setBusy(true);
                                   setError(null);
                                   setNotice(null);
-                                  try {
-                                    await handler(item);
-                                    setNotice(
-                                      action === "snooze"
-                                        ? "Snoozed for one hour."
-                                        : "Following resumed.",
-                                    );
-                                  } catch (cause) {
-                                    setError(
-                                      cause instanceof Error
-                                        ? cause.message
-                                        : "Could not update this item.",
-                                    );
-                                  } finally {
+                                  await (async () => {
+                                    try {
+                                      await handler(item);
+                                      setNotice(
+                                        action === "snooze"
+                                          ? "Snoozed for one hour."
+                                          : "Following resumed.",
+                                      );
+                                    } catch (cause) {
+                                      setError(
+                                        cause instanceof Error
+                                          ? cause.message
+                                          : "Could not update this item.",
+                                      );
+                                    }
+                                  })().finally(() => {
                                     stopping.current = false;
                                     setBusy(false);
-                                  }
+                                  });
                                 }}
                               >
                                 {action === "snooze" ? "Snooze 1 hour" : "Resume"}

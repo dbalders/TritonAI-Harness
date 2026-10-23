@@ -179,6 +179,30 @@ function runMessage(response: unknown): string {
   }
 }
 
+function actionMessage(action: DotScheduledPromptAction, response: unknown): string {
+  if (
+    typeof response === "object" &&
+    response !== null &&
+    "ok" in response &&
+    response.ok === false
+  ) {
+    throw new Error(
+      "error" in response && typeof response.error === "string"
+        ? response.error
+        : "The routine action failed.",
+    );
+  }
+  return action === "run"
+    ? runMessage(response)
+    : action === "delete"
+      ? "Routine stopped. Past results remain in history."
+      : action === "pause"
+        ? "Pause request accepted."
+        : action === "opened"
+          ? "Results marked read. A paused routine still needs Resume."
+          : "Resume request accepted.";
+}
+
 function PromptRow({
   prompt,
   onPromptAction,
@@ -205,40 +229,22 @@ function PromptRow({
     setBusy(action);
     setMessage(null);
     setError(null);
-    try {
-      const response = await onPromptAction(prompt, action);
-      if (
-        typeof response === "object" &&
-        response !== null &&
-        "ok" in response &&
-        response.ok === false
-      ) {
-        throw new Error(
-          "error" in response && typeof response.error === "string"
-            ? response.error
-            : "The routine action failed.",
+    await (async () => {
+      try {
+        const response = await onPromptAction(prompt, action);
+        setMessage(actionMessage(action, response));
+        if (action === "delete") closeConfirmation();
+      } catch (cause) {
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not update this routine. Please try again.",
         );
       }
-      setMessage(
-        action === "run"
-          ? runMessage(response)
-          : action === "delete"
-            ? "Routine stopped. Past results remain in history."
-            : action === "pause"
-              ? "Pause request accepted."
-              : action === "opened"
-                ? "Results marked read. A paused routine still needs Resume."
-                : "Resume request accepted.",
-      );
-      if (action === "delete") closeConfirmation();
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Could not update this routine. Please try again.",
-      );
-    } finally {
+    })().finally(() => {
       inFlight.current = false;
       setBusy(null);
-    }
+    });
   };
 
   return (

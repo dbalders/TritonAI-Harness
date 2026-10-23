@@ -36,25 +36,27 @@ export function BotMemoryEditor({
         inFlight.current = true;
         setBusy(true);
         setError(null);
-        try {
-          await onSave({
-            action: memory ? "edit" : "save-preference",
-            ...(memory
-              ? { memoryId: memory.memoryId, expectedVersion: memory.version }
-              : { memoryId: newId, expectedVersion: 0 }),
-            text: text.trim(),
-            kind,
-            scope: "owner",
-            reviewed: true,
-            ...(sourceRunId ? { sourceRunId } : {}),
-          });
-          onCancel();
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : "Could not save this memory.");
-        } finally {
+        await (async () => {
+          try {
+            await onSave({
+              action: memory ? "edit" : "save-preference",
+              ...(memory
+                ? { memoryId: memory.memoryId, expectedVersion: memory.version }
+                : { memoryId: newId, expectedVersion: 0 }),
+              text: text.trim(),
+              kind,
+              scope: "owner",
+              reviewed: true,
+              ...(sourceRunId ? { sourceRunId } : {}),
+            });
+            onCancel();
+          } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "Could not save this memory.");
+          }
+        })().finally(() => {
           inFlight.current = false;
           setBusy(false);
-        }
+        });
       }}
     >
       <h3 className="font-semibold">
@@ -228,17 +230,19 @@ export function BotMemoryPanel({
                     setBusy(true);
                     setError(null);
                     setEditing(null);
-                    try {
-                      const result = await onRead(item.memoryId);
-                      setEditing(result.memory);
-                    } catch (cause) {
-                      setError(
-                        cause instanceof Error ? cause.message : "Could not read this memory.",
-                      );
-                    } finally {
+                    await (async () => {
+                      try {
+                        const result = await onRead(item.memoryId);
+                        setEditing(result.memory);
+                      } catch (cause) {
+                        setError(
+                          cause instanceof Error ? cause.message : "Could not read this memory.",
+                        );
+                      }
+                    })().finally(() => {
                       inFlight.current = false;
                       setBusy(false);
-                    }
+                    });
                   }}
                 >
                   Edit memory
@@ -258,16 +262,18 @@ export function BotMemoryPanel({
                     inFlight.current = true;
                     setBusy(true);
                     setError(null);
-                    try {
-                      await onChange(item, action);
-                    } catch (cause) {
-                      setError(
-                        cause instanceof Error ? cause.message : "Could not update this memory.",
-                      );
-                    } finally {
+                    await (async () => {
+                      try {
+                        await onChange(item, action);
+                      } catch (cause) {
+                        setError(
+                          cause instanceof Error ? cause.message : "Could not update this memory.",
+                        );
+                      }
+                    })().finally(() => {
                       inFlight.current = false;
                       setBusy(false);
-                    }
+                    });
                   }}
                 >
                   {action === "complete" ? "Done" : "Forget"}

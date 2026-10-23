@@ -363,20 +363,21 @@ describe("DotClient", () => {
           requestId: "request",
           verificationUrl: "https://bot.example.test/client/connect?requestId=request",
           userCode: "ABCD1234",
+          redirectUri: "http://127.0.0.1:53682/dot/callback",
           expiresAt: Date.now() / 1000 + 300,
         }),
       )
       .mockResolvedValueOnce(Response.json({ ok: true, pending: true }, { status: 202 }))
       .mockResolvedValueOnce(Response.json({ ok: true, ...session }));
     const client = new DotClient("https://bot.example.test", mock);
-    const connection = await client.startConnection();
+    const connection = await client.startConnection("http://127.0.0.1:53682/dot/callback");
     expect(connection.codeVerifier.length).toBeGreaterThanOrEqual(43);
     expect(connection.verificationUrl).not.toContain(connection.codeVerifier);
     const sent = JSON.parse(String(mock.mock.calls[0]?.[1]?.body));
     expect(sent.codeChallenge).toHaveLength(43);
     expect(sent.codeVerifier).toBeUndefined();
-    expect(await client.pollConnection(connection)).toBeNull();
-    expect(await client.pollConnection(connection)).toEqual(session);
+    expect(await client.pollConnection(connection, "return-code")).toBeNull();
+    expect(await client.pollConnection(connection, "return-code")).toEqual(session);
     expect(JSON.parse(String(mock.mock.calls[1]?.[1]?.body)).codeVerifier).toBe(
       connection.codeVerifier,
     );
@@ -416,7 +417,19 @@ describe("DotClient", () => {
       codeVerifier: connection.codeVerifier,
       returnCode: "return-code",
     });
-    expect((await client.startConnection(redirectUri)).redirectUri).toBeUndefined();
+    await expect(client.startConnection(redirectUri)).rejects.toThrow(
+      "does not support secure desktop sign-in",
+    );
+  });
+
+  it("refuses browser/device-code auth before contacting the service", async () => {
+    const mock = vi.fn<typeof fetch>();
+    const client = new DotClient("https://bot.example.test", mock);
+    await expect(client.startConnection()).rejects.toThrow("requires the desktop Harness");
+    await expect(client.startConnection("https://elsewhere.test/dot/callback")).rejects.toThrow(
+      "return address is invalid",
+    );
+    expect(mock).not.toHaveBeenCalled();
   });
 
   it("expires sessions before dispatch, reports authentication failures, and sends boolean denials", async () => {

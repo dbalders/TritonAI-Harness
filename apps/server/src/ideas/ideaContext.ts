@@ -2,11 +2,11 @@
  * What the idea generator is shown, and how its answer is checked.
  *
  * Every item in the context carries a reference id (`thread:<id>`,
- * `note:<day>`, `file:<project>:<path>`, `plugin:<id>`, `skill:<id>`,
- * `starter:<id>`). The model must point each idea at those ids, and an idea
- * whose references are not in the context is dropped, so a card never cites
- * something that does not exist. Labels and sections come from the context,
- * not from the model.
+ * `note:<day>`, `file:<project>:<path>`, `plugin:<id>`, `skill:<id>`). The
+ * model must point each idea at those ids, and an idea whose references are not
+ * in the context is dropped, so a card never cites something that does not
+ * exist. An idea that leaves a blank for the user to fill in is dropped too.
+ * Labels and sections come from the context, not from the model.
  */
 import {
   type IdeaAction,
@@ -18,7 +18,7 @@ import {
 } from "@t3tools/contracts";
 
 import type { GeneratedIdea } from "../textGeneration/TextGeneration.ts";
-import { ideaKey, refKind, similarTitles } from "./ideaRules.ts";
+import { needsUserInput, ideaKey, ideaSubject, refKind, similarTitles } from "./ideaRules.ts";
 import type { StarterIdea } from "./starterIdeas.ts";
 
 export interface ContextProject {
@@ -75,7 +75,8 @@ export interface IdeasContext {
   readonly files: ReadonlyArray<ContextFile>;
   readonly plugins: ReadonlyArray<ContextPlugin>;
   readonly skills: ReadonlyArray<ContextSkill>;
-  readonly starters: ReadonlyArray<StarterIdea>;
+  /** Kinds of help to draw on; not references. */
+  readonly kinds: ReadonlyArray<string>;
   /** Titles already shown, dismissed, rejected, or used. */
   readonly avoid: ReadonlyArray<string>;
 }
@@ -83,6 +84,8 @@ export interface IdeasContext {
 /** An idea ready to store: checked, labeled, and keyed. */
 export interface CandidateIdea {
   readonly key: string;
+  /** What the idea is about, so one project or tool can't fill the page. */
+  readonly subject: string;
   readonly section: IdeaSection;
   readonly icon: string;
   readonly title: string;
@@ -175,15 +178,6 @@ function buildRefIndex(context: IdeasContext): ReadonlyMap<string, RefInfo> {
       threadId: null,
     });
   }
-  for (const starter of context.starters) {
-    refs.set(`starter:${starter.id}`, {
-      kind: "starter",
-      label: "Starter idea",
-      section: "starter",
-      projectId: null,
-      threadId: null,
-    });
-  }
   return refs;
 }
 
@@ -194,7 +188,6 @@ export function formatIdeasContext(context: IdeasContext): string {
     `- own work (thread, note, file): ${Math.max(context.weights.continue, context.weights.projects)}`,
     `- tools (plugin, skill): ${context.weights.tools}`,
     `- new in TritonAI: ${context.weights.new}`,
-    `- starter ideas: ${context.weights.starter}`,
     "",
   );
 
@@ -248,11 +241,10 @@ export function formatIdeasContext(context: IdeasContext): string {
   }
   lines.push("");
 
-  lines.push("Starter ideas (for anyone, adapt to the user when you can):");
-  if (context.starters.length === 0) lines.push("(none)");
-  for (const starter of context.starters) {
-    lines.push(`- starter:${starter.id} ${starter.title}`);
-  }
+  lines.push(
+    "Kinds of help you can offer (inspiration only, not reference ids; use one only with a real item above):",
+  );
+  for (const kind of context.kinds) lines.push(`- ${kind}`);
   lines.push("");
 
   lines.push("Avoid (already shown, dismissed, rejected, or used):");
@@ -267,10 +259,12 @@ function isEmoji(icon: string): boolean {
   return icon.length > 0 && icon.length <= 16 && /\p{Extended_Pictographic}/u.test(icon);
 }
 
-/** A starter idea as a card, word for word. */
+/** A ready-made starter idea as a card, word for word. One that needs a plugin is about that plugin. */
 export function starterCandidate(starter: StarterIdea): CandidateIdea {
+  const key = `starter:${starter.id}`;
   return {
-    key: `starter:${starter.id}`,
+    key,
+    subject: starter.requires === undefined ? key : `plugin:${starter.requires}`,
     section: "starter",
     icon: starter.icon,
     title: starter.title,
@@ -282,8 +276,9 @@ export function starterCandidate(starter: StarterIdea): CandidateIdea {
 
 /**
  * Turns the model's ideas into storable ones. Drops any idea that points at a
- * reference the context does not have, repeats an excluded key, or says nearly
- * the same thing as an avoided title or an earlier idea in the batch.
+ * reference the context does not have, leaves a blank for the user to fill in,
+ * repeats an excluded key, or says nearly the same thing as an avoided title or
+ * an earlier idea in the batch.
  */
 export function validateGeneratedIdeas(input: {
   readonly ideas: ReadonlyArray<GeneratedIdea>;
@@ -302,6 +297,7 @@ export function validateGeneratedIdeas(input: {
     const body = clip(idea.body, 300);
     const prompt = idea.prompt.trim().slice(0, 4_000);
     if (title.length === 0 || body.length === 0 || prompt.length === 0) continue;
+    if ([title, body, prompt].some(needsUserInput)) continue;
     const key = ideaKey(idea.ref, idea.topic);
     if (keys.has(key) || titles.some((other) => similarTitles(other, title))) continue;
 
@@ -328,6 +324,10 @@ export function validateGeneratedIdeas(input: {
     titles.push(title);
     accepted.push({
       key,
+      subject: ideaSubject(
+        key,
+        action.kind === "new-thread" ? action.projectId : primary.projectId,
+      ),
       section: primary.section,
       icon: isEmoji(idea.icon) ? idea.icon : SECTION_ICONS[primary.section],
       title,

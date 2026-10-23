@@ -27,19 +27,20 @@ export const BUILD_DEFAULT_BOT_SERVICE_URL = normalizeBotServiceUrl(
   import.meta.env.VITE_DOT_BRIDGE_URL ?? "",
 );
 
-/** `null` follows the build default; an empty or invalid value turns the bot off. */
+/** Legacy empty addresses follow the build default. The opt-in flag controls visibility. */
 export function resolveBotServiceUrl(
   setting: string | null,
   buildDefault: string | null = BUILD_DEFAULT_BOT_SERVICE_URL,
 ): string | null {
-  return setting === null ? buildDefault : normalizeBotServiceUrl(setting);
+  return setting === null || !setting.trim() ? buildDefault : normalizeBotServiceUrl(setting);
 }
 
 /** The configured bot service, or null while settings load or when none is configured. */
 export function useBotServiceUrl(): string | null {
   const hydrated = useClientSettingsHydrated();
   const setting = useClientSettings((settings) => settings.tritonAiBotUrl);
-  return hydrated ? resolveBotServiceUrl(setting) : null;
+  const enabled = useClientSettings((settings) => settings.tritonAiBotEnabled);
+  return hydrated && enabled ? resolveBotServiceUrl(setting) : null;
 }
 
 /** Whether the bot page shows its records and controls beside the chat (Settings → TritonAI Bot → Developer). */

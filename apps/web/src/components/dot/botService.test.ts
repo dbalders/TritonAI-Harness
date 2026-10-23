@@ -39,11 +39,13 @@ describe("TritonAI Bot service address", () => {
       expect(normalizeBotServiceUrl(value)).toBeNull();
   });
 
-  it("follows the build default until the user replaces or clears it", () => {
+  it("recovers legacy empty addresses to the build default without accepting invalid overrides", () => {
     const buildDefault = "https://default.example.test";
     expect(resolveBotServiceUrl(null, buildDefault)).toBe(buildDefault);
     expect(resolveBotServiceUrl(null, null)).toBeNull();
-    expect(resolveBotServiceUrl("", buildDefault)).toBeNull();
+    expect(resolveBotServiceUrl("", buildDefault)).toBe(buildDefault);
+    expect(resolveBotServiceUrl("  ", buildDefault)).toBe(buildDefault);
+    expect(resolveBotServiceUrl("", null)).toBeNull();
     expect(resolveBotServiceUrl("https://mine.example.test/", buildDefault)).toBe(
       "https://mine.example.test",
     );

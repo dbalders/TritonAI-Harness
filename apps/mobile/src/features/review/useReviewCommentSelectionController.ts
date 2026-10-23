@@ -4,7 +4,6 @@ import { useNavigation } from "@react-navigation/native";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 import * as Result from "effect/Result";
-
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   buildReviewCommentTarget,

@@ -10,6 +10,50 @@ const MICROSOFT_AREA_LABELS: Record<DotMicrosoftArea, string> = {
   todo: "Microsoft To Do",
 };
 
+/** Never infer consent from account eligibility or a missing health report. */
+export function BotMicrosoftConnection({
+  microsoft,
+  connectionsUrl,
+}: {
+  readonly microsoft: DotMicrosoftState | undefined;
+  readonly connectionsUrl: string;
+}) {
+  const areas = Object.values(microsoft?.health?.areas ?? {});
+  if (microsoft?.available !== false && areas.some((area) => area.status === "needs-reconnect"))
+    return <BotMicrosoftBanner microsoft={microsoft} connectionsUrl={connectionsUrl} />;
+  const unavailable = microsoft?.available === false;
+  const connected =
+    !unavailable &&
+    microsoft?.connected !== false &&
+    (microsoft?.connected === true || areas.some((area) => area.status === "connected"));
+  const degraded = !unavailable && areas.some((area) => area.status === "degraded");
+  const description = unavailable
+    ? (microsoft.message ?? "Microsoft access is not available for this account.")
+    : microsoft?.connected === false
+      ? "Connect your own Microsoft account, then choose access to Outlook, calendar, OneDrive and Microsoft To Do."
+      : degraded
+        ? "Some Microsoft access is temporarily unavailable. Your bot will retry; check your connections for details."
+        : connected
+          ? "Your Microsoft account is connected. Your selected permissions control what the bot can access."
+          : (microsoft?.message ??
+            "Microsoft connection status is unknown. Check your account's connections before asking about your work.");
+  return (
+    <section aria-label="Microsoft connection" className="shrink-0 rounded-xl border p-3 text-sm">
+      <p aria-live="polite">{description}</p>
+      {!unavailable ? (
+        <Button
+          size="sm"
+          variant="outline"
+          className="mt-2"
+          render={<a href={connectionsUrl} target="_blank" rel="noopener noreferrer" />}
+        >
+          {microsoft?.connected === false ? "Connect Microsoft" : "Manage Microsoft connections"}
+        </Button>
+      ) : null}
+    </section>
+  );
+}
+
 export function BotMicrosoftBanner({
   microsoft,
   connectionsUrl,

@@ -25,7 +25,7 @@ export function TritonAiUsageWarning() {
 
   useEffect(() => {
     return () => {
-      if (activeToastRef.current !== null) {
+      if (environmentId !== null && activeToastRef.current !== null) {
         toastManager.close(activeToastRef.current);
         activeToastRef.current = null;
       }

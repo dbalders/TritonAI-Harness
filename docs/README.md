@@ -19,6 +19,7 @@
 - [Usage and limits](./user/usage.md)
 - [Memory](./user/memory.md)
 - [Ideas](./user/ideas.md)
+- [Get help and prepare feedback](./user/help.md)
 - [Record a skill](./user/record-a-skill.md)
 - [UC San Diego account](./user/ucsd-account.md)
 - [TritonAI Bot](./user/tritonai-bot.md)

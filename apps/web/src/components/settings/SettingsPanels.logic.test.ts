@@ -1,5 +1,4 @@
 import {
-  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   DEFAULT_UNIFIED_SETTINGS,
   ProviderDriverKind,
@@ -243,14 +242,21 @@ describe("getChangedBrowserSettingLabels", () => {
   });
 
   it("treats a structurally equal viewport as unchanged", () => {
-    // The viewport is a tagged union, so identity comparison would report a
-    // freshly decoded copy of the default as dirty and offer to "restore" it.
     expect(
       getChangedBrowserSettingLabels({
         ...DEFAULT_UNIFIED_SETTINGS,
         browserDefaultViewport: { ...DEFAULT_UNIFIED_SETTINGS.browserDefaultViewport },
       }),
     ).toEqual([]);
+  });
+
+  it("counts a retained custom search URL so restore clears it", () => {
+    expect(
+      getChangedBrowserSettingLabels({
+        ...DEFAULT_UNIFIED_SETTINGS,
+        browserCustomSearchUrl: "https://search.example/?q=%s",
+      }),
+    ).toEqual(["Search engine"]);
   });
 
   it("labels each browser default that differs", () => {

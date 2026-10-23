@@ -10,6 +10,9 @@ import type {
   OrchestrationProjectShell,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
+import * as Fiber from "effect/Fiber";
+import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -141,6 +144,7 @@ interface Call {
 class FakeBot {
   readonly calls: Array<Call> = [];
   readonly results: Array<Record<string, unknown>> = [];
+  onResult: (() => void) | null = null;
   tasks: Array<{
     taskId: string;
     title: string;
@@ -150,8 +154,11 @@ class FakeBot {
     project?: { id: string; title: string; workspaceRoot: string; deviceId: string };
   }> = [];
   corruptAttachment = false;
+  attachmentStatus = 200;
   onAttachmentDownload: (() => void) | null = null;
   artifactStatus = 200;
+  transferLatency = 0;
+  transferStarted: Deferred.Deferred<void> | null = null;
   artifactStatuses: number[] = [];
   malformedArtifactMetadata = false;
   failArtifactTransport = false;
@@ -163,11 +170,26 @@ class FakeBot {
   resultStatuses: number[] = [];
   sessionValid = true;
   rejectedProgressTask: string | null = null;
+  rejectedProgressCode: string | undefined = "binding-mismatch";
+  rejectedProgressReason = "Claim worker changed";
+  missingProgressTask: string | null = null;
+  heartbeatLatency = 0;
+  heartbeatStarted: Deferred.Deferred<void> | null = null;
+  progressLeaseReply: { value?: unknown } | null = null;
+  renewProgressLease = true;
   supportsProgress = true;
+  enforceClaimLease = false;
+  readonly claimExpiries = new Map<string, number>();
+  readonly expiredProgressReports: string[] = [];
   ownerId = "owner@ucsd.edu";
   apiOrigin = API;
 
-  handle(path: string, headers: Record<string, string>, body: Record<string, unknown>) {
+  handle(
+    path: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown>,
+    now: number,
+  ) {
     this.calls.push({ path, headers, body });
     const worker = headers["x-triton-harness-token"];
     if (path === "/me") {
@@ -183,6 +205,7 @@ class FakeBot {
     if (path === "/harness/pairing/revoke")
       return { status: 200, json: { ok: true, taskComputer: null } };
     if (path === "/harness/results") {
+      this.onResult?.();
       const status = this.resultStatuses.shift() ?? this.resultStatus;
       if (status === 200) this.results.push(body);
       return { status, json: {} };
@@ -192,6 +215,7 @@ class FakeBot {
     }
     if (/^\/harness\/tasks\/[^/]+\/attachments\//u.test(path)) {
       this.onAttachmentDownload?.();
+      if (this.attachmentStatus !== 200) return { status: this.attachmentStatus, json: {} };
       const isDocument = path.endsWith(document.attachmentId);
       return {
         status: 200,
@@ -232,17 +256,45 @@ class FakeBot {
         status: 200,
         json: {
           ok: true,
-          tasks: ((body.tasks ?? []) as Array<{ taskId: string }>).map((task) => ({
-            taskId: task.taskId,
-            accepted: task.taskId !== this.rejectedProgressTask,
-            ...(task.taskId === this.rejectedProgressTask
-              ? { reason: "Claim worker changed" }
-              : {}),
-          })),
+          tasks: ((body.tasks ?? []) as Array<{ taskId: string }>)
+            .filter((task) => task.taskId !== this.missingProgressTask)
+            .map((task) => {
+              // Mirrors the service's strict two-hour claim check; progress cannot
+              // renew a lease that expired while the computer was asleep/offline.
+              const expired =
+                this.enforceClaimLease && (this.claimExpiries.get(task.taskId) ?? Infinity) <= now;
+              if (expired) this.expiredProgressReports.push(task.taskId);
+              const accepted = task.taskId !== this.rejectedProgressTask && !expired;
+              if (accepted && this.renewProgressLease)
+                this.claimExpiries.set(task.taskId, now + 2 * 3_600_000);
+              return {
+                taskId: task.taskId,
+                accepted,
+                ...(!accepted
+                  ? {
+                      reason: expired ? "Claim expired" : this.rejectedProgressReason,
+                      reasonCode: expired ? "claim-expired" : this.rejectedProgressCode,
+                    }
+                  : this.progressLeaseReply === null
+                    ? {
+                        leaseSeconds: Math.max(
+                          0,
+                          Math.min(
+                            7200,
+                            Math.floor(((this.claimExpiries.get(task.taskId) ?? now) - now) / 1000),
+                          ),
+                        ),
+                      }
+                    : "value" in this.progressLeaseReply
+                      ? { leaseSeconds: this.progressLeaseReply.value }
+                      : {}),
+              };
+            }),
         },
       };
     if (path === "/harness/tasks/claim") {
       const task = this.tasks.shift();
+      if (task) this.claimExpiries.set(task.taskId, now + Number(body.leaseSeconds) * 1000);
       return {
         status: 200,
         json: {
@@ -275,7 +327,7 @@ class FakeBot {
                 }),
               }),
             )
-          : Effect.sync(() => {
+          : Effect.map(Clock.currentTimeMillis, (now) => {
               const raw =
                 request.body._tag === "Uint8Array"
                   ? new TextDecoder().decode(request.body.body)
@@ -289,12 +341,26 @@ class FakeBot {
               const url = new URL(request.url);
               assert.strictEqual(url.origin, this.apiOrigin);
               const body = JSON.parse(raw) as Record<string, unknown>;
-              const reply = this.handle(url.pathname, headers, body);
+              const reply = this.handle(url.pathname, headers, body, now);
               return HttpClientResponse.fromWeb(
                 request,
                 Response.json(reply.json, { status: reply.status }),
               );
-            }),
+            }).pipe(
+              Effect.tap(() =>
+                request.url.endsWith("/harness/heartbeat")
+                  ? (this.heartbeatStarted
+                      ? Deferred.succeed(this.heartbeatStarted, undefined)
+                      : Effect.void
+                    ).pipe(Effect.andThen(Effect.sleep(this.heartbeatLatency)))
+                  : request.url.includes("/attachments/") || request.url.endsWith("/artifacts")
+                    ? (this.transferStarted
+                        ? Deferred.succeed(this.transferStarted, undefined)
+                        : Effect.void
+                      ).pipe(Effect.andThen(Effect.sleep(this.transferLatency)))
+                    : Effect.void,
+              ),
+            ),
       ),
     );
   }
@@ -464,7 +530,130 @@ const services = (bot: FakeBot, harness: FakeHarness, maxParallel = 1) =>
 const allow = (computer: BotTaskComputer.BotTaskComputer["Service"]) =>
   computer.allow({ apiUrl: API, ownerToken: "owner-session", projectId: PROJECT });
 
+/** Count successful journal writes while retaining the real encrypted store and restart path. */
+const recordJournalWrites = Effect.gen(function* () {
+  const real = yield* ServerSecretStore.ServerSecretStore;
+  const writes: Array<Record<string, unknown>> = [];
+  const make = BotTaskComputer.make.pipe(
+    Effect.provideService(ServerSecretStore.ServerSecretStore, {
+      ...real,
+      set: (name, bytes) =>
+        real
+          .set(name, bytes)
+          .pipe(
+            Effect.tap(() =>
+              name === "tritonai-bot-task-computer"
+                ? decodeRecoveryJournal(new TextDecoder().decode(bytes)).pipe(
+                    Effect.tap((journal) => Effect.sync(() => writes.push(journal))),
+                  )
+                : Effect.void,
+            ),
+          ),
+    }),
+  );
+  return { writes, make };
+});
+
 it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
+  it.effect.each(["read", "decode"] as const)(
+    "reports unknown permission after a journal %s failure and recovers without changing work",
+    (failure) => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "retained", title: "Private retained task", prompt: "Inspect" }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        let failRead = false;
+        let writes = 0;
+        const computer = yield* BotTaskComputer.make.pipe(
+          Effect.provideService(ServerSecretStore.ServerSecretStore, {
+            ...secrets,
+            get: (name) =>
+              Effect.suspend(() =>
+                name === "tritonai-bot-task-computer" && failRead
+                  ? Effect.fail(
+                      new ServerSecretStore.SecretStoreReadError({
+                        resource: "private-secret-resource",
+                        cause: new Error("private-lock-error"),
+                      }),
+                    )
+                  : secrets.get(name),
+              ),
+            set: (name, bytes) => {
+              writes++;
+              return secrets.set(name, bytes);
+            },
+            remove: (name) => {
+              writes++;
+              return secrets.remove(name);
+            },
+          }),
+        );
+        yield* allow(computer);
+        const before = yield* computer.getStatus;
+        assert.strictEqual(before.state, "running");
+        const journal = yield* secrets.get("tritonai-bot-task-computer");
+        const calls = [...bot.calls];
+        const commands = [...harness.commands];
+        const writesBefore = writes;
+        if (failure === "decode")
+          yield* secrets.set(
+            "tritonai-bot-task-computer",
+            new TextEncoder().encode("private-malformed-journal"),
+          );
+        const unreadableJournal = yield* secrets.get("tritonai-bot-task-computer");
+        failRead = failure === "read";
+        assert.deepEqual(yield* computer.getStatus, {
+          state: "error",
+          deviceId: before.deviceId,
+          deviceName: before.deviceName,
+          apiUrl: null,
+          userId: null,
+          projectId: null,
+          tasks: [],
+          currentTask: null,
+          lastCheckInAt: null,
+          message:
+            "Bot task permission on this Harness cannot currently be checked. Retrying automatically.",
+        });
+        assert.deepEqual(yield* secrets.get("tritonai-bot-task-computer"), unreadableJournal);
+        failRead = false;
+        // Fixture recovery restores malformed bytes; a status read must never repair them itself.
+        if (failure === "decode")
+          yield* secrets.set("tritonai-bot-task-computer", Option.getOrThrow(journal));
+        assert.deepEqual(yield* computer.getStatus, before, "the worker run state is unchanged");
+        assert.deepEqual(yield* secrets.get("tritonai-bot-task-computer"), journal);
+        assert.strictEqual(writes, writesBefore, "status never writes or removes secrets");
+        assert.deepEqual(bot.calls, calls, "status never calls the service or controls permission");
+        assert.deepEqual(harness.commands, commands, "status never dispatches or controls work");
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect("keeps confirmed missing and inactive journals off without status side effects", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    return Effect.gen(function* () {
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      assert.strictEqual((yield* computer.getStatus).state, "off");
+      assert.isTrue(Option.isNone(yield* secrets.get("tritonai-bot-task-computer")));
+      assert.isEmpty(bot.calls);
+      assert.isEmpty(harness.commands);
+      yield* allow(computer);
+      yield* writeRecoveryJournal({ ...(yield* readRecoveryJournal), active: false });
+      const journal = yield* secrets.get("tritonai-bot-task-computer");
+      const calls = [...bot.calls];
+      const off = yield* computer.getStatus;
+      assert.strictEqual(off.state, "off");
+      assert.isNull(off.apiUrl);
+      assert.deepEqual(yield* secrets.get("tritonai-bot-task-computer"), journal);
+      assert.deepEqual(bot.calls, calls);
+      assert.isEmpty(harness.commands);
+    }).pipe(Effect.provide(services(bot, harness)));
+  });
+
   for (const rejection of [400, 403, 404, 405, 409, 410, 412, 413, 414, 415, 422]) {
     it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
       `settles permanent upload ${rejection} per file and continues to the next assignment`,
@@ -906,6 +1095,13 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         yield* Effect.tryPromise(() => NodeFSP.rm(output, { recursive: true }));
         harness.threads.delete(turn.threadId);
         const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        assert.lengthOf(
+          bot.calls.filter((call) => call.path.endsWith("/artifacts")),
+          2,
+          "restart preserves backoff",
+        );
+        yield* TestClock.adjust("30 seconds");
         yield* restarted.tick;
         assert.deepEqual(
           bot.calls
@@ -1542,6 +1738,557 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         const status = yield* computer.getStatus;
         assert.strictEqual(status.userId, "owner@ucsd.edu");
         assert.strictEqual(status.currentTask?.taskId, "held-account-a");
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect(
+    "retries transient attachment downloads with durable backoff before any execution",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        { taskId: "retry-input", title: "Input", prompt: "Inspect", attachments: [screenshot] },
+      ];
+      bot.attachmentStatus = 503;
+      bot.enforceClaimLease = true;
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        assert.lengthOf(harness.commands, 0);
+        assert.lengthOf(bot.results, 0);
+        const attempts = () =>
+          bot.calls.filter((call) => call.path.includes("/attachments/")).length;
+        assert.strictEqual(attempts(), 1);
+        const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        yield* TestClock.adjust("29 seconds");
+        yield* restarted.tick;
+        assert.strictEqual(attempts(), 1);
+        yield* TestClock.adjust("1 second");
+        yield* restarted.tick;
+        assert.strictEqual(attempts(), 2);
+        bot.attachmentStatus = 200;
+        yield* TestClock.adjust("59 seconds");
+        yield* restarted.tick;
+        assert.strictEqual(attempts(), 2);
+        yield* TestClock.adjust("1 second");
+        yield* restarted.tick;
+        assert.strictEqual(attempts(), 3);
+        assert.lengthOf(harness.commands, 2);
+        assert.lengthOf(bot.results, 0);
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect.each([
+    { kind: "new thirty-minute window", legacy: false, elapsed: 30 * 60_000 },
+    {
+      kind: "legacy window capped by the two-hour claim",
+      legacy: true,
+      elapsed: 2 * 3_600_000 + 1,
+    },
+  ])(
+    "settles expired unstarted downloads ($kind) before rejected progress can wedge new work",
+    ({ legacy, elapsed }) => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        { taskId: "expired-input", title: "Input", prompt: "Inspect", attachments: [screenshot] },
+      ];
+      bot.attachmentStatus = 503;
+      bot.enforceClaimLease = true;
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        assert.lengthOf(harness.commands, 0);
+        const journal = yield* readRecoveryJournal;
+        const held = yield* decodeRecoveryHeld(journal.held);
+        assert.deepInclude(held[0] as object, { inputRetryUntil: START + 30 * 60_000 });
+        if (legacy)
+          yield* writeRecoveryJournal({
+            ...journal,
+            held: held.map((task) => ({
+              ...(task as Record<string, unknown>),
+              inputRetryUntil: START + 24 * 3_600_000,
+            })),
+          });
+        bot.tasks = [{ taskId: "after-expiry", title: "Next", prompt: "Continue" }];
+        yield* TestClock.setTime(START + elapsed);
+        const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        assert.strictEqual(
+          bot.calls.filter((call) => call.path.includes("/attachments/")).length,
+          1,
+        );
+        assert.lengthOf(bot.results, 1);
+        assert.strictEqual(bot.results[0]!.taskId, "expired-input");
+        assert.strictEqual(bot.results[0]!.status, "failed");
+        assert.include(String(bot.results[0]!.result), "Nothing ran");
+        if (legacy) assert.include(bot.expiredProgressReports, "expired-input");
+        assert.lengthOf(harness.commands, 2);
+        assert.strictEqual((yield* restarted.getStatus).currentTask?.taskId, "after-expiry");
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect.each([
+    { code: "binding-mismatch", reason: "Claim worker changed", terminal: true },
+    { code: "claim-expired", reason: "Claim expired", terminal: true },
+    { code: "claim-invalid", reason: "Claim changed", terminal: true },
+    {
+      code: "retryable",
+      reason: "Progress could not be stored. Retry this snapshot.",
+      terminal: false,
+    },
+    {
+      code: "retryable",
+      reason:
+        "Progress is stale, its claim expired, or its worker or thread binding changed. Nothing was renewed.",
+      terminal: false,
+    },
+    { code: "invalid-progress", reason: "Invalid Harness timestamp", terminal: false },
+    { code: "future-unknown-code", reason: "Claim expired", terminal: false },
+    {
+      code: undefined,
+      reason: "Progress could not be stored. Retry this snapshot.",
+      terminal: false,
+    },
+    {
+      code: undefined,
+      reason:
+        "Progress is stale, its claim expired, or its worker or thread binding changed. Nothing was renewed.",
+      terminal: false,
+    },
+    { code: "missing", reason: "No acknowledgement", terminal: false },
+  ])(
+    "settles only proven permanent, never-started refusals ($code, $reason)",
+    ({ code, reason, terminal }) => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = ["running", "queued"].map((taskId) => ({
+        taskId,
+        title: taskId,
+        prompt: "Inspect",
+      }));
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        assert.lengthOf(harness.commands, 2);
+        const before = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+        assert.deepInclude(
+          before.find((task) => (task as Record<string, unknown>).taskId === "queued") as object,
+          { started: false },
+        );
+        if (code === "missing") bot.missingProgressTask = "queued";
+        else {
+          bot.rejectedProgressTask = "queued";
+          bot.rejectedProgressCode = code;
+          bot.rejectedProgressReason = reason;
+        }
+        bot.tasks = [{ taskId: "later", title: "Later", prompt: "Continue" }];
+        yield* TestClock.adjust("30 seconds");
+        yield* computer.tick;
+        // A live dispatched turn never gets cancelled, failed or dispatched again.
+        assert.lengthOf(harness.commands, 2);
+        const after = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+        assert.deepInclude(
+          after.find((task) => (task as Record<string, unknown>).taskId === "running") as object,
+          { started: true, outcome: null },
+        );
+        if (terminal) {
+          assert.lengthOf(bot.results, 1);
+          assert.deepInclude(bot.results[0]!, { taskId: "queued", status: "failed" });
+          assert.include(String(bot.results[0]!.result), "Nothing ran");
+          assert.isFalse(
+            after.some((task) => (task as Record<string, unknown>).taskId === "queued"),
+          );
+          assert.lengthOf(bot.tasks, 0, "new independent claims are no longer wedged");
+        } else {
+          assert.lengthOf(bot.results, 0);
+          assert.isTrue(
+            after.some((task) => (task as Record<string, unknown>).taskId === "queued"),
+          );
+          assert.lengthOf(bot.tasks, 1, "missing acknowledgements retain the progress gate");
+          assert.strictEqual((yield* computer.getStatus).state, "error");
+          bot.rejectedProgressTask = null;
+          bot.missingProgressTask = null;
+          yield* computer.tick;
+          assert.lengthOf(
+            bot.results,
+            0,
+            "a transient refusal must not lose the approved assignment",
+          );
+          assert.lengthOf(bot.tasks, 0, "claims resume after the next accepted heartbeat");
+          const recovered = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+          assert.deepInclude(
+            recovered.find(
+              (task) => (task as Record<string, unknown>).taskId === "queued",
+            ) as object,
+            { started: false, outcome: null },
+          );
+        }
+      }).pipe(Effect.provide(services(bot, harness, 4)));
+    },
+  );
+
+  it.effect("allows an attachment transfer longer than the control-plane timeout", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = [
+      { taskId: "slow-input", title: "Input", prompt: "Inspect", attachments: [screenshot] },
+    ];
+    bot.transferLatency = 20_000;
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      bot.transferStarted = yield* Deferred.make<void>();
+      const pending = yield* allow(computer).pipe(Effect.forkChild);
+      yield* Deferred.await(bot.transferStarted);
+      yield* TestClock.adjust("16 seconds");
+      assert.lengthOf(harness.commands, 0);
+      yield* TestClock.adjust("4 seconds");
+      yield* Fiber.join(pending);
+      assert.lengthOf(harness.commands, 2);
+      assert.lengthOf(bot.results, 0);
+    }).pipe(Effect.provide(services(bot, harness)));
+  });
+
+  it.effect.each([false, true])(
+    "does not rewrite a started task's journal for repeated progress acknowledgements (uncertain dispatch: %s)",
+    (uncertain) => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "running", title: "Running", prompt: "Inspect" }];
+      harness.failAfterTurnPersisted = uncertain;
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const journal = yield* recordJournalWrites;
+        const computer = yield* journal.make;
+        yield* allow(computer);
+        const before = yield* readRecoveryJournal;
+        const writes = journal.writes.length;
+        for (let tick = 0; tick < 7; tick++) {
+          yield* TestClock.adjust("10 seconds");
+          yield* computer.tick;
+        }
+        assert.strictEqual(journal.writes.length, writes);
+        assert.deepEqual(yield* readRecoveryJournal, before);
+        assert.lengthOf(harness.commands, 2, "a lost dispatch acknowledgement cannot replay work");
+        assert.lengthOf(bot.results, 0);
+        assert.strictEqual(bot.claimExpiries.get("running"), START + 70_000 + 2 * 3_600_000);
+        bot.rejectedProgressTask = "running";
+        bot.rejectedProgressCode = "claim-expired";
+        yield* computer.tick;
+        assert.strictEqual(journal.writes.length, writes);
+        assert.deepEqual(yield* readRecoveryJournal, before);
+        assert.lengthOf(bot.results, 0, "a terminal refusal cannot discard uncertain started work");
+        assert.lengthOf(harness.commands, 2);
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect("checkpoints queued lease growth in bounded steps across restart", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = ["running", "queued"].map((taskId) => ({
+      taskId,
+      title: taskId,
+      prompt: "Inspect",
+    }));
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const journal = yield* recordJournalWrites;
+      const computer = yield* journal.make;
+      yield* allow(computer);
+      const before = yield* readRecoveryJournal;
+      const writes = journal.writes.length;
+      for (let tick = 0; tick < 5; tick++) {
+        yield* TestClock.adjust("10 seconds");
+        yield* computer.tick;
+      }
+      assert.strictEqual(journal.writes.length, writes);
+      assert.deepEqual(yield* readRecoveryJournal, before);
+      yield* TestClock.adjust("10 seconds");
+      yield* computer.tick;
+      assert.strictEqual(journal.writes.length, writes + 1);
+      const checkpoint = yield* readRecoveryJournal;
+      const held = yield* decodeRecoveryHeld(checkpoint.held);
+      assert.deepInclude(
+        held.find((task) => (task as Record<string, unknown>).taskId === "queued") as object,
+        { started: false, outcome: null, progressLeaseExpiresAt: START + 2 * 3_600_000 + 60_000 },
+      );
+      const restarted = yield* journal.make;
+      yield* TestClock.adjust("10 seconds");
+      yield* restarted.tick;
+      assert.strictEqual(journal.writes.length, writes + 1);
+      assert.deepEqual(yield* readRecoveryJournal, checkpoint);
+      assert.isAbove(bot.claimExpiries.get("queued")!, START + 2 * 3_600_000 + 60_000);
+      assert.lengthOf(harness.commands, 2);
+    }).pipe(Effect.provide(services(bot, harness, 4)));
+  });
+
+  it.effect(
+    "uses the earlier durable lease for input retries after an uncheckpointed renewal",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.enforceClaimLease = true;
+      bot.tasks = [
+        { taskId: "running", title: "Running", prompt: "Inspect" },
+        { taskId: "input", title: "Input", prompt: "Inspect", attachments: [screenshot] },
+      ];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const journal = yield* recordJournalWrites;
+        const computer = yield* journal.make;
+        yield* allow(computer);
+        const writes = journal.writes.length;
+        yield* TestClock.adjust("50 seconds");
+        yield* computer.tick;
+        assert.strictEqual(journal.writes.length, writes);
+        bot.renewProgressLease = false;
+        bot.attachmentStatus = 503;
+        const running = harness.commands.find((command) => command.type === "thread.create")!;
+        harness.finish(running.threadId, "Finished first task");
+        yield* TestClock.setTime(START + 2 * 3_600_000 - 15_000);
+        const restarted = yield* journal.make;
+        yield* restarted.tick;
+        const held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+        assert.deepInclude(held[0] as object, {
+          taskId: "input",
+          started: false,
+          outcome: null,
+          inputRetryUntil: START + 2 * 3_600_000,
+        });
+        assert.isFalse(Object.hasOwn(held[0] as object, "progressLeaseExpiresAt"));
+        yield* TestClock.adjust("15 seconds");
+        const again = yield* journal.make;
+        yield* again.tick;
+        assert.isAbove(bot.claimExpiries.get("input")!, START + 2 * 3_600_000);
+        assert.deepInclude(bot.results.at(-1)!, { taskId: "input", status: "failed" });
+        assert.include(String(bot.results.at(-1)!.result), "Nothing ran");
+        assert.lengthOf(harness.commands, 2);
+        assert.strictEqual(
+          bot.calls.filter((call) => call.path.includes("/attachments/")).length,
+          1,
+        );
+      }).pipe(Effect.provide(services(bot, harness, 4)));
+    },
+  );
+
+  it.effect("persists shorter queued lease bounds immediately and never extends from zero", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = ["running", "queued"].map((taskId) => ({
+      taskId,
+      title: taskId,
+      prompt: "Inspect",
+    }));
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const journal = yield* recordJournalWrites;
+      const computer = yield* journal.make;
+      yield* allow(computer);
+      const writes = journal.writes.length;
+      bot.progressLeaseReply = { value: 30 };
+      bot.heartbeatLatency = 5000;
+      bot.heartbeatStarted = yield* Deferred.make<void>();
+      yield* TestClock.adjust("1 second");
+      const pending = yield* computer.tick.pipe(Effect.forkChild);
+      yield* Deferred.await(bot.heartbeatStarted);
+      yield* TestClock.adjust("5 seconds");
+      yield* Fiber.join(pending);
+      assert.strictEqual(journal.writes.length, writes + 1);
+      let held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+      // The five seconds spent awaiting the heartbeat cannot inflate its lease.
+      assert.deepInclude(held[1] as object, { progressLeaseExpiresAt: START + 31_000 });
+      bot.heartbeatLatency = 0;
+      bot.heartbeatStarted = null;
+      bot.progressLeaseReply = { value: 0 };
+      yield* TestClock.adjust("10 seconds");
+      yield* computer.tick;
+      assert.strictEqual(journal.writes.length, writes + 2);
+      held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+      assert.deepInclude(held[1] as object, { progressLeaseExpiresAt: START + 16_000 });
+      const checkpoint = yield* readRecoveryJournal;
+      yield* TestClock.adjust("1 minute");
+      const restarted = yield* journal.make;
+      yield* restarted.tick;
+      assert.strictEqual(journal.writes.length, writes + 2);
+      assert.deepEqual(yield* readRecoveryJournal, checkpoint);
+      assert.lengthOf(harness.commands, 2);
+    }).pipe(Effect.provide(services(bot, harness, 4)));
+  });
+
+  it.effect(
+    "journals a typed terminal refusal before delivery without throttling or losing started work",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = ["running", "queued"].map((taskId) => ({
+        taskId,
+        title: taskId,
+        prompt: "Inspect",
+      }));
+      bot.resultStatus = 503;
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const journal = yield* recordJournalWrites;
+        const computer = yield* journal.make;
+        yield* allow(computer);
+        yield* TestClock.adjust("1 second");
+        yield* computer.tick;
+        const writes = journal.writes.length;
+        let atDelivery: Record<string, unknown> | undefined;
+        bot.onResult = () => {
+          atDelivery = journal.writes.at(-1);
+        };
+        bot.rejectedProgressTask = "queued";
+        bot.rejectedProgressCode = "claim-expired";
+        yield* computer.tick;
+        assert.strictEqual(journal.writes.length, writes + 1);
+        const held = yield* decodeRecoveryHeld(atDelivery!.held);
+        assert.deepInclude(held[0] as object, { taskId: "running", started: true, outcome: null });
+        assert.deepInclude(held[1] as object, { taskId: "queued", started: false });
+        assert.deepInclude((held[1] as Record<string, unknown>).outcome as object, {
+          status: "failed",
+        });
+        assert.include(
+          String(((held[1] as Record<string, unknown>).outcome as Record<string, unknown>).result),
+          "Nothing ran",
+        );
+        assert.isFalse(Object.hasOwn(held[1] as object, "assignment"));
+        bot.rejectedProgressTask = null;
+        yield* TestClock.adjust("1 minute");
+        const restarted = yield* journal.make;
+        yield* restarted.tick;
+        assert.strictEqual(
+          journal.writes.length,
+          writes + 1,
+          "saved outcomes need no lease writes",
+        );
+        assert.lengthOf(harness.commands, 2);
+        assert.lengthOf(bot.results, 0, "a transient delivery failure retains the journal");
+      }).pipe(Effect.provide(services(bot, harness, 4)));
+    },
+  );
+
+  it.effect(
+    "gives a long queued claim its full input retry window after a confirmed renewal",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.enforceClaimLease = true;
+      bot.tasks = [
+        { taskId: "running", title: "Running", prompt: "Inspect" },
+        {
+          taskId: "long-queued-input",
+          title: "Input",
+          prompt: "Inspect",
+          attachments: [screenshot],
+        },
+      ];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        for (let hour = 0; hour < 3; hour++) {
+          yield* TestClock.adjust("1 hour");
+          yield* computer.tick;
+        }
+        assert.lengthOf(harness.commands, 2);
+        const running = harness.commands.find((command) => command.type === "thread.create")!;
+        harness.finish(running.threadId, "Finished first task");
+        bot.attachmentStatus = 503;
+        yield* TestClock.adjust("1 second");
+        yield* computer.tick;
+        const held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+        const queued = held.find(
+          (task) => (task as Record<string, unknown>).taskId === "long-queued-input",
+        ) as Record<string, unknown>;
+        assert.deepInclude(queued, {
+          started: false,
+          outcome: null,
+          inputRetryUntil: START + 3 * 3_600_000 + 1000 + 30 * 60_000,
+        });
+        assert.strictEqual(queued.progressLeaseExpiresAt, START + 5 * 3_600_000);
+        assert.isFalse(bot.results.some((result) => result.taskId === "long-queued-input"));
+        bot.attachmentStatus = 200;
+        yield* TestClock.adjust("30 seconds");
+        const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        assert.lengthOf(harness.commands, 4);
+        assert.strictEqual((yield* restarted.getStatus).currentTask?.taskId, "long-queued-input");
+      }).pipe(Effect.provide(services(bot, harness, 4)));
+    },
+  );
+
+  it.effect.each([undefined, -1, 7201, 1.5, "7200", null, true, false])(
+    "does not invent lease renewal from an accepted ack with invalid/missing leaseSeconds (%s)",
+    (leaseSeconds) => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        { taskId: "input", title: "Input", prompt: "Inspect", attachments: [screenshot] },
+      ];
+      bot.attachmentStatus = 503;
+      bot.progressLeaseReply = leaseSeconds === undefined ? {} : { value: leaseSeconds };
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        yield* TestClock.adjust("1 second");
+        yield* computer.tick;
+        const held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+        assert.isFalse(Object.hasOwn(held[0] as object, "progressLeaseExpiresAt"));
+        assert.deepInclude(held[0] as object, { started: false, outcome: null });
+        assert.lengthOf(bot.results, 0);
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect(
+    "retains the reported expiry for duplicate accepted progress and honors a zero remaining lease",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        { taskId: "input", title: "Input", prompt: "Inspect", attachments: [screenshot] },
+      ];
+      bot.attachmentStatus = 503;
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        yield* TestClock.adjust("1 minute");
+        yield* computer.tick;
+        const first = (yield* decodeRecoveryHeld((yield* readRecoveryJournal).held))[0] as Record<
+          string,
+          unknown
+        >;
+        assert.strictEqual(first.progressLeaseExpiresAt, START + 2 * 3_600_000 + 60_000);
+        bot.renewProgressLease = false;
+        yield* TestClock.adjust("1 second");
+        yield* computer.tick;
+        const duplicate = (yield* decodeRecoveryHeld(
+          (yield* readRecoveryJournal).held,
+        ))[0] as Record<string, unknown>;
+        assert.strictEqual(duplicate.progressLeaseExpiresAt, first.progressLeaseExpiresAt);
+        bot.progressLeaseReply = { value: 0 };
+        yield* computer.tick;
+        const noLease = (yield* decodeRecoveryHeld((yield* readRecoveryJournal).held))[0] as Record<
+          string,
+          unknown
+        >;
+        assert.strictEqual(noLease.progressLeaseExpiresAt, START + 61_000);
+        yield* computer.tick;
+        assert.deepInclude(bot.results[0]!, { taskId: "input", status: "failed" });
+        assert.include(String(bot.results[0]!.result), "Nothing ran");
+        assert.lengthOf(harness.commands, 0);
       }).pipe(Effect.provide(services(bot, harness)));
     },
   );

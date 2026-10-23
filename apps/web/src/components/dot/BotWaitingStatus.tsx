@@ -1,4 +1,4 @@
-import { useEffect, useReducer } from "react";
+import { useEffect, useState } from "react";
 
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -51,14 +51,21 @@ export function BotWaitingStatus({
   readonly onAction?: ((action: DotWaitingAction) => void) | undefined;
   readonly canAct?: ((action: DotWaitingAction) => boolean) | undefined;
 }) {
-  "use no memo"; // Read the wall clock on the wake even when the status prop is unchanged.
-  const [, refreshClock] = useReducer((value: number) => value + 1, 0);
-  const { overdue, expired, wake } = waitingTimes(waiting);
+  const [now, setNow] = useState(Date.now);
+  const { overdue, expired } = waitingTimes(waiting, now);
   useEffect(() => {
-    if (wake === undefined) return;
-    const timer = setTimeout(refreshClock, Math.max(0, wake - Date.now()) + 1);
+    let timer: ReturnType<typeof setTimeout>;
+    const sampleClock = () => {
+      const current = Date.now();
+      setNow(current);
+      const { wake } = waitingTimes(waiting, current);
+      if (wake !== undefined) {
+        timer = setTimeout(sampleClock, Math.min(2_147_483_647, Math.max(0, wake - current) + 1));
+      }
+    };
+    timer = setTimeout(sampleClock, 0);
     return () => clearTimeout(timer);
-  }, [wake]);
+  }, [waiting]);
   const action =
     waiting.action && onAction && (canAct?.(waiting.action) ?? true) ? waiting.action : undefined;
   return (

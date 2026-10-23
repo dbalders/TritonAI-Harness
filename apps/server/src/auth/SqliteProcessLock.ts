@@ -2,7 +2,6 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
-
 import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -335,10 +334,8 @@ export const acquireSqliteProcessLock = (
     }),
   );
 
-export const releaseSqliteProcessLock = (
-  lock: SqliteProcessLock,
-): Effect.Effect<void, SqliteProcessLockError> =>
-  Effect.gen(function* () {
+export const releaseSqliteProcessLock = Effect.fn("SqliteProcessLock.releaseSqliteProcessLock")(
+  function* (lock: SqliteProcessLock): Effect.fn.Return<void, SqliteProcessLockError> {
     const rollbackResult = yield* Effect.result(
       Effect.try({
         try: () => lock.database.exec("ROLLBACK"),
@@ -360,4 +357,6 @@ export const releaseSqliteProcessLock = (
           ? failures[0]
           : new AggregateError(failures, "One or more process lock resources failed to close."),
     });
-  }).pipe(Effect.ensuring(releaseLocalReservation(lock.localReservationId)));
+  },
+  (effect, lock) => effect.pipe(Effect.ensuring(releaseLocalReservation(lock.localReservationId))),
+);

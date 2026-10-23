@@ -13,6 +13,11 @@ vp run dev
 Open the pairing URL printed by the dev runner. The bare origin does not authenticate
 a new browser.
 
+The standalone web server also needs an externally managed encryption keyring through
+`TRITONAI_SECRET_STORE_KEY_FILE`; see [headless and web server protection](./secret-storage.md#headless-and-web-server-protection).
+Keep development keys separate from installed-app keys and outside the repository and test evidence.
+The desktop app supplies its own protected keyring.
+
 Prefer a container? See [Dev container](../internals/devcontainer.md) for VS Code and Codespaces setup.
 
 ## Choosing a dev process
@@ -52,9 +57,13 @@ when changing this setup:
   chunks. Static imports can work on first load and fail after a route split.
 - Bundled dev rebuilds Tailwind through watched files. Its ordinary Vite hot-update hook expects
   a server/module graph that Rolldown does not provide.
+- The app and its routes are lazy chunks, built on first request. A plugin pre-bundles the
+  startup chain when the server starts. Renaming or moving a startup route or the app entry
+  silently drops it from that list.
 
-The workarounds live in the [web entry](../../apps/web/src/bootstrap.ts) and
-[Tailwind plugin](../../apps/web/vite/tailwind.ts).
+The workarounds live in the [web entry](../../apps/web/src/bootstrap.ts),
+[Tailwind plugin](../../apps/web/vite/tailwind.ts), and
+[startup warmup](../../apps/web/vite/warmBundledDev.ts).
 
 #### Reusable dev credential
 

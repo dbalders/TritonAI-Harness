@@ -21,22 +21,23 @@ vi.mock("react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("react")>()),
   useCallback: <T>(callback: T) => callback,
 }));
-vi.mock("@effect/atom-react", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@effect/atom-react")>()),
-  useAtomValue: () =>
-    new Map([
-      [
-        "env",
-        {
-          settings: {
-            ...DEFAULT_SERVER_SETTINGS,
-            defaultModelSelection: harness.appDefault,
-            defaultThreadEnvMode: "local",
-            newWorktreesStartFromOrigin: false,
+vi.mock("../rpc/atomRegistry", () => ({
+  appAtomRegistry: {
+    get: () =>
+      new Map([
+        [
+          "env",
+          {
+            settings: {
+              ...DEFAULT_SERVER_SETTINGS,
+              defaultModelSelection: harness.appDefault,
+              defaultThreadEnvMode: "local",
+              newWorktreesStartFromOrigin: false,
+            },
           },
-        },
-      ],
-    ]),
+        ],
+      ]),
+  },
 }));
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),

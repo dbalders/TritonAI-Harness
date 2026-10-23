@@ -11,11 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
-
-import {
-  EmptyIntegrationToolInput,
-  integrationToolJsonSchema,
-} from "../integrations/IntegrationTool.ts";
+import { EmptyIntegrationToolInput } from "../integrations/IntegrationTool.ts";
 import * as Integrations from "../integrations/IntegrationRegistry.ts";
 import { integrationToolInvocationContext } from "./IntegrationTools.ts";
 import {

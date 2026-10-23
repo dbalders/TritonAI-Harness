@@ -3,8 +3,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 // The same environment ChatMarkdown's own tests render it in.
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
-vi.mock("../../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: () => ({
+    pullRequestsEnabled: false,
+    availableEditors: [],
+    revealInFileManagerLabel: "Reveal in file manager",
+  }),
+}));
+vi.mock("../../hooks/useTheme", () => ({ useRenderedAppearance: () => "dark" }));
 vi.mock("../../hooks/useSettings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../hooks/useSettings")>();
   const settings = actual.getClientSettings();

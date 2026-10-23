@@ -64,17 +64,19 @@ export function BotResultCard({
                           onClick={async () => {
                             setBusy(true);
                             setError(null);
-                            try {
-                              await onDownload(item.attachmentId!);
-                            } catch (cause) {
-                              setError(
-                                cause instanceof Error
-                                  ? cause.message
-                                  : "Could not download this file.",
-                              );
-                            } finally {
+                            await (async () => {
+                              try {
+                                await onDownload(item.attachmentId!);
+                              } catch (cause) {
+                                setError(
+                                  cause instanceof Error
+                                    ? cause.message
+                                    : "Could not download this file.",
+                                );
+                              }
+                            })().finally(() => {
                               setBusy(false);
-                            }
+                            });
                           }}
                         >
                           Download {item.label}

@@ -1,4 +1,5 @@
-import React, { type ComponentRef, type Ref } from "react";
+import React from "react";
+import type { ComponentRef, Ref } from "react";
 import { Platform, StyleSheet, Text, type TextProps, type TextStyle } from "react-native";
 import T3SourceTextRunNativeComponent from "./T3SourceTextRunNativeComponent";
 import T3SourceTextNativeComponent from "./T3SourceTextNativeComponent";
@@ -13,7 +14,6 @@ export type SourceTextProps = Omit<TextProps, "onTextLayout" | "onPress" | "onLo
   }) => void;
 };
 
-/** One selectable document on iOS, with nested runs carrying syntax colors. */
 export function SourceText({ style, children, nativeTextRef, ...props }: SourceTextProps) {
   const [isAncestor, rootStyle] = React.useContext(TextAncestorContext);
   const flattenedStyle = React.useMemo(() => flattenStyles(rootStyle, style), [rootStyle, style]);

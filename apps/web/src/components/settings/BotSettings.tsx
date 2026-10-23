@@ -1,3 +1,4 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { useAtomValue } from "@effect/atom-react";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import {
@@ -5,7 +6,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useProjects } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -25,10 +26,11 @@ import {
   useClientSettings,
   usePrimarySettings,
   usePrimarySettingsAvailable,
-  useUpdateClientSettings,
+  updateClientSettings,
   useUpdatePrimarySettings,
 } from "../../hooks/useSettings";
 import { ensureLocalApi } from "../../localApi";
+import { BotMicrosoftConnection } from "../dot/BotDiscoveryPanels";
 import { useBotServiceUrl } from "../dot/botService";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -61,7 +63,7 @@ export function BotSettings() {
 }
 
 function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
-  const client = useMemo(() => (serviceUrl ? new DotClient(serviceUrl) : null), [serviceUrl]);
+  const [client] = useState(() => (serviceUrl ? new DotClient(serviceUrl) : null));
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -81,7 +83,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const diagnostics = useClientSettings((settings) => settings.tritonAiBotDiagnostics);
-  const updateSettings = useUpdateClientSettings();
+  const updateSettings = updateClientSettings;
   const maxParallel = usePrimarySettings((settings) => settings.botTaskMaxParallel);
   const serverSettingsAvailable = usePrimarySettingsAvailable();
   const updateServerSettings = useUpdatePrimarySettings();
@@ -115,10 +117,12 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     (scratchRoot !== null ? NO_PROJECT : (projects[0]?.id ?? null));
   const localForService =
     local?.apiUrl === serviceUrl && local.userId === state?.user.userId ? local : null;
+  const permissionUnknown = local?.state === "error" && local.apiUrl === null;
   const thisComputer = isTaskComputer(state?.taskComputer, localForService);
   const otherComputer = state?.taskComputer && !thisComputer ? state.taskComputer.deviceName : null;
   const projectSelectionReady = Boolean(
     canControlTasks &&
+    !permissionUnknown &&
     local &&
     (local.state === "off" || local.state === "replaced" || (state && session)),
   );
@@ -133,13 +137,14 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     setChosenProjectId(null);
   }
 
-  const isCurrentSession = useCallback(
+  const isCurrentSession = useStableCallback(
     (token: string) =>
       mounted.current &&
       Boolean(serviceUrl && readDotSession(sessionStorage, serviceUrl)?.ownerToken === token),
-    [serviceUrl],
   );
-  const loadState = useCallback(async () => {
+  const sessionOwnerToken = session?.ownerToken;
+  const loadState = useStableCallback(async (ownerToken = sessionOwnerToken) => {
+    if (ownerToken !== session?.ownerToken) return;
     if (!serviceUrl || !client) return;
     const current = readDotSession(sessionStorage, serviceUrl);
     if (current?.ownerToken !== session?.ownerToken) {
@@ -165,13 +170,13 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
       }
       setError(cause instanceof Error ? cause.message : "Could not reach TritonAI Bot.");
     }
-  }, [client, session, serviceUrl, isCurrentSession]);
+  });
 
   useEffect(() => {
-    void loadState();
-    const timer = setInterval(() => void loadState(), 30_000);
+    void loadState(session?.ownerToken);
+    const timer = setInterval(() => void loadState(session?.ownerToken), 30_000);
     return () => clearInterval(timer);
-  }, [loadState]);
+  }, [loadState, session?.ownerToken]);
 
   /** "No project" becomes the environment's Scratch project, created on first use. */
   const resolveProjectId = async (value: string) => {
@@ -181,11 +186,10 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   };
 
   const allow = async () => {
-    if (!session || !serviceUrl || !environmentId || !projectId) return;
+    if (permissionUnknown || !session || !serviceUrl || !environmentId || !projectId) return;
     setBusy(true);
     setError(null);
-    let current = false;
-    try {
+    const current = await (async () => {
       const resolvedProjectId = await resolveProjectId(projectId);
       // openScratchProject already reported a failed create. A sign-out or
       // account switch while it ran must not pair with the replaced session.
@@ -198,10 +202,10 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         setError(failureMessage(result, "Could not allow this computer."));
       }
-      current = true;
-    } finally {
+      return true;
+    })().finally(() => {
       if (mounted.current) setBusy(false);
-    }
+    });
     if (!current) return;
     refreshLocal();
     await loadState();
@@ -211,26 +215,28 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     if (!environmentId) return;
     setBusy(true);
     setError(null);
-    try {
-      const result = await stopHere({
-        environmentId,
-        input: {
-          ownerToken: localForService ? (session?.ownerToken ?? null) : null,
-          apiUrl: serviceUrl,
-        },
-      });
-      if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        setError(failureMessage(result, "Could not stop running tasks here."));
+    await (async () => {
+      try {
+        const result = await stopHere({
+          environmentId,
+          input: {
+            ownerToken: localForService ? (session?.ownerToken ?? null) : null,
+            apiUrl: serviceUrl,
+          },
+        });
+        if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          setError(failureMessage(result, "Could not stop running tasks here."));
+        }
+        refreshLocal();
+        await loadState();
+      } catch (cause) {
+        if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
+        setError(cause instanceof Error ? cause.message : "Could not stop running tasks here.");
       }
-      refreshLocal();
-      await loadState();
-    } catch (cause) {
-      if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
-      setError(cause instanceof Error ? cause.message : "Could not stop running tasks here.");
-    } finally {
+    })().finally(() => {
       if (mounted.current) setBusy(false);
-    }
+    });
   };
 
   const chooseProject = async (value: string) => {
@@ -253,7 +259,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     changingProject.current = true;
     setBusy(true);
     setError(null);
-    try {
+    await (async () => {
       const resolvedProjectId = await resolveProjectId(value);
       if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
       if (!resolvedProjectId) return;
@@ -267,30 +273,32 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
         setError(failureMessage(result, "Could not change the project."));
       }
       refreshLocal();
-    } finally {
+    })().finally(() => {
       changingProject.current = false;
       if (mounted.current) setBusy(false);
-    }
+    });
   };
 
   const setWarning = async (enabled: boolean) => {
     if (!session || !client) return;
     setBusy(true);
     setError(null);
-    try {
-      const { user } = await client.updateSettings(session, {
-        warnWhenTaskComputerOffline: enabled,
-      });
-      if (!isCurrentSession(session.ownerToken)) return;
-      setState((current) =>
-        current ? { ...current, user: { ...current.user, ...user } } : current,
-      );
-    } catch (cause) {
-      if (!isCurrentSession(session.ownerToken)) return;
-      setError(cause instanceof Error ? cause.message : "Could not save the setting.");
-    } finally {
+    await (async () => {
+      try {
+        const { user } = await client.updateSettings(session, {
+          warnWhenTaskComputerOffline: enabled,
+        });
+        if (!isCurrentSession(session.ownerToken)) return;
+        setState((current) =>
+          current ? { ...current, user: { ...current.user, ...user } } : current,
+        );
+      } catch (cause) {
+        if (!isCurrentSession(session.ownerToken)) return;
+        setError(cause instanceof Error ? cause.message : "Could not save the setting.");
+      }
+    })().finally(() => {
       if (mounted.current) setBusy(false);
-    }
+    });
   };
 
   const projectTitle =
@@ -303,10 +311,16 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     <SettingsPageContainer>
       {!serviceUrl ? (
         <p className="text-sm text-muted-foreground">
-          Set a TritonAI Bot service address in Settings → Connections to manage your bot.
+          Enable TritonAI Bot in Settings → General → Experimental to manage your personal bot.
         </p>
       ) : null}
       <SettingsSection id="tritonai-bot-account" title="Account">
+        {session && serviceUrl && state ? (
+          <BotMicrosoftConnection
+            microsoft={state.microsoft}
+            connectionsUrl={`${serviceUrl}/connections`}
+          />
+        ) : null}
         <SettingsRow
           title="Campus account"
           description={
@@ -315,7 +329,21 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
               : "Sign in on the TritonAI Bot page to manage these settings."
           }
           control={
-            session ? undefined : (
+            session ? (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  const current = session;
+                  if (serviceUrl) saveDotSession(sessionStorage, serviceUrl, null);
+                  setSession(null);
+                  setState(null);
+                  void client?.signOut(current).catch(() => undefined);
+                }}
+              >
+                Sign out
+              </Button>
+            ) : (
               <Button size="xs" onClick={() => void navigate({ to: "/dot" })}>
                 Open TritonAI Bot
               </Button>
@@ -375,11 +403,13 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
         <SettingsRow
           title={local ? `This computer · ${local.deviceName}` : "This computer"}
           description={
-            local && state && !localForService && local.state !== "off"
-              ? "This Harness is paired with a different Bot service or account. Choose Allow to pair it with the signed-in account."
-              : otherComputer && !thisComputer
-                ? describeThisComputerBesideAnother(local ?? null, otherComputer)
-                : describeThisComputer(local ?? null)
+            permissionUnknown
+              ? describeThisComputer(local)
+              : local && state && !localForService && local.state !== "off"
+                ? "This Harness is paired with a different Bot service or account. Choose Allow to pair it with the signed-in account."
+                : otherComputer && !thisComputer
+                  ? describeThisComputerBesideAnother(local ?? null, otherComputer)
+                  : describeThisComputer(local ?? null)
           }
           status={error ? <span className="text-destructive">{error}</span> : undefined}
           control={
@@ -399,6 +429,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
                   size="xs"
                   disabled={
                     busy ||
+                    permissionUnknown ||
                     !canControlTasks ||
                     !serviceUrl ||
                     !session ||

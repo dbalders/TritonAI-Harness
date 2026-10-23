@@ -8,6 +8,9 @@ vi.mock("./components/desktop/DesktopAppActivationCoordinator", () => ({
 vi.mock("./components/onboarding/FirstRunGate", () => ({
   FirstRunGate: ({ children }: { children: React.ReactNode }) => children,
 }));
+vi.mock("./components/onboarding/GettingStartedHost", () => ({
+  GettingStartedHost: () => null,
+}));
 vi.mock("./components/ThreadNotificationCoordinator", () => ({
   ThreadNotificationCoordinator: () => null,
 }));
@@ -105,6 +108,7 @@ vi.mock("./state/environments", () => ({
 vi.mock("./state/server", () => ({
   serverEnvironment: { configValueAtom: () => Symbol("config") },
   primaryServerConfigAtom: Symbol("primaryServerConfigAtom"),
+  environmentServerConfigsAtom: Symbol("environmentServerConfigsAtom"),
   primaryServerLegacyThreadMigrationAtom: Symbol("legacyMigration"),
   primaryServerConfigEventAtom: Symbol("primaryServerConfigEventAtom"),
   primaryServerEnvironmentThemesAtom: Symbol("primaryServerEnvironmentThemesAtom"),
