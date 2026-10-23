@@ -112,6 +112,7 @@ import {
   workspaceAssetResource,
 } from "./filePreviewMode";
 import { useFileSaveCoordinator } from "./useFileSaveCoordinator";
+import { UnsupportedFilePreview } from "./UnsupportedFilePreview";
 import {
   getOptimisticProjectFileQueryData,
   getProjectFileContents,
@@ -1365,6 +1366,19 @@ export default function FilePreviewPanel({
               workspaceRoot={cwd}
               title={relativePath}
               workspaceMutationId={workspaceMutationId}
+            />
+          ) : relativePath &&
+            absolutePath &&
+            file.readError?.failure === "binary_file" &&
+            file.data === null ? (
+            <UnsupportedFilePreview
+              key={absolutePath}
+              environmentId={environmentId}
+              cwd={cwd}
+              relativePath={relativePath}
+              absolutePath={absolutePath}
+              threadRef={threadRef}
+              draft={draft}
             />
           ) : relativePath && file.error && file.data === null ? (
             <div

@@ -458,6 +458,7 @@ export const layerAssetRoute = HttpRouter.add(
             ? { fileName }
             : {}),
         ...(asset.mimeType !== undefined ? { mimeType: asset.mimeType } : {}),
+        ...("file" in asset && asset.file !== undefined ? { file: asset.file } : {}),
       },
       request.method === "GET" ? request.headers.range : undefined,
       request.headers["if-range"],

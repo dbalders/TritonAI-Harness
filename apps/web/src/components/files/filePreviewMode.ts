@@ -61,7 +61,7 @@ export function workspaceAssetResource(input: {
   readonly draft: boolean;
   readonly workspaceRoot: string;
   readonly absolutePath: string;
-}): AssetResource {
+}): Extract<AssetResource, { _tag: "workspace-file" | "media-file" | "draft-workspace-file" }> {
   if (input.draft) {
     return { _tag: "draft-workspace-file", cwd: input.workspaceRoot, path: input.absolutePath };
   }
