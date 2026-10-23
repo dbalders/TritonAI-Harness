@@ -7,7 +7,13 @@ import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/process";
 import type { ProcessRunner, ProcessRunOutput } from "../processRunner.ts";
 import { ManagedCodexApprovedVersion, updateTritonAiManagedCodex } from "./managedCodexUpdate.ts";
-import { ManagedCodexLockError } from "./managedCodexLock.ts";
+import {
+  ManagedCodexLockError,
+  ManagedCodexBootId,
+  acquireManagedCodexLease,
+  assertManagedCodexIdle,
+  withManagedCodexLock,
+} from "./managedCodexLock.ts";
 
 const hooks = vi.hoisted(() => ({
   compromise: undefined as ((cause: Error) => void) | undefined,
@@ -39,6 +45,58 @@ const success = (version = ""): ProcessRunOutput => ({
 });
 
 it.layer(NodeServices.layer)("managed Codex activation ownership", (it) => {
+  it.effect.each(["before registration", "after registration"])(
+    "rejects lost admission ownership %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "codex-admission-test-" });
+        const runtimeRoot = path.join(home, "codex");
+        yield* fs.makeDirectory(runtimeRoot);
+        const takeover = fs
+          .rename(`${runtimeRoot}.lock`, `${runtimeRoot}.retired-lock`)
+          .pipe(Effect.andThen(fs.makeDirectory(`${runtimeRoot}.lock`)));
+        const testFs = FileSystem.FileSystem.of({
+          ...fs,
+          makeTempDirectory: (options) =>
+            fs
+              .makeTempDirectory(options)
+              .pipe(Effect.tap(() => (scenario === "after registration" ? takeover : Effect.void))),
+        });
+        const result = yield* acquireManagedCodexLease(
+          runtimeRoot,
+          scenario === "before registration" ? takeover : Effect.void,
+        ).pipe(Effect.provideService(FileSystem.FileSystem, testFs), Effect.scoped, Effect.exit);
+        expect(result._tag).toBe("Failure");
+        expect(
+          (yield* fs.readDirectory(runtimeRoot)).filter((entry) =>
+            entry.startsWith(".tritonai-codex-session."),
+          ),
+        ).toEqual([]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("retains an incomplete PID handoff until a verified reboot", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "codex-boot-test-" });
+      const boot = NodeCrypto.createHash("sha256").update("old boot").digest("hex");
+      const lease = path.join(root, `.tritonai-codex-session.999999.${boot}.pending`);
+      yield* fs.makeDirectory(lease);
+      const deferred = yield* withManagedCodexLock(root, assertManagedCodexIdle(root)).pipe(
+        Effect.provideService(ManagedCodexBootId, Effect.succeed("old boot")),
+        Effect.exit,
+      );
+      expect(deferred._tag).toBe("Failure");
+      expect(yield* fs.exists(lease)).toBe(true);
+      yield* withManagedCodexLock(root, assertManagedCodexIdle(root)).pipe(
+        Effect.provideService(ManagedCodexBootId, Effect.succeed("new boot")),
+      );
+      expect(yield* fs.exists(lease)).toBe(false);
+    }).pipe(Effect.scoped),
+  );
   it.effect.each(["compromised heartbeat", "replacement before heartbeat"])(
     "preserves a peer engine after %s",
     (scenario) =>
@@ -105,3 +163,5 @@ it.layer(NodeServices.layer)("managed Codex activation ownership", (it) => {
       }).pipe(Effect.scoped),
   );
 });
+// @effect-diagnostics nodeBuiltinImport:off - Regression fixtures identify retained leases across boots.
+import * as NodeCrypto from "node:crypto";

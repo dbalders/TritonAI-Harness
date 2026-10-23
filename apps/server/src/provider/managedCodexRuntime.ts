@@ -57,12 +57,13 @@ export const resolveManagedCodexBinary = Effect.fn("resolveManagedCodexBinary")(
     input.run({ ...command, env: input.environment });
   const workingVersion = Effect.fn("managedCodexRuntime.workingVersion")(
     function* (command: string) {
-      yield* leaseManagedCodexRuntime(command, run);
+      const lease = yield* leaseManagedCodexRuntime(command, run);
       const result = yield* run({
         command,
         args: ["--version"],
         timeout: "5 seconds",
         maxOutputBytes: 8 * 1024,
+        ...(lease ? { onSpawn: (pid: number) => lease.bindChild(pid).pipe(Effect.orDie) } : {}),
       });
       return result.code === 0 && !result.timedOut ? parseCodexCliVersion(result.stdout) : null;
     },
@@ -146,7 +147,7 @@ export const leaseManagedCodexRuntime = Effect.fn("leaseManagedCodexRuntime")(fu
   const installation = resolveTritonAiManagedCodexInstallation(binaryPath);
   if (!installation) return;
   const path = yield* Path.Path;
-  yield* acquireManagedCodexLease(
+  return yield* acquireManagedCodexLease(
     path.dirname(installation.installRoot),
     recoverManagedCodexUnderLock({ binaryPath, run }),
   );

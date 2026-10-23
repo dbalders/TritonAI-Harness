@@ -298,10 +298,17 @@ export const updateTritonAiManagedCodex = Effect.fn(
   const managedTools = windowsTools ?? (yield* resolvePosixManagedTools(installation));
   const installationName = path.basename(installation.installRoot);
   // Windows can briefly retain an executable's file mapping after --version exits.
-  const retryFileOperation = <A>(operation: Effect.Effect<A, PlatformError.PlatformError>) =>
-    operation.pipe(
+  const retryFileOperation = <A>(
+    operation: Effect.Effect<A, PlatformError.PlatformError>,
+    requireOwnership = false,
+  ) =>
+    (requireOwnership
+      ? assertManagedCodexLockOwnership().pipe(Effect.andThen(operation))
+      : operation
+    ).pipe(
       Effect.retry({
         while: (error) => {
+          if (error._tag === "ManagedCodexLockError") return false;
           const cause = error.reason.cause;
           return (
             installation.windows &&
@@ -403,10 +410,10 @@ export const updateTritonAiManagedCodex = Effect.fn(
   const activate = Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       yield* assertManagedCodexLockOwnership();
-      yield* retryFileOperation(fs.rename(installation.installRoot, backupInstallRoot));
+      yield* retryFileOperation(fs.rename(installation.installRoot, backupInstallRoot), true);
       backedUp = true;
       yield* assertManagedCodexLockOwnership();
-      yield* retryFileOperation(fs.rename(stagedInstallRoot, installation.installRoot));
+      yield* retryFileOperation(fs.rename(stagedInstallRoot, installation.installRoot), true);
       activated = true;
       const activeVersionResult = yield* restore(
         runCheckedCommand(
@@ -458,6 +465,7 @@ export const updateTritonAiManagedCodex = Effect.fn(
             if (activated) {
               yield* retryFileOperation(
                 fs.remove(installation.installRoot, { recursive: true, force: true }),
+                true,
               ).pipe(
                 Effect.mapError((rollbackCause) =>
                   updateError(
@@ -471,6 +479,7 @@ export const updateTritonAiManagedCodex = Effect.fn(
               yield* assertManagedCodexLockOwnership();
               yield* retryFileOperation(
                 fs.rename(backupInstallRoot, installation.installRoot),
+                true,
               ).pipe(
                 Effect.mapError((rollbackCause) =>
                   updateError(

@@ -1653,7 +1653,10 @@ export const layerAppServerClientFactory: Layer.Layer<
           .filter(Boolean)
           .join(",");
         const childEnvironment = { ...environment, NO_PROXY: noProxy, no_proxy: noProxy };
-        yield* leaseManagedCodexRuntime(input.settings.binaryPath, runner.run).pipe(
+        const runtimeLease = yield* leaseManagedCodexRuntime(
+          input.settings.binaryPath,
+          runner.run,
+        ).pipe(
           Effect.provideService(Scope.Scope, scope),
           Effect.provideService(FileSystem.FileSystem, runtimeFs),
           Effect.provideService(Path.Path, runtimePath),
@@ -1693,6 +1696,17 @@ export const layerAppServerClientFactory: Layer.Layer<
               }),
           ),
         );
+        if (runtimeLease)
+          yield* runtimeLease.bindChild(Number(handle.pid)).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CODEX_PROVIDER,
+                  providerSessionId: input.providerSessionId,
+                  cause,
+                }),
+            ),
+          );
         const protocolLogger = makeCodexAppServerProtocolLogger({
           nativeEventLogger,
           threadId: input.threadId,

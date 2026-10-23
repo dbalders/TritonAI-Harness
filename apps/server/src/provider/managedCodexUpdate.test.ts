@@ -555,11 +555,13 @@ it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
             "unrelated error",
             "rollback removal lock",
             "rollback restoration lock",
+            "lock ownership lost during retry",
           ],
           (scenario) => ({ scenario }),
         ),
       )("case $scenario", ({ scenario }) => {
         const rollbackFailure = scenario.startsWith("rollback");
+        const ownershipLost = scenario === "lock ownership lost during retry";
         const failActivation = scenario === "verification failure" || rollbackFailure;
         const shouldFail = scenario !== "success" && scenario !== "temporary lock";
         it.effect(`${layout}: ${scenario}`, () =>
@@ -637,7 +639,15 @@ it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
                   }
                   if (source.includes(".tritonai-codex-stage.") && destination === installRoot) {
                     activationAttempts++;
+                    if (ownershipLost && activationAttempts === 1) {
+                      yield* fs.rename(`${runtimeRoot}.lock`, `${runtimeRoot}.retired-lock`);
+                      yield* fs.makeDirectory(`${runtimeRoot}.lock`);
+                      yield* fs.makeDirectory(path.dirname(activeEntry), { recursive: true });
+                      yield* fs.writeFileString(activeEntry, "0.160.0");
+                      yield* fs.writeFileString(binaryPath, launcher);
+                    }
                     if (
+                      ownershipLost ||
                       scenario === "persistent lock" ||
                       scenario === "unrelated error" ||
                       (scenario === "temporary lock" && activationAttempts === 1)
@@ -685,7 +695,7 @@ it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
             );
             expect(installs).toBe(1);
             expect(result._tag).toBe(shouldFail ? "Failure" : "Success");
-            if (rollbackFailure) {
+            if (rollbackFailure || ownershipLost) {
               const entries = yield* fs.readDirectory(runtimeRoot);
               const backup = entries.find((entry) => entry.startsWith(".tritonai-codex-backup."));
               expect(backup).toBeDefined();
@@ -694,7 +704,9 @@ it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
                 "0.146.0",
               );
               expect(yield* fs.readFileString(path.join(savedRoot, "codex.cmd"))).toBe(launcher);
-              if (result._tag === "Failure") expect(result.failure.message).toContain(savedRoot);
+              if (ownershipLost) expect(yield* fs.readFileString(activeEntry)).toBe("0.160.0");
+              else if (result._tag === "Failure")
+                expect(result.failure.message).toContain(savedRoot);
             } else {
               expect(yield* fs.readFileString(activeEntry)).toBe(
                 shouldFail ? "0.146.0" : "0.151.0",

@@ -339,7 +339,9 @@ const withCodexClient = Effect.fn("CodexManagement.withCodexClient")(function* <
     environment,
     run: processRunner.run,
   }).pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
-  yield* leaseManagedCodexRuntime(binaryPath, processRunner.run).pipe(
+  const runtimeScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+  const runtimeLease = yield* leaseManagedCodexRuntime(binaryPath, processRunner.run).pipe(
+    Effect.provideService(Scope.Scope, runtimeScope),
     Effect.mapError((cause) => codexOperationError(operation, cause)),
   );
   const spawnCommand = yield* resolveCodexAppServerCommand(
@@ -361,6 +363,7 @@ const withCodexClient = Effect.fn("CodexManagement.withCodexClient")(function* <
       }),
     )
     .pipe(
+      Effect.provideService(Scope.Scope, runtimeScope),
       Effect.mapError((cause) =>
         codexOperationError(
           operation,
@@ -371,6 +374,10 @@ const withCodexClient = Effect.fn("CodexManagement.withCodexClient")(function* <
         ),
       ),
     );
+  if (runtimeLease)
+    yield* runtimeLease
+      .bindChild(Number(child.pid))
+      .pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
   const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child)).pipe(
     Effect.mapError((cause) => codexOperationError(operation, cause)),
   );
