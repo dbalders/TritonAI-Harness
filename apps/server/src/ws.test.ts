@@ -113,6 +113,10 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfigModule from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as TeamStorage from "./teams/TeamStorageService.ts";
+import * as TeamProjects from "./teams/TeamProjectService.ts";
+import { noTeamMirrorHost } from "./memory/sync/teamMirror.ts";
+import { noTeamDailyHost } from "./memory/teamDailySource.ts";
 
 import * as EventStore from "./orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
@@ -459,7 +463,7 @@ it.live.each(["thread", "shell"] as const)(
 const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ProjectBrief.ProjectBriefService)({}),
   Layer.mock(ProjectOverview.ProjectOverview)({}),
-  Layer.mock(DailyMemory.DailyMemory)({}),
+  Layer.mock(DailyMemory.DailyMemory)({ teams: noTeamDailyHost }),
   Layer.mock(PublicSkillRepository.PublicSkillRepository)({}),
   Layer.mock(VcsProcess.VcsProcess)({}),
   Layer.succeed(
@@ -469,7 +473,9 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(Account.AccountService)({}),
   Layer.mock(Ideas.Ideas)({}),
   Layer.mock(Help.Help)({}),
-  Layer.mock(MemorySync.MemorySync)({}),
+  Layer.mock(MemorySync.MemorySync)({ teams: noTeamMirrorHost }),
+  Layer.mock(TeamStorage.TeamStorageService)({}),
+  Layer.mock(TeamProjects.TeamProjectService)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(WorkspacePaths.WorkspacePaths)({}),
   Layer.mock(TraceDiagnostics.TraceDiagnostics)({}),

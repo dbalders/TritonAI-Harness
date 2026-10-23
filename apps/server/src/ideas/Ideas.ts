@@ -57,6 +57,7 @@ import * as PublicSkillRepository from "../provider/publicSkillRepository.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { auxiliaryMessageCondition } from "../teams/teamActivity.ts";
 import {
   type CandidateIdea,
   type ContextFile,
@@ -562,6 +563,7 @@ export const make = Effect.gen(function* () {
         t.pending_user_input_count + t.pending_approval_count AS "waiting",
         (SELECT m.text FROM harness_activity_messages AS m
           WHERE m.thread_id = t.thread_id AND m.role = 'user' AND m.is_streaming = 0
+            AND ${auxiliaryMessageCondition(sql)}
           ORDER BY m.created_at DESC LIMIT 1) AS "lastUserMessage",
         (SELECT m.text FROM harness_activity_messages AS m
           WHERE m.thread_id = t.thread_id AND m.role = 'assistant' AND m.is_streaming = 0
@@ -1077,8 +1079,8 @@ export const make = Effect.gen(function* () {
 
   /** Changes when a thread message is added or finishes, so idle days skip the model. */
   const activityFingerprint = sql<{ readonly count: number; readonly latest: string | null }>`
-    SELECT COUNT(*) AS "count", MAX(updated_at) AS "latest" FROM harness_activity_messages
-    WHERE is_streaming = 0
+    SELECT COUNT(*) AS "count", MAX(m.updated_at) AS "latest" FROM harness_activity_messages AS m
+    WHERE m.is_streaming = 0 AND ${auxiliaryMessageCondition(sql)}
   `.pipe(Effect.map(([row]) => `${row?.count ?? 0}:${row?.latest ?? ""}`));
 
   /** How many ideas a refresh would add now, or null when the page is fresh enough. */

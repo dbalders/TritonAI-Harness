@@ -204,8 +204,57 @@ describe("searchSettings", () => {
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
       "days-before-auto-settle",
+      "team-skills",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
+  });
+
+  it("keeps the environment Teams opt-in discoverable while Team Skills are hidden", () => {
+    const available = filterAvailableSettingsSearchItems({
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+      hasTeams: false,
+    });
+    expect(searchSettings("teams", available)).toContainEqual(
+      expect.objectContaining({
+        id: "experimental-teams",
+        to: "/settings/general",
+        scope: "environment-defaults",
+      }),
+    );
+    expect(available.some((item) => item.id === "team-skills")).toBe(false);
+    const target = getSettingsSearchTargetScope("experimental-teams");
+    expect(target?.scope).toBe("environment-defaults");
+    expect(isSettingsSearchScopeAvailable(target!.scope, "all")).toBe(true);
+    expect(isSettingsSearchScopeAvailable(target!.scope, "environment")).toBe(true);
+    expect(isSettingsSearchScopeAvailable(target!.scope, "project")).toBe(false);
+    expect(isSettingsSearchScopeAvailable(target!.scope, "checkout")).toBe(false);
+  });
+
+  it("finds Team Skills only where Teams is configured", () => {
+    const availability = {
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+    };
+    expect(searchSettings("team skills", filterAvailableSettingsSearchItems(availability))).toEqual(
+      [],
+    );
+    expect(
+      searchSettings(
+        "team skills",
+        filterAvailableSettingsSearchItems({ ...availability, hasTeams: true }),
+      )[0],
+    ).toMatchObject({ id: "team-skills", to: "/settings/skills" });
   });
 
   it("keeps the local toggle searchable without offering hidden host publishing controls", () => {

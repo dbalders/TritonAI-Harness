@@ -46,6 +46,15 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import * as TeamMessageGate from "../teams/TeamMessageGate.ts";
+import {
+  teamProjectFixture,
+  teamA,
+  projectId as teamProjectId,
+  deviceId,
+  recordId,
+  identityOf,
+} from "../teams/testing/teamProjectFixture.ts";
 
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
@@ -125,6 +134,7 @@ function startWithMissingWorktree(
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        TeamMessageGate.layerMemory(),
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
@@ -276,6 +286,7 @@ it.each([
 
 function makeLocalCommandHarness(input: {
   readonly text: string;
+  readonly teamMessageGate?: TeamMessageGate.TeamMessageGate["Service"];
   readonly worktreePath?: string;
   readonly worktreesDir?: string;
   readonly fileSystem?: FileSystem.FileSystem;
@@ -623,6 +634,9 @@ function makeLocalCommandHarness(input: {
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        input.teamMessageGate === undefined
+          ? TeamMessageGate.layerMemory()
+          : Layer.succeed(TeamMessageGate.TeamMessageGate, input.teamMessageGate),
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
           prepareProviderHandoff: () => Effect.die("history read must fail first"),
         }),
@@ -1274,3 +1288,125 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
       }),
   );
 }
+
+effectIt.effect.each(["removed", "switched", "root-changed", "unreachable"] as const)(
+  "refuses a queued team prompt before provider receipt after access is %s",
+  (change) =>
+    Effect.gen(function* () {
+      const f = teamProjectFixture();
+      const made = yield* f.make;
+      yield* made.connect(teamA);
+      yield* made.service.execute("s", { action: "bind", teamId: teamA, projectId: teamProjectId });
+      const reference = (yield* made.service.execute("s", {
+        action: "skill-attach",
+        projectId: teamProjectId,
+        path: `Skills/${identityOf("alice")}/${deviceId}/${recordId}.md`,
+      })).reference!;
+      const authority = (yield* made.gate.get(reference.id))!;
+      const harness = makeLocalCommandHarness({ text: "/logout", teamMessageGate: made.gate });
+      const projection = harness.projection();
+      yield* made.gate.bind({
+        messageId: projection.messages[0]!.id,
+        threadId: projection.thread.id,
+        text: "/logout",
+        references: [authority],
+      });
+      if (change === "removed") delete f.roles[teamA]!.alice;
+      if (change === "switched") {
+        f.roles[teamA]!.bob = "member";
+        f.switchTo("bob");
+      }
+      if (change === "root-changed")
+        f.storage[teamA] = { ...f.storage[teamA]!, folderId: "new-root" };
+      if (change === "unreachable") f.setTeamsDown(true);
+      const result = yield* Effect.result(harness.start);
+      expect(result._tag).toBe("Failure");
+      expect(harness.open).not.toHaveBeenCalled();
+      expect(harness.tryHandlePromptCommand).not.toHaveBeenCalled();
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+    }),
+);
+
+effectIt.effect.each(["membership-withdrawn", "experiment-paused"] as const)(
+  "rechecks a queued team prompt before startTurn when %s",
+  (change) =>
+    Effect.gen(function* () {
+      const f = teamProjectFixture();
+      const made = yield* f.make;
+      yield* made.connect(teamA);
+      yield* made.service.execute("s", { action: "bind", teamId: teamA, projectId: teamProjectId });
+      const reference = (yield* made.service.execute("s", {
+        action: "skill-attach",
+        projectId: teamProjectId,
+        path: `Skills/${identityOf("alice")}/${deviceId}/${recordId}.md`,
+      })).reference!;
+      const harness = makeLocalCommandHarness({ text: "Continue", teamMessageGate: made.gate });
+      const projection = harness.projection();
+      const providerThread = projection.providerThreads[0]!;
+      const rawStart = vi.fn(() => Effect.void);
+      harness.open.mockImplementation(() =>
+        Effect.succeed({
+          driver: providerThread.driver,
+          providerSession: {
+            id: providerThread.providerSessionId!,
+            driver: providerThread.driver,
+            providerInstanceId: harness.newInstanceId,
+            status: "ready",
+            cwd: "/tmp/native-account-command",
+            model: null,
+            capabilities: CodexProviderCapabilitiesV2,
+            createdAt: DateTime.makeUnsafe("2026-09-04T12:00:00Z"),
+            updatedAt: DateTime.makeUnsafe("2026-09-04T12:00:00Z"),
+            lastError: null,
+          },
+          ensureThread: () => Effect.succeed(providerThread),
+          startTurn: rawStart,
+        } as never),
+      );
+      harness.startRootRun.mockImplementation(() => Effect.void);
+      yield* made.gate.bind({
+        messageId: projection.messages[0]!.id,
+        threadId: projection.thread.id,
+        text: "Continue",
+        references: [(yield* made.gate.get(reference.id))!],
+      });
+      yield* harness.start;
+      const prepared = harness.startRootRun.mock.calls[0]![0];
+      const reading = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      if (change === "membership-withdrawn") delete f.roles[teamA]!.alice;
+      else
+        f.holdAccountStatusRead(
+          1,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(reading, undefined);
+            yield* Deferred.await(resume);
+          }),
+        );
+      const sending = yield* Effect.forkChild(
+        Effect.result(
+          prepared.session.startTurn({
+            appThread: prepared.appThread,
+            threadId: prepared.run.threadId,
+            runId: prepared.run.id,
+            runOrdinal: prepared.run.ordinal,
+            providerTurnOrdinal: prepared.providerTurnOrdinal,
+            attemptId: prepared.attemptId,
+            rootNodeId: prepared.rootNode.id,
+            providerThread: prepared.providerThread,
+            message: prepared.message,
+            modelSelection: prepared.modelSelection,
+            runtimePolicy: prepared.runtimePolicy,
+          }),
+        ),
+      );
+      if (change === "experiment-paused") {
+        yield* Deferred.await(reading);
+        yield* f.setTeamsEnabled(false);
+        yield* Deferred.succeed(resume, undefined);
+      }
+      const result = yield* Fiber.join(sending);
+      expect(result._tag).toBe("Failure");
+      expect(rawStart).not.toHaveBeenCalled();
+    }),
+);

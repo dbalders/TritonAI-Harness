@@ -1,3 +1,4 @@
+import * as TeamMessageGate from "../teams/TeamMessageGate.ts";
 import { assert, it } from "@effect/vitest";
 import {
   EventId,
@@ -344,6 +345,7 @@ it.effect.each(storageCases)(
       }).pipe(
         Effect.provide(
           Layer.merge(ProviderTurnControlService.layer, RuntimeRequestService.layer).pipe(
+            Layer.provide(TeamMessageGate.layerMemory()),
             Layer.provide(layerSessions),
           ),
         ),

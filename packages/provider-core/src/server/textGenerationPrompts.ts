@@ -789,3 +789,61 @@ export function buildIdeasPrompt(input: IdeasPromptInput) {
       : Schema.Struct({ ideas }),
   };
 }
+
+// Team daily memory
+/** What a team summary item records, so readers can tell an idea from a result. */
+const TEAM_DAILY_ITEM_KINDS = ["proposal", "attempt", "outcome", "decision", "open"] as const;
+
+export interface TeamDailyMemoryPromptInput {
+  /** The local day being summarized, `YYYY-MM-DD`. */
+  day: string;
+  teamName: string;
+  /** Threads to summarize, each under the key the model must answer with. */
+  threads: ReadonlyArray<{ readonly key: string; readonly activity: string }>;
+}
+
+export function buildTeamDailyMemoryPrompt(input: TeamDailyMemoryPromptInput) {
+  const prompt = [
+    `You write one person's entry in the shared daily memory of the team "${input.teamName}".`,
+    `Every member of the team can read it. Summarize each thread's work on ${input.day} from its activity below.`,
+    "Return a JSON object with key threads: one entry per thread key below that had real work.",
+    "Rules:",
+    "- threads[].key: the exact thread key, such as T1",
+    "- threads[].summary: one plain sentence saying what the thread was about",
+    "- threads[].items: short bullets, each with a kind and text",
+    "- kind proposal: an idea or plan that was suggested but not carried out",
+    "- kind attempt: something tried that failed, was abandoned, or whose result is unknown",
+    "- kind outcome: something that was actually done and verified in the activity",
+    "- kind decision: a choice the user made or confirmed",
+    "- kind open: unfinished work or an unanswered question",
+    "- never call something an outcome unless the activity shows it happened; when unsure, use attempt",
+    "- name PRs, branches, files, and results when the activity shows them",
+    "- only describe the work; leave out personal remarks and anything unrelated to the team's work",
+    "- never include secrets, tokens, keys, passwords, or credentials",
+    "- write plain sentences without markdown",
+    "",
+    ...input.threads.flatMap((thread) => [
+      `## Thread key: ${thread.key}`,
+      limitSection(thread.activity, 16_000),
+      "",
+    ]),
+  ].join("\n");
+
+  return {
+    prompt,
+    outputSchema: Schema.Struct({
+      threads: Schema.Array(
+        Schema.Struct({
+          key: Schema.String,
+          summary: Schema.String,
+          items: Schema.Array(
+            Schema.Struct({
+              kind: Schema.Literals(TEAM_DAILY_ITEM_KINDS),
+              text: Schema.String,
+            }),
+          ),
+        }),
+      ),
+    }),
+  };
+}

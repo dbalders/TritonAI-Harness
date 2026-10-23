@@ -1,3 +1,4 @@
+import { TeamMessageGate } from "../teams/TeamMessageGate.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   CommandId,
@@ -42,6 +43,7 @@ export class ThreadTitleRegenerationService extends Context.Service<
 >()("t3/orchestration-v2/ThreadTitleRegenerationService") {}
 
 const make = Effect.gen(function* () {
+  const teams = yield* TeamMessageGate;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -84,13 +86,22 @@ const make = Effect.gen(function* () {
         return { type: "complete" as const };
       }
 
+      // A queued message can lose access before this independent model request runs.
+      const accessibleMessages = yield* Effect.filter(projection.messages, (message) =>
+        teams
+          .verifyBeforeSend({ messageId: message.id, threadId: input.threadId, text: message.text })
+          .pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          ),
+      );
       let context: {
         readonly message: string;
         readonly attachments: ReadonlyArray<ChatAttachment>;
       };
       if (input.kind.type === "initial") {
         const messageId = input.kind.messageId;
-        const message = projection.messages.find(
+        const message = accessibleMessages.find(
           (candidate) => candidate.id === messageId && !candidate.streaming,
         );
         context =
@@ -99,7 +110,7 @@ const make = Effect.gen(function* () {
             : { message: message.text, attachments: message.attachments };
       } else {
         context = formatThreadTitleContext(
-          projection.messages.filter((message) => !message.streaming),
+          accessibleMessages.filter((message) => !message.streaming),
         );
       }
       if (context.message.length === 0 && context.attachments.length === 0) {

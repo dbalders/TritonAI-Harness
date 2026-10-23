@@ -1,0 +1,726 @@
+// @effect-diagnostics nodeBuiltinImport:off - Synchronous SHA-256 document fingerprints and campus identity keys use Node crypto.
+import * as ExperimentalTeams from "./experimentalTeams.ts";
+import * as NodeCrypto from "node:crypto";
+import {
+  type TeamInviteeLookup,
+  type TeamStorage,
+  type TeamStorageCommand,
+  type TeamStorageStatus,
+  type AccountStatus,
+  ServerAccountError,
+  TeamsError,
+} from "@t3tools/contracts";
+import * as Config from "effect/Config";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import * as Semaphore from "effect/Semaphore";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  type HttpClientResponse,
+} from "effect/http";
+import { AccountService } from "../auth/AccountService.ts";
+import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
+import * as Microsoft from "../memory/sync/microsoftSignIn.ts";
+import { executeDocument, summarizeDocument, type TeamDailyWriteCommand } from "./teamDocuments.ts";
+import { lookupInvitee } from "./teamInvitee.ts";
+
+const Guid = Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/iu));
+const OAuth = Schema.Struct({ clientId: Guid, tenantId: Guid });
+const decodeOAuth = Schema.decodeUnknownOption(Schema.fromJsonString(OAuth));
+const Item = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  eTag: Schema.optionalKey(Schema.String),
+  size: Schema.optionalKey(Schema.Int),
+  parentReference: Schema.Struct({ id: Schema.String }),
+  folder: Schema.optionalKey(Schema.Unknown),
+  file: Schema.optionalKey(Schema.Unknown),
+  remoteItem: Schema.optionalKey(Schema.Unknown),
+});
+const Page = Schema.Struct({
+  value: Schema.Array(Item),
+  "@odata.nextLink": Schema.optionalKey(Schema.String),
+});
+const encodeIdentity = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(Schema.NullOr(Schema.String))),
+);
+const decodePage = Schema.decodeUnknownEffect(Page);
+const decodeItem = Schema.decodeUnknownEffect(Item);
+const empty = (status: TeamStorageStatus["status"]): TeamStorageStatus => ({
+  status,
+  account: null,
+  flowId: null,
+  userCode: null,
+  verificationUri: null,
+  expiresAt: null,
+  retryAfterSeconds: null,
+  document: null,
+  files: [],
+});
+const failure = (message: string) => new TeamsError({ code: "unavailable", message });
+/** Narrows a storage command for callers that hold their own server-side team binding. */
+export interface TeamStorageScope {
+  /** The exact root recorded at binding time; any other root for the team is refused. */
+  readonly storage: TeamStorage;
+  /** Lists only this top-level folder instead of the whole team folder. */
+  readonly listRoot?: "Memory" | "SOPs" | "Skills" | "Daily";
+  /**
+   * Which folders below `listRoot` to list. A folder it refuses isn't opened, and its path is
+   * added to `skipped`, so callers know which parts of the folder they didn't see.
+   */
+  readonly descend?: (path: string) => boolean;
+  readonly skipped?: string[];
+  /**
+   * Also reads the start of this many listed documents, in path order, for their titles and
+   * descriptions. Each costs one Graph lookup and one partial download.
+   */
+  readonly summaries?: number;
+}
+interface Connection {
+  readonly sessionId: string;
+  readonly signIn: Microsoft.MicrosoftSignIn["Service"];
+}
+export class TeamStorageService extends Context.Service<
+  TeamStorageService,
+  {
+    readonly signOutAccount: (
+      sessionId: string,
+    ) => Effect.Effect<AccountStatus, ServerAccountError>;
+    readonly execute: (
+      sessionId: string,
+      command: TeamStorageCommand,
+      scope?: TeamStorageScope,
+    ) => Effect.Effect<TeamStorageStatus, TeamsError>;
+    /**
+     * Writes or removes the signed-in author's own daily team memory file or change marker, with
+     * the same account, membership, and storage checks as every other file operation. Returns the
+     * written version, or null after a removal.
+     */
+    readonly writeDaily: (
+      sessionId: string,
+      command: TeamDailyWriteCommand,
+      scope: TeamStorageScope,
+    ) => Effect.Effect<string | null, TeamsError>;
+  }
+>()("t3/teams/TeamStorageService") {}
+
+/**
+ * `config` is the Teams storage app. `directory` is the Harness's main Microsoft app, which the
+ * Microsoft 365 plugin signs in to; invitee lookup reads the directory through that plugin's
+ * sign-in, and is off without it. Team files never use it.
+ */
+export const make = Effect.fn("TeamStorageService.make")(function* (
+  config: Microsoft.MicrosoftOAuthConfig | null,
+  directory: Microsoft.MicrosoftOAuthConfig | null = null,
+) {
+  const teamsAccess = yield* ExperimentalTeams.makeAccess;
+  const account = yield* AccountService;
+  const http = yield* HttpClient.HttpClient;
+  const secrets = yield* ServerSecretStore;
+  const connections = new Map<string, Connection>();
+  const lanes = new Map<string, Semaphore.Semaphore>();
+  const credentialIndex = (sessionId: string) =>
+    `team-microsoft-index-${NodeCrypto.createHash("sha256").update(sessionId).digest("hex")}`;
+  const Index = Schema.Array(Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u))).check(
+    Schema.isMaxLength(64),
+  );
+  const readIndex = (sessionId: string) =>
+    secrets.get(credentialIndex(sessionId)).pipe(
+      Effect.flatMap((value) =>
+        Option.isSome(value)
+          ? Schema.decodeUnknownEffect(Schema.fromJsonString(Index))(
+              new TextDecoder().decode(value.value),
+            )
+          : Effect.succeed([] as readonly string[]),
+      ),
+      Effect.mapError(() => failure("Microsoft connection records could not be read securely.")),
+    );
+  const getLane = (sessionId: string) => {
+    let lane = lanes.get(sessionId);
+    if (!lane) {
+      lane = Semaphore.makeUnsafe(1);
+      lanes.set(sessionId, lane);
+    }
+    return lane;
+  };
+  const signOutAccount = Effect.fn("TeamStorageService.signOutAccount")(function* (
+    sessionId: string,
+  ) {
+    // Revoke campus access first; in-flight file operations then fail their membership readback.
+    const status = yield* account.signOut(sessionId);
+    yield* getLane(sessionId)
+      .withPermit(
+        Effect.gen(function* () {
+          for (const [key, connection] of connections) {
+            if (connection.sessionId !== sessionId) continue;
+            yield* connection.signIn.signOut;
+            connections.delete(key);
+          }
+          // The index also covers credentials restored after a server restart.
+          for (const key of yield* readIndex(sessionId))
+            yield* secrets.remove(`team-microsoft-${key}`);
+          yield* secrets.remove(credentialIndex(sessionId));
+        }),
+      )
+      .pipe(
+        Effect.mapError(
+          () =>
+            new ServerAccountError({
+              code: "storage_error",
+              message:
+                "Your campus account is signed out, but the Microsoft connection could not be fully cleared. Retry sign-out.",
+            }),
+        ),
+      );
+    return status;
+  });
+  const execute = Effect.fn("TeamStorageService.execute")(function* (
+    sessionId: string,
+    command: TeamStorageCommand | TeamDailyWriteCommand,
+    scope?: TeamStorageScope,
+  ) {
+    return yield* getLane(sessionId).withPermit(
+      Effect.gen(function* () {
+        if (!(yield* teamsAccess.enabled)) {
+          if (command.action === "status") return empty("disconnected");
+          if (command.action === "disconnect") {
+            // Disconnect remains local and available while the experiment is paused.
+            for (const [key, connection] of connections) {
+              if (connection.sessionId !== sessionId) continue;
+              yield* connection.signIn.signOut.pipe(
+                Effect.mapError(() => failure("The Microsoft connection could not be cleared.")),
+              );
+              connections.delete(key);
+            }
+            for (const key of yield* readIndex(sessionId))
+              yield* secrets
+                .remove(`team-microsoft-${key}`)
+                .pipe(
+                  Effect.mapError(() => failure("The Microsoft connection could not be cleared.")),
+                );
+            yield* secrets
+              .remove(credentialIndex(sessionId))
+              .pipe(
+                Effect.mapError(() => failure("The Microsoft connection could not be cleared.")),
+              );
+            return empty("disconnected");
+          }
+        }
+        // Only internal daily withdrawals and their reads can bypass a paused
+        // experiment. The transport contract cannot construct daily-write.
+        const allowed =
+          command.action === "daily-write" || command.action === "read-file"
+            ? teamsAccess.requireRead
+            : teamsAccess.requireEnabled;
+        yield* allowed;
+        const signedIn = yield* account
+          .getStatus(sessionId)
+          .pipe(Effect.mapError(() => failure("Your UC San Diego account could not be verified.")));
+        if (signedIn.status !== "signed-in" || !signedIn.profile)
+          return yield* new TeamsError({
+            code: "sign_in_required",
+            message: "Sign in with UC San Diego to open shared storage.",
+          });
+        const profile = signedIn.profile;
+        const result = yield* account.teams(sessionId, { action: "get", teamId: command.teamId });
+        const team = result.team;
+        // Storage is used only when bound to the exact team the caller asked for.
+        if (team && team.id !== command.teamId)
+          return yield* new TeamsError({
+            code: "not_found",
+            message: "This team is not available to your account.",
+          });
+        if (team?.state === "archived")
+          return yield* new TeamsError({ code: "not_found", message: "This team was archived." });
+        if (!team || !team.storage || team.state !== "ready")
+          return yield* failure("The team's private folder is not ready.");
+        if (command.action === "lookup-invitee" && !team.canManage)
+          return yield* new TeamsError({
+            code: "forbidden",
+            message: "Only team owners can look up people to invite.",
+          });
+        const storage = team.storage;
+        const expected = scope?.storage;
+        if (
+          expected &&
+          (expected.tenantId.toLowerCase() !== storage.tenantId.toLowerCase() ||
+            expected.siteId !== storage.siteId ||
+            expected.driveId !== storage.driveId ||
+            expected.folderId !== storage.folderId)
+        )
+          return yield* new TeamsError({
+            code: "conflict",
+            message: "This project's team folder changed. Unlink the project and link it again.",
+          });
+        /**
+         * The account, membership, revision, and folder are what they were when the request
+         * started; for a change, the caller can also still write to the team.
+         */
+        const verifyCapturedIdentity = Effect.fn("TeamStorageService.verifyCapturedIdentity")(
+          function* () {
+            const current = yield* account
+              .getStatus(sessionId)
+              .pipe(Effect.mapError(() => failure("Your account could not be verified.")));
+            if (
+              current.status !== "signed-in" ||
+              current.profile?.issuer !== profile.issuer ||
+              current.profile.subject !== profile.subject
+            )
+              return yield* new TeamsError({
+                code: "sign_in_required",
+                message: "Your account changed. Reopen this team.",
+              });
+          },
+        );
+        const verifyAuthorized = Effect.fn("TeamStorageService.verifyAuthorized")(function* (
+          changing: boolean,
+        ) {
+          yield* allowed;
+          yield* verifyCapturedIdentity();
+          const refreshed = yield* account.teams(sessionId, {
+            action: "get",
+            teamId: command.teamId,
+          });
+          // The lookup can wait while this session signs out or changes campus
+          // identity. Another member's answer cannot authorize this token or path.
+          yield* verifyCapturedIdentity();
+          if (
+            refreshed.team?.id !== team.id ||
+            refreshed.team.revision !== team.revision ||
+            refreshed.team.state !== "ready" ||
+            refreshed.team.storage?.driveId !== storage.driveId ||
+            refreshed.team.storage.folderId !== storage.folderId
+          )
+            return yield* new TeamsError({
+              code: "conflict",
+              message: "Team access changed. Refresh before continuing.",
+            });
+          if (changing && refreshed.team.role === "reader" && !refreshed.team.canManage)
+            return yield* new TeamsError({
+              code: "forbidden",
+              message: "You have read-only access to this team.",
+            });
+        });
+        const verifyCurrent = verifyAuthorized(false);
+        // Lookup reads the directory as the campus account, through the Microsoft 365 plugin's
+        // sign-in on the main app, rechecking the campus account and team around each step.
+        const directoryLookup = Effect.fn("TeamStorageService.directoryLookup")(
+          function* (email: string) {
+            const address = email.toLowerCase();
+            const skipped = (status: "off" | "connect" | "mismatch") =>
+              ({ email: address, status }) satisfies TeamInviteeLookup;
+            if (!directory || directory.tenantId.toLowerCase() !== storage.tenantId.toLowerCase())
+              return skipped("off");
+            const signIn = yield* Microsoft.make(directory, {
+              secretName: "",
+              scopes: "User.ReadBasic.All User.Read",
+              requiredAccount: { email: profile.email, tenantId: storage.tenantId },
+              pluginOnly: true,
+            }).pipe(
+              Effect.provideService(HttpClient.HttpClient, http),
+              Effect.provideService(ServerSecretStore, secrets),
+            );
+            yield* verifyCurrent;
+            const token = yield* signIn.accessToken.pipe(
+              Effect.map((value) => ({ value })),
+              Effect.catchTags({
+                MemorySyncSignInRequired: () => Effect.succeed(skipped("connect")),
+                MemorySyncFailure: (error) =>
+                  error.message === Microsoft.MICROSOFT_ACCOUNT_MISMATCH
+                    ? Effect.succeed(skipped("mismatch"))
+                    : Effect.fail(failure(error.message)),
+              }),
+            );
+            if (!("value" in token)) return token;
+            const invitee = yield* lookupInvitee(address, (request) =>
+              verifyCurrent.pipe(
+                Effect.andThen(
+                  http.execute(request.pipe(HttpClientRequest.bearerToken(token.value))),
+                ),
+                Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+                Effect.mapError((error) =>
+                  error._tag === "TeamsError"
+                    ? error
+                    : failure("Microsoft couldn't look up this address. Try again."),
+                ),
+              ),
+            );
+            yield* verifyCurrent;
+            return invitee;
+          },
+          Effect.timeout("30 seconds"),
+          Effect.catchTags({
+            TimeoutError: () =>
+              Effect.fail(failure("Microsoft couldn't look up this address. Try again.")),
+          }),
+        );
+        const withLookup = (status: TeamStorageStatus) =>
+          command.action === "lookup-invitee"
+            ? directoryLookup(command.email).pipe(Effect.map((invitee) => ({ ...status, invitee })))
+            : Effect.succeed(status);
+        if (!config || config.tenantId.toLowerCase() !== storage.tenantId.toLowerCase())
+          return yield* withLookup(empty("not-configured"));
+        const key = NodeCrypto.createHash("sha256")
+          .update(
+            encodeIdentity([
+              signedIn.serviceUrl,
+              sessionId,
+              profile.issuer,
+              profile.subject,
+              config.clientId,
+              storage.tenantId,
+            ]),
+          )
+          .digest("hex");
+        let connection = connections.get(key);
+        if (!connection) {
+          const keys = yield* readIndex(sessionId);
+          if (!keys.includes(key)) {
+            if (keys.length >= 64)
+              return yield* failure(
+                "Sign out to clear old Microsoft connections before reconnecting.",
+              );
+            const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Index))([
+              ...keys,
+              key,
+            ]).pipe(
+              Effect.mapError(() =>
+                failure("The Microsoft connection could not be saved securely."),
+              ),
+            );
+            yield* secrets
+              .set(credentialIndex(sessionId), new TextEncoder().encode(encoded))
+              .pipe(
+                Effect.mapError(() =>
+                  failure("The Microsoft connection could not be saved securely."),
+                ),
+              );
+          }
+          const signIn = yield* Microsoft.make(config, {
+            secretName: `team-microsoft-${key}`,
+            scopes: "Sites.Selected User.Read offline_access",
+            requiredAccount: { email: profile.email, tenantId: storage.tenantId },
+          }).pipe(
+            Effect.provideService(HttpClient.HttpClient, http),
+            Effect.provideService(ServerSecretStore, secrets),
+          );
+          connection = { signIn, sessionId };
+          connections.set(key, connection);
+        }
+        const signIn = connection.signIn;
+        const action = Effect.gen(function* () {
+          if (command.action === "disconnect") {
+            yield* signIn.signOut;
+            return empty("disconnected");
+          }
+          if (command.action === "connect") {
+            const flow = yield* signIn.start(verifyCurrent);
+            if (flow.kind === "connected") {
+              const who = yield* signIn.account;
+              return { ...empty("connected"), account: who?.account ?? null };
+            }
+            // The renderer only opens this fixed Microsoft origin; unexpected OAuth URLs are rejected.
+            if (
+              ![
+                "https://microsoft.com/devicelogin",
+                "https://www.microsoft.com/devicelogin",
+              ].includes(flow.verificationUri)
+            )
+              return yield* failure("Microsoft returned an unexpected sign-in address.");
+            return { ...empty("pending"), ...flow, retryAfterSeconds: flow.intervalSeconds };
+          }
+          if (command.action === "poll") {
+            const poll = yield* signIn.pollDeviceCode(command.flowId, verifyCurrent);
+            if (poll.state === "pending")
+              return {
+                ...empty("pending"),
+                flowId: command.flowId,
+                retryAfterSeconds: poll.retryAfterSeconds,
+              };
+            if (poll.state !== "connected")
+              return yield* failure(poll.message ?? "Microsoft sign-in expired. Try again.");
+          }
+          const who = yield* signIn.account;
+          if (!who?.accountId) return yield* withLookup(empty("disconnected"));
+          const connected = { ...empty("connected"), account: who.account };
+          const send = Effect.fn("TeamStorageService.send")(function* (
+            request: HttpClientRequest.HttpClientRequest,
+          ) {
+            yield* verifyCurrent;
+            const token = yield* signIn.accessToken.pipe(
+              Effect.mapError((error) =>
+                error._tag === "MemorySyncSignInRequired"
+                  ? new TeamsError({
+                      code: "sign_in_required",
+                      message: "Reconnect Microsoft to continue.",
+                    })
+                  : failure("Microsoft could not verify the connection. Try again."),
+              ),
+            );
+            // Checked again after any token refresh and immediately before each request that
+            // changes storage, retries included: removal, demotion, a folder change, another
+            // account, or (for daily team memory) a thread no longer shared while the token was
+            // refreshed means nothing goes out.
+            if (request.method !== "GET") {
+              yield* verifyAuthorized(true);
+              if (command.action === "daily-write") yield* command.guard;
+            }
+            const mutation =
+              command.action === "daily-write" &&
+              (request.method === "PUT" || request.method === "DELETE")
+                ? command.observeMutation
+                : undefined;
+            yield* allowed;
+            if (mutation) yield* mutation("sent");
+            const response = yield* http
+              .execute(request.pipe(HttpClientRequest.bearerToken(token)))
+              .pipe(
+                Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+                Effect.mapError(() => failure("Shared storage could not be reached.")),
+              );
+            yield* allowed;
+            // A 5xx or timeout can follow a committed mutation; only a definite client
+            // rejection proves that no content write is still outstanding.
+            if (mutation && [400, 401, 403, 404, 409, 412, 413, 429].includes(response.status))
+              yield* mutation("rejected");
+            if (response.status === 401) {
+              yield* signIn.invalidateAccessToken;
+              return yield* new TeamsError({
+                code: "sign_in_required",
+                message: "Reconnect Microsoft to continue.",
+              });
+            }
+            return response;
+          });
+          if (
+            command.action === "daily-write" ||
+            command.action === "publish" ||
+            command.action === "read-file" ||
+            command.action === "update-file" ||
+            command.action === "delete-file" ||
+            command.action === "list-versions" ||
+            command.action === "read-version"
+          ) {
+            const actorId = NodeCrypto.createHash("sha256")
+              .update(encodeIdentity([profile.issuer, profile.subject]))
+              .digest("base64url");
+            const result = yield* executeDocument({
+              command,
+              storage,
+              actorId,
+              canWrite: team.role !== "reader" || team.canManage,
+              canManage: team.canManage,
+              send,
+              verifyCurrent,
+            }).pipe(Effect.provideService(HttpClient.HttpClient, http));
+            return { ...connected, ...result };
+          }
+          if (command.action === "lookup-invitee") return yield* withLookup(connected);
+          if (command.action !== "list-files") return connected;
+          const files: TeamStorageStatus["files"][number][] = [];
+          const parents = new Map<string, string>();
+          const visited = new Set<string>();
+          const root = `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(storage.driveId)}/items/`;
+          const folderEndpoint = (path: string) =>
+            path
+              ? `${root}${encodeURIComponent(storage.folderId)}:/${path.split("/").map(encodeURIComponent).join("/")}`
+              : `${root}${encodeURIComponent(storage.folderId)}`;
+          const queue = [{ id: storage.folderId, path: "", depth: 0 }];
+          // Graph refusing the team folder itself means access ended, not a passing failure.
+          const lostFolder = (status: number) =>
+            status === 403 || status === 404
+              ? new TeamsError({
+                  code: status === 403 ? "forbidden" : "not_found",
+                  message: "This team's folder is no longer available to your account.",
+                })
+              : null;
+          if (scope?.listRoot) {
+            const response = yield* send(
+              HttpClientRequest.get(
+                `${folderEndpoint(scope.listRoot)}?$select=id,name,parentReference,folder,remoteItem`,
+              ),
+            );
+            if (response.status === 403) return yield* lostFolder(403)!;
+            if (response.status === 404) {
+              const root = yield* send(
+                HttpClientRequest.get(`${folderEndpoint("")}?$select=id,folder`),
+              );
+              const lost = lostFolder(root.status);
+              if (lost) return yield* lost;
+              // Nobody has published to this folder yet.
+              return { ...connected, files };
+            }
+            if (response.status !== 200)
+              return yield* failure(
+                "Shared storage access could not be verified. Refresh your team membership.",
+              );
+            const item = yield* response.json.pipe(
+              Effect.flatMap(decodeItem),
+              Effect.mapError(() => failure("Shared storage returned invalid folder metadata.")),
+            );
+            if (
+              item.name !== scope.listRoot ||
+              item.parentReference.id !== storage.folderId ||
+              item.folder === undefined ||
+              item.remoteItem !== undefined
+            )
+              return yield* failure("A shared folder moved. Refresh the team before continuing.");
+            queue[0] = { id: item.id, path: scope.listRoot, depth: 1 };
+          }
+          const verifyFolder = Effect.fn("TeamStorageService.verifyFolder")(function* (parent: {
+            id: string;
+            path: string;
+          }) {
+            if (!parent.path) return;
+            const response = yield* send(
+              HttpClientRequest.get(
+                `${folderEndpoint(parent.path)}?$select=id,name,parentReference,folder,remoteItem`,
+              ),
+            );
+            if (response.status !== 200)
+              return yield* failure("A shared folder moved. Refresh the team before continuing.");
+            const item = yield* response.json.pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(Item)),
+              Effect.mapError(() => failure("Shared storage returned invalid folder metadata.")),
+            );
+            if (item.id !== parent.id || item.folder === undefined || item.remoteItem !== undefined)
+              return yield* failure("A shared folder moved. Refresh the team before continuing.");
+          });
+          for (let cursor = 0; cursor < queue.length; cursor++) {
+            const parent = queue[cursor]!;
+            if (visited.has(parent.id) || parent.depth > 8 || visited.size > 1000)
+              return yield* failure("This team's shared folder is too large to list safely.");
+            visited.add(parent.id);
+            yield* verifyFolder(parent);
+            const endpoint = `${folderEndpoint(parent.path)}${parent.path ? ":" : ""}/children`;
+            let url: string | undefined =
+              `${endpoint}?$select=id,name,eTag,size,folder,file,parentReference,remoteItem&$top=200`;
+            const pages = new Set<string>();
+            while (url) {
+              const next = new URL(url);
+              if (
+                next.origin !== "https://graph.microsoft.com" ||
+                next.pathname !== new URL(endpoint).pathname ||
+                next.username ||
+                next.password ||
+                pages.has(url)
+              )
+                return yield* failure("Shared storage returned an invalid continuation.");
+              pages.add(url);
+              if (pages.size > 20)
+                return yield* failure("This team has too many shared files to display.");
+              yield* verifyCurrent;
+              const response: HttpClientResponse.HttpClientResponse = yield* send(
+                HttpClientRequest.get(url),
+              );
+              const lost = parent.path ? null : lostFolder(response.status);
+              if (lost) return yield* lost;
+              if (response.status !== 200)
+                return yield* failure(
+                  "Shared storage access could not be verified. Refresh your team membership.",
+                );
+              const page: typeof Page.Type = yield* response.json.pipe(
+                Effect.flatMap(decodePage),
+                Effect.mapError(() => failure("Shared storage returned an invalid file list.")),
+              );
+              for (const item of page.value) {
+                if (
+                  item.parentReference.id !== parent.id ||
+                  item.remoteItem !== undefined ||
+                  /[\u0000-\u001f\\/]/u.test(item.name) ||
+                  [".", ".."].includes(item.name)
+                )
+                  return yield* failure("Shared storage contained an unexpected item.");
+                const path = parent.path ? `${parent.path}/${item.name}` : item.name;
+                if (item.folder !== undefined) {
+                  if (scope?.descend && !scope.descend(path)) scope.skipped?.push(path);
+                  else queue.push({ id: item.id, path, depth: parent.depth + 1 });
+                } else if (item.file !== undefined && item.eTag) {
+                  files.push({ id: item.id, path, etag: item.eTag, size: item.size ?? 0 });
+                  parents.set(path, parent.id);
+                }
+                if (files.length + queue.length > 4000)
+                  return yield* failure("This team has too many shared files to display.");
+              }
+              url = page["@odata.nextLink"];
+            }
+          }
+          for (const parent of queue) yield* verifyFolder(parent);
+          const summarized = files
+            .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+            .slice(0, scope?.summaries ?? 0);
+          const summaries = new Map(
+            yield* Effect.forEach(
+              summarized,
+              (file) =>
+                summarizeDocument({
+                  storage,
+                  file: { ...file, parentId: parents.get(file.path)! },
+                  send,
+                }).pipe(Effect.map((summary) => [file.path, summary] as const)),
+              { concurrency: 4 },
+            ).pipe(Effect.provideService(HttpClient.HttpClient, http)),
+          );
+          yield* verifyCurrent;
+          return {
+            ...connected,
+            files: files.map((file) => {
+              const summary = summaries.get(file.path);
+              return summary ? { ...file, summary } : file;
+            }),
+          };
+        });
+        return yield* action.pipe(
+          Effect.tap(() => verifyCurrent),
+          Effect.catchTags({
+            MemorySyncFailure: (error) => Effect.fail(failure(error.message)),
+          }),
+          Effect.timeout("60 seconds"),
+          Effect.catchTags({
+            TimeoutError: () => Effect.fail(failure("Shared storage timed out. Try again.")),
+          }),
+        );
+      }),
+    );
+  });
+  const writeDaily = (sessionId: string, command: TeamDailyWriteCommand, scope: TeamStorageScope) =>
+    execute(sessionId, command, scope).pipe(
+      // Only a connected, confirmed request counts: no Microsoft connection means nothing was
+      // written or removed.
+      Effect.flatMap((status) =>
+        status.status !== "connected"
+          ? Effect.fail(
+              new TeamsError({
+                code: "sign_in_required",
+                message:
+                  status.status === "not-configured"
+                    ? "Microsoft storage is not set up for this environment yet."
+                    : "Connect Microsoft in Teams to share your work.",
+              }),
+            )
+          : command.text !== null && !status.document
+            ? Effect.fail(failure("Shared storage did not confirm the daily note."))
+            : Effect.succeed(status.document?.etag ?? null),
+      ),
+    );
+  return TeamStorageService.of({ execute, writeDaily, signOutAccount });
+});
+
+export const layer = Layer.effect(
+  TeamStorageService,
+  Effect.gen(function* () {
+    const json = yield* Config.String("TRITONAI_TEAMS_MICROSOFT_OAUTH_JSON").pipe(
+      Config.withDefault(""),
+    );
+    const config = decodeOAuth(json);
+    return yield* make(
+      config._tag === "Some" ? config.value : null,
+      Microsoft.builtMicrosoftOAuthConfig(),
+    );
+  }),
+);

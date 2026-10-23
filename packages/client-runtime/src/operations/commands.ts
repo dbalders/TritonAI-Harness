@@ -159,6 +159,7 @@ interface StartThreadBootstrap {
 }
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
+  readonly teamReferences?: ReadonlyArray<string>;
   readonly manualContinuationOfRunId?: RunId;
   readonly message: {
     readonly messageId: MessageId;
@@ -238,6 +239,7 @@ export interface RetryWorkspacePreparationInput extends ThreadCommandInput {
 }
 
 export interface EditQueuedRunInput extends ThreadCommandInput {
+  readonly teamReferences?: ReadonlyArray<string>;
   readonly runId: RunId;
   readonly text: string;
   /**
@@ -674,6 +676,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       initialMessage: {
         messageId: input.message.messageId,
         text: input.message.text,
+        ...(input.teamReferences === undefined ? {} : { teamReferences: input.teamReferences }),
         ...(context ? { context } : {}),
         attachments,
       },
@@ -693,6 +696,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
         ? {}
         : { manualContinuationOfRunId: input.manualContinuationOfRunId }),
       text: input.message.text,
+      ...(input.teamReferences === undefined ? {} : { teamReferences: input.teamReferences }),
       ...(context ? { context } : {}),
       attachments,
       ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
@@ -754,6 +758,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     threadId: input.threadId,
     messageId: input.message.messageId,
     text: input.message.text,
+    ...(input.teamReferences === undefined ? {} : { teamReferences: input.teamReferences }),
     ...(context ? { context } : {}),
     attachments,
     ...(shouldSendTitleSeed ? { titleSeed: input.titleSeed } : {}),
@@ -1040,6 +1045,7 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
       : yield* persistAttachments(input.threadId, input.edit.messageId, input.edit.attachments);
   return yield* dispatch({
     type: "queued-run.edit",
+    ...(input.teamReferences === undefined ? {} : { teamReferences: input.teamReferences }),
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     runId: input.runId,
@@ -1096,6 +1102,20 @@ export const unlinkThreadPullRequest = Effect.fn("EnvironmentCommands.unlinkThre
       ...input,
       type: "thread.pull-request.unlink",
       commandId: yield* allocateCommandId(input),
+    });
+  },
+);
+
+export interface SetThreadTeamSharingInput extends ThreadCommandInput {
+  readonly shared: boolean;
+}
+export const setThreadTeamSharing = Effect.fn("EnvironmentCommands.setThreadTeamSharing")(
+  function* (input: SetThreadTeamSharingInput) {
+    return yield* dispatch({
+      type: "thread.metadata.update",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      teamSharing: input.shared,
     });
   },
 );

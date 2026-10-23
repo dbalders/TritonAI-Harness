@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as UsageRouteImport } from './routes/usage'
+import { Route as TeamsRouteImport } from './routes/teams'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as GuidedTourRouteImport } from './routes/guided-tour'
@@ -53,6 +54,11 @@ const WelcomeRoute = WelcomeRouteImport.update({
 const UsageRoute = UsageRouteImport.update({
   id: '/usage',
   path: '/usage',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TeamsRoute = TeamsRouteImport.update({
+  id: '/teams',
+  path: '/teams',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SettingsRoute = SettingsRouteImport.update({
@@ -230,6 +236,7 @@ export interface FileRoutesByFullPath {
   '/guided-tour': typeof GuidedTourRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/teams': typeof TeamsRoute
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
   '/help': typeof ChatHelpRoute
@@ -265,6 +272,7 @@ export interface FileRoutesByTo {
   '/guided-tour': typeof GuidedTourRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/teams': typeof TeamsRoute
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
   '/help': typeof ChatHelpRoute
@@ -303,6 +311,7 @@ export interface FileRoutesById {
   '/guided-tour': typeof GuidedTourRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/teams': typeof TeamsRoute
   '/usage': typeof UsageRoute
   '/welcome': typeof WelcomeRoute
   '/_chat/help': typeof ChatHelpRoute
@@ -342,6 +351,7 @@ export interface FileRouteTypes {
     | '/guided-tour'
     | '/pair'
     | '/settings'
+    | '/teams'
     | '/usage'
     | '/welcome'
     | '/help'
@@ -377,6 +387,7 @@ export interface FileRouteTypes {
     | '/guided-tour'
     | '/pair'
     | '/settings'
+    | '/teams'
     | '/usage'
     | '/welcome'
     | '/help'
@@ -414,6 +425,7 @@ export interface FileRouteTypes {
     | '/guided-tour'
     | '/pair'
     | '/settings'
+    | '/teams'
     | '/usage'
     | '/welcome'
     | '/_chat/help'
@@ -452,6 +464,7 @@ export interface RootRouteChildren {
   GuidedTourRoute: typeof GuidedTourRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
+  TeamsRoute: typeof TeamsRoute
   UsageRoute: typeof UsageRoute
   WelcomeRoute: typeof WelcomeRoute
   ProjectHomeProjectKeyRoute: typeof ProjectHomeProjectKeyRoute
@@ -473,6 +486,13 @@ declare module '@tanstack/react-router' {
       path: '/usage'
       fullPath: '/usage'
       preLoaderRoute: typeof UsageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/teams': {
+      id: '/teams'
+      path: '/teams'
+      fullPath: '/teams'
+      preLoaderRoute: typeof TeamsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings': {
@@ -782,6 +802,7 @@ const rootRouteChildren: RootRouteChildren = {
   GuidedTourRoute: GuidedTourRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
+  TeamsRoute: TeamsRoute,
   UsageRoute: UsageRoute,
   WelcomeRoute: WelcomeRoute,
   ProjectHomeProjectKeyRoute: ProjectHomeProjectKeyRoute,

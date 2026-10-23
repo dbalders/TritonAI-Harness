@@ -117,6 +117,28 @@ export interface DailyMemoryGenerationResult {
   openLoops: ReadonlyArray<string>;
 }
 
+export interface TeamDailyMemoryGenerationInput {
+  /** Working directory for the generation process. Nothing in it is read. */
+  cwd: string;
+  /** The local day being summarized, `YYYY-MM-DD`. */
+  day: string;
+  teamName: string;
+  /** Each thread's activity, under the key its summary comes back with. */
+  threads: ReadonlyArray<{ readonly key: string; readonly activity: string }>;
+  modelSelection: ModelSelection;
+}
+
+export interface TeamDailyMemoryGenerationResult {
+  threads: ReadonlyArray<{
+    readonly key: string;
+    readonly summary: string;
+    readonly items: ReadonlyArray<{
+      readonly kind: "proposal" | "attempt" | "outcome" | "decision" | "open";
+      readonly text: string;
+    }>;
+  }>;
+}
+
 export interface IdeasGenerationInput {
   /** Working directory for the generation process. Nothing in it is read. */
   cwd: string;
@@ -165,6 +187,10 @@ export interface HelpGenerationResult {
 
 /** Text generation backed by one provider instance. */
 export interface ProviderTextGeneration {
+  /** Summarize linked team work on behalf of its author; supplied by Codex. */
+  readonly generateTeamDailyMemory?: (
+    input: TeamDailyMemoryGenerationInput,
+  ) => Effect.Effect<TeamDailyMemoryGenerationResult, TextGenerationError>;
   /**
    * Explain the current release using only supplied context. Present only when the
    * adapter guarantees no tools and no implicit filesystem or instruction context.

@@ -1641,6 +1641,10 @@ export function threadShellFromProjection(
     pinnedAt: projection.thread.pinnedAt ?? null,
 
     autoSettleDisabledAt: projection.thread.autoSettleDisabledAt ?? null,
+
+    teamSharingOffAt: projection.thread.teamSharingOffAt ?? null,
+
+    teamSharingResumedAt: projection.thread.teamSharingResumedAt ?? null,
     pinOrderKey: projection.thread.pinOrderKey ?? null,
     lastVisitedAt: projection.thread.lastVisitedAt,
     titleRegeneration: projection.thread.titleRegeneration ?? null,
@@ -1882,6 +1886,10 @@ function shellFromState(input: {
     pinnedAt: input.state.thread.pinnedAt ?? null,
 
     autoSettleDisabledAt: input.state.thread.autoSettleDisabledAt ?? null,
+
+    teamSharingOffAt: input.state.thread.teamSharingOffAt ?? null,
+
+    teamSharingResumedAt: input.state.thread.teamSharingResumedAt ?? null,
     pinOrderKey: input.state.thread.pinOrderKey ?? null,
     lastVisitedAt: input.state.thread.lastVisitedAt,
     titleRegeneration: input.state.thread.titleRegeneration ?? null,

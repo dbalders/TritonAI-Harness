@@ -350,6 +350,15 @@ import {
   ProviderConsumeResetCreditResult,
 } from "./providerUsageLimits.ts";
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
+import {
+  TeamCommand,
+  TeamsResult,
+  TeamsError,
+  TeamStorageCommand,
+  TeamStorageStatus,
+  TeamProjectCommand,
+  TeamProjectResult,
+} from "./teams.ts";
 import { AccountStatus, ServerAccountError } from "./account.ts";
 import {
   ServerVoiceTranscribeInput,
@@ -548,6 +557,9 @@ export const WS_METHODS = {
   serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverGetSettings: "server.getSettings",
+  serverTeamStorage: "server.teamStorage",
+  serverTeams: "server.teams",
+  serverTeamProjects: "server.teamProjects",
   serverGetAccountStatus: "server.getAccountStatus",
   serverStartAccountLogin: "server.startAccountLogin",
   serverPollAccountLogin: "server.pollAccountLogin",
@@ -869,6 +881,22 @@ const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   payload: Schema.Struct({}),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+const WsServerTeamStorageRpc = Rpc.make(WS_METHODS.serverTeamStorage, {
+  payload: TeamStorageCommand,
+  success: TeamStorageStatus,
+  error: Schema.Union([TeamsError, EnvironmentAuthorizationError]),
+});
+const WsServerTeamsRpc = Rpc.make(WS_METHODS.serverTeams, {
+  payload: TeamCommand,
+  success: TeamsResult,
+  error: Schema.Union([TeamsError, EnvironmentAuthorizationError]),
+});
+const WsServerTeamProjectsRpc = Rpc.make(WS_METHODS.serverTeamProjects, {
+  payload: TeamProjectCommand,
+  success: TeamProjectResult,
+  error: Schema.Union([TeamsError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetAccountStatusRpc = Rpc.make(WS_METHODS.serverGetAccountStatus, {
@@ -2304,6 +2332,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetStorageCleanupReportRpc,
   WsServerGetDatabaseStorageRpc,
   WsServerGetSettingsRpc,
+  WsServerTeamStorageRpc,
+  WsServerTeamsRpc,
+  WsServerTeamProjectsRpc,
   WsServerGetAccountStatusRpc,
   WsServerStartAccountLoginRpc,
   WsServerPollAccountLoginRpc,

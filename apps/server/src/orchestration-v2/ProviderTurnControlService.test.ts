@@ -1,3 +1,4 @@
+import * as TeamMessageGate from "../teams/TeamMessageGate.ts";
 import { assert, it } from "@effect/vitest";
 import {
   type ModelSelection,
@@ -281,6 +282,7 @@ it.effect(
         }),
       );
       const layerControl = ProviderTurnControlService.layer.pipe(
+        Layer.provide(TeamMessageGate.layerMemory()),
         Layer.provide(Layer.merge(layerProjection, layerSessionManager)),
       );
 

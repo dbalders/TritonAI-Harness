@@ -1597,6 +1597,8 @@ const VoiceDictationControl = memo(function VoiceDictationControl(props: {
 // Handle exposed to ChatView
 
 export interface ChatComposerHandle {
+  /** Stable for one mounted draft, including across ordinary composer renders. */
+  getDraftIdentity: () => object;
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
   setGoalMode: (armed: boolean, objective?: string) => boolean;
@@ -2173,6 +2175,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   });
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const composerDraftTargetKey = composerTargetKey(composerDraftTarget);
+  const [mountedDraftIdentity, setMountedDraftIdentity] = useState(() => ({
+    targetKey: composerDraftTargetKey,
+    token: {},
+  }));
+  if (mountedDraftIdentity.targetKey !== composerDraftTargetKey) {
+    // Allocate inside the updater so every switch, including A → B → A, gets a fresh token.
+    setMountedDraftIdentity(() => ({ targetKey: composerDraftTargetKey, token: {} }));
+  }
+  const mountedDraftIdentityRef = useRef(mountedDraftIdentity);
+  useLayoutEffect(() => {
+    // Old imperative handles read the latest committed draft, never an abandoned render.
+    mountedDraftIdentityRef.current = mountedDraftIdentity;
+  }, [mountedDraftIdentity]);
   const {
     heldRequestIds,
     onDraftChange: onTypingGuardDraftChange,
@@ -6733,6 +6748,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useImperativeHandle(
     composerRef,
     () => ({
+      getDraftIdentity: () => mountedDraftIdentityRef.current.token,
       focusAtEnd: () => {
         composerEditorRef.current?.focusAtEnd();
       },

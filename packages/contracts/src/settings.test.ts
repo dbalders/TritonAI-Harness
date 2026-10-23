@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
+import { AuthSettingsWriteScope } from "./auth.ts";
 import { type CommandId, ProjectId } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
@@ -9,6 +10,7 @@ import {
   CodexSettings,
   DEFAULT_SERVER_SETTINGS,
   requiredScopesForProjectMutation,
+  requiredScopesForServerSettingsPatch,
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
   ServerSettings,
@@ -22,6 +24,30 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeCodexSettings = Schema.decodeUnknownSync(CodexSettings);
+
+describe("experimental Teams settings", () => {
+  it("keeps existing and fresh environments off until explicitly enabled", () => {
+    expect(decodeServerSettings({}).experimentalTeamsEnabled).toBe(false);
+    expect(DEFAULT_SERVER_SETTINGS.experimentalTeamsEnabled).toBe(false);
+    expect(decodeServerSettingsPatch({})).not.toHaveProperty("experimentalTeamsEnabled");
+  });
+
+  it.each([true, false])(
+    "round-trips the environment opt-in %s and requires settings permission",
+    (enabled) => {
+      const patch = { experimentalTeamsEnabled: enabled };
+      expect(encodeServerSettings(decodeServerSettings(patch))).toMatchObject(patch);
+      expect(decodeServerSettingsPatch(patch)).toEqual(patch);
+      expect(requiredScopesForServerSettingsPatch(patch)).toEqual([AuthSettingsWriteScope]);
+    },
+  );
+
+  it.each(["true", 1, null])("rejects non-boolean opt-ins %s", (experimentalTeamsEnabled) => {
+    expect(() => decodeServerSettings({ experimentalTeamsEnabled })).toThrow();
+    expect(() => decodeServerSettingsPatch({ experimentalTeamsEnabled })).toThrow();
+  });
+});
 
 describe("ServerSettings response streaming", () => {
   it("defaults to paragraph buffering", () => {
@@ -977,9 +1003,8 @@ describe("Codex custom model metadata", () => {
     });
 
     expect(
-      Schema.decodeUnknownSync(CodexSettings)(
-        decoded.providerInstances[ProviderInstanceId.make("codex")]?.config,
-      ).customModelMetadata["configured-model"],
+      decodeCodexSettings(decoded.providerInstances[ProviderInstanceId.make("codex")]?.config)
+        .customModelMetadata["configured-model"],
     ).toEqual({
       name: "Configured Model",
       shortName: "Configured",

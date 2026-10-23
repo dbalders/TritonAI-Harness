@@ -12,6 +12,11 @@ import { getManagedCodexSettings } from "../managedPolicy.ts";
  * Once every finished day is done, today's note is written too, and rewritten
  * at most every four hours while there is new activity. It stays partial until
  * the day ends and the final pass replaces it.
+ *
+ * Each check then runs the team pass (`teamDailyPass.ts`) on the same rhythm,
+ * for work in projects linked to a team. It never reads the personal vault and
+ * has its own lock, so a slow personal summary doesn't hold back a thread
+ * someone chose not to share.
  */
 import {
   type ServerMemoryStatus,
@@ -38,22 +43,25 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
+import { EventSinkV2 } from "../orchestration-v2/EventSink.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { hasStreamingMessages, loadDayActivity } from "./memoryActivity.ts";
+import { auxiliaryMessageCondition } from "../teams/teamActivity.ts";
+import { makeTeamDailyPass } from "./teamDailyPass.ts";
+import { TeamDailyHost } from "./teamDailySource.ts";
 import { addLocalDays, localDayAt, localDayRange, pendingMemoryDays } from "./memoryDays.ts";
 import {
   appendProjectRecentLine,
   dailyNoteName,
   formatMemoryActivity,
-  type MemoryActivityMessage,
   type MemoryThreadActivity,
   projectNoteFileName,
   projectNoteName,
   projectNoteWorkspace,
   renderDailyNote,
   renderProjectNote,
-  selectMemoryMessages,
 } from "./memoryNotes.ts";
 import {
   type DevicePaths,
@@ -75,15 +83,15 @@ import {
   writeSummaryProgress,
 } from "./memoryVault.ts";
 
-const MAX_CATCH_UP_DAYS = 7;
+export const MAX_CATCH_UP_DAYS = 7;
 const CHECK_INTERVAL = Duration.hours(1);
 // Today's note is rewritten at most this often, and only when there is new input.
-const PARTIAL_INTERVAL_MS = 4 * 60 * 60_000;
+export const PARTIAL_INTERVAL_MS = 4 * 60 * 60_000;
 // Let startup work finish before the first check competes with it.
 const STARTUP_DELAY = Duration.seconds(30);
 const INBOX_NOTE_LIMIT = 8_000;
 // A message still streaming after this long is treated as abandoned.
-const STREAMING_GRACE_HOURS = 2;
+export const STREAMING_GRACE_HOURS = 2;
 // Stays under the prompt's inbox limit, so every note moved to processed was read.
 const INBOX_PROMPT_LIMIT = 18_000;
 
@@ -103,124 +111,10 @@ export class DailyMemory extends Context.Service<
     ) => Effect.Effect<ServerProjectMemory, ServerProjectMemoryError>;
     /** Runs `effect` while no catch-up pass is writing to the vault. */
     readonly exclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+    /** Daily team memory; see `teamDailyPass.ts`. */
+    readonly teams: TeamDailyHost["Service"];
   }
 >()("t3/memory/DailyMemory") {}
-
-interface ActivityRow {
-  readonly threadId: string;
-  readonly turnId: string | null;
-  readonly role: string;
-  readonly text: string;
-  readonly createdAt: string;
-  readonly threadTitle: string;
-  readonly branch: string | null;
-  readonly linkedPullRequest: string | null;
-  readonly projectId: string;
-  readonly projectTitle: string;
-  readonly workspaceRoot: string;
-  readonly codexThreadId: string | null;
-}
-
-function pullRequestUrl(json: string | null): string | null {
-  if (!json) return null;
-  try {
-    const value: unknown = JSON.parse(json);
-    return typeof value === "object" &&
-      value !== null &&
-      "url" in value &&
-      typeof value.url === "string"
-      ? value.url
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Threads with messages in `[startIso, endIso)`, in order of first activity. */
-const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (range: {
-  readonly startIso: string;
-  readonly endIso: string;
-}) {
-  const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<ActivityRow>`
-    SELECT
-      m.thread_id AS "threadId",
-      m.turn_id AS "turnId",
-      m.role,
-      m.text,
-      m.created_at AS "createdAt",
-      t.title AS "threadTitle",
-      t.branch,
-      t.linked_pull_request_json AS "linkedPullRequest",
-      p.project_id AS "projectId",
-      p.title AS "projectTitle",
-      p.workspace_root AS "workspaceRoot",
-      t.codex_thread_id AS "codexThreadId"
-    FROM harness_activity_messages AS m
-    JOIN harness_activity_threads AS t ON t.thread_id = m.thread_id
-    JOIN projection_projects AS p ON p.project_id = t.project_id
-    WHERE m.created_at >= ${range.startIso}
-      AND m.created_at < ${range.endIso}
-      AND m.is_streaming = 0
-      AND m.role IN ('user', 'assistant')
-      AND t.deleted_at IS NULL
-      AND p.deleted_at IS NULL
-    ORDER BY m.created_at ASC, m.message_id ASC
-  `;
-
-  const threads = new Map<
-    string,
-    { activity: MemoryThreadActivity; messages: MemoryActivityMessage[] }
-  >();
-  for (const row of rows) {
-    let entry = threads.get(row.threadId);
-    if (!entry) {
-      entry = {
-        activity: {
-          threadId: row.threadId,
-          title: row.threadTitle,
-          branch: row.branch,
-          pullRequestUrl: pullRequestUrl(row.linkedPullRequest),
-          projectId: row.projectId,
-          projectTitle: row.projectTitle,
-          workspaceRoot: row.workspaceRoot,
-          codexThreadId: typeof row.codexThreadId === "string" ? row.codexThreadId : null,
-          messages: [],
-        },
-        messages: [],
-      };
-      threads.set(row.threadId, entry);
-    }
-    if (row.text.trim().length === 0) continue;
-    entry.messages.push({
-      turnId: row.turnId,
-      role: row.role === "user" ? "user" : "assistant",
-      text: row.text,
-      createdAt: row.createdAt,
-    });
-  }
-  return [...threads.values()]
-    .map(({ activity, messages }) => ({ ...activity, messages: selectMemoryMessages(messages) }))
-    .filter((thread) => thread.messages.length > 0);
-});
-
-/** Whether a message from the range is still being written and was updated since `sinceIso`. */
-const hasStreamingMessages = Effect.fn("memory.hasStreamingMessages")(function* (
-  range: { readonly startIso: string; readonly endIso: string },
-  sinceIso: string,
-) {
-  const sql = yield* SqlClient.SqlClient;
-  const [row] = yield* sql<{ readonly streaming: number }>`
-    SELECT EXISTS (
-      SELECT 1 FROM harness_activity_messages
-      WHERE created_at >= ${range.startIso}
-        AND created_at < ${range.endIso}
-        AND is_streaming = 1
-        AND updated_at >= ${sinceIso}
-    ) AS "streaming"
-  `;
-  return Boolean(row?.streaming);
-});
 
 /**
  * Changes whenever a finished message in the range is added, edited, finished
@@ -240,6 +134,7 @@ const activityFingerprint = Effect.fn("memory.activityFingerprint")(function* (r
       AND m.created_at < ${range.endIso}
       AND m.is_streaming = 0
       AND m.role IN ('user', 'assistant')
+      AND ${auxiliaryMessageCondition(sql)}
       AND t.deleted_at IS NULL
       AND p.deleted_at IS NULL
   `;
@@ -490,6 +385,19 @@ export const make = Effect.gen(function* () {
   const descriptor = yield* environment.getDescriptor;
   const status = yield* Ref.make<SummarizerStatus>({ state: "idle", message: null });
   const lock = yield* Semaphore.make(1);
+  const teams = yield* makeTeamDailyPass({
+    stateDir: config.stateDir,
+    deviceLabel: descriptor.label,
+    settings: settingsService,
+    textGeneration,
+    maxCatchUpDays: MAX_CATCH_UP_DAYS,
+    partialIntervalMs: PARTIAL_INTERVAL_MS,
+    streamingGraceMs: STREAMING_GRACE_HOURS * 60 * 60_000,
+  }).pipe(
+    Effect.provideService(FileSystem.FileSystem, fs),
+    Effect.provideService(Path.Path, path),
+    Effect.provideService(SqlClient.SqlClient, sql),
+  );
 
   const provide = <A, E>(
     effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | SqlClient.SqlClient>,
@@ -822,7 +730,7 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  const runCatchUp = lock.withPermits(1)(catchUp);
+  const runCatchUp = lock.withPermits(1)(catchUp).pipe(Effect.andThen(teams.run));
 
   const getStatus = Effect.gen(function* () {
     const enabled = yield* settingsService.getSettings.pipe(
@@ -949,15 +857,28 @@ export const make = Effect.gen(function* () {
     getStatus,
     getProjectMemory,
     exclusive: lock.withPermits(1),
+    teams: TeamDailyHost.of(teams),
   });
 });
 
-/** Runs catch-up after startup, every hour, and whenever Memory is switched. */
+/**
+ * Runs catch-up after startup, every hour, and whenever Memory is switched, and the team pass
+ * alone when a thread's team sharing changes.
+ */
 export const layer = Layer.effect(
   DailyMemory,
   Effect.gen(function* () {
     const service = yield* make;
     const settings = yield* ServerSettingsService;
+    const events = yield* EventSinkV2;
+    // Startup catch-up reads the current projection. Retaining historical metadata updates
+    // would replay old sharing choices and make startup scale with the event log.
+    const afterSequence = yield* events.latestSequence().pipe(Effect.orDie);
+    yield* events.stream({ afterSequence, eventType: "thread.metadata-updated" }).pipe(
+      Stream.debounce(Duration.seconds(2)),
+      Stream.runForEach(() => service.teams.run),
+      Effect.forkScoped,
+    );
     yield* Effect.sleep(STARTUP_DELAY).pipe(
       Effect.andThen(service.runCatchUp.pipe(Effect.repeat(Schedule.spaced(CHECK_INTERVAL)))),
       Effect.forkScoped,
@@ -969,5 +890,13 @@ export const layer = Layer.effect(
       Effect.forkScoped,
     );
     return service;
+  }),
+);
+
+/** Daily team memory's host, which the Teams services attach their source to. */
+export const teamDailyHostLayer = Layer.effect(
+  TeamDailyHost,
+  Effect.gen(function* () {
+    return (yield* DailyMemory).teams;
   }),
 );

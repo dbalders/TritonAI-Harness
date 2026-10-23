@@ -13,6 +13,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useEnvironmentScope } from "~/state/session";
 import { isWslSettingsRowVisible } from "./ConnectionsSettings.logic";
 import { isProviderSettingsEnvironmentAvailable } from "./ProviderSettingsPanel.logic";
+import { useTeamsConfigured } from "../teams/useTeamsConfigured";
 import type { SettingsScopeSearch } from "./settingsScope";
 import {
   filterAvailableSettingsSearchItems,
@@ -48,6 +49,12 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
   const hasThreadAutoSettlement =
     getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length > 0;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const teamsEnvironmentId =
+    scopeSearch.machine === undefined
+      ? primaryEnvironmentId
+      : (environments.find((environment) => environment.environmentId === scopeSearch.machine)
+          ?.environmentId ?? null);
+  const hasTeams = useTeamsConfigured(teamsEnvironmentId);
   const canMaintain = useEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope);
   const cloudLinkState = usePrimaryCloudLinkState().data;
   // Same fallback as the Connections row: older servers imply a tunnel from `linked`.
@@ -73,6 +80,7 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
     canManageLocalBackend,
     isWslSettingsRowVisible: wslSettingsRowVisible,
     hasThreadAutoSettlement,
+    hasTeams,
     managedTunnelActive,
   });
 }

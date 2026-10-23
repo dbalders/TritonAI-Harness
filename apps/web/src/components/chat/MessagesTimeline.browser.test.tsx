@@ -1478,26 +1478,35 @@ describe("MessagesTimeline scroll position", () => {
       nestedCommits = phase === "nested-update" ? nestedCommits + 1 : 0;
       maxNestedCommits = Math.max(maxNestedCommits, nestedCommits);
     };
-    const timeline = (entries: Entry[]) => (
-      <Profiler id="timeline" onRender={onRender}>
-        <MessagesTimeline {...props} timelineEntries={entries} />
-      </Profiler>
-    );
-    await using screen = await renderElement(timeline(long));
+    function Timeline({ entries }: { entries: Entry[] }) {
+      const [liveFollowEnabled, setLiveFollowEnabled] = useState(true);
+      return (
+        <div className="contents" onWheelCapture={() => setLiveFollowEnabled(false)}>
+          <Profiler id="timeline" onRender={onRender}>
+            <MessagesTimeline
+              {...props}
+              timelineEntries={entries}
+              liveFollowEnabled={liveFollowEnabled}
+            />
+          </Profiler>
+        </div>
+      );
+    }
+    await using screen = await renderElement(<Timeline entries={long} />);
     const viewport = await waitForList(props);
-    await act(async () => {
-      viewport.scrollTop = 0;
-      viewport.dispatchEvent(new Event("scroll"));
+    await vi.waitFor(() => expect(readTimelinePosition(props.routeThreadKey)?.atEnd).toBe(true));
+    await userEvent.wheel(viewport, { delta: { y: -viewport.scrollHeight } });
+    await vi.waitFor(() => {
+      expect(readTimelinePosition(props.routeThreadKey)?.atEnd).toBe(false);
+      expect(viewport.scrollTop).toBeLessThanOrEqual(1);
     });
 
     maxNestedCommits = 0;
-    await screen.rerender(timeline([...short, ...long]));
-    await vi.waitFor(async () => {
-      await act(async () => {
-        viewport.scrollTop = 0;
-        viewport.dispatchEvent(new Event("scroll"));
-      });
+    await screen.rerender(<Timeline entries={[...short, ...long]} />);
+    await userEvent.wheel(viewport, { delta: { y: -viewport.scrollHeight } });
+    await vi.waitFor(() => {
       expect(screen.text()).toContain("Short reply 0");
+      expect(viewport.scrollTop).toBeLessThanOrEqual(1);
     });
     expect(maxNestedCommits).toBeLessThan(8);
   });

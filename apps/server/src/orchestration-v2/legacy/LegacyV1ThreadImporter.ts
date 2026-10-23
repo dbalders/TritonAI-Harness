@@ -58,6 +58,8 @@ interface LegacyThreadRow {
   readonly snoozed_at: string | null;
   readonly pinned_at: string | null;
   readonly auto_settle_disabled_at: string | null;
+  readonly team_sharing_off_at: string | null;
+  readonly team_sharing_resumed_at: string | null;
   readonly pin_order_key: string | null;
   readonly pull_requests_json: string;
   readonly linked_pull_request_json: string | null;
@@ -276,6 +278,8 @@ function importedThread(row: LegacyThreadRow): OrchestrationV2AppThread {
     snoozedAt: nullableDateTime(row.snoozed_at),
     pinnedAt: nullableDateTime(row.pinned_at),
     autoSettleDisabledAt: nullableDateTime(row.auto_settle_disabled_at),
+    teamSharingOffAt: nullableDateTime(row.team_sharing_off_at),
+    teamSharingResumedAt: nullableDateTime(row.team_sharing_resumed_at),
     pinOrderKey: row.pin_order_key?.trim() || null,
     lastVisitedAt: null,
     deletedAt: nullableDateTime(row.deleted_at),
@@ -487,6 +491,8 @@ const make = Effect.gen(function* () {
         thread.snoozed_at,
         thread.pinned_at,
         thread.auto_settle_disabled_at,
+        thread.team_sharing_off_at,
+        thread.team_sharing_resumed_at,
         thread.pin_order_key,
         (SELECT json_group_array(json_object('host', pr.host, 'repository', pr.repository, 'number', pr.number, 'url', pr.url, 'source', pr.source, 'linkedAt', pr.linked_at, 'snapshot', json(pr.snapshot_json), 'stack', json(pr.stack_json))) FROM projection_thread_pull_requests pr WHERE pr.thread_id = thread.thread_id) AS pull_requests_json,
         thread.linked_pull_request_json,
@@ -499,7 +505,9 @@ const make = Effect.gen(function* () {
         ON thread.thread_id = legacy_import.thread_id
       INNER JOIN orchestration_v2_projection_threads AS projection
         ON projection.thread_id = legacy_import.thread_id
-      WHERE json_type(projection.payload_json, '$.pinnedAt') IS NULL
+      WHERE json_type(projection.payload_json, '$.teamSharingOffAt') IS NULL
+         OR json_type(projection.payload_json, '$.teamSharingResumedAt') IS NULL
+         OR json_type(projection.payload_json, '$.pinnedAt') IS NULL
          OR json_type(projection.payload_json, '$.pinOrderKey') IS NULL
          OR json_type(projection.payload_json, '$.snoozedUntil') IS NULL
          OR json_type(projection.payload_json, '$.snoozedAt') IS NULL
@@ -522,6 +530,14 @@ const make = Effect.gen(function* () {
         ...current,
         legacyGoal: current.legacyGoal === undefined ? legacy.legacyGoal : current.legacyGoal,
         pinnedAt: current.pinnedAt === undefined ? legacy.pinnedAt : current.pinnedAt,
+        teamSharingOffAt:
+          current.teamSharingOffAt === undefined
+            ? legacy.teamSharingOffAt
+            : current.teamSharingOffAt,
+        teamSharingResumedAt:
+          current.teamSharingResumedAt === undefined
+            ? legacy.teamSharingResumedAt
+            : current.teamSharingResumedAt,
         autoSettleDisabledAt:
           current.autoSettleDisabledAt === undefined
             ? legacy.autoSettleDisabledAt
@@ -594,6 +610,8 @@ const make = Effect.gen(function* () {
         thread.snoozed_at,
         thread.pinned_at,
         thread.auto_settle_disabled_at,
+        thread.team_sharing_off_at,
+        thread.team_sharing_resumed_at,
         thread.pin_order_key,
         (SELECT json_group_array(json_object('host', pr.host, 'repository', pr.repository, 'number', pr.number, 'url', pr.url, 'source', pr.source, 'linkedAt', pr.linked_at, 'snapshot', json(pr.snapshot_json), 'stack', json(pr.stack_json))) FROM projection_thread_pull_requests pr WHERE pr.thread_id = thread.thread_id) AS pull_requests_json,
         thread.linked_pull_request_json,

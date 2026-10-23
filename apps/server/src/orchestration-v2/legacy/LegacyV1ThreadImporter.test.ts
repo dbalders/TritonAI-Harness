@@ -369,6 +369,7 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
             '2026-01-04T00:00:00.000Z', NULL)
       `;
 
+      yield* sql`UPDATE projection_threads SET team_sharing_off_at = '2026-01-02T12:00:00.000Z', team_sharing_resumed_at = '2026-01-01T12:00:00.000Z' WHERE thread_id = ${threadId}`;
       assert.equal(yield* importer.pendingThreadCount, 1);
       const shellImport = yield* importer.reconcileShells;
       assert.equal(yield* importer.pendingThreadCount, 1);
@@ -388,6 +389,14 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
       assert.isTrue((yield* maintenance.verify).valid);
       const shellProjection = yield* projections.getThreadProjection(threadId);
       assert.equal(shellProjection.thread.historyOrigin, "v1_import");
+      assert.deepEqual(
+        shellProjection.thread.teamSharingOffAt,
+        DateTime.makeUnsafe("2026-01-02T12:00:00.000Z"),
+      );
+      assert.deepEqual(
+        shellProjection.thread.teamSharingResumedAt,
+        DateTime.makeUnsafe("2026-01-01T12:00:00.000Z"),
+      );
       assert.equal(shellProjection.thread.branch, "main");
       assert.equal(shellProjection.thread.worktreePath, "/tmp/legacy-project");
       assert.deepEqual(

@@ -1,3 +1,4 @@
+import * as TeamMessageGate from "../teams/TeamMessageGate.ts";
 import { assert, describe, it, vi } from "@effect/vitest";
 import {
   type ChatAttachment,
@@ -8,6 +9,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   TextGenerationError,
+  TeamsError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -46,6 +48,7 @@ const adapter = {
 function makeHarness(
   options: {
     readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
+    readonly teamGate?: Layer.Layer<TeamMessageGate.TeamMessageGate>;
   } = {},
 ) {
   const layerDatabase = SqlitePersistence.layerMemory;
@@ -87,6 +90,7 @@ function makeHarness(
       ),
   });
   const layerTitleRegeneration = ThreadTitleRegeneration.layer.pipe(
+    Layer.provide(options.teamGate ?? TeamMessageGate.layerMemory()),
     Layer.provide(
       Layer.mergeAll(
         layerThreadManagement,
@@ -230,6 +234,36 @@ describe("formatThreadTitleContext", () => {
 });
 
 describe("ThreadTitleRegenerationService", () => {
+  it.effect("keeps refused queued team text out of the title model", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({
+        teamGate: Layer.mock(TeamMessageGate.TeamMessageGate)({
+          verifyBeforeSend: () =>
+            Effect.fail(new TeamsError({ code: "forbidden", message: "Membership removed" })),
+        }),
+      });
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const service = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const threadId = yield* createThread({
+          command: "team-title-create",
+          thread: "team-title",
+        });
+        yield* dispatchUserMessage({
+          command: "team-title-message",
+          threadId,
+          text: "Private team content",
+        });
+        const requestId = yield* armRegeneration({ command: "team-title-request", threadId });
+        yield* service.execute({ threadId, requestId, kind: { type: "regenerate" } });
+        assert.equal(harness.generateThreadTitle.mock.calls.length, 0);
+        const projection = yield* threads.getThreadProjection(threadId);
+        assert.equal(projection.thread.title, "Seed title");
+        assert.isNotOk(projection.thread.titleRegeneration);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
   it.effect("arms and clears the regeneration marker through metadata commands", () =>
     Effect.gen(function* () {
       const harness = makeHarness();

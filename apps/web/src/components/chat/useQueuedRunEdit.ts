@@ -12,6 +12,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@t3tools/shared/composerContextReferences";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useAssetUrls } from "../../assets/assetUrls";
@@ -42,6 +43,12 @@ import type { ChatComposerHandle } from "./ChatComposer";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
 import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./queuedMessageEdit";
 import type { EditQueuedRunRequest } from "./QueuedRunsControl";
+import {
+  draftTeamReferenceIds,
+  inheritDraftTeamReferences,
+  moveDraftTeamMemory,
+  settleDraftTeamMemory,
+} from "../teams/teamMemoryDrafts";
 
 interface EditingQueuedRun {
   readonly threadId: ThreadId;
@@ -69,7 +76,7 @@ function queuedEditDraftTarget(routeThreadRef: ScopedThreadRef, runId: RunId) {
 }
 
 /** Uploads the edit's new attachments and saves it. Returns the error to show, or null. */
-async function submitQueuedRunEdit(input: {
+export async function submitQueuedRunEdit(input: {
   readonly environmentId: EnvironmentId;
   readonly draftTarget: ComposerThreadTarget;
   readonly editing: EditingQueuedRun;
@@ -77,6 +84,8 @@ async function submitQueuedRunEdit(input: {
   readonly editQueuedRun: ReturnType<typeof useEditQueuedRunCommand>;
 }): Promise<string | null> {
   const { environmentId, draftTarget, editing, content } = input;
+  // The payload owns this snapshot even if account reconciliation changes the draft during uploads.
+  const teamReferences = draftTeamReferenceIds(draftTarget, content.prompt);
   const editText = content.prompt.trim();
   const newAttachments = [...content.images, ...content.files];
   const uploadFiles = async (files: ReadonlyArray<ComposerFileAttachment>) => {
@@ -131,6 +140,7 @@ async function submitQueuedRunEdit(input: {
       input: {
         threadId: editing.threadId,
         runId: editing.runId,
+        teamReferences,
         text: editText.length === 0 ? ATTACHMENT_ONLY_BOOTSTRAP_PROMPT : editText,
         edit: {
           messageId: editing.messageId,
@@ -148,7 +158,11 @@ async function submitQueuedRunEdit(input: {
         },
       },
     });
-    return result._tag === "Failure" ? "Could not save the edited queued message." : null;
+    if (result._tag === "Success") return null;
+    const cause = squashAtomCommandFailure(result);
+    return cause instanceof Error && cause.message
+      ? cause.message
+      : "Could not save the edited queued message.";
   } catch (error) {
     return error instanceof Error ? error.message : "Could not save the edited queued message.";
   }
@@ -223,7 +237,13 @@ export function useQueuedRunEdit(input: {
     const target = queuedEditDraftTarget(routeThreadRef, request.runId);
     const store = useComposerDraftStore.getState();
     store.clearComposerContent(target);
+    settleDraftTeamMemory();
     store.setPrompt(target, request.text);
+    inheritDraftTeamReferences(
+      target,
+      serverProjection?.messages.find((message) => message.id === request.messageId)
+        ?.teamReferences ?? [],
+    );
     setEditing({
       threadId: activeThreadId,
       runId: request.runId,
@@ -238,6 +258,7 @@ export function useQueuedRunEdit(input: {
   const cancelEdit = useStableCallback(() => {
     if (editing === null) return;
     clearEditDraft(editing.runId);
+    settleDraftTeamMemory();
     setEditing(null);
     focusComposerSoon();
   });
@@ -267,6 +288,10 @@ export function useQueuedRunEdit(input: {
       threadTarget: threadDraftTarget,
       originalText: editing.originalText,
     });
+    if (recovery === "kept") {
+      moveDraftTeamMemory(queuedEditDraftTarget(routeThreadRef, editing.runId), threadDraftTarget);
+    }
+    settleDraftTeamMemory();
     if (recovery !== "clean") {
       toastManager.add(
         stackedThreadToast({

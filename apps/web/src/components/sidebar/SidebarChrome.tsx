@@ -1,11 +1,17 @@
+import { useTeamsEnabled } from "../teams/useTeamsEnabled";
 import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
   CircleHelpIcon,
   LightbulbIcon,
+  UsersIcon,
   SettingsIcon,
 } from "lucide-react";
 import { type ReactElement, type ReactNode, memo } from "react";
+import { SidebarAccount } from "../teams/SidebarAccount";
+import { usePendingTeamInvitationCount } from "../teams/useTeamsController";
+import { useUcsdAccount } from "../../hooks/useUcsdAccount";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
@@ -24,6 +30,7 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "../ui/sidebar";
+import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
@@ -135,19 +142,23 @@ function SidebarUtilityItem({
   icon,
   label,
   onClick,
+  count = 0,
+  countLabel,
   tooltip = true,
   render,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
+  count?: number;
+  countLabel?: string;
   /** Off where the icon already says enough. */
   tooltip?: boolean;
   render?: ReactElement;
 }) {
   const button = (
     <SidebarMenuButton
-      aria-label={label}
+      aria-label={count > 0 && countLabel ? `${label}, ${countLabel}` : label}
       data-getting-started-target={label === "Settings" ? "settings" : undefined}
       onClick={onClick}
       render={render}
@@ -166,6 +177,11 @@ function SidebarUtilityItem({
       ) : (
         button
       )}
+      {count > 0 ? (
+        <span aria-hidden className="pointer-events-none absolute -top-1 -right-1">
+          <Badge size="sm">{count > 9 ? "9+" : count}</Badge>
+        </span>
+      ) : null}
     </SidebarMenuItem>
   );
 }
@@ -184,7 +200,11 @@ function SidebarIdeasItem({ onClick }: { onClick: () => void }) {
   );
 }
 
-export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+export const SidebarUtilityMenu = memo(function SidebarUtilityMenu({
+  pendingTeamInvitations = 0,
+}: {
+  pendingTeamInvitations?: number;
+}) {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -193,6 +213,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   });
   const isOnHelpPage = useLocation({ select: (location) => location.pathname === "/help" });
   const pullRequestsSupported = usePullRequestsSupported();
+  const teamsEnabled = useTeamsEnabled(usePrimaryEnvironmentId());
   const closeMobileSidebar = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -258,6 +279,18 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                 onClick={handlePullRequestsClick}
               />
             ) : null}
+            {teamsEnabled ? (
+              <SidebarUtilityItem
+                icon={<UsersIcon />}
+                label="Teams"
+                count={pendingTeamInvitations}
+                countLabel={`${pendingTeamInvitations} pending ${pendingTeamInvitations === 1 ? "invitation" : "invitations"}`}
+                onClick={() => {
+                  closeMobileSidebar();
+                  void navigate({ to: "/teams" });
+                }}
+              />
+            ) : null}
             <SidebarUtilityItem
               icon={<ChartNoAxesColumnIcon />}
               label="Usage"
@@ -272,14 +305,32 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   );
 });
 
+/** The account and the Teams item's invitation count share one account check. */
+function SidebarAccountFooter({ environmentId }: { environmentId: EnvironmentId }) {
+  const account = useUcsdAccount(environmentId);
+  const teamsEnabled = useTeamsEnabled(environmentId);
+  const pendingTeamInvitations = usePendingTeamInvitationCount(environmentId, account);
+  return (
+    <>
+      <SidebarAccount {...account} teamsEnabled={teamsEnabled} />
+      <SidebarUtilityMenu pendingTeamInvitations={pendingTeamInvitations} />
+    </>
+  );
+}
+
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
+  const environmentId = usePrimaryEnvironmentId();
   return (
     <SidebarFooter>
       <SidebarThreadUndoNotice />
       <GettingStartedSidebarEntry />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
-      <SidebarUtilityMenu />
+      {environmentId ? (
+        <SidebarAccountFooter key={environmentId} environmentId={environmentId} />
+      ) : (
+        <SidebarUtilityMenu />
+      )}
     </SidebarFooter>
   );
 });

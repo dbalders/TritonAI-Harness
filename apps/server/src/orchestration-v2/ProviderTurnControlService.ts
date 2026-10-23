@@ -1,3 +1,4 @@
+import { TeamMessageGate } from "../teams/TeamMessageGate.ts";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
   MessageId,
@@ -84,10 +85,13 @@ export class ProviderTurnControlServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   ProviderTurnControlServiceV2,
   never,
-  ProjectionStore.ProjectionStoreV2 | ProviderSessionManager.ProviderSessionManagerV2
+  | ProjectionStore.ProjectionStoreV2
+  | ProviderSessionManager.ProviderSessionManagerV2
+  | TeamMessageGate
 > = Layer.effect(
   ProviderTurnControlServiceV2,
   Effect.gen(function* () {
+    const teams = yield* TeamMessageGate;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
 
@@ -353,6 +357,23 @@ export const layer: Layer.Layer<
               cause: "The persisted steering message or target run is missing.",
             });
           }
+          yield* teams
+            .verifyBeforeSend({
+              messageId: message.id,
+              threadId: input.threadId,
+              text: message.text,
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderTurnControlError({
+                    threadId: input.threadId,
+                    operation: "steer",
+                    providerTurnId: input.providerTurnId,
+                    cause,
+                  }),
+              ),
+            );
           yield* loaded.session.value
             .steerTurn({
               threadId: input.threadId,

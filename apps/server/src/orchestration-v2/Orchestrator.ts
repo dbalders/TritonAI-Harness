@@ -1815,6 +1815,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           type: "user_message",
           messageId: queuedMessage.id,
           text: queuedMessage.text,
+          ...(queuedMessage.teamReferences === undefined
+            ? {}
+            : { teamReferences: queuedMessage.teamReferences }),
           attachments: queuedMessage.attachments,
           ...(queuedMessage.context ? { context: queuedMessage.context } : {}),
           createdBy: queuedMessage.createdBy,
@@ -3156,6 +3159,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return {
             ...thread,
             ...(command.title === undefined ? {} : { title: command.title }),
+            ...(command.teamSharing === undefined
+              ? {}
+              : {
+                  teamSharingOffAt: command.teamSharing ? null : (thread.teamSharingOffAt ?? now),
+                  teamSharingResumedAt:
+                    command.teamSharing && thread.teamSharingOffAt != null
+                      ? now
+                      : (thread.teamSharingResumedAt ?? null),
+                }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.limitRecovery !== undefined &&
             limitRecovery?.snooze === true &&
@@ -3207,7 +3219,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               : command.regenerateTitle === false || command.title !== undefined
                 ? { titleRegeneration: null }
                 : {}),
-            updatedAt: now,
+            updatedAt:
+              command.teamSharing !== undefined &&
+              command.title === undefined &&
+              command.limitRecovery === undefined &&
+              command.branch === undefined &&
+              command.worktreePath === undefined &&
+              command.linkedPullRequest === undefined &&
+              command.regenerateTitle === undefined
+                ? thread.updatedAt
+                : now,
           };
         }
         case "thread.pull-request.link":
@@ -4067,6 +4088,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly targetRunId: OrchestrationV2Run["id"];
     readonly messageId: OrchestrationV2ConversationMessage["id"];
     readonly text: string;
+    readonly teamReferences?: readonly string[];
     readonly attachments: ReadonlyArray<ChatAttachment>;
     readonly context?: import("@t3tools/contracts").OrchestrationMessageContext | undefined;
     readonly createdBy: OrchestrationV2ConversationMessage["createdBy"];
@@ -4238,6 +4260,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           text: input.text,
           attachments: input.attachments,
           ...(input.context ? { context: input.context } : {}),
+          ...(input.teamReferences === undefined ? {} : { teamReferences: input.teamReferences }),
           streaming: false,
           createdAt: now,
           updatedAt: now,
@@ -4272,6 +4295,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           text: input.text,
           attachments: input.attachments,
           ...(input.context ? { context: input.context } : {}),
+          ...(input.teamReferences === undefined ? {} : { teamReferences: input.teamReferences }),
         };
         yield* emitEvent({
           type: "message.updated",
@@ -5177,6 +5201,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         messageId: command.messageId,
         text: dispatchText,
         ...(command.context ? { context: command.context } : {}),
+        ...(command.teamReferences === undefined ? {} : { teamReferences: command.teamReferences }),
         attachments: command.attachments,
         createdBy: command.createdBy,
         creationSource: command.creationSource,
@@ -5426,6 +5451,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         role: "user",
         text: dispatchText,
         ...(command.context ? { context: command.context } : {}),
+        ...(command.teamReferences === undefined ? {} : { teamReferences: command.teamReferences }),
         attachments: command.attachments,
         streaming: false,
         createdAt: now,
@@ -5766,6 +5792,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         role: "user",
         text: dispatchText,
         ...(command.context ? { context: command.context } : {}),
+        ...(command.teamReferences === undefined ? {} : { teamReferences: command.teamReferences }),
         attachments: command.attachments,
         streaming: false,
         createdAt: now,
@@ -5799,6 +5826,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         inputIntent: "turn_start",
         text: dispatchText,
         ...(command.context ? { context: command.context } : {}),
+        ...(command.teamReferences === undefined ? {} : { teamReferences: command.teamReferences }),
         attachments: command.attachments,
       };
       const preparationTurnItem: OrchestrationV2TurnItem | null =
@@ -6453,6 +6481,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       role: "user",
       text: dispatchText,
       ...(command.context ? { context: command.context } : {}),
+      ...(command.teamReferences === undefined ? {} : { teamReferences: command.teamReferences }),
       attachments: command.attachments,
       streaming: false,
       createdAt: now,
@@ -6486,6 +6515,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       inputIntent: "turn_start",
       text: dispatchText,
       ...(command.context ? { context: command.context } : {}),
+      ...(command.teamReferences === undefined ? {} : { teamReferences: command.teamReferences }),
       attachments: command.attachments,
     };
     const activeHandoff = portableForkHandoff ?? mergeBackHandoff ?? providerSwitchHandoff;
@@ -8005,6 +8035,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       targetRunId: command.targetRunId,
       messageId: queuedMessage.id,
       text: queuedMessage.text,
+      ...(queuedMessage.teamReferences === undefined
+        ? {}
+        : { teamReferences: queuedMessage.teamReferences }),
       attachments: queuedMessage.attachments,
       ...(queuedMessage.context ? { context: queuedMessage.context } : {}),
       createdBy: queuedMessage.createdBy,
@@ -8261,6 +8294,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         text: command.text,
         ...editedAttachments,
         ...(command.context ? { context: command.context } : {}),
+        ...(command.teamReferences === undefined ? {} : { teamReferences: command.teamReferences }),
         updatedAt: now,
       },
     });
@@ -8277,6 +8311,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           text: command.text,
           ...editedAttachments,
           ...(command.context ? { context: command.context } : {}),
+          ...(command.teamReferences === undefined
+            ? {}
+            : { teamReferences: command.teamReferences }),
           updatedAt: now,
         },
       });

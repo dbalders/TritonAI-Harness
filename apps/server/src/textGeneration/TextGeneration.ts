@@ -11,6 +11,8 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
 
 export type {
+  TeamDailyMemoryGenerationInput,
+  TeamDailyMemoryGenerationResult,
   DailyMemoryGenerationInput,
   DailyMemoryGenerationResult,
   IdeasGenerationInput,
@@ -38,6 +40,7 @@ type TextGenerationOp =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateDailyMemory"
+  | "generateTeamDailyMemory"
   | "generateIdeas"
   | "generateReviewGuide"
   | "generateHelp";
@@ -120,6 +123,20 @@ export const make = Effect.gen(function* () {
                   operation: "generateDailyMemory",
                   detail:
                     "Daily memory needs a Codex text generation model. Choose one under Settings, Text generation.",
+                }),
+              ),
+        ),
+      ),
+    generateTeamDailyMemory: (input) =>
+      resolveInstance(registry, "generateTeamDailyMemory", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) =>
+          textGeneration.generateTeamDailyMemory
+            ? textGeneration.generateTeamDailyMemory(input)
+            : Effect.fail(
+                new TextGenerationError({
+                  operation: "generateTeamDailyMemory",
+                  detail:
+                    "Team memory needs a Codex text generation model. Choose one under Settings, Text generation.",
                 }),
               ),
         ),

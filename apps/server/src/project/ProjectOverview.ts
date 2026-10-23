@@ -31,6 +31,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import { auxiliaryMessageCondition } from "../teams/teamActivity.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const digest = (value: unknown) =>
@@ -211,6 +212,7 @@ export const make = Effect.gen(function* () {
       LEFT JOIN harness_activity_messages u ON u.message_id=(
         SELECT message_id FROM harness_activity_messages m WHERE m.thread_id=t.thread_id
           AND m.role='user' AND m.is_streaming=0 AND trim(m.text)<>''
+          AND ${auxiliaryMessageCondition(sql)}
         ORDER BY m.created_at DESC,m.message_id DESC LIMIT 1
       )
       LEFT JOIN harness_activity_messages a ON a.message_id=(

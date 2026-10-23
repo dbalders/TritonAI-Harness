@@ -4,7 +4,10 @@ import * as NodeFS from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import type { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import type {
+  ExecutionEnvironmentDescriptor,
+  ServerSettings as Settings,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
@@ -14,6 +17,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
@@ -25,6 +31,13 @@ import { DailyMemory } from "../DailyMemory.ts";
 import { generalVaultPaths, registerMemoryDevice } from "../memoryVault.ts";
 import * as MemorySync from "./MemorySync.ts";
 import * as MicrosoftSignIn from "./microsoftSignIn.ts";
+import { noTeamDailyHost } from "../teamDailySource.ts";
+import type {
+  TeamMirrorDocument,
+  TeamMirrorListing,
+  TeamMirrorOutcome,
+  TeamMirrorSource,
+} from "./teamMirror.ts";
 
 const OAUTH = {
   clientId: "fcfe0e23-a675-4851-99a7-704dfd153b9c",
@@ -288,6 +301,11 @@ class FakeOneDrive {
  */
 const makeDeniableFileSystem = (fs: FileSystem.FileSystem, path: Path.Path) => {
   const denied = new Map<string, "writes" | "everything">();
+  const hooks = {
+    afterRename: null as ((from: string, to: string) => void) | null,
+    afterWrite: null as ((target: string) => Effect.Effect<void>) | null,
+    afterRemove: null as ((target: string) => Effect.Effect<void>) | null,
+  };
   const under = (target: string, directory: string) => {
     const relative = path.relative(directory, target);
     return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
@@ -331,12 +349,19 @@ const makeDeniableFileSystem = (fs: FileSystem.FileSystem, path: Path.Path) => {
     makeDirectory: (target, options) =>
       guard("makeDirectory", target, "write", fs.makeDirectory(target, options)),
     writeFile: (target, data, options) =>
-      guard("writeFile", target, "write", fs.writeFile(target, data, options)),
-    remove: (target, options) => guard("remove", target, "write", fs.remove(target, options)),
+      guard("writeFile", target, "write", fs.writeFile(target, data, options)).pipe(
+        Effect.tap(() => Effect.suspend(() => hooks.afterWrite?.(target) ?? Effect.void)),
+      ),
+    remove: (target, options) =>
+      guard("remove", target, "write", fs.remove(target, options)).pipe(
+        Effect.tap(() => Effect.suspend(() => hooks.afterRemove?.(target) ?? Effect.void)),
+      ),
     rename: (from, to) =>
-      guard("rename", from, "write", guard("rename", to, "write", fs.rename(from, to))),
+      guard("rename", from, "write", guard("rename", to, "write", fs.rename(from, to))).pipe(
+        Effect.tap(() => Effect.sync(() => hooks.afterRename?.(from, to))),
+      ),
   });
-  return { deniable, denied };
+  return { deniable, denied, hooks };
 };
 
 interface Computer {
@@ -355,11 +380,11 @@ const IMAC: Computer = {
   name: "iMac",
 };
 
-const setup = (drive: FakeOneDrive, computer: Computer) =>
+const setup = (drive: FakeOneDrive, computer: Computer, teamsEnabled = true, scheduled = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const { deniable, denied } = makeDeniableFileSystem(fs, path);
+    const { deniable, denied, hooks } = makeDeniableFileSystem(fs, path);
     const temporary = yield* fs.makeTempDirectoryScoped({ prefix: "t3-memory-sync-test-" });
     const baseDir = path.join(temporary, ".tritonai-harness");
     const vault = path.join(baseDir, "memory", "general");
@@ -391,8 +416,42 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
       });
 
     const lock = yield* Semaphore.make(1);
+    const settingsChanges = yield* PubSub.unbounded<Settings>();
+    const settingsSubscriptions = yield* Ref.make(0);
+    const settingsReady = yield* Deferred.make<void>();
+    const settingsLayer = Layer.effect(
+      ServerSettings.ServerSettingsService,
+      Effect.gen(function* () {
+        const original = yield* ServerSettings.ServerSettingsService;
+        return ServerSettings.ServerSettingsService.of({
+          ...original,
+          updateSettings: (patch) =>
+            original
+              .updateSettings(patch)
+              .pipe(Effect.tap((next) => PubSub.publish(settingsChanges, next))),
+          streamChanges: Stream.unwrap(
+            PubSub.subscribe(settingsChanges).pipe(
+              Effect.tap(() =>
+                Ref.updateAndGet(settingsSubscriptions, (count) => count + 1).pipe(
+                  Effect.flatMap((count) =>
+                    count >= 2 ? Deferred.succeed(settingsReady, undefined) : Effect.succeed(false),
+                  ),
+                ),
+              ),
+              Effect.map(Stream.fromSubscription),
+            ),
+          ),
+        });
+      }),
+    ).pipe(
+      Layer.provide(
+        ServerSettings.layerTest({ memoryEnabled: true, experimentalTeamsEnabled: teamsEnabled }),
+      ),
+    );
     // The service without its schedule, so each test decides when a pass runs.
-    const layer = Layer.effect(MemorySync.MemorySync, MemorySync.make).pipe(
+    const layer = (
+      scheduled ? MemorySync.layer : Layer.effect(MemorySync.MemorySync, MemorySync.make)
+    ).pipe(
       Layer.provide(
         Layer.effect(MicrosoftSignIn.MicrosoftSignIn, MicrosoftSignIn.make(OAUTH)).pipe(
           Layer.provide(drive.layer()),
@@ -401,7 +460,7 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
       Layer.provideMerge(drive.layer()),
       Layer.provideMerge(
         Layer.mergeAll(
-          ServerSettings.layerTest({ memoryEnabled: true }),
+          settingsLayer,
           Layer.mock(ServerEnvironment)({
             getDescriptor: Effect.succeed({
               environmentId: computer.environmentId,
@@ -410,6 +469,7 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
           }),
           Layer.mock(DailyMemory)({
             exclusive: (effect) => lock.withPermits(1)(effect),
+            teams: noTeamDailyHost,
             getStatus: Effect.succeed({
               enabled: true,
               directoryPath: path.join(baseDir, "memory"),
@@ -427,6 +487,7 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
     );
     // One set of services per computer for the whole test, like a running app.
     const context = yield* Layer.build(layer);
+    if (scheduled) yield* Deferred.await(settingsReady);
     return {
       vault,
       label,
@@ -438,6 +499,7 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
       fs,
       path,
       denied,
+      hooks,
     };
   });
 
@@ -468,6 +530,52 @@ const connectSync = Effect.gen(function* () {
   yield* sync.start;
   return sync;
 });
+
+const FOLDER = "teams/grant-reports-3f2a1c";
+const TEAM_NOTE = `${FOLDER}/Memory/author/device/record.md`;
+
+/** One team's folder as the Teams side would report it; tests change it between passes. */
+const fakeTeamSource = (folder = FOLDER.slice("teams/".length)) => {
+  const state = {
+    kept: true,
+    files: new Map<string, { eTag: string; text: string }>(),
+    /** Overrides the listing; null lists `files`. */
+    listing: null as TeamMirrorListing | null,
+    /** Overrides every read; null reads `files`. */
+    document: null as TeamMirrorDocument | null,
+    lists: 0,
+    reads: [] as string[],
+    reports: [] as TeamMirrorOutcome[],
+    beforeRead: null as (() => void) | null,
+    duringRead: Effect.void as Effect.Effect<void>,
+    skippedPaths: new Set<string>(),
+  };
+  const source: TeamMirrorSource = {
+    teams: Effect.sync(() => (state.kept ? [{ teamId: "team-1", folder }] : [])),
+    list: () =>
+      Effect.sync(() => {
+        state.lists++;
+        return (
+          state.listing ?? {
+            kind: "files" as const,
+            files: [...state.files].map(([path, file]) => ({ path, eTag: file.eTag })),
+          }
+        );
+      }),
+    read: (_teamId, path) =>
+      Effect.gen(function* (): Effect.fn.Return<TeamMirrorDocument> {
+        state.reads.push(path);
+        state.beforeRead?.();
+        yield* state.duringRead;
+        if (state.document) return state.document;
+        if (state.skippedPaths.has(path)) return { kind: "skip" };
+        const file = state.files.get(path);
+        return file ? { kind: "file", ...file } : { kind: "skip" };
+      }),
+    report: (_teamId, outcome) => Effect.sync(() => void state.reports.push(outcome)),
+  };
+  return Object.assign(state, { source });
+};
 
 const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 const isDeviceCodeToken = (url: URL, params: URLSearchParams) =>
@@ -1249,6 +1357,489 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
           drive.file(`TritonAI Harness/memory/general/.devices/${MAC.environmentId}/device.json`),
         );
       }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+
+  it.effect("never uploads a team copy to OneDrive", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      yield* mac.registerDevice;
+      yield* mac.writeDay("2026-10-02", "My day");
+      yield* mac.write(TEAM_NOTE, "Team note");
+      const sync = yield* connectSync.pipe(Effect.provide(mac.layer));
+      yield* sync.syncNow;
+      assert.strictEqual((yield* sync.getStatus).sync.state, "idle");
+      assert.strictEqual(
+        drive.file(`TritonAI Harness/memory/general/Daily/2026/2026-10-02 ${mac.label}.md`),
+        "My day",
+      );
+      assert.isNull(drive.file("TritonAI Harness/memory/general/teams"));
+    }),
+  );
+
+  it.effect("keeps personal OneDrive sync running while Experimental Teams is off", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC, false);
+      const sync = yield* connectSync.pipe(Effect.provide(mac.layer));
+      const team = fakeTeamSource();
+      team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "Team note" });
+      yield* sync.teams.attach(team.source);
+      yield* mac.registerDevice;
+      yield* mac.write("Notes/personal.md", "Personal note");
+      yield* sync.syncNow;
+      yield* sync.teams.sync;
+      assert.strictEqual(
+        drive.file("TritonAI Harness/memory/general/Notes/personal.md"),
+        "Personal note",
+      );
+      assert.strictEqual(team.lists, 0);
+      assert.strictEqual(team.reads.length, 0);
+      assert.isNull(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`));
+    }),
+  );
+
+  it.effect(
+    "pauses only recorded team folders without remote reads and retains their journal",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        const settings = yield* ServerSettings.ServerSettingsService.pipe(
+          Effect.provide(mac.layer),
+        );
+        const team = fakeTeamSource();
+        team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "Team note" });
+        yield* sync.teams.attach(team.source);
+        yield* sync.teams.sync;
+        const journal = yield* mac.read(".sync/teams.json");
+        yield* mac.write("teams/personal/note.md", "Personal team notes");
+        const reads = team.reads.length;
+        const lists = team.lists;
+        yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+        yield* sync.teams.prune;
+        yield* sync.teams.sync;
+        assert.isNull(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`));
+        assert.strictEqual(yield* mac.read("teams/personal/note.md"), "Personal team notes");
+        assert.strictEqual(yield* mac.read(".sync/teams.json"), journal);
+        assert.strictEqual(team.reads.length, reads);
+        assert.strictEqual(team.lists, lists);
+        assert.strictEqual(team.kept, true);
+        yield* settings.updateSettings({ experimentalTeamsEnabled: true });
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "Team note");
+      }),
+  );
+
+  it.effect(
+    "prunes owned mirrors on the settings change while an earlier remote read is still pending",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC, true, true);
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        const settings = yield* ServerSettings.ServerSettingsService.pipe(
+          Effect.provide(mac.layer),
+        );
+        const team = fakeTeamSource();
+        const relative = `${FOLDER}/Memory/a/d/1.md`;
+        team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "Existing team note" });
+        yield* sync.teams.attach(team.source);
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(relative), "Existing team note");
+        const reached = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const removed = yield* Deferred.make<void>();
+        team.files.set("Memory/a/d/1.md", { eTag: "e2", text: "Late replacement" });
+        team.duringRead = Deferred.succeed(reached, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        );
+        mac.hooks.afterRemove = (target) =>
+          target === mac.path.join(mac.vault, FOLDER)
+            ? Deferred.succeed(removed, undefined).pipe(Effect.asVoid)
+            : Effect.void;
+        const running = yield* sync.teams.sync.pipe(Effect.forkChild);
+        yield* Deferred.await(reached);
+        yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+        yield* Deferred.await(removed);
+        assert.isNull(yield* mac.read(relative));
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(running);
+        assert.isNull(yield* mac.read(relative));
+      }),
+  );
+
+  it.effect("discards a deferred team download after Experimental Teams is paused", () =>
+    Effect.gen(function* () {
+      const mac = yield* setup(new FakeOneDrive(), MAC);
+      const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+      const settings = yield* ServerSettings.ServerSettingsService.pipe(Effect.provide(mac.layer));
+      const team = fakeTeamSource();
+      team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "Team note" });
+      yield* sync.teams.attach(team.source);
+      const reached = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      team.duringRead = Deferred.succeed(reached, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      );
+      const running = yield* sync.teams.sync.pipe(Effect.forkChild);
+      yield* Deferred.await(reached);
+      yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(running);
+      assert.isNull(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`));
+      assert.strictEqual(team.reads.length, 1);
+      yield* sync.teams.sync;
+      assert.strictEqual(team.reads.length, 1);
+    }),
+  );
+
+  it.effect(
+    "rechecks Experimental Teams after writing temporary bytes before installing a copy",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        const settings = yield* ServerSettings.ServerSettingsService.pipe(
+          Effect.provide(mac.layer),
+        );
+        const team = fakeTeamSource();
+        const relative = `${FOLDER}/Memory/a/d/1.md`;
+        team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "Late team note" });
+        yield* sync.teams.attach(team.source);
+        const reached = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        mac.hooks.afterWrite = (target) =>
+          target === mac.path.join(mac.vault, `${relative}.sync.tmp`)
+            ? Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void;
+        const running = yield* sync.teams.sync.pipe(Effect.forkChild);
+        yield* Deferred.await(reached);
+        yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(running);
+        assert.isNull(yield* mac.read(relative));
+        assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, FOLDER)));
+        assert.isNotNull(yield* mac.read(".sync/teams.json"));
+        mac.hooks.afterWrite = null;
+        yield* settings.updateSettings({ experimentalTeamsEnabled: true });
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(relative), "Late team note");
+      }),
+  );
+
+  it.effect("copies a team's documents, follows its changes, and bounds each pass", () =>
+    Effect.gen(function* () {
+      const mac = yield* setup(new FakeOneDrive(), MAC);
+      const team = fakeTeamSource();
+      const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+      yield* sync.teams.attach(team.source);
+      team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "First" });
+      team.files.set("SOPs/a/d/2.md", { eTag: "e1", text: "Procedure" });
+      yield* sync.teams.sync;
+      assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "First");
+      assert.strictEqual(yield* mac.read(`${FOLDER}/SOPs/a/d/2.md`), "Procedure");
+      assert.deepInclude(team.reports.at(-1), { kind: "synced", files: 2, pending: 0 });
+
+      // Changed and removed in the team; edited here, which a read-only copy replaces.
+      team.files.set("Memory/a/d/1.md", { eTag: "e2", text: "Second" });
+      team.files.delete("SOPs/a/d/2.md");
+      yield* mac.write(`${FOLDER}/Memory/a/d/1.md`, "Local edit");
+      team.reads.length = 0;
+      yield* sync.teams.sync;
+      assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "Second");
+      assert.isNull(yield* mac.read(`${FOLDER}/SOPs/a/d/2.md`));
+      // An unchanged copy is not read again.
+      yield* sync.teams.sync;
+      assert.deepStrictEqual(team.reads, ["Memory/a/d/1.md"]);
+
+      // A large team catches up over several passes.
+      for (let index = 0; index < 60; index++)
+        team.files.set(`Memory/a/d/n${index}.md`, { eTag: "e1", text: `Note ${index}` });
+      yield* sync.teams.sync;
+      assert.deepInclude(team.reports.at(-1), { kind: "synced", pending: 10 });
+      yield* sync.teams.sync;
+      assert.deepInclude(team.reports.at(-1), { kind: "synced", pending: 0 });
+      assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/n59.md`), "Note 59");
+    }),
+  );
+
+  it.effect(
+    "removes a team's copy when access ends and keeps it when access can't be checked",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "First" });
+        yield* sync.teams.sync;
+        team.listing = { kind: "unavailable" };
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "First");
+
+        team.listing = { kind: "detached" };
+        yield* sync.teams.sync;
+        assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, FOLDER)));
+
+        // Ended between listing and reading: the copy goes as soon as a read says so.
+        team.listing = null;
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "First");
+        team.files.set("Memory/a/d/1.md", { eTag: "e2", text: "Second" });
+        team.document = { kind: "detached" };
+        yield* sync.teams.sync;
+        assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, FOLDER)));
+      }),
+  );
+
+  it.effect(
+    "leaves a month nobody listed alone, and removes its withdrawn note once it is listed",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        const old = "Daily/bob/2025-01/2025-01-05 device.md";
+        const recent = "Daily/bob/2026-10/2026-10-09 device.md";
+        team.files.set(old, { eTag: "e1", text: "Old day with a withdrawn thread" });
+        team.files.set(recent, { eTag: "e1", text: "Recent day" });
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${old}`), "Old day with a withdrawn thread");
+
+        // Bob removed the old note. An ordinary pass doesn't list that month: the copy stays.
+        team.files.delete(old);
+        team.listing = {
+          kind: "files",
+          files: [{ path: recent, eTag: "e1" }],
+          unlisted: ["Daily/bob/2025-01"],
+        };
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${old}`), "Old day with a withdrawn thread");
+
+        // Bob's marker says the month changed, so the next pass lists it and the note goes.
+        team.listing = { kind: "files", files: [{ path: recent, eTag: "e1" }], unlisted: [] };
+        yield* sync.teams.sync;
+        assert.isNull(yield* mac.read(`${FOLDER}/${old}`));
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${recent}`), "Recent day");
+      }),
+  );
+
+  it.effect(
+    "removes a withdrawn download after the installed file outlived a failed state save",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const remote = "Memory/a/d/interrupted.md";
+        const relative = `${FOLDER}/${remote}`;
+        const unmanaged = `${FOLDER}/Memory/a/d/local.md`;
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        yield* sync.teams.sync;
+        yield* mac.write(unmanaged, "Local note never copied by Harness");
+        team.files.set(remote, { eTag: "e1", text: "Team content later withdrawn" });
+        // The file lands, but persisting the completed pass fails, as at a crash boundary.
+        mac.hooks.afterRename = (_from, to) => {
+          if (to === mac.path.join(mac.vault, relative))
+            mac.denied.set(mac.path.join(mac.vault, ".sync"), "writes");
+        };
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(relative), "Team content later withdrawn");
+        assert.deepInclude(team.reports.at(-1), { kind: "failed" });
+        mac.hooks.afterRename = null;
+        mac.denied.clear();
+
+        // The next process sees the withdrawal before it can redownload the document.
+        team.files.delete(remote);
+        const restarted = yield* MemorySync.make.pipe(
+          Effect.provideServiceEffect(MicrosoftSignIn.MicrosoftSignIn, MicrosoftSignIn.make(OAUTH)),
+          Effect.provide(mac.layer),
+        );
+        yield* restarted.teams.attach(team.source);
+        yield* restarted.teams.sync;
+        assert.isNull(yield* mac.read(relative));
+        assert.strictEqual(yield* mac.read(unmanaged), "Local note never copied by Harness");
+      }),
+  );
+
+  it.effect.each(["Different local text", "Team text"])(
+    "preserves an unmanaged file when installation failed before replacing its bytes (%s)",
+    (localText) =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const remote = "Memory/a/d/interrupted.md";
+        const relative = `${FOLDER}/${remote}`;
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        yield* sync.teams.sync;
+        yield* mac.write(relative, localText);
+        team.files.set(remote, { eTag: "e1", text: "Team text" });
+        team.beforeRead = () => mac.denied.set(mac.path.join(mac.vault, FOLDER), "writes");
+        yield* sync.teams.sync;
+        assert.deepInclude(team.reports.at(-1), { kind: "failed" });
+        assert.strictEqual(yield* mac.read(relative), localText);
+        team.beforeRead = null;
+        mac.denied.clear();
+
+        team.files.delete(remote);
+        const restarted = yield* MemorySync.make.pipe(
+          Effect.provideServiceEffect(MicrosoftSignIn.MicrosoftSignIn, MicrosoftSignIn.make(OAUTH)),
+          Effect.provide(mac.layer),
+        );
+        yield* restarted.teams.attach(team.source);
+        yield* restarted.teams.sync;
+        assert.strictEqual(yield* mac.read(relative), localText);
+      }),
+  );
+
+  it.effect(
+    "copies valid tail documents after fifty unchanged read skips without exceeding the attempt limit",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        for (let index = 0; index < 50; index++) {
+          const name = `Memory/a/d/skip-${String(index).padStart(2, "0")}.md`;
+          team.files.set(name, { eTag: "e1", text: "Previously unavailable" });
+          team.skippedPaths.add(name);
+        }
+        const tail = "Memory/a/d/zz-valid.md";
+        team.files.set(tail, { eTag: "e1", text: "Valid tail document" });
+        yield* sync.teams.sync;
+        assert.strictEqual(team.reads.length, 50);
+        assert.isNull(yield* mac.read(`${FOLDER}/${tail}`));
+
+        // A changed skipped version becomes eligible immediately. The other misses remain
+        // unchanged, including across a server restart, and must not starve the valid tail.
+        const changed = "Memory/a/d/skip-49.md";
+        team.files.set(changed, { eTag: "e2", text: "Now available" });
+        team.skippedPaths.delete(changed);
+        const restarted = yield* MemorySync.make.pipe(
+          Effect.provideServiceEffect(MicrosoftSignIn.MicrosoftSignIn, MicrosoftSignIn.make(OAUTH)),
+          Effect.provide(mac.layer),
+        );
+        yield* restarted.teams.attach(team.source);
+        team.reads.length = 0;
+        yield* restarted.teams.sync;
+        assert.strictEqual(team.reads.length, 50);
+        assert.strictEqual(team.reads[0], changed);
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${changed}`), "Now available");
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${tail}`), "Valid tail document");
+      }),
+  );
+
+  it.effect("prunes only recorded team copies, without reaching the team", () =>
+    Effect.gen(function* () {
+      const mac = yield* setup(new FakeOneDrive(), MAC);
+      const team = fakeTeamSource();
+      const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+      // Before the Teams side attaches, nothing in the teams folder is touched.
+      yield* mac.write("teams/personal/note.md", "Personal team notes");
+      yield* sync.teams.prune;
+      assert.strictEqual(yield* mac.read("teams/personal/note.md"), "Personal team notes");
+
+      yield* sync.teams.attach(team.source);
+      team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "First" });
+      yield* sync.teams.sync;
+      yield* mac.write("teams/stray/note.md", "Not a team copy");
+      team.kept = false;
+      const reads = team.reads.length;
+      yield* sync.teams.prune;
+      assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, FOLDER)));
+      assert.strictEqual(yield* mac.read("teams/stray/note.md"), "Not a team copy");
+      assert.strictEqual(yield* mac.read("teams/personal/note.md"), "Personal team notes");
+      assert.strictEqual(team.reads.length, reads);
+      assert.strictEqual(team.lists, 1);
+    }),
+  );
+
+  it.effect.each(["missing", "invalid", "unreadable"])(
+    "preserves pre-existing teams content with a %s ownership record and no active teams",
+    (record) =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        team.kept = false;
+        yield* mac.write("teams/personal/note.md", "My own notes");
+        yield* mac.write("teams/roster.md", "My own roster");
+        if (record !== "missing") yield* mac.write(".sync/teams.json", "unreadable as JSON");
+        if (record === "unreadable")
+          mac.denied.set(mac.path.join(mac.vault, ".sync/teams.json"), "everything");
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        yield* sync.teams.prune;
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read("teams/personal/note.md"), "My own notes");
+        assert.strictEqual(yield* mac.read("teams/roster.md"), "My own roster");
+        assert.strictEqual(team.lists, 0);
+      }),
+  );
+
+  it.effect.each([
+    { folder: "grant-reports-3f2a1c", kind: "files" },
+    { folder: "grant-reports-3f2a1c", kind: "detached" },
+    { folder: "constructor", kind: "files" },
+    { folder: "constructor", kind: "detached" },
+  ] as const)(
+    "does not adopt or remove an unrecorded folder at the next copy's path ($folder, $kind)",
+    ({ folder, kind }) =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource(folder);
+        const file = "Memory/a/d/personal.md";
+        const relative = `teams/${folder}/${file}`;
+        yield* mac.write(relative, "Pre-existing personal note");
+        team.files.set(file, { eTag: "e1", text: "Team copy" });
+        if (kind === "detached") team.listing = { kind: "detached" };
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(relative), "Pre-existing personal note");
+        assert.deepInclude(team.reports.at(-1), { kind: "failed" });
+        team.kept = false;
+        yield* sync.teams.prune;
+        assert.strictEqual(yield* mac.read(relative), "Pre-existing personal note");
+      }),
+  );
+
+  it.effect("records and prunes a newly created copy named constructor", () =>
+    Effect.gen(function* () {
+      const mac = yield* setup(new FakeOneDrive(), MAC);
+      const team = fakeTeamSource("constructor");
+      const relative = "teams/constructor/Memory/a/d/note.md";
+      team.files.set("Memory/a/d/note.md", { eTag: "e1", text: "Recorded copy" });
+      const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+      yield* sync.teams.attach(team.source);
+      yield* sync.teams.sync;
+      assert.strictEqual(yield* mac.read(relative), "Recorded copy");
+      team.kept = false;
+      yield* sync.teams.prune;
+      assert.isNull(yield* mac.read(relative));
+    }),
+  );
+
+  it.effect("ignores ownership entries outside the team-copy namespace", () =>
+    Effect.gen(function* () {
+      const mac = yield* setup(new FakeOneDrive(), MAC);
+      const team = fakeTeamSource();
+      team.kept = false;
+      yield* mac.write("personal/note.md", "Outside team copies");
+      yield* mac.write(
+        ".sync/teams.json",
+        JSON.stringify({
+          version: 1,
+          teams: { "../personal": { teamId: "old", synced: {} } },
+        }),
+      );
+      const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+      yield* sync.teams.attach(team.source);
+      yield* sync.teams.prune;
+      assert.strictEqual(yield* mac.read("personal/note.md"), "Outside team copies");
     }),
   );
 });

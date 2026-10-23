@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as TeamMessageGate from "./teams/TeamMessageGate.ts";
 import * as AnalyticsReactor from "./telemetry/AnalyticsReactor.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
@@ -15,6 +16,8 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -140,6 +143,8 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as AuthHttp from "./auth/http.ts";
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as TeamStorage from "./teams/TeamStorageService.ts";
+import * as TeamProject from "./teams/TeamProjectService.ts";
 import * as Account from "./auth/AccountService.ts";
 import { IntegrationCredentialKeepaliveLive } from "./integrations/IntegrationCredentialKeepalive.ts";
 import * as IntegrationRegistry from "./integrations/IntegrationRegistry.ts";
@@ -652,6 +657,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
+  Layer.provideMerge(ProjectionStoreV2.layer),
+  Layer.provideMerge(RuntimeLayer.layerEventSink),
+  Layer.provideMerge(TeamMessageGate.layer),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
   Layer.provideMerge(layerServerSettings),
@@ -721,6 +729,8 @@ const layerRuntimeDependencies = TritonAiCommonsAction.runtimeLayer.pipe(
     Help.layer.pipe(Layer.provide(Layer.mergeAll(layerHelpIntegrations, HelpDocumentation.layer))),
   ),
   // Memory sync takes the summarizer's lock while it touches the vault.
+  Layer.provideMerge(MemorySync.teamMirrorHostLayer),
+  Layer.provideMerge(DailyMemory.teamDailyHostLayer),
   Layer.provideMerge(MemorySync.layer.pipe(Layer.provide(MicrosoftSignIn.layer))),
   // Ideas read threads, memory notes, and plugins, and call text generation.
   Layer.provideMerge(ProjectOverview.layer),
@@ -768,8 +778,25 @@ const layerCommandReadiness = HttpRouter.middleware(
   { global: true },
 );
 
+/** Campus account and Teams services; both transports share one instance of each. */
+export const teamServicesLayer = TeamProject.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provideMerge(TeamStorage.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+  Layer.provideMerge(Account.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+);
+
+/**
+ * The Teams services the running server's routes use. Only the synthetic Teams content fixture
+ * (`apps/server/scripts/teams-content-fixture.ts`) provides another layer.
+ */
+export class ServerTeamServices extends Context.Reference<typeof teamServicesLayer>(
+  "t3/server/ServerTeamServices",
+  { defaultValue: () => teamServicesLayer },
+) {}
+
 const makeRoutesLayerFor = (
   loadIntegrationRegistry?: Parameters<typeof McpHttpServer.makeLayer>[0],
+  teamServices: typeof teamServicesLayer = teamServicesLayer,
 ) =>
   Layer.mergeAll(
     Layer.mergeAll(
@@ -816,14 +843,11 @@ const makeRoutesLayerFor = (
     Layer.provide(PreviewBrowser.layer),
     Layer.provide(PreviewAutomationBroker.layer),
     Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
-    Layer.provide(Account.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+    Layer.provide(teamServices),
     Layer.provide(layerCommandReadiness),
     Layer.provide(ServerHttp.layerBrowserApiCors),
     Layer.provide(ServerHttp.layerHttpCompression),
   );
-
-const makeRoutesLayer = makeRoutesLayerFor();
-const layerMakeRoutes = makeRoutesLayer;
 
 const layerMakeServer = Layer.unwrap(
   Effect.gen(function* () {
@@ -1134,10 +1158,14 @@ const layerMakeServer = Layer.unwrap(
       ).pipe(Effect.asVoid),
     }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
 
-    const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
-      disableLogger: !config.logWebSocketEvents,
-      routerConfig: HTTP_ROUTER_CONFIG,
-    }).pipe(
+    const teamServices = yield* ServerTeamServices;
+    const layerRoutes = HttpRouter.serve(
+      makeRoutesLayerFor(undefined, teamServices).pipe(Layer.provide(layerLauncher)),
+      {
+        disableLogger: !config.logWebSocketEvents,
+        routerConfig: HTTP_ROUTER_CONFIG,
+      },
+    ).pipe(
       withUntracedRequests,
       Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)),
     );

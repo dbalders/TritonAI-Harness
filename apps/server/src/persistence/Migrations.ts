@@ -86,6 +86,7 @@ import UpstreamMigration0052 from "./Migrations/052_ProjectionThreadTitleState.t
 import UpstreamMigration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
 import UpstreamMigration0054 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
 import Migration0058 from "./Migrations/058_Ideas.ts";
+import TeamSharingMigration from "./Migrations/072_TeamSharing.ts";
 
 import UpstreamMigration0063 from "./Migrations/063_DropUnusedV1Projections.ts";
 import UpstreamMigration0064 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
@@ -176,6 +177,7 @@ export const migrationEntries = [
   [75, "CodexUsageNativeTurnIndex", UpstreamMigration0065],
   [76, "RepairClientSettlementTimestamps", UpstreamMigration0066],
   [77, "WebhookDedupe", UpstreamMigration0067],
+  [78, "TeamSharing", TeamSharingMigration],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -239,40 +241,51 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  const includesV2 =
-    toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
-  const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
-  if (includesV2) {
-    yield* assertV2MigrationsCanRun(toMigrationInclusive);
-  }
-  const executedMigrations = [
-    ...previewMigrations,
-    ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
-  ];
-  const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
-  yield* migrations.length === 0
-    ? Effect.logDebug("Database schema is current")
-    : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
-
   const sql = yield* SqlClient.SqlClient;
-  const recorded = yield* sql<{
-    readonly migration_id: number;
-    readonly name: string;
-  }>`SELECT migration_id, name FROM effect_sql_migrations`;
-  const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
-  const divergent = recorded.flatMap((row) => {
-    const expected = manifestNames.get(row.migration_id);
-    if (expected === undefined) {
-      return [`${row.migration_id}:${row.name} (unknown to this build)`];
-    }
-    return expected === row.name
-      ? []
-      : [`${row.migration_id}:${row.name} (this build: ${expected})`];
-  });
-  if (divergent.length > 0) {
-    yield* Effect.logWarning(
-      "Database migration history diverges from this build; recorded migration ids are skipped, not reconciled by name.",
-    ).pipe(Effect.annotateLogs({ divergent }));
-  }
-  return executedMigrations;
+  // Preview reconciliation and the upgrade batch must commit together.
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const includesV2 =
+        toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
+      const previewMigrations = includesV2
+        ? yield* reconcileV2PreviewMigration({
+            includeTeams: toMigrationInclusive === undefined || toMigrationInclusive >= 78,
+          })
+        : [];
+      if (includesV2) {
+        yield* assertV2MigrationsCanRun(toMigrationInclusive);
+      }
+      const executedMigrations = [
+        ...previewMigrations,
+        ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
+      ];
+      const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
+      yield* migrations.length === 0
+        ? Effect.logDebug("Database schema is current")
+        : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
+
+      const recorded = yield* sql<{
+        readonly migration_id: number;
+        readonly name: string;
+      }>`SELECT migration_id, name FROM effect_sql_migrations`;
+      const manifestNames = new Map<number, string>(
+        migrationEntries.map(([id, name]) => [id, name]),
+      );
+      const divergent = recorded.flatMap((row) => {
+        const expected = manifestNames.get(row.migration_id);
+        if (expected === undefined) {
+          return [`${row.migration_id}:${row.name} (unknown to this build)`];
+        }
+        return expected === row.name
+          ? []
+          : [`${row.migration_id}:${row.name} (this build: ${expected})`];
+      });
+      if (divergent.length > 0) {
+        yield* Effect.logWarning(
+          "Database migration history diverges from this build; recorded migration ids are skipped, not reconciled by name.",
+        ).pipe(Effect.annotateLogs({ divergent }));
+      }
+      return executedMigrations;
+    }),
+  );
 });

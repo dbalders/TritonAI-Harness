@@ -121,6 +121,33 @@ const makeHarness = (
 const titles = (snapshot: IdeasSnapshot) => snapshot.ideas.map((idea) => idea.title);
 
 it.layer(NodeServices.layer)("Ideas", (it) => {
+  it.effect(
+    "omits protected queued context from the auxiliary model without acceptance evidence",
+    () =>
+      Effect.gen(function* () {
+        const { calls, layer } = yield* makeHarness(() => Effect.succeed([threadIdea()]));
+        yield* TestClock.setTime(NOW);
+        yield* Effect.gen(function* () {
+          yield* seedWork;
+          const secret = "UNSENT_PROTECTED_IDEA_CONTEXT";
+          yield* seedV2Activity({
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "Budget work",
+            at: iso(NOW - HOUR),
+            messages: [{ id: "protected-idea-message", role: "user", text: secret }],
+          });
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO teams_message_contexts (context_key, message_id, payload_json) VALUES ('protected-idea-context', 'protected-idea-message', '{}')`;
+          const ideas = yield* Ideas.make;
+          yield* ideas.markViewed;
+          yield* ideas.awaitIdle;
+          assert.lengthOf(calls, 1);
+          assert.notInclude(calls[0]!.context, secret);
+          assert.include(calls[0]!.context, "Match the travel lines.");
+        }).pipe(Effect.scoped, Effect.provide(layer));
+      }),
+  );
   it.effect("uses V2-only threads and authoritative imported messages in generation", () =>
     Effect.gen(function* () {
       const { calls, layer } = yield* makeHarness(() =>

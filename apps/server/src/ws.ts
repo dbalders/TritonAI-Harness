@@ -1,3 +1,5 @@
+import * as TeamStorage from "./teams/TeamStorageService.ts";
+import * as TeamProject from "./teams/TeamProjectService.ts";
 import * as DailyMemory from "./memory/DailyMemory.ts";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as HttpClient from "effect/http/HttpClient";
@@ -1289,6 +1291,8 @@ type WsRpcServices =
   | ResourceTelemetry.ResourceTelemetry
   | RelayClient.RelayClient
   | Account.AccountService
+  | TeamStorage.TeamStorageService
+  | TeamProject.TeamProjectService
   | MemorySync.MemorySync
   | Ideas.Ideas
   | Help.Help;
@@ -1532,6 +1536,9 @@ const wsRpcSecondHalfTags = [
   WS_METHODS.subscribeResourceTelemetry,
   WS_METHODS.serverTranscribeVoice,
   WS_METHODS.serverGetTritonAiUsage,
+  WS_METHODS.serverTeamStorage,
+  WS_METHODS.serverTeamProjects,
+  WS_METHODS.serverTeams,
   WS_METHODS.serverGetAccountStatus,
   WS_METHODS.serverStartAccountLogin,
   WS_METHODS.serverPollAccountLogin,
@@ -2282,6 +2289,8 @@ export const layerWsRpc = (
         return result;
       });
 
+      const teamStorage = Context.get(requestServices, TeamStorage.TeamStorageService);
+      const teamProject = Context.get(requestServices, TeamProject.TeamProjectService);
       const account = Context.get(requestServices, Account.AccountService);
       const memorySync = Context.get(requestServices, MemorySync.MemorySync);
       const ideas = Context.get(requestServices, Ideas.Ideas);
@@ -2313,13 +2322,16 @@ export const layerWsRpc = (
                 .enqueueCommand(
                   (command.type === "prepared-run.retry"
                     ? threadLaunch.retryPreparation(command)
-                    : ThreadMessageIntake.dispatchCommand(
-                        ThreadManagementService.withCreationProvenance(command, {
-                          createdBy: "user",
-                          creationSource:
-                            "creationSource" in command ? command.creationSource : "web",
-                        }),
-                      )
+                    : teamProject
+                        .prepareOutgoingCommand(
+                          currentSessionId,
+                          ThreadManagementService.withCreationProvenance(command, {
+                            createdBy: "user",
+                            creationSource:
+                              "creationSource" in command ? command.creationSource : "web",
+                          }),
+                        )
+                        .pipe(Effect.flatMap(ThreadMessageIntake.dispatchCommand))
                   ).pipe(Effect.provide(intakeContext)),
                 )
                 .pipe(
@@ -2430,6 +2442,8 @@ export const layerWsRpc = (
               startup
                 .enqueueCommand(
                   ThreadMessageIntake.launchThread({
+                    prepareInitialCommand: (command) =>
+                      teamProject.prepareOutgoingCommand(currentSessionId, command),
                     commandId: input.commandId,
                     ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
                     ...(input.reuseExistingThread === undefined
@@ -2452,6 +2466,9 @@ export const layerWsRpc = (
                               ? {}
                               : { messageId: input.initialMessage.messageId }),
                             text: input.initialMessage.text,
+                            ...(input.initialMessage.teamReferences === undefined
+                              ? {}
+                              : { teamReferences: input.initialMessage.teamReferences }),
                             attachments: input.initialMessage.attachments,
                             ...(input.initialMessage.context === undefined
                               ? {}
@@ -3632,11 +3649,14 @@ export const layerWsRpc = (
 
         [WS_METHODS.serverTranscribeVoice]: (input) => transcribeVoice(input),
         [WS_METHODS.serverGetTritonAiUsage]: (_input) => fetchTritonAiUsage(),
+        [WS_METHODS.serverTeamStorage]: (input) => teamStorage.execute(currentSessionId, input),
+        [WS_METHODS.serverTeamProjects]: (input) => teamProject.execute(currentSessionId, input),
+        [WS_METHODS.serverTeams]: (input) => teamProject.teams(currentSessionId, input),
         [WS_METHODS.serverGetAccountStatus]: (_input) => account.getStatus(currentSessionId),
         [WS_METHODS.serverStartAccountLogin]: (input) =>
           account.startLogin(currentSessionId, input),
         [WS_METHODS.serverPollAccountLogin]: (input) => account.pollLogin(currentSessionId, input),
-        [WS_METHODS.serverSignOutAccount]: (_input) => account.signOut(currentSessionId),
+        [WS_METHODS.serverSignOutAccount]: (_input) => teamProject.signOutAccount(currentSessionId),
         [WS_METHODS.serverGetMemoryStatus]: (_input) => memorySync.getStatus,
         [WS_METHODS.serverGetProjectMemory]: (input) => dailyMemory.getProjectMemory(input),
         [WS_METHODS.serverStartMemorySync]: (_input) => memorySync.start,
@@ -3958,6 +3978,9 @@ export const layerWsRpc = (
           [WS_METHODS.subscribeResourceTelemetry]: handlers[WS_METHODS.subscribeResourceTelemetry],
           [WS_METHODS.serverTranscribeVoice]: handlers[WS_METHODS.serverTranscribeVoice],
           [WS_METHODS.serverGetTritonAiUsage]: handlers[WS_METHODS.serverGetTritonAiUsage],
+          [WS_METHODS.serverTeamStorage]: handlers[WS_METHODS.serverTeamStorage],
+          [WS_METHODS.serverTeamProjects]: handlers[WS_METHODS.serverTeamProjects],
+          [WS_METHODS.serverTeams]: handlers[WS_METHODS.serverTeams],
           [WS_METHODS.serverGetAccountStatus]: handlers[WS_METHODS.serverGetAccountStatus],
           [WS_METHODS.serverStartAccountLogin]: handlers[WS_METHODS.serverStartAccountLogin],
           [WS_METHODS.serverPollAccountLogin]: handlers[WS_METHODS.serverPollAccountLogin],
@@ -4015,6 +4038,8 @@ export const layer = Layer.unwrap(
     const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
     const sql = yield* SqlClient.SqlClient;
     const account = yield* Account.AccountService;
+    const teamStorage = yield* TeamStorage.TeamStorageService;
+    const teamProject = yield* TeamProject.TeamProjectService;
     const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
     return HttpRouter.add(
       "GET",
@@ -4091,6 +4116,8 @@ export const layer = Layer.unwrap(
               // Request fibers run in the handlers' context, so this reporter sees
               // their defects, not the rest of the server's.
               Layer.provide(DefectReporter.layer),
+              Layer.provide(Layer.succeed(TeamStorage.TeamStorageService, teamStorage)),
+              Layer.provide(Layer.succeed(TeamProject.TeamProjectService, teamProject)),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(

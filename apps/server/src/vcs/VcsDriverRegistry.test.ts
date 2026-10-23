@@ -57,6 +57,8 @@ describe("VcsDriverRegistry", () => {
         Layer.mock(VcsProcess.VcsProcess)({
           run: (input) =>
             Effect.gen(function* () {
+              // Apple's developer-tools check is separate from Git repository detection.
+              if (input.command === "/usr/bin/xcode-select") return processOutput("");
               const fs = yield* FileSystem.FileSystem;
               const path = yield* Path.Path;
               const command = normalizeGitArgs(input.args).join(" ");

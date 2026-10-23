@@ -49,6 +49,8 @@ export interface SettingsSearchItem {
   readonly managedTunnelOnly?: boolean;
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
+  /** Teams entries require the environment's experiment and account service. */
+  readonly teamsOnly?: boolean;
 }
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
@@ -582,6 +584,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "experimental-teams",
+    title: "Teams (experimental)",
+    to: "/settings/general",
+    scope: "environment-defaults",
+    searchTerms: ["teams enable sharing collaboration invite experiment"],
+  },
+  {
     id: "experimental-guided-tour",
     title: "Guided tour (experimental)",
     to: "/settings/general",
@@ -770,6 +779,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Auto-show floating preview",
     to: "/settings/integrations",
     searchTerms: ["agent opens browser device simulator pop into view hide"],
+  },
+  {
+    id: "team-skills",
+    title: "Team Skills",
+    to: "/settings/skills",
+    teamsOnly: true,
+    searchTerms: ["teams shared skill documents linked project turn on review update"],
   },
   {
     id: "automatic-pull",

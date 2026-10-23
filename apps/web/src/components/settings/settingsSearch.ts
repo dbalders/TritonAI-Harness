@@ -37,6 +37,7 @@ export interface SettingsSearchAvailability {
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
   readonly hasStageArtwork?: boolean;
+  readonly hasTeams?: boolean;
   readonly managedTunnelActive?: boolean;
 }
 
@@ -171,6 +172,7 @@ export function filterAvailableSettingsSearchItems(
       (!item.localEnvironmentOnly || !availability.localEnvironmentDisabled) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
+      (!item.teamsOnly || availability.hasTeams === true) &&
       (!item.managedTunnelOnly || availability.managedTunnelActive === true),
   );
 }

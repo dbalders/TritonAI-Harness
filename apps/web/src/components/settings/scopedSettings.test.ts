@@ -150,6 +150,48 @@ describe("scoped settings targets", () => {
 });
 
 describe("scoped settings writes", () => {
+  it("persists the Teams experiment only to the selected environment and preserves explicit opt-out", async () => {
+    const current = new Map(
+      environments
+        .filter((entry) => entry.serverConfig)
+        .map((entry) => [entry.environmentId, entry.serverConfig!.settings]),
+    );
+    const save = vi.fn(
+      async ({
+        environmentId,
+        input,
+      }: Parameters<Parameters<typeof persistScopedSettingsPatch>[1]>[0]) => {
+        const next = applyServerSettingsPatch(current.get(environmentId)!, input.patch);
+        current.set(environmentId, next);
+        return { _tag: "Success" as const, value: next };
+      },
+    );
+    const enable = planScopedSettingsPatch(named, environments, { experimentalTeamsEnabled: true });
+    expect(enable.clientPatch).toEqual({});
+    expect(enable.serverWrites.map((write) => write.environmentId)).toEqual([server.environmentId]);
+    await persistScopedSettingsPatch(enable, save, vi.fn());
+    expect(current.get(server.environmentId)?.experimentalTeamsEnabled).toBe(true);
+    expect(current.get(laptop.environmentId)?.experimentalTeamsEnabled).toBe(false);
+    const updated = environments.map((entry) =>
+      entry.serverConfig
+        ? {
+            ...entry,
+            serverConfig: { ...entry.serverConfig, settings: current.get(entry.environmentId)! },
+          }
+        : entry,
+    );
+    const disable = planScopedSettingsPatch(named, updated, { experimentalTeamsEnabled: false });
+    await persistScopedSettingsPatch(disable, save, vi.fn());
+    expect(current.get(server.environmentId)?.experimentalTeamsEnabled).toBe(false);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(
+      planScopedSettingsPatch(project, environments, { experimentalTeamsEnabled: true }),
+    ).toMatchObject({
+      serverWrites: [],
+      unavailableReason: "This setting is environment-wide and cannot be overridden by a project.",
+    });
+  });
+
   it("edits the effective machine policy without changing other machines' rules", () => {
     const custom = environment("Laptop", {
       settings: {

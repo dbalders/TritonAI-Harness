@@ -287,6 +287,7 @@ describe("V2 environment commands", () => {
 
       yield* startThreadTurn({
         commandId: CommandId.make("implement-plan"),
+        teamReferences: ["edited-note-reference"],
         threadId: v2ThreadId,
         message: {
           messageId: MessageId.make("message-implementation"),
@@ -314,6 +315,7 @@ describe("V2 environment commands", () => {
         threadId: v2ThreadId,
         titleSeed: "Implement the plan",
         sourcePlanRef: { threadId: "thread-plan", planId: "plan-1" },
+        teamReferences: ["edited-note-reference"],
         deliveryIntent: "auto",
         dispatchMode: { type: "start_immediately" },
       });
@@ -327,6 +329,7 @@ describe("V2 environment commands", () => {
 
       yield* startThreadTurn({
         commandId: CommandId.make("launch-existing-worktree"),
+        teamReferences: ["new-thread-note-reference"],
         threadId: v2ThreadId,
         message: {
           messageId: MessageId.make("message-existing-worktree"),
@@ -351,6 +354,7 @@ describe("V2 environment commands", () => {
         },
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
+      expect(launches[0]?.initialMessage?.teamReferences).toEqual(["new-thread-note-reference"]);
       expect(launches[0]).toMatchObject({
         threadId: v2ThreadId,
         title: "Continue here",
@@ -677,6 +681,7 @@ describe("V2 environment commands", () => {
         }).pipe(provide);
         yield* editQueuedRun({
           commandId: CommandId.make("edit"),
+          teamReferences: ["newly-inserted-skill-reference"],
           threadId: v2ThreadId,
           runId: RunId.make("run-3"),
           text: "updated queued text",
@@ -710,7 +715,12 @@ describe("V2 environment commands", () => {
             targetRunId: "run-active",
           },
           { type: "queued-run.cancel", runId: "run-3" },
-          { type: "queued-run.edit", runId: "run-3", text: "updated queued text" },
+          {
+            type: "queued-run.edit",
+            runId: "run-3",
+            text: "updated queued text",
+            teamReferences: ["newly-inserted-skill-reference"],
+          },
           {
             type: "queued-run.edit",
             runId: "run-3",

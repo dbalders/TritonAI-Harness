@@ -51,6 +51,8 @@ import {
 } from "@t3tools/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+import * as TeamMessageGate from "../teams/TeamMessageGate.ts";
+import * as TeamContextHandoff from "../teams/teamContextHandoff.ts";
 import {
   isRestartNoteContinuation,
   pendingRestartCancelledBackgroundWork,
@@ -111,6 +113,7 @@ export const layer: Layer.Layer<
   | ProviderSessionManager.ProviderSessionManagerV2
   | RunExecutionService.RunExecutionServiceV2
   | RuntimePolicy.RuntimePolicyV2
+  | TeamMessageGate.TeamMessageGate
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
@@ -128,6 +131,8 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
+    const teamMessageGate = yield* TeamMessageGate.TeamMessageGate;
+    const filterTeamContext = yield* TeamContextHandoff.makeFilter;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
 
     // These callbacks outlive startup while a run drains background work. Build
@@ -384,6 +389,11 @@ export const layer: Layer.Layer<
           });
         },
       );
+      yield* teamMessageGate.verifyBeforeSend({
+        messageId: message.id,
+        threadId: input.threadId,
+        text: message.text,
+      });
       if (message.attachments.length === 0 && message.text.trimStart().startsWith("/")) {
         const isEmptyCompaction =
           message.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
@@ -1117,7 +1127,7 @@ export const layer: Layer.Layer<
                   }),
                 ];
           const delivery = yield* deliverContextHandoffs({
-            handoffs: [...effectiveHandoffs, ...retryHandoff],
+            handoffs: yield* filterTeamContext([...effectiveHandoffs, ...retryHandoff]),
             deferInline: compact,
             providerThread: runningProviderThread,
             budget: Effect.gen(function* () {
@@ -1168,6 +1178,11 @@ export const layer: Layer.Layer<
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
+          yield* teamMessageGate.verifyBeforeSend({
+            messageId: message.id,
+            threadId: input.threadId,
+            text: message.text,
+          });
           yield* start({
             ...(noteContinuation ? promptedInput : turnInput),
             message: {
@@ -1212,13 +1227,9 @@ export const layer: Layer.Layer<
               }),
         ),
       );
-      const deliverySession =
-        effectiveHandoffs.length === 0 &&
-        missedItems.length === 0 &&
-        restartNote === "" &&
-        !noteContinuation
-          ? session
-          : makeDeliverySession(session, startWithHandoffs);
+      // Even an ordinary queued turn rechecks access at the provider boundary: session
+      // preparation and context handoffs may have waited after the initial queue check.
+      const deliverySession = makeDeliverySession(session, startWithHandoffs);
       return runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,

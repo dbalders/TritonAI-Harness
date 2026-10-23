@@ -1,3 +1,4 @@
+import { ThreadTeamControl } from "../teams/ThreadTeamControl";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
@@ -38,6 +39,15 @@ import { cn } from "~/lib/utils";
 import { useClientSettings } from "../../hooks/useSettings";
 
 interface ChatHeaderProps {
+  /** Present for project threads; each opens a review dialog before anything is shared or added. */
+  teamActions?:
+    | {
+        onShare: () => void;
+        onUseSkill: () => void;
+        /** Present in a project linked to a team: whether this thread's work is shared. */
+        sharing?: { shared: boolean; onToggle: () => void };
+      }
+    | undefined;
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadId: ThreadId;
   activeThreadTitle: string;
@@ -76,6 +86,7 @@ export const ChatHeader = memo(function ChatHeader({
   rightPanelOpen,
   onNewThreadInProject,
   onOpenProjectSettings,
+  teamActions,
 }: ChatHeaderProps) {
   const activeProjectName = activeProject?.isScratch ? "No project" : activeProject?.title;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
@@ -398,6 +409,14 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      {teamActions ? (
+        <ThreadTeamControl
+          presentation="toolbar"
+          onShare={teamActions.onShare}
+          onUseSkill={teamActions.onUseSkill}
+          sharing={teamActions.sharing}
+        />
+      ) : null}
     </div>
   );
 });

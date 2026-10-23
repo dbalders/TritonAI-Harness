@@ -15,7 +15,7 @@ layer("055_OrchestrationV2", (it) => {
     Effect.sync(() => {
       assert.deepStrictEqual(
         migrationEntries.map(([id]) => id),
-        Array.from({ length: 77 }, (_, index) => index + 1),
+        Array.from({ length: 78 }, (_, index) => index + 1),
       );
     }),
   );
@@ -46,6 +46,7 @@ layer("055_OrchestrationV2", (it) => {
         [75, "CodexUsageNativeTurnIndex"],
         [76, "RepairClientSettlementTimestamps"],
         [77, "WebhookDedupe"],
+        [78, "TeamSharing"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 

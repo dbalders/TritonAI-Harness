@@ -1,3 +1,4 @@
+import * as TeamMessageGate from "../teams/TeamMessageGate.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
@@ -224,6 +225,7 @@ function makeHarness(options: HarnessOptions = {}) {
       }),
   );
   const layerLaunch = ThreadLaunch.layer.pipe(
+    Layer.provide(TeamMessageGate.layerMemory()),
     Layer.provide(
       Layer.mergeAll(
         layerExternalServices,
@@ -255,6 +257,7 @@ function makeHarness(options: HarnessOptions = {}) {
       ),
   });
   const layerTitleRegeneration = ThreadTitleRegeneration.layer.pipe(
+    Layer.provide(TeamMessageGate.layerMemory()),
     Layer.provide(
       Layer.mergeAll(layerThreadManagement, layerProjectedProjects, layerExternalServices),
     ),

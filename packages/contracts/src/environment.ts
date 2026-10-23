@@ -121,6 +121,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadPinReorder: Schema.optionalKey(Schema.Boolean),
   threadActiveReorder: Schema.optionalKey(Schema.Boolean),
   threadAutoSettleOptOut: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.team-sharing.set (Don't share this thread with the project's
+      team). Absent on older servers, so clients hide the choice instead of sending it. */
+  threadTeamSharing: Schema.optionalKey(Schema.Boolean),
+  /** Server understands regenerateTitle on thread.meta.update. Absent on
+      older servers, so clients hide the action instead of sending it. */
   threadTitleRegeneration: Schema.optionalKey(Schema.Boolean),
   threadVisitedTracking: Schema.optionalKey(Schema.Boolean),
   projectOverview: Schema.optionalKey(Schema.Boolean),

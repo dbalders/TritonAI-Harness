@@ -23,7 +23,7 @@ import {
 
 export type Operation = Exclude<
   keyof ProviderTextGeneration,
-  "generateDailyMemory" | "generateIdeas"
+  "generateDailyMemory" | "generateIdeas" | "generateTeamDailyMemory"
 >;
 
 export interface Request<S extends Schema.Top> {

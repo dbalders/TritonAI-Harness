@@ -7,6 +7,11 @@
  * sync is turned on, and on request. It holds the summarizer's lock so a note
  * is never uploaded half written or replaced while Memory writes it. What a
  * pass does to each file is decided by `planMemorySync`.
+ *
+ * The same passes keep read-only copies of team memory in `teams/<folder>/`
+ * (see `teamMirror.ts`), planned by `planTeamMirror`. Those copies never go to
+ * OneDrive, and they hold their own lock, so a slow team folder never holds up
+ * the summarizer.
  */
 import {
   ServerMemorySyncError,
@@ -24,9 +29,11 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import type * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ServerConfig from "../../config.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
@@ -47,6 +54,7 @@ import {
   type LocalFile,
   memoryOwnershipConflict,
   planMemorySync,
+  planTeamMirror,
   type SyncAction,
   type SyncDevice,
   type SyncedFile,
@@ -57,6 +65,12 @@ import {
   MicrosoftSignIn,
 } from "./microsoftSignIn.ts";
 import { type DriveItem, makeOneDrive, MAX_UPLOAD_BYTES } from "./oneDrive.ts";
+import {
+  TEAM_MIRROR_FOLDER,
+  TeamMirrorHost,
+  type TeamMirrorSource,
+  type TeamMirrorTeam,
+} from "./teamMirror.ts";
 
 const SYNC_INTERVAL = Duration.minutes(5);
 
@@ -109,6 +123,51 @@ const decodeSyncState = Schema.decodeUnknownEffect(SyncStateJson);
 const encodeSyncState = Schema.encodeEffect(SyncStateJson);
 const WrittenFiles = Schema.Struct({ files: Schema.Record(Schema.String, Schema.String) });
 const decodeWrittenFiles = Schema.decodeUnknownEffect(Schema.fromJsonString(WrittenFiles));
+/** What the last pass copied for each team folder, by vault-relative path. */
+const TeamMirrorState = Schema.fromJsonString(
+  Schema.Struct({
+    version: Schema.Literal(1),
+    teams: Schema.Record(
+      Schema.String,
+      Schema.Struct({
+        teamId: Schema.String,
+        synced: Schema.Record(
+          Schema.String,
+          Schema.Struct({ sha256: Schema.String, eTag: Schema.String }),
+        ),
+        skippedReads: Schema.Record(Schema.String, Schema.String).pipe(
+          Schema.withDecodingDefault(Effect.succeed({})),
+        ),
+        pendingDownloads: Schema.Record(
+          Schema.String,
+          Schema.Struct({
+            sha256: Schema.String,
+            eTag: Schema.String,
+            previousSha256: Schema.NullOr(Schema.String),
+          }),
+        ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+      }),
+    ),
+  }),
+);
+type TeamMirrorEntry = {
+  teamId: string;
+  synced: Record<string, { sha256: string; eTag: string }>;
+  skippedReads: Record<string, string>;
+  pendingDownloads: Record<string, { sha256: string; eTag: string; previousSha256: string | null }>;
+};
+const decodeTeamMirrorState = Schema.decodeUnknownEffect(TeamMirrorState);
+const encodeTeamMirrorState = Schema.encodeEffect(TeamMirrorState);
+/**
+ * Team documents downloaded per team in one pass. A small team is copied in one
+ * pass; a large one catches up over the next few.
+ */
+const TEAM_DOWNLOADS_PER_PASS = 50;
+/** A team document path is plain names joined by `/`, none of them hidden or relative. */
+const isPlainRelativePath = (relativePath: string) =>
+  relativePath
+    .split("/")
+    .every((segment) => segment.length > 0 && !segment.startsWith(".") && !segment.includes("\\"));
 
 /**
  * The OneDrive folder for this install. Stable and Nightly keep separate
@@ -143,6 +202,8 @@ export class MemorySync extends Context.Service<
     /** Turns sync off and cancels any sign-in still in progress. */
     readonly stop: Effect.Effect<void, ServerMemorySyncError>;
     readonly signOut: Effect.Effect<void, ServerMemorySyncError>;
+    /** Team copies in the vault; see `teamMirror.ts`. */
+    readonly teams: TeamMirrorHost["Service"];
   }
 >()("t3/memory/sync/MemorySync") {}
 
@@ -202,7 +263,7 @@ export const make = Effect.gen(function* () {
       yield* fs.writeFile(temporary, bytes);
       yield* fs.rename(temporary, filePath);
     },
-    (effect, filePath, bytes) =>
+    (effect, filePath) =>
       effect.pipe(
         Effect.mapError(() => new MemorySyncFailure({ message: `Could not write ${filePath}.` })),
       ),
@@ -245,7 +306,9 @@ export const make = Effect.gen(function* () {
     const files = new Map<string, { readonly bytes: Uint8Array; readonly sha256: string }>();
     for (const entry of entries) {
       const relativePath = entry.split(path.sep).join("/");
-      if (classifyVaultPath(relativePath, device) === "ignored") continue;
+      const pathClass = classifyVaultPath(relativePath, device);
+      // Team copies come from their team's folder and never go to OneDrive.
+      if (pathClass === "ignored" || pathClass === "team") continue;
       const bytes = yield* readLocal(relativePath);
       if (bytes !== null) files.set(relativePath, { bytes, sha256: sha256Bytes(bytes) });
     }
@@ -750,17 +813,379 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  return MemorySync.of({ getStatus, syncNow, start, poll, stop, signOut });
+  const teamSource = yield* Ref.make<TeamMirrorSource | null>(null);
+  const teamLock = yield* Semaphore.make(1);
+  const teamsDirectory = path.join(vault.root, "teams");
+  const teamStateFile = path.join(vault.root, ".sync", "teams.json");
+  const teamsEnabled = settingsService.getSettings.pipe(
+    Effect.map((settings) => settings.experimentalTeamsEnabled),
+    Effect.orElseSucceed(() => false),
+  );
+
+  // Without a readable ownership record, existing local files remain unmanaged.
+  const readTeamState = fs.readFileString(teamStateFile).pipe(
+    Effect.flatMap((raw) => decodeTeamMirrorState(raw)),
+    Effect.map((state): Record<string, TeamMirrorEntry> =>
+      Object.fromEntries(
+        Object.entries(state.teams)
+          .filter(([folder]) => TEAM_MIRROR_FOLDER.test(folder))
+          .map(([folder, entry]) => [
+            folder,
+            {
+              teamId: entry.teamId,
+              synced: { ...entry.synced },
+              skippedReads: { ...entry.skippedReads },
+              pendingDownloads: { ...entry.pendingDownloads },
+            },
+          ]),
+      ),
+    ),
+    Effect.orElseSucceed((): Record<string, TeamMirrorEntry> => ({})),
+  );
+  // Encodes when run, not when built: passes write the record they finished with.
+  const writeTeamState = (teams: Record<string, TeamMirrorEntry>) =>
+    Effect.suspend(() => encodeTeamMirrorState({ version: 1, teams })).pipe(
+      Effect.flatMap((json) => writeBytesAtomically(teamStateFile, new TextEncoder().encode(json))),
+      Effect.mapError(
+        () => new MemorySyncFailure({ message: "Could not save the team copy records." }),
+      ),
+    );
+
+  const removeTeamCopy = (folder: string, teams: Record<string, TeamMirrorEntry>) =>
+    Object.hasOwn(teams, folder)
+      ? fs.remove(path.join(teamsDirectory, folder), { recursive: true }).pipe(
+          Effect.catchIf(isNotFound, () => Effect.void),
+          Effect.mapError(
+            () =>
+              new MemorySyncFailure({
+                message: `Could not remove the local copy in teams/${folder}.`,
+              }),
+          ),
+        )
+      : Effect.void;
+
+  /** Pausing removes only journaled copies; preferences and ownership survive until resumed. */
+  const pauseTeamCopies = (teams: Record<string, TeamMirrorEntry>) =>
+    Effect.forEach(Object.keys(teams), (folder) => removeTeamCopy(folder, teams), {
+      discard: true,
+    });
+  const pauseIfDisabled = Effect.fn("memorySync.pauseIfDisabled")(function* (
+    teams: Record<string, TeamMirrorEntry>,
+  ) {
+    if (yield* teamsEnabled) return false;
+    yield* pauseTeamCopies(teams);
+    return true;
+  });
+
+  /** Recheck after the asynchronous temporary write, immediately before installing the copy. */
+  const installTeamBytes = Effect.fn("memorySync.installTeamBytes")(
+    function* (filePath: string, bytes: Uint8Array) {
+      yield* fs.makeDirectory(path.dirname(filePath), { recursive: true });
+      const temporary = `${filePath}.sync.tmp`;
+      yield* fs.writeFile(temporary, bytes);
+      if (!(yield* teamsEnabled)) {
+        yield* fs.remove(temporary).pipe(Effect.catchIf(isNotFound, () => Effect.void));
+        return false;
+      }
+      yield* fs.rename(temporary, filePath);
+      return yield* teamsEnabled;
+    },
+    (effect, filePath) =>
+      effect.pipe(
+        Effect.mapError(() => new MemorySyncFailure({ message: `Could not write ${filePath}.` })),
+      ),
+  );
+
+  /**
+   * Removes inactive copies only from the ownership record. Other content in
+   * the vault's teams/ folder was never reserved for Harness.
+   */
+  const pruneTeamCopies = Effect.fn("memorySync.pruneTeamCopies")(function* (
+    teams: Record<string, TeamMirrorEntry>,
+    active: ReadonlyArray<TeamMirrorTeam>,
+  ) {
+    const keep = new Map(active.map((team) => [team.folder, team.teamId]));
+    for (const [folder, entry] of Object.entries(teams)) {
+      // A folder handed to another team starts over.
+      if (keep.get(folder) !== entry.teamId) {
+        yield* removeTeamCopy(folder, teams);
+        delete teams[folder];
+      }
+    }
+  });
+
+  const activeTeams = (source: TeamMirrorSource) =>
+    source.teams.pipe(
+      Effect.map((teams) => {
+        const seen = new Set<string>();
+        return teams.filter((team) => {
+          if (!TEAM_MIRROR_FOLDER.test(team.folder) || seen.has(team.folder)) return false;
+          seen.add(team.folder);
+          return true;
+        });
+      }),
+    );
+
+  /** Brings one team's copy in line with its folder; returns false when the copy was removed. */
+  const syncTeamCopy = Effect.fn("memorySync.syncTeamCopy")(function* (
+    source: TeamMirrorSource,
+    team: TeamMirrorTeam,
+    teams: Record<string, TeamMirrorEntry>,
+  ) {
+    if (yield* pauseIfDisabled(teams)) return;
+    // A missing or unreadable journal cannot make existing user content ours.
+    if (
+      !Object.hasOwn(teams, team.folder) &&
+      (yield* fs.exists(path.join(teamsDirectory, team.folder)))
+    ) {
+      return yield* source.report(team.teamId, {
+        kind: "failed",
+        message: `A folder already exists at teams/${team.folder}, and Harness can't confirm it is a team copy. Move it somewhere safe, then choose Check again.`,
+      });
+    }
+    const detach = Effect.gen(function* () {
+      yield* removeTeamCopy(team.folder, teams);
+      delete teams[team.folder];
+    });
+    const listing = yield* source.list(team.teamId);
+    if (yield* pauseIfDisabled(teams)) return;
+    if (listing.kind === "detached") return yield* detach;
+    if (listing.kind === "unavailable") return;
+    const prefix = `teams/${team.folder}/`;
+    const unlisted = (listing.unlisted ?? []).map((folder) => `${prefix}${folder}/`);
+    const listed = (relativePath: string) =>
+      !unlisted.some((folder) => relativePath.startsWith(folder));
+    const cloud = new Map(
+      listing.files
+        .filter((file) => isPlainRelativePath(file.path))
+        .map((file) => [`${prefix}${file.path}`, { eTag: file.eTag }] as const),
+    );
+    const entries = yield* fs
+      .readDirectory(path.join(teamsDirectory, team.folder), { recursive: true })
+      .pipe(
+        Effect.catchIf(isNotFound, () => Effect.succeed<ReadonlyArray<string>>([])),
+        Effect.mapError(
+          () => new MemorySyncFailure({ message: "Could not read the team's local copy." }),
+        ),
+      );
+    const local = new Map<string, { readonly sha256: string }>();
+    for (const entry of entries) {
+      const relativePath = `${prefix}${entry.split(path.sep).join("/")}`;
+      if (!listed(relativePath)) continue;
+      const bytes = yield* readLocal(relativePath);
+      if (bytes !== null) local.set(relativePath, { sha256: sha256Bytes(bytes) });
+    }
+    const entry = Object.hasOwn(teams, team.folder)
+      ? teams[team.folder]!
+      : {
+          teamId: team.teamId,
+          synced: {},
+          skippedReads: {},
+          pendingDownloads: {},
+        };
+    teams[team.folder] = entry;
+    for (const [relativePath, pending] of Object.entries(entry.pendingDownloads)) {
+      if (!listed(relativePath)) continue;
+      // Recover an installed copy whose final state save never happened. Bytes that already
+      // existed unmanaged before the attempt cannot prove that installation completed.
+      if (
+        local.get(relativePath)?.sha256 === pending.sha256 &&
+        (entry.synced[relativePath] !== undefined || pending.previousSha256 !== pending.sha256)
+      )
+        entry.synced[relativePath] = { sha256: pending.sha256, eTag: pending.eTag };
+      delete entry.pendingDownloads[relativePath];
+    }
+    for (const relativePath of Object.keys(entry.skippedReads))
+      if (listed(relativePath) && !cloud.has(relativePath)) delete entry.skippedReads[relativePath];
+    yield* writeTeamState(teams);
+    const unchangedSinceScan = (relativePath: string) =>
+      readLocal(relativePath).pipe(
+        Effect.map(
+          (bytes) =>
+            (bytes === null ? null : sha256Bytes(bytes)) ===
+            (local.get(relativePath)?.sha256 ?? null),
+        ),
+      );
+    let downloads = 0;
+    let skipped = 0;
+    let pending = 0;
+    const actions = planTeamMirror({
+      local,
+      cloud,
+      synced: new Map(
+        Object.entries(entry.synced).filter(([relativePath]) => listed(relativePath)),
+      ),
+    });
+    // Keep the attempt budget bounded while giving new or changed documents a turn before
+    // retrying the same unreadable versions. Remember misses across server restarts too.
+    const unchangedReadSkip = (action: (typeof actions)[number]) =>
+      action.kind === "download" &&
+      entry.skippedReads[action.path] !== undefined &&
+      entry.skippedReads[action.path] === cloud.get(action.path)?.eTag;
+    for (const action of actions.toSorted(
+      (left, right) => Number(unchangedReadSkip(left)) - Number(unchangedReadSkip(right)),
+    )) {
+      if (yield* pauseIfDisabled(teams)) return;
+      switch (action.kind) {
+        case "download": {
+          if (downloads >= TEAM_DOWNLOADS_PER_PASS) {
+            pending++;
+            break;
+          }
+          downloads++;
+          const document = yield* source.read(team.teamId, action.path.slice(prefix.length));
+          if (yield* pauseIfDisabled(teams)) return;
+          if (document.kind === "detached") return yield* detach;
+          // Access couldn't be checked: keep what was copied and stop for this pass.
+          if (document.kind === "unavailable") return;
+          if (document.kind === "skip") {
+            entry.skippedReads[action.path] = cloud.get(action.path)!.eTag;
+            skipped++;
+            break;
+          }
+          delete entry.skippedReads[action.path];
+          if (!(yield* unchangedSinceScan(action.path))) {
+            skipped++;
+            break;
+          }
+          const bytes = new TextEncoder().encode(document.text);
+          const downloaded = { sha256: sha256Bytes(bytes), eTag: document.eTag };
+          entry.pendingDownloads[action.path] = {
+            ...downloaded,
+            previousSha256: local.get(action.path)?.sha256 ?? null,
+          };
+          // A completed atomic install must remain owned even if the process stops before
+          // recording success, so a later remote withdrawal can still remove its local copy.
+          yield* writeTeamState(teams);
+          if (!(yield* unchangedSinceScan(action.path))) {
+            delete entry.pendingDownloads[action.path];
+            skipped++;
+            break;
+          }
+          if (!(yield* installTeamBytes(toLocalPath(action.path), bytes))) {
+            yield* pauseTeamCopies(teams);
+            return;
+          }
+          entry.synced[action.path] = downloaded;
+          delete entry.pendingDownloads[action.path];
+          break;
+        }
+        case "deleteLocal":
+          if (!(yield* unchangedSinceScan(action.path))) {
+            skipped++;
+            break;
+          }
+          yield* fs.remove(toLocalPath(action.path)).pipe(
+            Effect.catchIf(isNotFound, () => Effect.void),
+            Effect.mapError(
+              () => new MemorySyncFailure({ message: `Could not remove ${action.path}.` }),
+            ),
+          );
+          delete entry.synced[action.path];
+          break;
+        case "forget":
+          delete entry.synced[action.path];
+          break;
+      }
+    }
+    yield* writeTeamState(teams);
+    yield* source.report(team.teamId, {
+      kind: "synced",
+      at: yield* nowIso,
+      files: cloud.size,
+      skipped,
+      pending,
+    });
+  });
+
+  const withTeamSource = (
+    run: (
+      source: TeamMirrorSource,
+      teams: Record<string, TeamMirrorEntry>,
+      active: ReadonlyArray<TeamMirrorTeam>,
+    ) => Effect.Effect<void, MemorySyncFailure | PlatformError.PlatformError>,
+  ) =>
+    teamLock.withPermits(1)(
+      Effect.gen(function* () {
+        const teams = yield* readTeamState;
+        // OFF needs no remote membership/listing call, even before Teams attaches.
+        if (yield* pauseIfDisabled(teams)) return;
+        const source = yield* Ref.get(teamSource);
+        if (!source) return;
+        const active = yield* activeTeams(source);
+        if (yield* pauseIfDisabled(teams)) return;
+        yield* pruneTeamCopies(teams, active).pipe(
+          Effect.ensuring(writeTeamState(teams).pipe(Effect.ignore)),
+        );
+        yield* run(source, teams, active);
+      }).pipe(
+        Effect.catch((error) => Effect.logWarning("team memory copy failed", { error })),
+        Effect.catchDefect((defect) => Effect.logWarning("team memory copy failed", { defect })),
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      ),
+    );
+
+  const teamHost = TeamMirrorHost.of({
+    attach: (source) => Ref.set(teamSource, source),
+    // OFF can prune while a previous download is still waiting on its response. That pass
+    // cannot install after the pause because every installation rereads the same setting.
+    prune: teamsEnabled.pipe(
+      Effect.flatMap((enabled) =>
+        enabled
+          ? withTeamSource(() => Effect.void)
+          : readTeamState.pipe(
+              Effect.flatMap(pauseTeamCopies),
+              Effect.catch((error) => Effect.logWarning("team memory copy failed", { error })),
+            ),
+      ),
+    ),
+    sync: withTeamSource((source, teams, active) =>
+      Effect.forEach(
+        active,
+        (team) =>
+          syncTeamCopy(source, team, teams).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("team memory copy failed", { error }).pipe(
+                Effect.andThen(
+                  source.report(team.teamId, {
+                    kind: "failed",
+                    message:
+                      error._tag === "MemorySyncFailure"
+                        ? error.message
+                        : "The local copy could not be updated.",
+                  }),
+                ),
+              ),
+            ),
+          ),
+        { discard: true },
+      ).pipe(Effect.ensuring(writeTeamState(teams).pipe(Effect.ignore))),
+    ),
+  });
+
+  return MemorySync.of({ getStatus, syncNow, start, poll, stop, signOut, teams: teamHost });
 });
 
-/** Syncs after startup, every five minutes, and whenever sync or Memory is switched. */
+/**
+ * Syncs after startup, every five minutes, and whenever sync or Memory is
+ * switched. Team copies refresh after startup and every five minutes.
+ */
 export const layer = Layer.effect(
   MemorySync,
   Effect.gen(function* () {
     const service = yield* make;
     const settings = yield* ServerSettingsService;
+    // Remove paused copies before any provider can discover them at startup, without waiting
+    // for the first scheduled pass or for the Teams source to attach.
+    yield* service.teams.prune;
     yield* Effect.sleep(STARTUP_DELAY).pipe(
-      Effect.andThen(service.syncNow.pipe(Effect.repeat(Schedule.spaced(SYNC_INTERVAL)))),
+      Effect.andThen(
+        service.syncNow.pipe(
+          Effect.andThen(service.teams.sync),
+          Effect.repeat(Schedule.spaced(SYNC_INTERVAL)),
+        ),
+      ),
       Effect.forkScoped,
     );
     yield* settings.streamChanges.pipe(
@@ -769,6 +1194,23 @@ export const layer = Layer.effect(
       Stream.runForEach(() => service.syncNow),
       Effect.forkScoped,
     );
+    yield* settings.streamChanges.pipe(
+      Stream.map((next) => next.experimentalTeamsEnabled),
+      Stream.changes,
+      Stream.switchMap((enabled) =>
+        Stream.fromEffect(enabled ? service.teams.sync : service.teams.prune),
+      ),
+      Stream.runDrain,
+      Effect.forkScoped,
+    );
     return service;
+  }),
+);
+
+/** The engine's side of team copies, for the Teams services. */
+export const teamMirrorHostLayer = Layer.effect(
+  TeamMirrorHost,
+  Effect.gen(function* () {
+    return (yield* MemorySync).teams;
   }),
 );

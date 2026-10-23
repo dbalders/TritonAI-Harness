@@ -99,6 +99,30 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
   });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  it.effect("defaults Teams off and persists both opt-in and opt-out across reconstruction", () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      assert.isFalse((yield* service.getSettings).experimentalTeamsEnabled);
+      yield* service.updateSettings({ experimentalTeamsEnabled: true });
+      assert.isTrue(
+        (yield* decodeServerSettingsJson(yield* fs.readFileString(config.settingsPath)))
+          .experimentalTeamsEnabled,
+      );
+      yield* Effect.gen(function* () {
+        const restarted = yield* ServerSettingsModule.ServerSettingsService;
+        assert.isTrue((yield* restarted.getSettings).experimentalTeamsEnabled);
+        yield* restarted.updateSettings({ experimentalTeamsEnabled: false });
+      }).pipe(Effect.provide(Layer.fresh(ServerSettingsModule.layerUnmanagedTest)));
+      const readAfterRestart = yield* Effect.gen(function* () {
+        const restarted = yield* ServerSettingsModule.ServerSettingsService;
+        return yield* restarted.getSettings;
+      }).pipe(Effect.provide(Layer.fresh(ServerSettingsModule.layerUnmanagedTest)));
+      assert.isFalse(readAfterRestart.experimentalTeamsEnabled);
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
   it.effect("serializes concurrent model preference edits without cancelling duplicate adds", () =>
     Effect.gen(function* () {
       const service = yield* ServerSettingsModule.ServerSettingsService;
@@ -242,27 +266,51 @@ it.layer(NodeServices.layer)("server settings", (it) => {
   it.effect("reloads when the destination of a symlinked settings file changes", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const config = yield* ServerConfig.ServerConfig;
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const service = yield* ServerSettingsModule.ServerSettingsService;
         const dotfiles = yield* fs.makeTempDirectoryScoped({ prefix: "t3-settings-dotfiles-" });
         const linkedSettingsPath = path.join(dotfiles, "settings.json");
-        yield* fs.writeFileString(linkedSettingsPath, `{ "responseStreamingMode": "turn" }`);
-        yield* fs.remove(config.settingsPath, { force: true });
-        yield* fs.symlink(linkedSettingsPath, config.settingsPath);
-        yield* service.start;
-        const changes = yield* service.subscribeChanges;
-
-        yield* writeFileStringAtomically({
-          filePath: linkedSettingsPath,
-          contents: `{ "responseStreamingMode": "paragraph" }`,
+        const targetEvents = yield* Queue.unbounded<FileSystem.WatchEvent>();
+        const targetWatchStarted = yield* Deferred.make<void>();
+        const observedFs = FileSystem.FileSystem.of({
+          ...fs,
+          // Native events are covered by the repointed-link test. Control this event so
+          // the first atomic write cannot race the target watch's async setup.
+          watch: (directory, options) =>
+            directory === path.dirname(linkedSettingsPath)
+              ? Stream.fromQueue(targetEvents).pipe(
+                  Stream.onStart(Deferred.succeed(targetWatchStarted, undefined)),
+                )
+              : fs.watch(directory, options),
         });
 
-        const change = yield* changes.pipe(Stream.runHead, Effect.timeout("2 seconds"));
-        assert.equal(Option.getOrUndefined(change)?.responseStreamingMode, "paragraph");
+        yield* Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          const service = yield* ServerSettingsModule.ServerSettingsService;
+          yield* fs.writeFileString(linkedSettingsPath, `{ "responseStreamingMode": "turn" }`);
+          yield* fs.remove(config.settingsPath, { force: true });
+          yield* fs.symlink(linkedSettingsPath, config.settingsPath);
+          yield* service.start;
+          yield* Deferred.await(targetWatchStarted);
+          const changes = yield* service.subscribeChanges;
+
+          yield* writeFileStringAtomically({
+            filePath: linkedSettingsPath,
+            contents: `{ "responseStreamingMode": "paragraph" }`,
+          });
+          yield* Queue.offer(targetEvents, { _tag: "Create", path: "settings.json" });
+
+          const change = yield* changes.pipe(Stream.runHead, Effect.timeout("2 seconds"));
+          assert.equal(Option.getOrUndefined(change)?.responseStreamingMode, "paragraph");
+        }).pipe(
+          Effect.provide(
+            layerServerSettings().pipe(
+              Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, observedFs)),
+            ),
+          ),
+        );
       }),
-    ).pipe(TestClock.withLive, Effect.provide(layerServerSettings())),
+    ).pipe(TestClock.withLive),
   );
 
   it.effect("follows a settings link that is repointed to another directory", () =>

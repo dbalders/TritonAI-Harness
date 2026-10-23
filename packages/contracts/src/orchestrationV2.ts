@@ -1,3 +1,4 @@
+import { MAX_TEAM_MESSAGE_REFERENCES } from "./teams.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -444,6 +445,10 @@ export const OrchestrationV2AppThread = Schema.Struct({
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  teamSharingOffAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  teamSharingResumedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  // Fractional-index slot in the user-arranged pinned order. Optional so
+  // payloads from pre-reorder servers still decode.
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
@@ -1121,6 +1126,9 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   nodeId: Schema.NullOr(NodeId),
   role: Schema.Literals(["user", "assistant", "system"]),
   text: Schema.String,
+  teamReferences: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(MAX_TEAM_MESSAGE_REFERENCES)),
+  ),
   context: Schema.optional(OrchestrationMessageContext),
   attachments: Schema.Array(ChatAttachment),
   streaming: Schema.Boolean,
@@ -1369,6 +1377,9 @@ export const OrchestrationV2TurnItem = Schema.Union([
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
+    teamReferences: Schema.optional(
+      Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(MAX_TEAM_MESSAGE_REFERENCES)),
+    ),
     context: Schema.optional(OrchestrationMessageContext),
     attachments: Schema.Array(ChatAttachment),
   }),
@@ -1882,6 +1893,9 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  teamSharingOffAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  teamSharingResumedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** Slot in the user-arranged pinned order; omitted by pre-reorder servers. */
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -1966,6 +1980,8 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
   lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  teamSharingOffAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  teamSharingResumedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -2128,6 +2144,9 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
+    teamReferences: Schema.optional(
+      Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(MAX_TEAM_MESSAGE_REFERENCES)),
+    ),
     context: Schema.optional(OrchestrationMessageContext),
     attachments: Schema.Array(ChatAttachment),
   }),
@@ -2390,6 +2409,8 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  teamSharingOffAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  teamSharingResumedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   titleRegeneration: Schema.optional(
     Schema.NullOr(
@@ -2700,6 +2721,8 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("thread.metadata.update"),
+    /** Whether this thread contributes to its linked team’s daily summaries. */
+    teamSharing: Schema.optional(Schema.Boolean),
     commandId: CommandId,
     threadId: ThreadId,
     title: Schema.optional(TrimmedNonEmptyString),
@@ -2801,6 +2824,10 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("message.dispatch"),
+    /** Server-issued Team memory or skill references, resolved under the authenticated caller. */
+    teamReferences: Schema.optional(
+      Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(MAX_TEAM_MESSAGE_REFERENCES)),
+    ),
     notification: Schema.optional(OrchestrationV2Notification),
     ...OrchestrationV2CreationFields,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
@@ -2911,6 +2938,10 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("queued-run.edit"),
+    /** Server-issued Team memory or skill references, resolved under the authenticated caller. */
+    teamReferences: Schema.optional(
+      Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(MAX_TEAM_MESSAGE_REFERENCES)),
+    ),
     context: Schema.optional(OrchestrationMessageContext),
     commandId: CommandId,
     threadId: ThreadId,
@@ -3184,6 +3215,9 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   initialMessage: Schema.optional(
     Schema.Struct({
       messageId: Schema.optional(MessageId),
+      teamReferences: Schema.optional(
+        Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(MAX_TEAM_MESSAGE_REFERENCES)),
+      ),
       text: Schema.String,
       context: Schema.optional(OrchestrationMessageContext),
       attachments: Schema.Array(ChatAttachment),

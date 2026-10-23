@@ -41,6 +41,7 @@ import { withCodexHelpAuthOwner } from "./CodexHelpAuthOwner.ts";
 import { readCodexHelpTransport } from "./CodexHelpTransport.ts";
 import {
   buildDailyMemoryPrompt,
+  buildTeamDailyMemoryPrompt,
   buildIdeasPrompt,
 } from "@t3tools/provider-core/server/textGenerationPrompts";
 import {
@@ -151,7 +152,11 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       );
 
   const encodeJsonForOperation = (
-    operation: TextGenerationOperations.Operation | "generateDailyMemory" | "generateIdeas",
+    operation:
+      | TextGenerationOperations.Operation
+      | "generateDailyMemory"
+      | "generateIdeas"
+      | "generateTeamDailyMemory",
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -677,7 +682,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     readonly operation:
       | TextGenerationOperations.Operation
       | "generateDailyMemory"
-      | "generateIdeas";
+      | "generateIdeas"
+      | "generateTeamDailyMemory";
   }): Effect.fn.Return<S["Type"], TextGenerationError, S["DecodingServices"]> {
     const imagePaths = yield* materializeImageAttachments(attachments, modelSelection);
     const schemaJson = yield* encodeJsonForOperation(
@@ -822,7 +828,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         // The read-only sandbox already holds an investigation to reading; it only needs longer.
         Effect.timeoutOption(
           investigate?.timeoutMs ??
-            (operation === "generateDailyMemory"
+            (operation === "generateDailyMemory" || operation === "generateTeamDailyMemory"
               ? DAILY_MEMORY_TIMEOUT_MS
               : operation === "generateIdeas"
                 ? IDEAS_TIMEOUT_MS
@@ -895,6 +901,32 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     } satisfies TextGeneration.DailyMemoryGenerationResult;
   });
 
+  const generateTeamDailyMemory = Effect.fn("CodexTextGeneration.generateTeamDailyMemory")(
+    function* (input: TextGeneration.TeamDailyMemoryGenerationInput) {
+      const { prompt, outputSchema } = buildTeamDailyMemoryPrompt({
+        day: input.day,
+        teamName: input.teamName,
+        threads: input.threads,
+      });
+      const generated = yield* runCodexJson({
+        operation: "generateTeamDailyMemory",
+        cwd: input.cwd,
+        prompt,
+        outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return {
+        threads: generated.threads.map((thread) => ({
+          key: thread.key.trim(),
+          summary: thread.summary.trim(),
+          items: thread.items
+            .map((item) => ({ kind: item.kind, text: item.text.trim() }))
+            .filter((item) => item.text.length > 0),
+        })),
+      } satisfies TextGeneration.TeamDailyMemoryGenerationResult;
+    },
+  );
+
   const generateIdeas = Effect.fn("CodexTextGeneration.generateIdeas")(function* (
     input: TextGeneration.IdeasGenerationInput,
   ) {
@@ -938,6 +970,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       { help: { promptOnly: true } },
     ),
     generateDailyMemory,
+    generateTeamDailyMemory,
     generateIdeas,
   };
 });

@@ -1,3 +1,4 @@
+import { TeamMessageGate } from "../teams/TeamMessageGate.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -66,6 +67,7 @@ export type ThreadLaunchWorkspaceStrategy =
     };
 
 export interface ThreadLaunchInitialMessage {
+  readonly teamReferences?: readonly string[];
   readonly messageId?: MessageId;
   readonly scheduledTaskId?: ScheduledTaskId;
   readonly senderThreadId?: ThreadId;
@@ -75,6 +77,13 @@ export interface ThreadLaunchInitialMessage {
 }
 
 export interface ThreadLaunchInput {
+  /** Transport-owned preparation uses the authenticated caller once the thread exists. */
+  readonly prepareInitialCommand?: (
+    command: import("@t3tools/contracts").OrchestrationV2Command,
+  ) => Effect.Effect<
+    import("@t3tools/contracts").OrchestrationV2Command,
+    import("@t3tools/contracts").TeamsError
+  >;
   readonly commandId: CommandId;
   readonly threadId?: ThreadId;
   readonly reuseExistingThread?: boolean;
@@ -204,6 +213,7 @@ const make = Effect.gen(function* () {
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const teams = yield* TeamMessageGate;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
@@ -332,6 +342,17 @@ const make = Effect.gen(function* () {
       const initialMessage = input.initialMessage;
       const generateBranchNameFor = Effect.fn("ThreadLaunchService.generateBranchNameFor")(
         function* (cwd: string, message: ThreadLaunchInitialMessage) {
+          if (runId !== null) {
+            const persisted = yield* threads.getThreadRecords(threadId, ["messages"], {
+              messageRunIds: [runId],
+            });
+            for (const original of persisted.messages)
+              yield* teams.verifyBeforeSend({
+                messageId: original.id,
+                threadId,
+                text: original.text,
+              });
+          }
           const settings = resolveProjectSettings(
             yield* serverSettings.getSettings,
             input.projectId,
@@ -952,27 +973,40 @@ const make = Effect.gen(function* () {
             (yield* ids.allocate
               .message({ threadId, ordinal: 1 })
               .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId))));
+          const initialCommand: Extract<
+            import("@t3tools/contracts").OrchestrationV2Command,
+            { type: "message.dispatch" }
+          > = {
+            type: "message.dispatch",
+            commandId: messageCommandId,
+            threadId,
+            messageId,
+            text: input.initialMessage.text,
+            ...(input.initialMessage.teamReferences === undefined
+              ? {}
+              : { teamReferences: input.initialMessage.teamReferences }),
+            ...(input.initialMessage.scheduledTaskId === undefined
+              ? {}
+              : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
+            ...(input.initialMessage.senderThreadId === undefined
+              ? {}
+              : { senderThreadId: input.initialMessage.senderThreadId }),
+            attachments: input.initialMessage.attachments,
+            ...(input.initialMessage.context ? { context: input.initialMessage.context } : {}),
+            ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
+            modelSelection: input.modelSelection,
+            dispatchMode: { type: "defer_start", workspaceStrategy },
+            createdBy: input.createdBy,
+            creationSource: input.creationSource,
+          };
+          const preparedCommand =
+            input.prepareInitialCommand === undefined
+              ? initialCommand
+              : yield* input
+                  .prepareInitialCommand(initialCommand)
+                  .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId)));
           const dispatched = yield* threads
-            .dispatch({
-              type: "message.dispatch",
-              commandId: messageCommandId,
-              threadId,
-              messageId,
-              text: input.initialMessage.text,
-              ...(input.initialMessage.scheduledTaskId === undefined
-                ? {}
-                : { scheduledTaskId: input.initialMessage.scheduledTaskId }),
-              ...(input.initialMessage.senderThreadId === undefined
-                ? {}
-                : { senderThreadId: input.initialMessage.senderThreadId }),
-              attachments: input.initialMessage.attachments,
-              ...(input.initialMessage.context ? { context: input.initialMessage.context } : {}),
-              ...(input.generateTitle === true ? { titleSeed: input.title } : {}),
-              modelSelection: input.modelSelection,
-              dispatchMode: { type: "defer_start", workspaceStrategy },
-              createdBy: input.createdBy,
-              creationSource: input.creationSource,
-            })
+            .dispatch(preparedCommand)
             .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId)));
           const runCreated = dispatched.storedEvents.find(
             (stored) => stored.event.type === "run.created",
