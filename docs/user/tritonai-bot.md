@@ -29,13 +29,16 @@ in each app or browser. A notice in the main window shows when tasks are allowed
 while Bot is off or unavailable in this app, even with the sidebar hidden or
 Experimental settings collapsed. This includes permission saved by an earlier
 Nightly. Choose **Turn on Experimental Bot** to show Bot in this app without
-changing the pairing. **Stop Bot tasks here** stops new assignments for every
-client of this Harness; running work and saved result delivery can finish.
+changing the pairing. **Stop Bot tasks here** signs you out of Bot in this app,
+turns off Experimental Bot here, and stops new assignments for every client of
+this Harness; running work and saved result delivery can finish.
 
-If Harness cannot read the saved task permission, the notice and Experimental row
+If Harness cannot read the saved task permission, the notice and Bot settings
 say it cannot currently be checked and is retrying automatically. Permission is
-unknown until that check succeeds. The check does not change task permission or
-stop work already running.
+unknown until that check succeeds. Allow and project changes wait for the check
+to recover. The notice's **Stop Bot tasks here** remains available with the
+effects described above. The check does not change task permission or stop work
+already running.
 
 ## Chatting with your bot
 

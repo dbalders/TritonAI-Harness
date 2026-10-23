@@ -45,7 +45,8 @@ export function BotTaskComputerNotice() {
         )}
       </p>
       <p>
-        Stopping tasks here affects every client of this Harness. Work already running and saved
+        Stopping tasks here signs you out of Bot in this app, turns off Experimental Bot here, and
+        stops new assignments for every client of this Harness. Work already running and saved
         result delivery can finish.
       </p>
       {error ? (

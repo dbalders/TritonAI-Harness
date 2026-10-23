@@ -659,6 +659,114 @@ function allowButton(): HTMLButtonElement | undefined {
   );
 }
 
+it.each(["local-device", "remote-device"])(
+  "holds pairing changes while permission is unknown and recovers the matching pairing with cloud device %s",
+  async (deviceId) => {
+    await using _test = await setupTest();
+    setProjectSettings();
+    const accepted = configuration.local!;
+    const message =
+      "Bot task permission on this Harness cannot currently be checked. Retrying automatically.";
+    configuration.local = {
+      ...accepted,
+      state: "error",
+      apiUrl: null,
+      userId: null,
+      projectId: null,
+      message,
+    };
+    vi.spyOn(DotClient.prototype, "state").mockResolvedValue({
+      ...state(firstSession.email),
+      taskComputer: {
+        deviceId,
+        deviceName: deviceId === "local-device" ? "This Mac" : "Other Mac",
+        pairedAt: "2026-10-12T12:00:00Z",
+        online: true,
+      },
+    });
+    await act(async () => root.rerender(<BotSettings />));
+    expect(container.textContent).toContain(message);
+    expect(container.textContent).not.toContain("paired with a different Bot service or account");
+    expect(container.textContent).not.toContain("Allow moves task running here");
+    expect(container.textContent).not.toContain("(this computer)");
+    expect(allowButton()!.disabled).toBe(true);
+    expect(projectPicker().disabled).toBe(true);
+    await act(async () => {
+      allowButton()!.click();
+      projectPicker().click();
+    });
+    expect(configuration.command).not.toHaveBeenCalled();
+    const stop = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Stop running tasks here",
+    )!;
+    expect(stop.disabled).toBe(false);
+    expect(configuration.openScratchProject).not.toHaveBeenCalled();
+
+    await publishLocal(accepted);
+    expect(container.textContent).not.toContain(message);
+    expect(projectPicker().disabled).toBe(false);
+    expect(projectPicker().textContent).toContain("Saved");
+    expect(configuration.command).not.toHaveBeenCalled();
+    expect(configuration.openScratchProject).not.toHaveBeenCalled();
+    if (deviceId === "local-device") {
+      expect(container.textContent).toContain("This Mac (this computer) is online");
+      expect(allowButton()).toBeUndefined();
+    } else {
+      expect(container.textContent).toContain("Allow moves task running here from Other Mac");
+      expect(allowButton()!.disabled).toBe(false);
+    }
+    await chooseProject("Chosen");
+    expect(configuration.command).toHaveBeenLastCalledWith({
+      environmentId: "synthetic-environment",
+      input: { projectId: "chosen" },
+    });
+    await publishLocal({ ...accepted, projectId: "chosen" });
+    expect(projectPicker().textContent).toContain("Chosen");
+  },
+);
+
+it("can stop unknown permission locally without forwarding either service's session", async () => {
+  await using _test = await setupTest();
+  setProjectSettings("error");
+  configuration.local = {
+    ...configuration.local!,
+    apiUrl: null,
+    userId: null,
+    projectId: null,
+    message: "Bot task permission cannot currently be checked. Retrying automatically.",
+  };
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  await act(async () => root.rerender(<BotSettings />));
+  const stop = Array.from(container.querySelectorAll("button")).find(
+    (button) => button.textContent === "Stop running tasks here",
+  )!;
+  expect(stop.disabled).toBe(false);
+  await act(async () => stop.click());
+  expect(configuration.command).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "synthetic-environment",
+    input: { apiUrl: firstUrl, ownerToken: null },
+  });
+  expect(readDotSession(sessionStorage, firstUrl)).toEqual(firstSession);
+  expect(readDotSession(sessionStorage, secondUrl)).toEqual(secondSession);
+});
+
+it("keeps a known-service error actionable instead of treating its pairing as unknown", async () => {
+  await using _test = await setupTest();
+  setProjectSettings("error");
+  configuration.local = { ...configuration.local!, message: "Service is temporarily unreachable." };
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  await act(async () => root.rerender(<BotSettings />));
+  expect(container.textContent).toContain("Service is temporarily unreachable.");
+  expect(container.textContent).not.toContain("paired with a different Bot service or account");
+  expect(allowButton()).toBeUndefined();
+  expect(projectPicker().disabled).toBe(false);
+  await chooseProject("Chosen");
+  expect(configuration.command).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "synthetic-environment",
+    input: { projectId: "chosen" },
+  });
+});
+
 it("defaults a new task computer to No project and creates it on Allow", async () => {
   await using _test = await setupTest();
   configuration.scratchRoot = "/synthetic/scratch";

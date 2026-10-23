@@ -2,6 +2,7 @@ import "../index.css";
 import { act, render } from "../../test/render";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
+import { Cause } from "effect";
 import {
   DEFAULT_CLIENT_SETTINGS,
   type ClientSettings,
@@ -336,5 +337,136 @@ it.each([false, true])(
     expect(state.stop).not.toHaveBeenCalled();
     expect(state.update).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
+it("discloses the enabled unknown-permission Stop effects before stopping, signing out and disabling Bot in order", async () => {
+  using _test = setup();
+  state.settings = { ...state.settings!, tritonAiBotEnabled: true };
+  state.local = { state: "error", apiUrl: null } as ServerBotTaskComputerStatus;
+  const ownSession = {
+    ownerToken: "synthetic-current-owner",
+    email: "own@example.test",
+    expiresAt: 4_000_000_000,
+  };
+  const otherSession = { ...ownSession, ownerToken: "synthetic-earlier-service-owner" };
+  saveDotSession(sessionStorage, currentService, ownSession);
+  saveDotSession(sessionStorage, earlierService, otherSession);
+  const effects: string[] = [];
+  let finishStop!: () => void;
+  let finishSignOut!: () => void;
+  using signOut = vi.spyOn(DotClient.prototype, "signOut").mockImplementation(async function (
+    this: DotClient,
+    session,
+  ) {
+    effects.push("sign out");
+    expect(this.baseUrl).toBe(currentService);
+    expect(session).toEqual(ownSession);
+    expect(readDotSession(sessionStorage, currentService)).toEqual(ownSession);
+    expect(state.settings!.tritonAiBotEnabled).toBe(true);
+    return new Promise((resolve) => {
+      finishSignOut = () => resolve({ ok: true });
+    });
+  });
+  state.stop.mockImplementation(async () => {
+    effects.push("stop");
+    expect(readDotSession(sessionStorage, currentService)).toEqual(ownSession);
+    expect(state.settings!.tritonAiBotEnabled).toBe(true);
+    return new Promise((resolve) => {
+      finishStop = () => {
+        state.local = { state: "off", apiUrl: null } as ServerBotTaskComputerStatus;
+        resolve({ _tag: "Success" });
+      };
+    });
+  });
+  state.update.mockImplementation(async (patch) => {
+    effects.push("disable");
+    expect(readDotSession(sessionStorage, currentService)).toBeNull();
+    expect(readDotSession(sessionStorage, earlierService)).toBeNull();
+    Object.assign(state.settings!, patch);
+  });
+  await using screen = await render(
+    <AppSidebarLayout>
+      <main>Conversation</main>
+    </AppSidebarLayout>,
+  );
+  const notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
+  expect(notice.textContent).toContain("cannot currently be checked");
+  expect(notice.textContent).toContain("signs you out of Bot in this app");
+  expect(notice.textContent).toContain("turns off Experimental Bot here");
+  expect(notice.textContent).toContain("stops new assignments for every client of this Harness");
+  expect(notice.getBoundingClientRect().width).toBeGreaterThan(0);
+  expect(effects).toEqual([]);
+  await act(async () => (notice.querySelector("button") as HTMLButtonElement).click());
+  expect(state.stop).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "own-harness",
+    input: { apiUrl: currentService, ownerToken: ownSession.ownerToken },
+  });
+  expect(effects).toEqual(["stop"]);
+  expect(signOut).not.toHaveBeenCalled();
+  expect(state.update).not.toHaveBeenCalled();
+  expect(state.settings!.tritonAiBotEnabled).toBe(true);
+  expect(readDotSession(sessionStorage, currentService)).toEqual(ownSession);
+  expect(readDotSession(sessionStorage, earlierService)).toEqual(otherSession);
+  await act(async () => finishStop());
+  expect(signOut).toHaveBeenCalledOnce();
+  expect(effects).toEqual(["stop", "sign out"]);
+  expect(state.update).not.toHaveBeenCalled();
+  expect(readDotSession(sessionStorage, earlierService)).toEqual(otherSession);
+  await act(async () => finishSignOut());
+  expect(effects).toEqual(["stop", "sign out", "disable"]);
+  expect(state.update).toHaveBeenCalledExactlyOnceWith({ tritonAiBotEnabled: false });
+  expect(state.settings!.tritonAiBotEnabled).toBe(false);
+  expect(readDotSession(sessionStorage, currentService)).toBeNull();
+  expect(screen.container.querySelector('aside[aria-label="Bot task permission"]')).toBeNull();
+});
+
+it.each(["refused", "unreachable"])(
+  "preserves enabled Bot and both service sessions when unknown-permission Stop is %s",
+  async (failure) => {
+    using _test = setup();
+    state.settings = { ...state.settings!, tritonAiBotEnabled: true };
+    const unknown = { state: "error", apiUrl: null } as ServerBotTaskComputerStatus;
+    state.local = unknown;
+    const ownSession = {
+      ownerToken: "synthetic-current-owner",
+      email: "own@example.test",
+      expiresAt: 4_000_000_000,
+    };
+    const otherSession = { ...ownSession, ownerToken: "synthetic-earlier-service-owner" };
+    saveDotSession(sessionStorage, currentService, ownSession);
+    saveDotSession(sessionStorage, earlierService, otherSession);
+    using signOut = vi.spyOn(DotClient.prototype, "signOut");
+    if (failure === "refused")
+      state.stop.mockResolvedValue({
+        _tag: "Failure",
+        cause: Cause.fail(new Error("Could not stop Bot tasks")),
+      });
+    else state.stop.mockRejectedValue(new Error("Could not stop Bot tasks"));
+    await using screen = await render(
+      <AppSidebarLayout>
+        <main>Conversation</main>
+      </AppSidebarLayout>,
+    );
+    const notice = screen.container.querySelector('aside[aria-label="Bot task permission"]')!;
+    expect(notice.textContent).toContain("signs you out of Bot in this app");
+    expect(notice.textContent).toContain("turns off Experimental Bot here");
+    const stop = notice.querySelector("button") as HTMLButtonElement;
+    await act(async () => stop.click());
+    expect(notice.querySelector('[role="alert"]')?.textContent).toBe("Could not stop Bot tasks");
+    expect(notice.textContent).toContain("cannot currently be checked");
+    expect(notice.textContent).not.toContain("Bot tasks are allowed");
+    expect(stop.disabled).toBe(false);
+    expect(state.stop).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "own-harness",
+      input: { apiUrl: currentService, ownerToken: ownSession.ownerToken },
+    });
+    expect(state.local).toBe(unknown);
+    expect(state.settings!.tritonAiBotEnabled).toBe(true);
+    expect(readDotSession(sessionStorage, currentService)).toEqual(ownSession);
+    expect(readDotSession(sessionStorage, earlierService)).toEqual(otherSession);
+    expect(state.update).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+    expect(state.refresh).not.toHaveBeenCalled();
   },
 );

@@ -117,10 +117,12 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     (scratchRoot !== null ? NO_PROJECT : (projects[0]?.id ?? null));
   const localForService =
     local?.apiUrl === serviceUrl && local.userId === state?.user.userId ? local : null;
+  const permissionUnknown = local?.state === "error" && local.apiUrl === null;
   const thisComputer = isTaskComputer(state?.taskComputer, localForService);
   const otherComputer = state?.taskComputer && !thisComputer ? state.taskComputer.deviceName : null;
   const projectSelectionReady = Boolean(
     canControlTasks &&
+    !permissionUnknown &&
     local &&
     (local.state === "off" || local.state === "replaced" || (state && session)),
   );
@@ -184,7 +186,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   };
 
   const allow = async () => {
-    if (!session || !serviceUrl || !environmentId || !projectId) return;
+    if (permissionUnknown || !session || !serviceUrl || !environmentId || !projectId) return;
     setBusy(true);
     setError(null);
     const current = await (async () => {
@@ -401,11 +403,13 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
         <SettingsRow
           title={local ? `This computer · ${local.deviceName}` : "This computer"}
           description={
-            local && state && !localForService && local.state !== "off"
-              ? "This Harness is paired with a different Bot service or account. Choose Allow to pair it with the signed-in account."
-              : otherComputer && !thisComputer
-                ? describeThisComputerBesideAnother(local ?? null, otherComputer)
-                : describeThisComputer(local ?? null)
+            permissionUnknown
+              ? describeThisComputer(local)
+              : local && state && !localForService && local.state !== "off"
+                ? "This Harness is paired with a different Bot service or account. Choose Allow to pair it with the signed-in account."
+                : otherComputer && !thisComputer
+                  ? describeThisComputerBesideAnother(local ?? null, otherComputer)
+                  : describeThisComputer(local ?? null)
           }
           status={error ? <span className="text-destructive">{error}</span> : undefined}
           control={
@@ -425,6 +429,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
                   size="xs"
                   disabled={
                     busy ||
+                    permissionUnknown ||
                     !canControlTasks ||
                     !serviceUrl ||
                     !session ||
