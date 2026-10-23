@@ -8,7 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 
 import { toJsonSchemaObject } from "@t3tools/provider-core/server/textGenerationUtils";
-import { makeTritonAiClientHeaders } from "../tritonAiClientHeaders.ts";
+import * as TritonAiRequestAnalytics from "../telemetry/TritonAiRequestAnalytics.ts";
 import { resolveTritonAiServiceApiKey } from "../tritonAiCredential.ts";
 
 const IMAGE_CONTEXT_TIMEOUT_MS = 2 * 60 * 1_000;
@@ -212,6 +212,7 @@ export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAna
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const resolvedEnvironment = environment ?? process.env;
+  const clientHeaders = (yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics).headers("image");
 
   const analyze: CodexImageContextAnalyzer = (input) => {
     if (input.signal?.aborted) {
@@ -295,7 +296,7 @@ export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAna
             const result = await requestFetch(endpoint, {
               method: "POST",
               headers: {
-                ...makeTritonAiClientHeaders(),
+                ...clientHeaders,
                 Accept: "application/json",
                 Authorization: `Bearer ${apiKey}`,
                 "Content-Type": "application/json",

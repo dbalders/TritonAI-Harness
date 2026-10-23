@@ -1,5 +1,7 @@
 import { vi } from "vite-plus/test";
 import * as Clock from "effect/Clock";
+import * as ConfigProvider from "effect/ConfigProvider";
+import * as TritonAiRequestAnalytics from "../../telemetry/TritonAiRequestAnalytics.ts";
 import * as IntegrationRegistry from "../../integrations/IntegrationRegistry.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
@@ -1004,10 +1006,26 @@ describe("CodexAdapterV2 process spawning", () => {
         );
         assert.ok(args.includes("model_providers.ucsd.supports_websockets=false"));
         assert.ok(args.includes("features.enable_request_compression=false"));
+        const headers = args.find((arg) => arg.startsWith("model_providers.ucsd.http_headers="));
+        const fs = yield* FileSystem.FileSystem;
+        const config = yield* ServerConfig.ServerConfig;
+        const installId = (yield* fs.readFileString(config.anonymousIdPath)).trim();
+        assert.include(headers ?? "", "purpose:chat");
+        assert.include(headers ?? "", `harness-install:${installId}`);
       }
     }).pipe(
       Effect.provideService(HostProcess.Platform, "linux"),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        TritonAiRequestAnalytics.layer.pipe(
+          Layer.provideMerge(
+            ServerConfig.layerTest(process.cwd(), { prefix: "t3-codex-tagged-launch-" }),
+          ),
+          Layer.provide(
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: true })),
+          ),
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
     ),
   );
 

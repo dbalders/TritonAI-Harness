@@ -6,6 +6,8 @@ Events include the app version, operating system, which client is connected (des
 
 Events do not include prompts, responses, file contents, file paths, project or thread names, model names, authentication tokens, provider account IDs, conversation IDs, raw provider events, or child-agent output.
 
-To disable collection, set `T3CODE_TELEMETRY_ENABLED=false` in the server's environment before starting it. No events are sent and no install ID is created.
+Managed model requests also carry the app version, a purpose such as chat or voice, and the same random install ID to TritonAI's model gateway. This lets us compare model usage with product usage. The ID counts server installations, not people; clients connected to one server share an ID.
+
+To disable product usage collection, set `T3CODE_TELEMETRY_ENABLED=false` in the server's environment before starting it. No product events or optional gateway analytics tags or installation IDs are sent, and no install ID is created. The gateway's existing operational logging and budget accounting still apply to model requests.
 
 To reset the install ID, quit TritonAI Harness and delete `anonymous-id` from the userdata directory. A new ID is created on the next launch. Events sent earlier are not erased.
