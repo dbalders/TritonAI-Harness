@@ -140,7 +140,8 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
       mounted.current &&
       Boolean(serviceUrl && readDotSession(sessionStorage, serviceUrl)?.ownerToken === token),
   );
-  const loadState = useStableCallback(async (ownerToken = session?.ownerToken) => {
+  const sessionOwnerToken = session?.ownerToken;
+  const loadState = useStableCallback(async (ownerToken = sessionOwnerToken) => {
     if (ownerToken !== session?.ownerToken) return;
     if (!serviceUrl || !client) return;
     const current = readDotSession(sessionStorage, serviceUrl);
@@ -186,8 +187,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     if (!session || !serviceUrl || !environmentId || !projectId) return;
     setBusy(true);
     setError(null);
-    let current = false;
-    try {
+    const current = await (async () => {
       const resolvedProjectId = await resolveProjectId(projectId);
       // openScratchProject already reported a failed create. A sign-out or
       // account switch while it ran must not pair with the replaced session.
@@ -200,10 +200,10 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         setError(failureMessage(result, "Could not allow this computer."));
       }
-      current = true;
-    } finally {
+      return true;
+    })().finally(() => {
       if (mounted.current) setBusy(false);
-    }
+    });
     if (!current) return;
     refreshLocal();
     await loadState();
@@ -213,26 +213,28 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     if (!environmentId) return;
     setBusy(true);
     setError(null);
-    try {
-      const result = await stopHere({
-        environmentId,
-        input: {
-          ownerToken: localForService ? (session?.ownerToken ?? null) : null,
-          apiUrl: serviceUrl,
-        },
-      });
-      if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        setError(failureMessage(result, "Could not stop running tasks here."));
+    await (async () => {
+      try {
+        const result = await stopHere({
+          environmentId,
+          input: {
+            ownerToken: localForService ? (session?.ownerToken ?? null) : null,
+            apiUrl: serviceUrl,
+          },
+        });
+        if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          setError(failureMessage(result, "Could not stop running tasks here."));
+        }
+        refreshLocal();
+        await loadState();
+      } catch (cause) {
+        if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
+        setError(cause instanceof Error ? cause.message : "Could not stop running tasks here.");
       }
-      refreshLocal();
-      await loadState();
-    } catch (cause) {
-      if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
-      setError(cause instanceof Error ? cause.message : "Could not stop running tasks here.");
-    } finally {
+    })().finally(() => {
       if (mounted.current) setBusy(false);
-    }
+    });
   };
 
   const chooseProject = async (value: string) => {
@@ -255,7 +257,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     changingProject.current = true;
     setBusy(true);
     setError(null);
-    try {
+    await (async () => {
       const resolvedProjectId = await resolveProjectId(value);
       if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
       if (!resolvedProjectId) return;
@@ -269,30 +271,32 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
         setError(failureMessage(result, "Could not change the project."));
       }
       refreshLocal();
-    } finally {
+    })().finally(() => {
       changingProject.current = false;
       if (mounted.current) setBusy(false);
-    }
+    });
   };
 
   const setWarning = async (enabled: boolean) => {
     if (!session || !client) return;
     setBusy(true);
     setError(null);
-    try {
-      const { user } = await client.updateSettings(session, {
-        warnWhenTaskComputerOffline: enabled,
-      });
-      if (!isCurrentSession(session.ownerToken)) return;
-      setState((current) =>
-        current ? { ...current, user: { ...current.user, ...user } } : current,
-      );
-    } catch (cause) {
-      if (!isCurrentSession(session.ownerToken)) return;
-      setError(cause instanceof Error ? cause.message : "Could not save the setting.");
-    } finally {
+    await (async () => {
+      try {
+        const { user } = await client.updateSettings(session, {
+          warnWhenTaskComputerOffline: enabled,
+        });
+        if (!isCurrentSession(session.ownerToken)) return;
+        setState((current) =>
+          current ? { ...current, user: { ...current.user, ...user } } : current,
+        );
+      } catch (cause) {
+        if (!isCurrentSession(session.ownerToken)) return;
+        setError(cause instanceof Error ? cause.message : "Could not save the setting.");
+      }
+    })().finally(() => {
       if (mounted.current) setBusy(false);
-    }
+    });
   };
 
   const projectTitle =

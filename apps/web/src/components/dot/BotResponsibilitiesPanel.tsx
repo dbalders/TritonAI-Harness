@@ -247,32 +247,36 @@ function ResponsibilityEditor({
         inFlight.current = true;
         setBusy(true);
         setError(null);
-        try {
-          await onSave({
-            ...(responsibility
-              ? ({
-                  action: "update",
-                  responsibilityId: responsibility.responsibilityId,
-                  expectedVersion: responsibility.version,
-                } as const)
-              : ({
-                  action: "create",
-                  responsibilityId: newId,
-                  expectedVersion: 0,
-                  source: { kind: "harness-task", taskId },
-                } as const)),
-            title: title.trim(),
-            intendedOutcome: outcome.trim(),
-            completionCriteria: criteria.trim(),
-            nextAction: next.trim(),
-          });
-          onCancel();
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : "Could not save this responsibility.");
-        } finally {
+        await (async () => {
+          try {
+            await onSave({
+              ...(responsibility
+                ? ({
+                    action: "update",
+                    responsibilityId: responsibility.responsibilityId,
+                    expectedVersion: responsibility.version,
+                  } as const)
+                : ({
+                    action: "create",
+                    responsibilityId: newId,
+                    expectedVersion: 0,
+                    source: { kind: "harness-task", taskId },
+                  } as const)),
+              title: title.trim(),
+              intendedOutcome: outcome.trim(),
+              completionCriteria: criteria.trim(),
+              nextAction: next.trim(),
+            });
+            onCancel();
+          } catch (cause) {
+            setError(
+              cause instanceof Error ? cause.message : "Could not save this responsibility.",
+            );
+          }
+        })().finally(() => {
           inFlight.current = false;
           setBusy(false);
-        }
+        });
       }}
     >
       <h3 className="font-semibold">
@@ -398,16 +402,18 @@ function ResponsibilityRow({
     inFlight.current = true;
     setBusy(true);
     setError(null);
-    try {
-      await onAction(input);
-      setReviewed(false);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not update this responsibility.");
-      throw cause;
-    } finally {
+    await (async () => {
+      try {
+        await onAction(input);
+        setReviewed(false);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Could not update this responsibility.");
+        throw cause;
+      }
+    })().finally(() => {
       inFlight.current = false;
       setBusy(false);
-    }
+    });
   }
   async function act(action: "cancel" | "resume" | "snooze" | "complete" | "reopen") {
     const common = { responsibilityId: item.responsibilityId, expectedVersion: item.version };
@@ -501,14 +507,18 @@ function ResponsibilityRow({
               inFlight.current = true;
               setBusy(true);
               setError(null);
-              try {
-                await onLoadTask(item.source.taskId);
-              } catch (cause) {
-                setError(cause instanceof Error ? cause.message : "Could not load task evidence.");
-              } finally {
+              await (async () => {
+                try {
+                  await onLoadTask(item.source.taskId);
+                } catch (cause) {
+                  setError(
+                    cause instanceof Error ? cause.message : "Could not load task evidence.",
+                  );
+                }
+              })().finally(() => {
                 inFlight.current = false;
                 setBusy(false);
-              }
+              });
             }}
           >
             {busy ? "Loading task evidence…" : "Load task evidence"}

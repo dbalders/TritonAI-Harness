@@ -126,22 +126,24 @@ export function BotRoutineEditor({
     inFlight.current = true;
     setBusy(true);
     setError(null);
-    try {
-      if (previewOnly) {
-        const result = await onPreview({ schedule, timezone });
-        setPreview(
-          `${result.scheduleText} · ${timezone}${result.nextRunAt ? ` · Next: ${new Date(result.nextRunAt).toLocaleString()}` : ""}`,
-        );
-      } else {
-        await onSave({ name: name.trim(), prompt: composed, schedule, timezone, notify }, prompt);
-        onCancel();
+    await (async () => {
+      try {
+        if (previewOnly) {
+          const result = await onPreview({ schedule, timezone });
+          setPreview(
+            `${result.scheduleText} · ${timezone}${result.nextRunAt ? ` · Next: ${new Date(result.nextRunAt).toLocaleString()}` : ""}`,
+          );
+        } else {
+          await onSave({ name: name.trim(), prompt: composed, schedule, timezone, notify }, prompt);
+          onCancel();
+        }
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Could not save this routine.");
       }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save this routine.");
-    } finally {
+    })().finally(() => {
       inFlight.current = false;
       setBusy(false);
-    }
+    });
   }
 
   return (

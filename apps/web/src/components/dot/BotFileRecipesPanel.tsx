@@ -74,14 +74,16 @@ function FolderPicker({
   const open = async (folderId?: string) => {
     setLoading(true);
     setError(null);
-    try {
-      const listing = await onBrowse(folderId);
-      setTrail((previous) => (folderId ? [...previous, listing] : [listing]));
-    } catch (cause) {
-      setError(errorText(cause, "Could not open this OneDrive folder."));
-    } finally {
+    await (async () => {
+      try {
+        const listing = await onBrowse(folderId);
+        setTrail((previous) => (folderId ? [...previous, listing] : [listing]));
+      } catch (cause) {
+        setError(errorText(cause, "Could not open this OneDrive folder."));
+      }
+    })().finally(() => {
       setLoading(false);
-    }
+    });
   };
   const loaded = useRef(false);
   useEffect(() => {
@@ -182,23 +184,25 @@ function RecipeEditor({
     inFlight.current = true;
     setBusy(true);
     setError(null);
-    try {
-      await onSubmit(
-        {
-          name: name.trim(),
-          instructions: instructions.trim(),
-          expectedOutput: expectedOutput.trim(),
-          approval,
-        },
-        folder?.folderId,
-      );
-      onCancel();
-    } catch (cause) {
-      setError(errorText(cause, "Could not save this file recipe."));
-    } finally {
+    await (async () => {
+      try {
+        await onSubmit(
+          {
+            name: name.trim(),
+            instructions: instructions.trim(),
+            expectedOutput: expectedOutput.trim(),
+            approval,
+          },
+          folder?.folderId,
+        );
+        onCancel();
+      } catch (cause) {
+        setError(errorText(cause, "Could not save this file recipe."));
+      }
+    })().finally(() => {
       inFlight.current = false;
       setBusy(false);
-    }
+    });
   };
   return (
     <form
@@ -436,21 +440,23 @@ function RecipeRow({
     setBusy(action);
     setMessage(null);
     setError(null);
-    try {
-      await onAction(recipe, action);
-      setMessage(
-        action === "pause"
-          ? "Paused. Files that had not started won't start."
-          : action === "resume"
-            ? "Resumed. Files that arrived while paused are listed, not started."
-            : "Stopped. Past files remain listed.",
-      );
-      if (action === "stop") setConfirmStop(false);
-    } catch (cause) {
-      setError(errorText(cause, "Could not update this file recipe."));
-    } finally {
+    await (async () => {
+      try {
+        await onAction(recipe, action);
+        setMessage(
+          action === "pause"
+            ? "Paused. Files that had not started won't start."
+            : action === "resume"
+              ? "Resumed. Files that arrived while paused are listed, not started."
+              : "Stopped. Past files remain listed.",
+        );
+        if (action === "stop") setConfirmStop(false);
+      } catch (cause) {
+        setError(errorText(cause, "Could not update this file recipe."));
+      }
+    })().finally(() => {
       setBusy(null);
-    }
+    });
   };
   const folderLink = safeRecipeLink(recipe.folder.webUrl);
   const waiting = usableWaiting(recipe.waiting);

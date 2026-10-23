@@ -27,13 +27,15 @@ export function BotReturnedFiles({
     if (busy) return;
     setBusy(true);
     setError(null);
-    try {
-      await action();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not load this file. Try again.");
-    } finally {
+    await (async () => {
+      try {
+        await action();
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Could not load this file. Try again.");
+      }
+    })().finally(() => {
       setBusy(false);
-    }
+    });
   }
 
   return (
