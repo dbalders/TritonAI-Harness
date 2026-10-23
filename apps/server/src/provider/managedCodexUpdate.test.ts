@@ -392,6 +392,91 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("serializes two manual updates that finish staging together", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const staged = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      let copies = 0;
+      const observedFs = FileSystem.FileSystem.of({
+        ...fixture.fs,
+        copyFile: (source, destination) =>
+          fixture.fs.copyFile(source, destination).pipe(
+            Effect.tap(() =>
+              destination.includes(".tritonai-codex-stage.")
+                ? Effect.gen(function* () {
+                    copies += 1;
+                    if (copies === 2) yield* Deferred.succeed(staged, undefined);
+                    yield* Deferred.await(resume);
+                  })
+                : Effect.void,
+            ),
+          ),
+      });
+      const runner = yield* makeFakeRunner();
+      const update = updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: runner,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, observedFs), Effect.scoped);
+      const first = yield* update.pipe(Effect.forkChild);
+      const second = yield* update.pipe(Effect.forkChild);
+      yield* Deferred.await(staged);
+      yield* Deferred.succeed(resume, undefined);
+      expect(yield* Fiber.join(first)).toBe("0.151.0");
+      expect(yield* Fiber.join(second)).toBe("0.151.0");
+      expect((yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toSorted()).toEqual([
+        "openai-codex-0.146.0",
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("admits a waiting session only after activation restores a verified launcher", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const paused = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const prepared = yield* Deferred.make<void>();
+      const observedFs = FileSystem.FileSystem.of({
+        ...fixture.fs,
+        rename: (source, destination) =>
+          fixture.fs
+            .rename(source, destination)
+            .pipe(
+              Effect.tap(() =>
+                destination.includes(".tritonai-codex-backup.")
+                  ? Deferred.succeed(paused, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+                  : Effect.void,
+              ),
+            ),
+      });
+      const update = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: yield* makeFakeRunner(),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, observedFs),
+        Effect.scoped,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(paused);
+      expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(false);
+      const session = yield* acquireManagedCodexLease(
+        fixture.runtimeRoot,
+        fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")).pipe(
+          Effect.tap((version) => Effect.sync(() => expect(version).toBe("0.151.0"))),
+          Effect.andThen(Deferred.succeed(prepared, undefined)),
+          Effect.asVoid,
+        ),
+      ).pipe(Effect.scoped, Effect.forkChild);
+      // The lock uses native timers; allow its first acquisition attempt while activation is paused.
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      expect(yield* Deferred.isDone(prepared)).toBe(false);
+      yield* Deferred.succeed(resume, undefined);
+      expect(yield* Fiber.join(update)).toBe("0.151.0");
+      yield* Fiber.join(session);
+      expect(yield* Deferred.isDone(prepared)).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("rolls back when the activated runtime fails verification", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();
