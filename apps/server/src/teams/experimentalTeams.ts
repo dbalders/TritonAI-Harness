@@ -13,6 +13,14 @@ class PrivacyCleanup extends Context.Reference<boolean>("t3/teams/PrivacyCleanup
 export const withPrivacyCleanup = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.provideService(PrivacyCleanup, true));
 
+// Kept distinct in-process so a paused request remains retryable even if Teams is
+// enabled again before its caller observes the failure. The transport stays unchanged.
+const experimentPaused = new TeamsError({
+  code: "forbidden",
+  message: "Teams is turned off. Turn it on in Settings → Experimental to continue.",
+});
+export const isExperimentPaused = (error: TeamsError) => error === experimentPaused;
+
 /** Capture the service, then read its latest value at each side-effect boundary. */
 export const makeAccess = Effect.gen(function* () {
   const settings = yield* ServerSettingsService;
@@ -22,16 +30,7 @@ export const makeAccess = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
   const requireEnabled = enabled.pipe(
-    Effect.flatMap((on) =>
-      on
-        ? Effect.void
-        : Effect.fail(
-            new TeamsError({
-              code: "forbidden",
-              message: "Teams is turned off. Turn it on in Settings → Experimental to continue.",
-            }),
-          ),
-    ),
+    Effect.flatMap((on) => (on ? Effect.void : Effect.fail(experimentPaused))),
   );
   const requireRead = PrivacyCleanup.pipe(
     Effect.flatMap((cleanup) => (cleanup ? Effect.void : requireEnabled)),

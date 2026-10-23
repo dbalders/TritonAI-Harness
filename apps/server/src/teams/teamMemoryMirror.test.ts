@@ -1,12 +1,19 @@
 // @effect-diagnostics globalDate:off globalDateInEffect:off - fixtures use host-local times.
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { vi } from "vite-plus/test";
+import * as Account from "../auth/AccountService.ts";
+import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { isExperimentPaused } from "./experimentalTeams.ts";
 import * as TestClock from "effect/testing/TestClock";
 import {
   deviceId,
   identityOf,
   recordId,
   teamA,
+  teamB,
   teamProjectFixture as fixture,
 } from "./testing/teamProjectFixture.ts";
 
@@ -57,7 +64,169 @@ const memberOfTeam = Effect.gen(function* () {
 const paths = (listing: { kind: string; files?: ReadonlyArray<{ path: string }> }) =>
   listing.kind === "files" ? listing.files!.map((file) => file.path) : listing.kind;
 
+/** A saved off preference must survive another copy's temporary pause. */
+const stopOtherTeam = Effect.fn("teamMemoryMirror.test.stopOtherTeam")(function* (
+  team: Effect.Success<typeof memberOfTeam>,
+) {
+  team.f.roles[teamB]!.alice = "member";
+  yield* team.source.teams;
+  yield* team.service.execute("s", { action: "mirror-off", teamId: teamB });
+  return team.f.values.get("team-memory-mirrors")!.slice();
+});
+
 describe("Local team copies", () => {
+  it.effect.each([false, true])(
+    "holds the mirror on an actual AccountService pause and resumes after restart (re-enabled before observation: %s)",
+    (reenableBeforeObservation) =>
+      Effect.gen(function* () {
+        const team = yield* memberOfTeam;
+        const [copy] = yield* team.source.teams;
+        const saved = yield* stopOtherTeam(team);
+        // The real account service rejects at its experiment gate before reading credentials.
+        const pausedAccount = yield* Account.make({
+          serviceUrl: "https://accounts.example.test",
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(ServerSettings.layerTest(), Layer.mock(ServerSecretStore)({})),
+          ),
+        );
+        const original = team.account.teams;
+        using lookup = vi.spyOn(team.account, "teams").mockImplementation((sessionId, command) =>
+          command.action === "get"
+            ? pausedAccount.teams(sessionId, command).pipe(
+                Effect.tapError((error) => {
+                  expect(isExperimentPaused(error)).toBe(true);
+                  return reenableBeforeObservation
+                    ? team.f.setTeamsEnabled(true).pipe(Effect.orDie)
+                    : Effect.void;
+                }),
+              )
+            : original(sessionId, command),
+        );
+        yield* team.f.setTeamsEnabled(false);
+        expect(yield* team.source.list(teamA)).toEqual({ kind: "unavailable" });
+        expect(team.f.values.get("team-memory-mirrors")).toEqual(saved);
+        lookup.mockRestore();
+        yield* team.f.setTeamsEnabled(true);
+        expect(yield* team.source.teams).toEqual([copy]);
+        expect(yield* team.mirrors).toEqual([
+          expect.objectContaining({ teamId: teamA, state: "mirrored" }),
+          expect.objectContaining({ teamId: teamB, state: "off" }),
+        ]);
+        yield* team.f.make;
+        const restarted = team.f.mirror.source!;
+        expect(yield* restarted.teams).toEqual([copy]);
+        expect((yield* restarted.list(teamA)).kind).toBe("files");
+      }),
+  );
+
+  it.effect.each([false, true])(
+    "holds the mirror when Teams pauses during a real storage listing and resumes after restart (re-enabled before observation: %s)",
+    (reenableBeforeObservation) =>
+      Effect.gen(function* () {
+        const team = yield* memberOfTeam;
+        const [copy] = yield* team.source.teams;
+        const saved = yield* stopOtherTeam(team);
+        const original = team.storage.execute;
+        let observedPause = false;
+        using listing = vi.spyOn(team.storage, "execute").mockImplementation((...args) =>
+          original(...args).pipe(
+            Effect.tapError((error) => {
+              observedPause = isExperimentPaused(error);
+              return reenableBeforeObservation
+                ? team.f.setTeamsEnabled(true).pipe(Effect.orDie)
+                : Effect.void;
+            }),
+          ),
+        );
+        // The HTTP request was authorized while on; its response arrives after the pause.
+        team.f.interleave(team.f.setTeamsEnabled(false).pipe(Effect.orDie));
+        expect(yield* team.source.list(teamA)).toEqual({ kind: "unavailable" });
+        expect(observedPause).toBe(true);
+        expect(team.f.values.get("team-memory-mirrors")).toEqual(saved);
+        listing.mockRestore();
+        yield* team.f.setTeamsEnabled(true);
+        expect(yield* team.source.teams).toEqual([copy]);
+        expect(yield* team.mirrors).toEqual([
+          expect.objectContaining({ teamId: teamA, state: "mirrored" }),
+          expect.objectContaining({ teamId: teamB, state: "off" }),
+        ]);
+        yield* team.f.make;
+        const restarted = team.f.mirror.source!;
+        expect(yield* restarted.teams).toEqual([copy]);
+        expect((yield* restarted.list(teamA)).kind).toBe("files");
+      }),
+  );
+
+  it.effect.each([false, true])(
+    "retries a file paused during a real storage read (re-enabled before observation: %s)",
+    (reenableBeforeObservation) =>
+      Effect.gen(function* () {
+        const team = yield* memberOfTeam;
+        const [copy] = yield* team.source.teams;
+        yield* team.source.list(teamA);
+        const original = team.storage.execute;
+        let observedPause = false;
+        using reading = vi.spyOn(team.storage, "execute").mockImplementation((...args) =>
+          original(...args).pipe(
+            Effect.tapError((error) => {
+              observedPause = isExperimentPaused(error);
+              return reenableBeforeObservation
+                ? team.f.setTeamsEnabled(true).pipe(Effect.orDie)
+                : Effect.void;
+            }),
+          ),
+        );
+        team.f.interleave(team.f.setTeamsEnabled(false).pipe(Effect.orDie));
+        expect(yield* team.source.read(teamA, documentIn("Memory"))).toEqual({
+          kind: "unavailable",
+        });
+        expect(observedPause).toBe(true);
+        reading.mockRestore();
+        yield* team.f.setTeamsEnabled(true);
+        expect(yield* team.source.teams).toEqual([copy]);
+        expect(yield* team.source.read(teamA, documentIn("Memory"))).toMatchObject({
+          kind: "file",
+        });
+      }),
+  );
+
+  it.effect.each([403, 404])("still detaches the mirror for a genuine Graph %s", (status) =>
+    Effect.gen(function* () {
+      const team = yield* memberOfTeam;
+      if (status === 403) team.f.denied.add("rootA");
+      else {
+        team.f.removed.add("rootA:Memory");
+        team.f.removed.add("rootA:");
+      }
+      const original = team.storage.execute;
+      let observedProviderFailure = false;
+      using listing = vi.spyOn(team.storage, "execute").mockImplementation((...args) =>
+        original(...args).pipe(
+          Effect.tapError((error) =>
+            Effect.sync(() => {
+              observedProviderFailure =
+                !isExperimentPaused(error) &&
+                error.code === (status === 403 ? "forbidden" : "not_found");
+            }),
+          ),
+        ),
+      );
+      expect(yield* team.source.list(teamA)).toEqual({ kind: "detached" });
+      expect(observedProviderFailure).toBe(true);
+      expect(yield* team.mirrors).toEqual([
+        expect.objectContaining({
+          state: "detached",
+          message: expect.stringMatching(/folder is no longer available/u),
+        }),
+      ]);
+      listing.mockRestore();
+      team.f.denied.clear();
+      team.f.removed.clear();
+      expect(yield* team.source.teams).toEqual([]);
+    }),
+  );
+
   it.effect("copies every team the account belongs to, without a project link, until stopped", () =>
     Effect.gen(function* () {
       const { source, mirrors, service, f } = yield* memberOfTeam;

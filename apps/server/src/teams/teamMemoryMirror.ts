@@ -38,6 +38,7 @@ import type {
   TeamMirrorSource,
 } from "../memory/sync/teamMirror.ts";
 import { isTeamDailyPath, teamDailyMarkerAuthor, TeamDailyMarker } from "../memory/teamDaily.ts";
+import { isExperimentPaused } from "./experimentalTeams.ts";
 import { isTeamDocumentPath } from "./teamDocuments.ts";
 import type { TeamStorageService } from "./TeamStorageService.ts";
 
@@ -242,7 +243,10 @@ export const makeTeamMemoryMirror = Effect.fn("teamMemoryMirror.make")(function*
       .teams(mirror.sessionId, { action: "get", teamId: mirror.teamId })
       .pipe(Effect.result);
     if (result._tag === "Failure") {
-      if (result.failure.code === "not_found" || result.failure.code === "forbidden")
+      if (
+        !isExperimentPaused(result.failure) &&
+        (result.failure.code === "not_found" || result.failure.code === "forbidden")
+      )
         return yield* detach(reasons.lostTeam);
       yield* note(mirror.teamId, result.failure.message);
       return "unavailable" as const;
@@ -291,7 +295,10 @@ export const makeTeamMemoryMirror = Effect.fn("teamMemoryMirror.make")(function*
       )
       .pipe(Effect.result);
     if (listed._tag === "Failure") {
-      if (listed.failure.code === "forbidden" || listed.failure.code === "not_found") {
+      if (
+        !isExperimentPaused(listed.failure) &&
+        (listed.failure.code === "forbidden" || listed.failure.code === "not_found")
+      ) {
         yield* detachWhere((m) => m.teamId === mirror.teamId, reasons.lostFolder);
         return { kind: "detached" } satisfies Listed;
       }
@@ -542,7 +549,7 @@ export const makeTeamMemoryMirror = Effect.fn("teamMemoryMirror.make")(function*
         if (!folder) return { kind: "unavailable" } as const;
         const result = yield* readText(mirror, folder, path);
         if (result._tag === "Failure") {
-          if (result.failure.code === "sign_in_required") {
+          if (isExperimentPaused(result.failure) || result.failure.code === "sign_in_required") {
             yield* note(teamId, storageProblem(result.failure));
             return { kind: "unavailable" } as const;
           }
