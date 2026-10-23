@@ -71,8 +71,7 @@ it.layer(NodeServices.layer)("managed Codex activation ownership", (it) => {
                 ),
               ),
           remove: (target, options) => {
-            if (!String(target).includes(".tritonai-codex-session."))
-              return fs.remove(target, options);
+            if (!String(target).includes(".tritonai-codex-")) return fs.remove(target, options);
             cleanupAttempts += 1;
             return Effect.fail(
               PlatformError.systemError({
@@ -103,6 +102,53 @@ it.layer(NodeServices.layer)("managed Codex activation ownership", (it) => {
         yield* assertManagedCodexIdle(root).pipe(
           Effect.provideService(ManagedCodexBootId, Effect.succeed("new boot")),
         );
+        expect(yield* fs.readDirectory(root)).toEqual([]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["recorded child", "unbound admission"])(
+    "allows updates after partial cleanup of a closed lease with %s and unknown boot identity",
+    (scenario) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "codex-partial-cleanup-" });
+        const testFs = FileSystem.FileSystem.of({
+          ...fs,
+          remove: (target, options) => {
+            if (!path.basename(target).startsWith(".tritonai-codex-"))
+              return fs.remove(target, options);
+            return fs.remove(path.join(target, "child.pid"), { force: true }).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "PermissionDenied",
+                    module: "FileSystem",
+                    method: "remove",
+                    cause: Object.assign(new Error("directory remains locked"), { code: "EPERM" }),
+                  }),
+                ),
+              ),
+            );
+          },
+        });
+        yield* Effect.gen(function* () {
+          const lease = yield* acquireManagedCodexLease(root);
+          if (scenario === "recorded child") yield* lease.bindChild(999_999_999);
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, testFs),
+          Effect.provideService(ManagedCodexBootId, Effect.succeed(null)),
+          Effect.scoped,
+        );
+
+        const idle = yield* withManagedCodexLock(root, assertManagedCodexIdle(root)).pipe(
+          Effect.provideService(FileSystem.FileSystem, testFs),
+          Effect.provideService(ManagedCodexBootId, Effect.succeed(null)),
+          Effect.result,
+        );
+        expect(idle._tag).toBe("Success");
+        expect((yield* fs.readDirectory(root)).length).toBe(1);
+        yield* withManagedCodexLock(root, assertManagedCodexIdle(root));
         expect(yield* fs.readDirectory(root)).toEqual([]);
       }).pipe(Effect.scoped),
   );

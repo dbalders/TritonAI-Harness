@@ -15,6 +15,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
 export class ManagedCodexLockError extends Schema.TaggedError<ManagedCodexLockError>()(
@@ -133,6 +134,15 @@ export const withManagedCodexLock = <A, E, R>(runtimeRoot: string, task: Effect.
   );
 
 const SESSION_PREFIX = ".tritonai-codex-session.";
+const RELEASED_SESSION_PREFIX = ".tritonai-codex-released.";
+const removeReleasedLease = (fs: FileSystem.FileSystem, directory: string) =>
+  fs
+    .remove(directory, { recursive: true, force: true })
+    .pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not remove a released managed Codex session lease", { cause }),
+      ),
+    );
 // SystemBootEnvironmentInformation (90) returns the kernel's boot GUID, independent of wall time.
 // Layout: https://github.com/winsiderss/phnt/blob/master/ntexapi.h
 const WINDOWS_BOOT_ID_COMMAND = `
@@ -221,6 +231,10 @@ export const assertManagedCodexIdle = Effect.fn("assertManagedCodexIdle")(functi
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   for (const entry of yield* fs.readDirectory(runtimeRoot)) {
+    if (entry.startsWith(RELEASED_SESSION_PREFIX)) {
+      yield* removeReleasedLease(fs, path.join(runtimeRoot, entry));
+      continue;
+    }
     if (!entry.startsWith(SESSION_PREFIX)) continue;
     const [, recordedBoot] = entry.slice(SESSION_PREFIX.length).split(".");
     const currentBoot = bootKey(yield* yield* ManagedCodexBootId);
@@ -251,14 +265,32 @@ export const acquireManagedCodexLease = Effect.fn("acquireManagedCodexLease")(fu
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const boot = bootKey(yield* yield* ManagedCodexBootId);
-  const removeLease = (directory: string) =>
-    fs
-      .remove(directory, { recursive: true, force: true })
-      .pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Could not remove a managed Codex session lease", { cause }),
-        ),
-      );
+  const removeLease = (directory: string) => {
+    const released = path.join(
+      runtimeRoot,
+      `${RELEASED_SESSION_PREFIX}${path.basename(directory).slice(SESSION_PREFIX.length)}`,
+    );
+    // Publish release atomically before recursive cleanup can erase the child PID.
+    return fs.rename(directory, released).pipe(
+      Effect.retry({
+        while: (error) => {
+          const cause = error.reason.cause;
+          return (
+            typeof cause === "object" &&
+            cause !== null &&
+            "code" in cause &&
+            ["EPERM", "EACCES", "EBUSY"].includes(String(cause.code))
+          );
+        },
+        schedule: Schedule.spaced("250 millis"),
+        times: 8,
+      }),
+      Effect.andThen(removeReleasedLease(fs, released)),
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not mark a managed Codex session lease as released", { cause }),
+      ),
+    );
+  };
   let created: string | undefined;
   const directory = yield* Effect.acquireRelease(
     withManagedCodexLock(
@@ -275,7 +307,7 @@ export const acquireManagedCodexLease = Effect.fn("acquireManagedCodexLease")(fu
         return created;
       }).pipe(Effect.onError(() => (created ? removeLease(created) : Effect.void))),
     ),
-    // Failed cleanup keeps the lease conservative; idle checks can reap it once it is stale.
+    // The caller stops its child before this finalizer publishes release.
     removeLease,
   );
   return {
