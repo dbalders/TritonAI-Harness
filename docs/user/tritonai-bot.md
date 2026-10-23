@@ -12,6 +12,8 @@ mobile sign-in are unavailable; no manual device-code fallback is offered.
 
 The managed build supplies the service address. A custom service address can be
 set in **Settings → Connections** if your administrator asks you to use one.
+Changing services stops new tasks here and signs you out of the old service.
+Clearing a custom address restores the managed default.
 Enabling Bot does not grant Microsoft access, choose a model, or allow tasks to
 run on this computer. Each requires its own consent or setting.
 
@@ -19,6 +21,11 @@ To disable Bot, turn off its Experimental switch while connected to your Harness
 This signs out and stops new assignments here. Running work and delivery of saved
 results may finish. Your cloud bot and Microsoft permissions remain; use the bot's
 pause control and Microsoft connections page to manage those separately.
+
+An earlier Nightly may have saved a task-computer pairing before this switch
+existed. Experimental settings warns when that pairing remains active while
+Bot is off or unavailable. Choose **Stop Bot tasks here** to stop new assignments;
+running work and saved result delivery can finish.
 
 ## Chatting with your bot
 

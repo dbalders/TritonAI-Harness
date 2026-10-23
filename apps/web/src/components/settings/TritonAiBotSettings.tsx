@@ -1,16 +1,21 @@
 import { useState } from "react";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 
 import {
   useClientSettings,
   useClientSettingsHydrated,
   updateClientSettings,
 } from "../../hooks/useSettings";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import {
   BUILD_DEFAULT_BOT_SERVICE_URL,
   clearBotSessions,
   normalizeBotServiceUrl,
   resolveBotServiceUrl,
 } from "../dot/botService";
+import { DotClient, readDotSession } from "../dot/dotClient";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -22,33 +27,56 @@ export function TritonAiBotSettings() {
   const hydrated = useClientSettingsHydrated();
   const setting = useClientSettings((settings) => settings.tritonAiBotUrl);
   const updateSettings = updateClientSettings;
+  const environmentId = usePrimaryEnvironmentId();
+  const stop = useAtomCommand(serverEnvironment.stopBotTaskComputer, { reportFailure: false });
   const active = resolveBotServiceUrl(setting);
   // null shows the saved address, so a change elsewhere is never hidden behind a stale edit.
   const [edit, setEdit] = useState<string | null>(null);
   const draft = edit ?? active ?? "";
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const apply = (value: string | null) => {
+  const apply = async (value: string | null) => {
+    if (busy) return;
     setError(null);
-    setEdit(null);
-    if (resolveBotServiceUrl(value) !== active) clearBotSessions(sessionStorage);
-    void updateSettings({ tritonAiBotUrl: value });
+    setBusy(true);
+    try {
+      if (resolveBotServiceUrl(value) !== active) {
+        if (!environmentId)
+          throw new Error("Connect to your Harness to stop Bot tasks before changing services.");
+        const session = active ? readDotSession(sessionStorage, active) : null;
+        const result = await stop({
+          environmentId,
+          input: { apiUrl: active, ownerToken: session?.ownerToken ?? null },
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+        if (active && session) await new DotClient(active).signOut(session).catch(() => undefined);
+        clearBotSessions(sessionStorage);
+      }
+      await updateSettings({ tritonAiBotUrl: value });
+      setEdit(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not change the Bot service.");
+    } finally {
+      setBusy(false);
+    }
   };
   const save = () => {
-    if (!draft.trim()) return apply("");
+    if (!draft.trim()) return void apply(null);
     const url = normalizeBotServiceUrl(draft);
     if (!url) {
       setError("Enter an HTTPS address, such as https://bot.example.edu.");
       return;
     }
-    apply(url === BUILD_DEFAULT_BOT_SERVICE_URL ? null : url);
+    void apply(url === BUILD_DEFAULT_BOT_SERVICE_URL ? null : url);
   };
 
-  if (!enabled) return null;
+  // Keep configuration recovery reachable when an older override is unusable.
+  if (!enabled && active) return null;
 
   const description = !active
     ? "No service configured. Use the managed default or contact your administrator."
-    : setting === null
+    : setting === null || !setting.trim()
       ? "Using this build's default service. Sign in with your own account if this service is available to you."
       : "Using a custom service. Your bot session stays with this address.";
 
@@ -63,7 +91,7 @@ export function TritonAiBotSettings() {
               {error}
             </span>
           ) : (
-            "Changing or clearing the address signs you out of the previous service. The mobile app does not support TritonAI Bot yet."
+            "Clearing the address restores the managed default. Changing services stops new tasks here and signs you out of the previous service. Running work and saved result delivery can finish. The mobile app does not support TritonAI Bot yet."
           )
         }
         control={
@@ -77,16 +105,26 @@ export function TritonAiBotSettings() {
             <Input
               aria-label="TritonAI Bot service address"
               value={draft}
-              disabled={!hydrated}
+              disabled={!hydrated || busy}
               onChange={(event) => setEdit(event.target.value)}
               placeholder="https://"
               className="w-72"
             />
-            <Button size="xs" type="submit" disabled={!hydrated || draft.trim() === (active ?? "")}>
+            <Button
+              size="xs"
+              type="submit"
+              disabled={!hydrated || busy || draft.trim() === (active ?? "")}
+            >
               Save
             </Button>
             {setting !== null && BUILD_DEFAULT_BOT_SERVICE_URL ? (
-              <Button size="xs" variant="outline" type="button" onClick={() => apply(null)}>
+              <Button
+                size="xs"
+                variant="outline"
+                type="button"
+                disabled={busy}
+                onClick={() => void apply(null)}
+              >
                 Use default
               </Button>
             ) : null}

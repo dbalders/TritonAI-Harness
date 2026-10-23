@@ -10,6 +10,7 @@ import type {
   OrchestrationProjectShell,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
@@ -168,11 +169,20 @@ class FakeBot {
   resultStatuses: number[] = [];
   sessionValid = true;
   rejectedProgressTask: string | null = null;
+  missingProgressTask: string | null = null;
   supportsProgress = true;
+  enforceClaimLease = false;
+  readonly claimExpiries = new Map<string, number>();
+  readonly expiredProgressReports: string[] = [];
   ownerId = "owner@ucsd.edu";
   apiOrigin = API;
 
-  handle(path: string, headers: Record<string, string>, body: Record<string, unknown>) {
+  handle(
+    path: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown>,
+    now: number,
+  ) {
     this.calls.push({ path, headers, body });
     const worker = headers["x-triton-harness-token"];
     if (path === "/me") {
@@ -238,17 +248,29 @@ class FakeBot {
         status: 200,
         json: {
           ok: true,
-          tasks: ((body.tasks ?? []) as Array<{ taskId: string }>).map((task) => ({
-            taskId: task.taskId,
-            accepted: task.taskId !== this.rejectedProgressTask,
-            ...(task.taskId === this.rejectedProgressTask
-              ? { reason: "Claim worker changed" }
-              : {}),
-          })),
+          tasks: ((body.tasks ?? []) as Array<{ taskId: string }>)
+            .filter((task) => task.taskId !== this.missingProgressTask)
+            .map((task) => {
+              // Mirrors the service's strict two-hour claim check; progress cannot
+              // renew a lease that expired while the computer was asleep/offline.
+              const expired =
+                this.enforceClaimLease && (this.claimExpiries.get(task.taskId) ?? Infinity) <= now;
+              if (expired) this.expiredProgressReports.push(task.taskId);
+              const accepted = task.taskId !== this.rejectedProgressTask && !expired;
+              if (accepted) this.claimExpiries.set(task.taskId, now + 2 * 3_600_000);
+              return {
+                taskId: task.taskId,
+                accepted,
+                ...(!accepted
+                  ? { reason: expired ? "Claim expired" : "Claim worker changed" }
+                  : {}),
+              };
+            }),
         },
       };
     if (path === "/harness/tasks/claim") {
       const task = this.tasks.shift();
+      if (task) this.claimExpiries.set(task.taskId, now + Number(body.leaseSeconds) * 1000);
       return {
         status: 200,
         json: {
@@ -281,7 +303,7 @@ class FakeBot {
                 }),
               }),
             )
-          : Effect.sync(() => {
+          : Effect.map(Clock.currentTimeMillis, (now) => {
               const raw =
                 request.body._tag === "Uint8Array"
                   ? new TextDecoder().decode(request.body.body)
@@ -295,7 +317,7 @@ class FakeBot {
               const url = new URL(request.url);
               assert.strictEqual(url.origin, this.apiOrigin);
               const body = JSON.parse(raw) as Record<string, unknown>;
-              const reply = this.handle(url.pathname, headers, body);
+              const reply = this.handle(url.pathname, headers, body, now);
               return HttpClientResponse.fromWeb(
                 request,
                 Response.json(reply.json, { status: reply.status }),
@@ -1577,6 +1599,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         { taskId: "retry-input", title: "Input", prompt: "Inspect", attachments: [screenshot] },
       ];
       bot.attachmentStatus = 503;
+      bot.enforceClaimLease = true;
       return Effect.gen(function* () {
         yield* TestClock.setTime(START);
         const computer = yield* BotTaskComputer.BotTaskComputer;
@@ -1604,6 +1627,110 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         assert.lengthOf(harness.commands, 2);
         assert.lengthOf(bot.results, 0);
       }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect.each([
+    { kind: "new thirty-minute window", legacy: false, elapsed: 30 * 60_000 },
+    {
+      kind: "legacy window capped by the two-hour claim",
+      legacy: true,
+      elapsed: 2 * 3_600_000 + 1,
+    },
+  ])(
+    "settles expired unstarted downloads ($kind) before rejected progress can wedge new work",
+    ({ legacy, elapsed }) => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        { taskId: "expired-input", title: "Input", prompt: "Inspect", attachments: [screenshot] },
+      ];
+      bot.attachmentStatus = 503;
+      bot.enforceClaimLease = true;
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        assert.lengthOf(harness.commands, 0);
+        const journal = yield* readRecoveryJournal;
+        const held = yield* decodeRecoveryHeld(journal.held);
+        assert.deepInclude(held[0] as object, { inputRetryUntil: START + 30 * 60_000 });
+        if (legacy)
+          yield* writeRecoveryJournal({
+            ...journal,
+            held: held.map((task) => ({
+              ...(task as Record<string, unknown>),
+              inputRetryUntil: START + 24 * 3_600_000,
+            })),
+          });
+        bot.tasks = [{ taskId: "after-expiry", title: "Next", prompt: "Continue" }];
+        yield* TestClock.setTime(START + elapsed);
+        const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        assert.strictEqual(
+          bot.calls.filter((call) => call.path.includes("/attachments/")).length,
+          1,
+        );
+        assert.lengthOf(bot.results, 1);
+        assert.strictEqual(bot.results[0]!.taskId, "expired-input");
+        assert.strictEqual(bot.results[0]!.status, "failed");
+        assert.include(String(bot.results[0]!.result), "Nothing ran");
+        if (legacy) assert.include(bot.expiredProgressReports, "expired-input");
+        assert.lengthOf(harness.commands, 2);
+        assert.strictEqual((yield* restarted.getStatus).currentTask?.taskId, "after-expiry");
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect.each(["refused", "missing"] as const)(
+    "settles only explicitly refused, never-started claims (%s acknowledgement)",
+    (acknowledgement) => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = ["running", "queued"].map((taskId) => ({
+        taskId,
+        title: taskId,
+        prompt: "Inspect",
+      }));
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        assert.lengthOf(harness.commands, 2);
+        const before = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+        assert.deepInclude(
+          before.find((task) => (task as Record<string, unknown>).taskId === "queued") as object,
+          { started: false },
+        );
+        if (acknowledgement === "refused") bot.rejectedProgressTask = "queued";
+        else bot.missingProgressTask = "queued";
+        bot.tasks = [{ taskId: "later", title: "Later", prompt: "Continue" }];
+        yield* TestClock.adjust("30 seconds");
+        yield* computer.tick;
+        // A live dispatched turn never gets cancelled, failed or dispatched again.
+        assert.lengthOf(harness.commands, 2);
+        const after = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+        assert.deepInclude(
+          after.find((task) => (task as Record<string, unknown>).taskId === "running") as object,
+          { started: true, outcome: null },
+        );
+        if (acknowledgement === "refused") {
+          assert.lengthOf(bot.results, 1);
+          assert.deepInclude(bot.results[0]!, { taskId: "queued", status: "failed" });
+          assert.include(String(bot.results[0]!.result), "Nothing ran");
+          assert.isFalse(
+            after.some((task) => (task as Record<string, unknown>).taskId === "queued"),
+          );
+          assert.lengthOf(bot.tasks, 0, "new independent claims are no longer wedged");
+        } else {
+          assert.lengthOf(bot.results, 0);
+          assert.isTrue(
+            after.some((task) => (task as Record<string, unknown>).taskId === "queued"),
+          );
+          assert.lengthOf(bot.tasks, 1, "missing acknowledgements retain the progress gate");
+          assert.strictEqual((yield* computer.getStatus).state, "error");
+        }
+      }).pipe(Effect.provide(services(bot, harness, 4)));
     },
   );
 

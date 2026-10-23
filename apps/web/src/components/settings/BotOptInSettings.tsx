@@ -7,6 +7,7 @@ import {
   updateClientSettings,
 } from "../../hooks/useSettings";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { clearBotSessions, resolveBotServiceUrl } from "../dot/botService";
@@ -24,30 +25,45 @@ export function BotOptInSettings() {
   const update = updateClientSettings;
   const environmentId = usePrimaryEnvironmentId();
   const stop = useAtomCommand(serverEnvironment.stopBotTaskComputer, { reportFailure: false });
+  const { data: local, refresh: refreshLocal } = useEnvironmentQuery(
+    environmentId ? serverEnvironment.botTaskComputer({ environmentId, input: {} }) : null,
+  );
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const serviceUrl = resolveBotServiceUrl(setting);
+  const earlierPairing =
+    (!enabled || !serviceUrl) && local && local.state !== "off" && local.state !== "replaced";
+  const stopPairing = async () => {
+    if (!environmentId)
+      throw new Error("Connect to your Harness to stop Bot tasks before disabling it.");
+    // An upgrade can retain a worker for a different address than the current setting.
+    // Only send an owner token to the service that issued it.
+    const pairedUrl = local?.apiUrl ?? serviceUrl;
+    const session = pairedUrl ? readDotSession(sessionStorage, pairedUrl) : null;
+    const result = await stop({
+      environmentId,
+      input: { apiUrl: pairedUrl, ownerToken: session?.ownerToken ?? null },
+    });
+    if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+    refreshLocal();
+    if (pairedUrl && session)
+      await new DotClient(pairedUrl).signOut(session).catch(() => undefined);
+    clearBotSessions(sessionStorage);
+  };
   const change = async (next: boolean) => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
       if (!next) {
-        const session = serviceUrl ? readDotSession(sessionStorage, serviceUrl) : null;
         // Stop claiming before hiding the UI. Held results remain durable and deliverable.
-        if (!environmentId)
-          throw new Error("Connect to your Harness to stop Bot tasks before disabling it.");
-        const result = await stop({
-          environmentId,
-          input: { apiUrl: serviceUrl, ownerToken: session?.ownerToken ?? null },
-        });
-        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-        if (serviceUrl && session)
-          await new DotClient(serviceUrl).signOut(session).catch(() => undefined);
-        clearBotSessions(sessionStorage);
+        await stopPairing();
       }
-      await update({ tritonAiBotEnabled: next });
+      await update({
+        tritonAiBotEnabled: next,
+        ...(next && setting !== null && !setting.trim() ? { tritonAiBotUrl: null } : {}),
+      });
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Could not change TritonAI Bot. Try again.",
@@ -61,16 +77,31 @@ export function BotOptInSettings() {
       {...searchableSetting("tritonai-bot-opt-in")}
       description="Your personal bot for Outlook, calendar, OneDrive and Microsoft To Do. Sign in with your own account, then choose your Microsoft permissions. Running approved tasks on this computer requires a separate Allow. Turning this off signs out and stops new tasks here; work already running and saved result delivery can finish."
       status={
-        error ? (
-          <span role="alert" className="text-destructive">
-            {error}
-          </span>
-        ) : !serviceUrl ? (
-          "The Bot service is unavailable in this build. Contact your administrator."
-        ) : undefined
+        <>
+          {error ? (
+            <span role="alert" className="text-destructive">
+              {error}
+            </span>
+          ) : null}
+          {earlierPairing ? (
+            <span role="status">
+              An earlier pairing is still active on this Harness while Experimental Bot is{" "}
+              {enabled ? "unavailable" : "off"}. Stop new tasks here to retire that permission. Work
+              already running and saved result delivery can finish.
+            </span>
+          ) : null}
+          {!serviceUrl
+            ? "The Bot service is unavailable. Set a valid service address below or contact your administrator."
+            : null}
+        </>
       }
       control={
         <div className="flex items-center gap-2">
+          {earlierPairing ? (
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => void change(false)}>
+              Stop Bot tasks here
+            </Button>
+          ) : null}
           {enabled && serviceUrl ? (
             <Button size="sm" variant="outline" onClick={() => void navigate({ to: "/dot" })}>
               Open Bot

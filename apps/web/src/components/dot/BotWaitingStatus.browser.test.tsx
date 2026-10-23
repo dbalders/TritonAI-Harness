@@ -117,6 +117,79 @@ describe("waiting status", async () => {
     expect(container.querySelector("button")).toBeNull();
   });
 
+  it("resamples new waiting data after a backward clock correction", async () => {
+    await using _test = await setupTest();
+    const waiting: DotWaitingStatus = {
+      code: "queued",
+      on: "bot",
+      text: "Waiting for the next check.",
+      next: [{ kind: "none", what: "Nothing is scheduled." }],
+    };
+    await act(async () =>
+      root.rerender(<BotWaitingStatus waiting={waiting} subject="Clock correction" />),
+    );
+    vi.setSystemTime(now - 60 * 60_000);
+    await act(async () => {
+      await root.rerender(
+        <BotWaitingStatus
+          waiting={{
+            ...waiting,
+            next: [{ kind: "check", at: iso(-30), what: "Check after clock correction" }],
+          }}
+          subject="Clock correction"
+        />,
+      );
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(text()).toContain("Next check: Check after clock correction ·");
+    expect(text()).not.toContain("overdue");
+    expect(vi.getTimerCount()).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+    });
+    expect(text()).toContain("Next check overdue: Check after clock correction was due");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("waits for distant checks without overflowing into repeated immediate wakes", async () => {
+    await using _test = await setupTest();
+    const schedule = globalThis.setTimeout;
+    using _boundedDelays = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) => {
+        expect(delay ?? 0).toBeLessThanOrEqual(2_147_483_647);
+        return schedule(callback, delay, ...args);
+      });
+    await act(async () => {
+      await root.rerender(
+        <BotWaitingStatus
+          waiting={{
+            code: "snoozed",
+            on: "bot",
+            text: "Snoozed for thirty days.",
+            next: [{ kind: "check", at: iso(30 * 24 * 60), what: "Thirty-day check" }],
+          }}
+          subject="Long snooze"
+        />,
+      );
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const before = Date.now();
+    await act(async () => {
+      await vi.advanceTimersToNextTimerAsync();
+    });
+    expect(Date.now() - before).toBeGreaterThanOrEqual(24 * 60 * 60_000);
+    expect(text()).not.toContain("overdue");
+    expect(vi.getTimerCount()).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersToNextTimerAsync();
+    });
+    expect(text()).toContain("Next check overdue: Thirty-day check was due");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("drops malformed explanations so older or partial responses keep their own wording", async () => {
     await using _test = await setupTest();
     expect(usableWaiting(undefined)).toBeUndefined();

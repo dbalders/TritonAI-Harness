@@ -112,6 +112,10 @@ const transferRetryDelay = (attempt: number) =>
   Math.min(30 * 60_000, 30_000 * 2 ** Math.min(attempt - 1, 16));
 /** Retry uploads for one day after capturing the completed turn, then report the missing files. */
 const OUTPUT_RETRY_WINDOW_MS = 24 * 3_600_000;
+/** Input retries must finish well inside the original two-hour claim. */
+const INPUT_RETRY_WINDOW_MS = 30 * 60_000;
+const INPUT_RETRY_EXPIRED =
+  "The file download retry window ended. Nothing ran. Ask your bot to try this assignment again.";
 const PROJECT_GONE = "The project for TritonAI Bot tasks no longer exists.";
 const WORKSPACE_CHANGED = "The assignment workspace changed before dispatch.";
 
@@ -1176,7 +1180,10 @@ export const make = Effect.gen(function* () {
       if (Cause.squash(started) === WORKSPACE_CHANGED && task.operation === undefined) return next;
       if (Cause.squash(started) === TRANSFER_RETRY) {
         const now = yield* Clock.currentTimeMillis;
-        const inputRetryUntil = held.inputRetryUntil ?? now + OUTPUT_RETRY_WINDOW_MS;
+        const inputRetryUntil = Math.min(
+          held.inputRetryUntil ?? now + INPUT_RETRY_WINDOW_MS,
+          Date.parse(held.claimedAt) + LEASE_SECONDS * 1000,
+        );
         if (now < inputRetryUntil) {
           const transferFailures = (held.transferFailures ?? 0) + 1;
           yield* save({
@@ -1374,11 +1381,32 @@ export const make = Effect.gen(function* () {
   const pass = Effect.gen(function* () {
     const saved = yield* readStored;
     if (!saved) return;
-    const initial = yield* migrateHeldBindings(saved);
+    let initial = yield* migrateHeldBindings(saved);
     const now = yield* Clock.currentTimeMillis;
+    const held = initial.held.map((task) =>
+      !task.started &&
+      task.outcome === null &&
+      task.inputRetryUntil !== undefined &&
+      now >= Math.min(task.inputRetryUntil, Date.parse(task.claimedAt) + LEASE_SECONDS * 1000)
+        ? {
+            ...task,
+            assignment: undefined,
+            nextTransferAt: undefined,
+            inputRetryUntil: undefined,
+            outcome: { status: "failed" as const, result: INPUT_RETRY_EXPIRED },
+          }
+        : task,
+    );
+    if (held.some((task, index) => task !== initial.held[index])) {
+      // Do this before heartbeat: an expired claim can reject progress, but its
+      // never-started failure result must still settle and unblock this worker.
+      initial = { ...initial, held };
+      yield* writeStored(initial);
+    }
     const report = yield* executionReport(initial);
     let reachable = true;
     const rejectedProgress = new Map<string, string>();
+    const refusedProgress = new Set<string>();
     // Publish terminal progress before final delivery removes its active journal entry.
     if (initial.active) {
       const publishable = new Set(
@@ -1424,6 +1452,13 @@ export const make = Effect.gen(function* () {
                 ? ack.reason.slice(0, 200)
                 : "No valid progress acknowledgement";
             rejectedProgress.set(task.taskId, reason);
+            if (
+              typeof ack === "object" &&
+              ack !== null &&
+              "accepted" in ack &&
+              ack.accepted === false
+            )
+              refusedProgress.add(task.taskId);
           }
         }
       }
@@ -1432,6 +1467,27 @@ export const make = Effect.gen(function* () {
           ? { state: "idle", message: null, lastCheckInAt: isoAt(now), lastCheckInMs: now }
           : { state: "error", message: "Could not reach TritonAI Bot. Retrying." },
       );
+    }
+    const heldAfterRefusal = initial.held.map((task) =>
+      !task.started && task.outcome === null && refusedProgress.has(task.taskId)
+        ? {
+            ...task,
+            assignment: undefined,
+            nextTransferAt: undefined,
+            inputRetryUntil: undefined,
+            outcome: {
+              status: "failed" as const,
+              result:
+                "Your Bot could not confirm this assignment. Nothing ran. Ask your bot to try again.",
+            },
+          }
+        : task,
+    );
+    if (heldAfterRefusal.some((task, index) => task !== initial.held[index])) {
+      // A refused unstarted assignment can be settled safely. An uncertain dispatch
+      // (started:true) and a missing acknowledgement must keep their existing gate.
+      initial = { ...initial, held: heldAfterRefusal };
+      yield* writeStored(initial);
     }
     let stored = yield* settleHeld(initial, now);
     if (!stored.active) {

@@ -447,11 +447,9 @@ export const ClientSettingsSchema = Schema.Struct({
   tritonAiFirstRunOnboardingCompleted: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
-  /**
-   * TritonAI Bot service address. `null` follows the build's default service,
-   * an empty string turns the bot off, and any other value replaces the default.
-   */
+  /** Experimental opt-in; never grants sign-in, Microsoft access, or task execution. */
   tritonAiBotEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Service address override. Null and legacy empty strings follow the build default. */
   tritonAiBotUrl: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
