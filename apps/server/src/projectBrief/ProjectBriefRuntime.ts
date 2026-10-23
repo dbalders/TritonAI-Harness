@@ -495,26 +495,25 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const boundRun = (input: ExecutionRef) =>
-    Effect.gen(function* () {
-      yield* project(input.projectId);
-      const records = yield* threads.getProjectThreadRecords(input, ["runs", "messages"]).pipe(
-        Effect.mapError(
-          () =>
-            new ProjectBriefError({
-              code: "unavailable",
-              message: "The execution thread is no longer available in this project.",
-            }),
-        ),
-      );
-      const run = currentRun(records.runs, input.runId);
-      if (run === undefined)
-        return yield* new ProjectBriefError({
-          code: "unavailable",
-          message: "The exact execution run could not be confirmed.",
-        });
-      return { records, run };
-    });
+  const boundRun = Effect.fn("ProjectBriefRuntime.boundRun")(function* (input: ExecutionRef) {
+    yield* project(input.projectId);
+    const records = yield* threads.getProjectThreadRecords(input, ["runs", "messages"]).pipe(
+      Effect.mapError(
+        () =>
+          new ProjectBriefError({
+            code: "unavailable",
+            message: "The execution thread is no longer available in this project.",
+          }),
+      ),
+    );
+    const run = currentRun(records.runs, input.runId);
+    if (run === undefined)
+      return yield* new ProjectBriefError({
+        code: "unavailable",
+        message: "The exact execution run could not be confirmed.",
+      });
+    return { records, run };
+  });
   const reconcile: ProjectBriefRuntime["Service"]["reconcile"] = Effect.fn(
     "ProjectBriefRuntime.reconcile",
   )(function* (input) {

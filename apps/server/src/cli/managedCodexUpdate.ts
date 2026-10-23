@@ -1,15 +1,8 @@
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import * as PlatformError from "effect/PlatformError";
-import * as Scope from "effect/Scope";
 import { Argument, Command } from "effect/cli";
-import { ChildProcessSpawner } from "effect/process";
-
 import * as ProcessRunner from "../processRunner.ts";
 import {
-  type ManagedCodexUpdateError,
   managedCodexUpdateCommandName,
   updateTritonAiManagedCodex,
 } from "../provider/managedCodexUpdate.ts";

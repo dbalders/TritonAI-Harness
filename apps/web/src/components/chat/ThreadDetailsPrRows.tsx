@@ -1,19 +1,23 @@
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import type { EnvironmentId, ScopedThreadRef, ThreadPullRequestLink } from "@t3tools/contracts";
 import {
+  pullRequestListLines,
   resolveThreadPullRequestChains,
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
 } from "@t3tools/shared/threadPullRequests";
 import { Minus, Plus } from "lucide";
 import { useState, type ComponentProps, type MouseEvent as ReactMouseEvent } from "react";
+
 import { findProjectOnChangeRequestHost, parseChangeRequestUrl } from "~/lib/openPullRequestLink";
+
 import { useProjects } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { pullRequestListLines } from "../pullRequest/pullRequestListLines";
+
 import { MorphIcon } from "~/components/MorphIcon";
 import { linkedPullRequestSnapshotStatus, prStatusIndicator } from "../ThreadStatusIndicators";
+
 import { ThreadDetailsPrRow } from "./ThreadDetailsPrRow";
 
 function ThreadDetailsPrLinkRow({
@@ -71,7 +75,6 @@ export function ThreadDetailsPrRows({
 }) {
   const [expanded, setExpanded] = useState(false);
   const watch = useAtomCommand(threadEnvironment.watchPullRequest, { reportFailure: true });
-  // Only watched links get the eye; the row hides it once the server records the stop.
   const stopWatching = (link: ThreadPullRequestLink | null) =>
     link?.watch === undefined
       ? undefined
@@ -98,8 +101,9 @@ export function ThreadDetailsPrRows({
   return (
     <>
       {currentRow}
-      {expanded
-        ? rest.map((link) => (
+      {expanded ? (
+        <div data-thread-details-pr-list className="flex flex-col">
+          {rest.map((link) => (
             <ThreadDetailsPrLinkRow
               key={threadPullRequestKeyOf(link)}
               environmentId={row.environmentId}
@@ -108,8 +112,9 @@ export function ThreadDetailsPrRows({
               onActed={row.onActed}
               onStopWatching={stopWatching(link)}
             />
-          ))
-        : null}
+          ))}
+        </div>
+      ) : null}
       <ThreadDetailsControl
         variant="ghost"
         size="sm"

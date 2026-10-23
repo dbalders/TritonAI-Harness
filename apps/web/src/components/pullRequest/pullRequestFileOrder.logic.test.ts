@@ -2,7 +2,6 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 
-/** Only the path and the patch's own lines matter here; the viewer fills the rest in. */
 function file(name: string, additionLines: ReadonlyArray<string> = []): FileDiffMetadata {
   return { name, hunks: [], additionLines, deletionLines: [] } as unknown as FileDiffMetadata;
 }
@@ -70,8 +69,6 @@ describe("orderDiffFiles", () => {
   });
 
   it("falls back to the specifier's last segment when the path does not line up", () => {
-    // An aliased import (`~/lib/b`) resolves to nothing on disk here, but the diff has only one
-    // file that could be meant.
     expect(order([file("src/a.ts", ['import { b } from "~/lib/b";']), file("lib/b.ts")])).toEqual([
       "lib/b.ts",
       "src/a.ts",

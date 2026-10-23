@@ -15,7 +15,6 @@ const refreshIconVariants = cva("", {
   },
 });
 
-/** Keep the refresh glyph in place while its owning action is running. */
 export function RefreshIcon({
   refreshing = false,
   className,

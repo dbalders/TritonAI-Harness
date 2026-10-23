@@ -1,13 +1,17 @@
+import { APP_DISPLAY_NAME } from "../branding";
+import { hasCloudPublicConfig } from "../cloud/publicConfig";
+import { isLocalEnvironmentDisabled } from "../localEnvironment";
+import { LinkIcon, PlusIcon } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
-import { LinkIcon, PlusIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
-import { isLocalEnvironmentDisabled } from "../localEnvironment";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { isElectron } from "../env";
 import { NoProjectsHero } from "../components/NoProjectsHero";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
+import { HostedEmptyState } from "../components/HostedEmptyState";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
@@ -19,8 +23,6 @@ import {
   useThreadShells,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
-import { APP_DISPLAY_NAME } from "~/branding";
-import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
@@ -28,17 +30,12 @@ function ChatIndexRouteView() {
 
   if (authGateState.status === "hosted-static") {
     if (!isReady) return null;
-    if (environments.length === 0) return <HostedStaticOnboardingState />;
+    if (environments.length === 0) return <HostedEmptyState />;
   }
 
   return <IndexDraftLanding />;
 }
 
-/**
- * Landing on the index route drops straight into a draft thread for the most
- * recently active project, so the first screen is a prompt instead of a dead
- * end. Falls back to an add-project hero when no project exists yet.
- */
 function IndexDraftLanding() {
   const projects = useProjects();
   const threads = useThreadShells();
@@ -48,46 +45,34 @@ function IndexDraftLanding() {
   // Read at effect time: this page stays mounted while a navigation away from
   // "/" is still loading, but the router already points at the new location.
   const isStillOnIndex = useEffectEvent(() => router.state.location.pathname === "/");
-  const startingRef = useRef(false);
+  const startedAttemptRef = useRef<number | null>(null);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
-  const mostRecentProject = useMemo(
-    () =>
-      bootstrapped
-        ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
-        : null,
-    [bootstrapped, projects, threads],
-  );
+  const mostRecentProject =
+    sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null;
+  const attempt = startState.retryRequest;
 
   useEffect(() => {
     // Starting a draft after the user has left would replace the page they picked.
-    if (mostRecentProject === null || startingRef.current || !isStillOnIndex()) {
+    if (mostRecentProject === null || startedAttemptRef.current === attempt || !isStillOnIndex()) {
       return;
     }
     const projectRef = scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id);
-    // A project removed since this render is gone from the store; the next
-    // render picks another one.
     if (readProject(projectRef) === null) {
       return;
     }
-    startingRef.current = true;
+    startedAttemptRef.current = attempt;
     void handleNewThread(projectRef, { replace: true })
       .then((opened) => {
-        // The project was removed while its draft started; land on the next one.
         if (opened === null) {
-          startingRef.current = false;
           setStartState((state) => ({ ...state, retryRequest: state.retryRequest + 1 }));
         }
       })
       .catch(() => {
-        startingRef.current = false;
         setStartState((state) => ({ ...state, failed: true }));
       });
-  }, [handleNewThread, mostRecentProject, startState.retryRequest]);
+  }, [attempt, handleNewThread, mostRecentProject]);
 
-  if (!bootstrapped) {
-    return null;
-  }
   if (mostRecentProject !== null) {
     return startState.failed ? (
       <DraftStartError
@@ -100,9 +85,8 @@ function IndexDraftLanding() {
       />
     ) : null;
   }
-  // First-run routing to the welcome wizard happens in FirstRunGate at the
-  // root, before this route ever renders.
-  return <NoProjectsHero />;
+  // A pending environment cannot prove the workspace is empty.
+  return bootstrapped ? <NoProjectsHero /> : null;
 }
 
 function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {

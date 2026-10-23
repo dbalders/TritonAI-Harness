@@ -1,6 +1,6 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { useCallback, useMemo, useRef } from "react";
+import { useRef } from "react";
 import { waitForProject } from "../firstRunOnboarding";
 import { inferProjectTitleFromPath } from "../lib/projectPaths";
 import { newProjectId } from "../lib/utils";
@@ -19,18 +19,15 @@ export function useTritonAiProject(environmentId: EnvironmentId | null) {
     label: "guided tour project create",
     reportFailure: false,
   });
-  const existing = useMemo(
-    () =>
-      projects.find(
-        (project) =>
-          project.environmentId === environmentId && isTritonAiWorkspacePath(project.workspaceRoot),
-      ) ?? null,
-    [environmentId, projects],
-  );
+  const existing =
+    projects.find(
+      (project) =>
+        project.environmentId === environmentId && isTritonAiWorkspacePath(project.workspaceRoot),
+    ) ?? null;
   // Remembers a project created here until the project list catches up, so a second
   // run never tries to create the folder again.
   const created = useRef<EnvironmentProject | null>(null);
-  return useCallback(async (): Promise<EnvironmentProject | null> => {
+  return async (): Promise<EnvironmentProject | null> => {
     if (existing) return existing;
     if (created.current?.environmentId === environmentId) return created.current;
     if (!environmentId) return null;
@@ -49,5 +46,5 @@ export function useTritonAiProject(environmentId: EnvironmentId | null) {
     if (result._tag === "Failure") return null;
     created.current = await waitForProject({ environmentId, projectId, timeoutMs: 5_000 });
     return created.current;
-  }, [createProject, environmentId, existing]);
+  };
 }

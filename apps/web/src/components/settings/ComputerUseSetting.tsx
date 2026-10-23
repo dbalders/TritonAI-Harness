@@ -51,13 +51,15 @@ export function ComputerUseSetting() {
     watcher.current?.stop();
     setPending(true);
     setError(null);
-    try {
-      setState(await bridge.setComputerUseEnabled(enabled));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not update computer use.");
-    } finally {
+    return await (async () => {
+      try {
+        setState(await bridge.setComputerUseEnabled(enabled));
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Could not update computer use.");
+      }
+    })().finally(async () => {
       setPending(false);
-    }
+    });
   };
 
   return (

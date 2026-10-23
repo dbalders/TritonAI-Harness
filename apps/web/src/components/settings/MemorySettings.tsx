@@ -11,7 +11,7 @@ import {
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { ChevronDownIcon, FolderOpenIcon } from "lucide-react";
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { resolveAndPersistPreferredEditor } from "../../editorPreferences";
 import { formatEnvironmentQueryError } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -157,29 +157,22 @@ export function MemorySettingsSection() {
   const [expanded, setExpanded] = useState(false);
   const [folderErrors, setFolderErrors] = useState<Readonly<Record<string, string>>>({});
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, { reportFailure: false });
-  const statusesAtom = useMemo(
-    () =>
-      Atom.make((get) =>
-        connectedEnvironments.map((environment) => {
-          const result = get(
-            serverEnvironment.memoryStatus({ environmentId: environment.environmentId, input: {} }),
-          );
-          return {
-            environmentId: environment.environmentId,
-            status: Option.getOrNull(AsyncResult.value(result)),
-            error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
-          };
-        }),
-      ),
-    [connectedEnvironments],
+  const statusesAtom = Atom.make((get) =>
+    connectedEnvironments.map((environment) => {
+      const result = get(
+        serverEnvironment.memoryStatus({ environmentId: environment.environmentId, input: {} }),
+      );
+      return {
+        environmentId: environment.environmentId,
+        status: Option.getOrNull(AsyncResult.value(result)),
+        error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
+      };
+    }),
   );
   const statuses = useAtomValue(statusesAtom);
-  const refresh = useCallback(
-    (environmentId: EnvironmentId) => {
-      registry.refresh(serverEnvironment.memoryStatus({ environmentId, input: {} }));
-    },
-    [registry],
-  );
+  const refresh = (environmentId: EnvironmentId) => {
+    registry.refresh(serverEnvironment.memoryStatus({ environmentId, input: {} }));
+  };
   const { operations, run, finishSignIn } = useMemorySyncActions(refresh);
   const settingsKey = JSON.stringify(
     connectedEnvironments.map((environment) => [

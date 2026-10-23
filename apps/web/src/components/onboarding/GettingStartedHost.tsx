@@ -11,6 +11,7 @@ import {
   openGettingStarted,
   updateGettingStarted,
   useGettingStarted,
+  useGettingStartedEnabled,
 } from "../../onboarding/gettingStartedState";
 import { useGettingStartedActions } from "../../onboarding/useGettingStartedActions";
 import { isTritonAiCodeBrand } from "../../tritonAiWorkspace";
@@ -23,8 +24,9 @@ import { useIntegrationConnection } from "./useIntegrationConnection";
 export function GettingStartedSidebarEntry() {
   const environmentId = usePrimaryEnvironmentId();
   const state = useGettingStarted();
+  const enabled = useGettingStartedEnabled();
   const { isMobile, setOpenMobile } = useSidebar();
-  if (!environmentId || !isTritonAiCodeBrand(APP_BASE_NAME)) return null;
+  if (!enabled || !environmentId || !isTritonAiCodeBrand(APP_BASE_NAME)) return null;
   return (
     <GettingStartedEntryButton
       active={state.open && !state.paused}
@@ -55,6 +57,7 @@ function usableMail(integration: IntegrationSummary | null): boolean {
 /** The chapter tray never replaces a route or traps focus; exercises use ordinary app controls. */
 export function GettingStartedHost() {
   const state = useGettingStarted();
+  const enabled = useGettingStartedEnabled();
   const environmentId = usePrimaryEnvironmentId();
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -63,6 +66,7 @@ export function GettingStartedHost() {
   const [computerHelpGeneration, setComputerHelpGeneration] = useState<number | null>(null);
   const computerHelpSeen = computerHelpGeneration === state.generation;
   const relevantConnection =
+    enabled &&
     state.startedAt !== null &&
     !state.paused &&
     state.environmentId === environmentId &&
@@ -105,6 +109,7 @@ export function GettingStartedHost() {
   }, [environmentId, mail, state.activeChapter, state.completed, state.generation]);
 
   if (
+    !enabled ||
     !state.open ||
     state.paused ||
     !state.startedAt ||

@@ -1,8 +1,7 @@
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import { isValidElement, type MouseEvent, type ReactElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { SidebarUpdateReleaseNotes } from "./SidebarUpdateReleaseNotes";
-
 const testState = vi.hoisted(() => ({
   addToast: vi.fn(),
 }));
@@ -71,6 +70,26 @@ function renderNotes(state: DesktopUpdateState, openExternal = vi.fn().mockResol
 describe("SidebarUpdateReleaseNotes", () => {
   beforeEach(() => {
     testState.addToast.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("uses the configured repository for release links", () => {
+    vi.stubEnv("T3CODE_DESKTOP_UPDATE_REPOSITORY", "JustYannicc/t3code");
+    const anchors = collectAnchors(
+      renderNotes({
+        ...baseState,
+        releaseNotes: [{ version: "0.0.36-nightly.3", items: ["Change 3"], totalItems: 1 }],
+        omittedReleaseCount: 1,
+      }),
+    );
+
+    expect(anchors.map(({ props }) => props.href)).toEqual([
+      "https://github.com/JustYannicc/t3code/releases/tag/v0.0.36-nightly.3",
+      "https://github.com/JustYannicc/t3code/releases",
+    ]);
   });
 
   it("links each preview to its exact release and labels hidden changes", () => {

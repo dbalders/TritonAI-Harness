@@ -52,7 +52,6 @@ describe("loadPreviewWebviewConfig", () => {
         },
       });
 
-      // The partition is derived in main from both, so both have to arrive.
       expect(requested).toEqual({ environmentId, profileId: "work" });
       expect(result).toEqual(config);
     }),

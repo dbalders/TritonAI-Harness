@@ -522,7 +522,6 @@ describe("RpcSessionFactory", () => {
             Effect.forkChild,
           );
           yield* Deferred.await(started);
-          // A live end marker makes a missing or stale replay event fail without a timeout.
           const marker: ServerConfigStreamEventType = {
             version: 1,
             type: "keybindingsUpdated",
@@ -1088,10 +1087,22 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
-  it.effect("closes the session after 15 seconds without a frame from the server", () =>
+  // Over T3 Connect too: the socket opened, so blaming DNS or a firewall misleads.
+  it.effect.each([
+    { relay: false, label: "direct" },
+    { relay: true, label: "relay" },
+  ])("closes the $label session after 15 seconds without a frame from the server", ({ relay }) =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
-      const session = yield* factory.connect(PREPARED);
+      const session = yield* factory.connect({
+        ...PREPARED,
+        target: relay
+          ? new RelayConnectionTarget({
+              environmentId: TARGET.environmentId,
+              label: TARGET.label,
+            })
+          : TARGET,
+      });
       const readyFiber = yield* Effect.forkChild(session.ready);
       const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
       const socket = yield* awaitSocket(sockets);
@@ -1113,7 +1124,8 @@ describe("RpcSessionFactory", () => {
       expect(error).toBeInstanceOf(ConnectionTransientError);
       expect(error).toMatchObject({
         reason: "transport",
-        detail: "Test environment stopped responding.",
+        detail:
+          "Test environment stopped responding for 15s. It may be overloaded, asleep, or off the network.",
       });
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
@@ -1128,7 +1140,6 @@ describe("RpcSessionFactory", () => {
       yield* completeInitialConfig(socket);
       yield* Fiber.join(readyFiber);
 
-      // The consumer takes one event and stops pulling, so the stream buffer fills.
       const consuming = yield* Deferred.make<void>();
       const streamFiber = yield* session.client[WS_METHODS.subscribeServerConfig]({}).pipe(
         Stream.runForEach(() =>

@@ -125,73 +125,74 @@ const make = Effect.gen(function* () {
   const locks = yield* KeyedLock.make<ProjectId>();
   const changes = yield* PubSub.sliding<ProjectId>(32);
   const scope = yield* Effect.scope;
-  const read = (projectId: ProjectId) =>
-    Effect.gen(function* () {
-      const rows = yield* sql<{
-        state_json: string;
-      }>`SELECT state_json FROM project_briefs WHERE project_id=${projectId}`.pipe(
-        Effect.mapError(unavailable),
-      );
-      if (!rows[0]) return initial(projectId);
-      return yield* decodeStored(rows[0].state_json).pipe(Effect.mapError(unavailable));
-    });
-  const replay = (projectId: ProjectId, requestId: string, payload: unknown) =>
-    Effect.gen(function* () {
-      const rows = yield* sql<{
-        payload_digest: string;
-      }>`SELECT payload_digest FROM project_brief_requests WHERE project_id=${projectId} AND request_id=${requestId}`.pipe(
-        Effect.mapError(unavailable),
-      );
-      if (!rows[0]) return false;
-      if (rows[0].payload_digest !== digest(payload))
-        return yield* fail("conflict", "That request id was already used for different work.");
-      return true;
-    });
-  const save = (
+  const read = Effect.fn("ProjectBriefService.read")(function* (projectId: ProjectId) {
+    const rows = yield* sql<{
+      state_json: string;
+    }>`SELECT state_json FROM project_briefs WHERE project_id=${projectId}`.pipe(
+      Effect.mapError(unavailable),
+    );
+    if (!rows[0]) return initial(projectId);
+    return yield* decodeStored(rows[0].state_json).pipe(Effect.mapError(unavailable));
+  });
+  const replay = Effect.fn("ProjectBriefService.replay")(function* (
+    projectId: ProjectId,
+    requestId: string,
+    payload: unknown,
+  ) {
+    const rows = yield* sql<{
+      payload_digest: string;
+    }>`SELECT payload_digest FROM project_brief_requests WHERE project_id=${projectId} AND request_id=${requestId}`.pipe(
+      Effect.mapError(unavailable),
+    );
+    if (!rows[0]) return false;
+    if (rows[0].payload_digest !== digest(payload))
+      return yield* fail("conflict", "That request id was already used for different work.");
+    return true;
+  });
+  const save = Effect.fn("ProjectBriefService.save")(function* (
     previous: ProjectBriefState,
     next: ProjectBriefState,
     receipt?: { requestId: string; payload: unknown },
     launch?: Launch,
     recovery?: { retireCommandId?: string; archive?: ProjectBriefArchive },
-  ) =>
-    Effect.gen(function* () {
-      const state = yield* decoding({ ...next, revision: previous.revision + 1 }).pipe(
-        Effect.mapError(unavailable),
+  ) {
+    const state = yield* decoding({ ...next, revision: previous.revision + 1 }).pipe(
+      Effect.mapError(unavailable),
+    );
+    const serialized = encodeStored(state);
+    if (new TextEncoder().encode(serialized).byteLength > 2_000_000)
+      return yield* fail(
+        "invalid_request",
+        "This brief has reached its 2 MB limit. Finish or discard active work, then archive it to start a new brief.",
       );
-      const serialized = encodeStored(state);
-      if (new TextEncoder().encode(serialized).byteLength > 2_000_000)
-        return yield* fail(
-          "invalid_request",
-          "This brief has reached its 2 MB limit. Finish or discard active work, then archive it to start a new brief.",
-        );
-      yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            const rows = yield* sql<{
-              revision: number;
-            }>`SELECT revision FROM project_briefs WHERE project_id=${state.projectId}`;
-            if ((rows[0]?.revision ?? 0) !== previous.revision)
-              return yield* fail("conflict", "The project changed. Refresh before trying again.");
-            yield* sql`INSERT INTO project_briefs (project_id,revision,state_json) VALUES (${state.projectId},${state.revision},${serialized}) ON CONFLICT(project_id) DO UPDATE SET revision=excluded.revision,state_json=excluded.state_json`;
-            if (receipt)
-              yield* sql`INSERT INTO project_brief_requests (project_id,request_id,payload_digest) VALUES (${state.projectId},${receipt.requestId},${digest(receipt.payload)})`;
-            if (launch)
-              yield* sql`INSERT INTO project_brief_dispatches (project_id,command_id,launch_json) VALUES (${state.projectId},${launch.commandId},${encodeLaunch(launch)})`;
-            if (recovery?.retireCommandId)
-              yield* sql`DELETE FROM project_brief_dispatches WHERE project_id=${state.projectId} AND command_id=${recovery.retireCommandId}`;
-            if (recovery?.archive) {
-              const archive = recovery.archive;
-              yield* sql`INSERT INTO project_brief_archives (project_id,archive_id,archived_at,state_json) VALUES (${state.projectId},${archive.id},${archive.archivedAt},${encodeStored(archive.state)})`;
-              yield* sql`DELETE FROM project_brief_dispatches WHERE project_id=${state.projectId}`;
-            }
-          }),
-        )
-        .pipe(
-          Effect.mapError((error) => (Schema.is(ProjectBriefError)(error) ? error : unavailable())),
-        );
-      yield* PubSub.publish(changes, state.projectId);
-      return state;
-    });
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const rows = yield* sql<{
+            revision: number;
+          }>`SELECT revision FROM project_briefs WHERE project_id=${state.projectId}`;
+          if ((rows[0]?.revision ?? 0) !== previous.revision)
+            return yield* fail("conflict", "The project changed. Refresh before trying again.");
+          yield* sql`INSERT INTO project_briefs (project_id,revision,state_json) VALUES (${state.projectId},${state.revision},${serialized}) ON CONFLICT(project_id) DO UPDATE SET revision=excluded.revision,state_json=excluded.state_json`;
+          if (receipt)
+            yield* sql`INSERT INTO project_brief_requests (project_id,request_id,payload_digest) VALUES (${state.projectId},${receipt.requestId},${digest(receipt.payload)})`;
+          if (launch)
+            yield* sql`INSERT INTO project_brief_dispatches (project_id,command_id,launch_json) VALUES (${state.projectId},${launch.commandId},${encodeLaunch(launch)})`;
+          if (recovery?.retireCommandId)
+            yield* sql`DELETE FROM project_brief_dispatches WHERE project_id=${state.projectId} AND command_id=${recovery.retireCommandId}`;
+          if (recovery?.archive) {
+            const archive = recovery.archive;
+            yield* sql`INSERT INTO project_brief_archives (project_id,archive_id,archived_at,state_json) VALUES (${state.projectId},${archive.id},${archive.archivedAt},${encodeStored(archive.state)})`;
+            yield* sql`DELETE FROM project_brief_dispatches WHERE project_id=${state.projectId}`;
+          }
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) => (Schema.is(ProjectBriefError)(error) ? error : unavailable())),
+      );
+    yield* PubSub.publish(changes, state.projectId);
+    return state;
+  });
   const requireRevision = (state: ProjectBriefState, expected: number) =>
     state.revision === expected
       ? Effect.void
@@ -202,116 +203,109 @@ const make = Effect.gen(function* () {
       : Effect.fail(
           fail("stale_sources", "Select available sources and refresh them before continuing."),
         );
-  const refreshSources = (state: ProjectBriefState) =>
-    Effect.gen(function* () {
-      let next = state;
-      for (const source of state.sources) {
-        const captured = yield* runtime
-          .capture({ projectId: state.projectId, selection: source.selection })
-          .pipe(
-            Effect.map((value) => ({ value })),
-            Effect.catch(() => Effect.succeed({ value: null })),
-          );
-        if (!captured.value) {
-          next = {
-            ...next,
-            sources: next.sources.map((item) =>
-              item.id === source.id ? { ...item, status: "unavailable" as const } : item,
-            ),
-          };
-          continue;
-        }
-        const previous = next.snapshots.find((snapshot) => snapshot.id === source.snapshotId)!;
-        const value = captured.value;
-        let snapshotId = previous.id;
-        if (
-          previous.digest !== value.digest ||
-          previous.revision !== value.revision ||
-          previous.text !== value.text
-        ) {
-          if (next.snapshots.length >= 200)
-            return yield* fail(
-              "invalid_request",
-              "This project has reached its 200-snapshot limit.",
-            );
-          snapshotId = `snapshot:${digest([source.id, value.revision, value.digest, value.text])}`;
-          if (!next.snapshots.some((snapshot) => snapshot.id === snapshotId))
-            next = {
-              ...next,
-              snapshots: [
-                ...next.snapshots,
-                { ...value, id: snapshotId, sourceId: source.id, capturedAt: yield* now },
-              ],
-            };
-        }
+  const refreshSources = Effect.fn("ProjectBriefService.refreshSources")(function* (
+    state: ProjectBriefState,
+  ) {
+    let next = state;
+    for (const source of state.sources) {
+      const captured = yield* runtime
+        .capture({ projectId: state.projectId, selection: source.selection })
+        .pipe(
+          Effect.map((value) => ({ value })),
+          Effect.catch(() => Effect.succeed({ value: null })),
+        );
+      if (!captured.value) {
         next = {
           ...next,
           sources: next.sources.map((item) =>
-            item.id === source.id ? { ...item, snapshotId, status: "available" as const } : item,
+            item.id === source.id ? { ...item, status: "unavailable" as const } : item,
           ),
         };
+        continue;
       }
-      return { ...next, sourceDigest: sourceDigest(next) };
-    });
-  const observe = (state: ProjectBriefState) =>
-    Effect.gen(function* () {
-      let next = state;
+      const previous = next.snapshots.find((snapshot) => snapshot.id === source.snapshotId)!;
+      const value = captured.value;
+      let snapshotId = previous.id;
       if (
-        state.synthesis &&
-        ["dispatch-pending", "running", "uncertain"].includes(state.synthesis.status)
+        previous.digest !== value.digest ||
+        previous.revision !== value.revision ||
+        previous.text !== value.text
       ) {
-        const synthesis = state.synthesis;
-        const observation = yield* runtime
-          .reconcile({
-            projectId: state.projectId,
-            threadId: synthesis.threadId,
-            runId: synthesis.runId,
-          })
-          .pipe(Effect.catch(() => Effect.succeed(null)));
-        if (observation)
+        if (next.snapshots.length >= 200)
+          return yield* fail("invalid_request", "This project has reached its 200-snapshot limit.");
+        snapshotId = `snapshot:${digest([source.id, value.revision, value.digest, value.text])}`;
+        if (!next.snapshots.some((snapshot) => snapshot.id === snapshotId))
           next = {
             ...next,
-            synthesis: {
-              ...synthesis,
-              runId: observation.runId,
-              status: ["completed", "failed", "interrupted", "cancelled"].includes(
-                observation.status,
-              )
-                ? "failed"
-                : "running",
-            },
+            snapshots: [
+              ...next.snapshots,
+              { ...value, id: snapshotId, sourceId: source.id, capturedAt: yield* now },
+            ],
           };
       }
-      for (const execution of state.executions) {
-        if (
-          ["completed", "cancelled", "failed", "interrupted", "withdrawn"].includes(
-            execution.status,
-          )
-        )
-          continue;
-        const observation = yield* runtime
-          .reconcile({
-            projectId: state.projectId,
-            threadId: execution.threadId,
-            runId: execution.runId,
-          })
-          .pipe(Effect.catch(() => Effect.succeed(null)));
-        if (!observation) continue;
-        const status: ProjectBriefExecution["status"] =
-          observation.status === "completed"
-            ? execution.result?.runId === observation.runId
-              ? "needs-review"
-              : "result-missing"
-            : observation.status;
+      next = {
+        ...next,
+        sources: next.sources.map((item) =>
+          item.id === source.id ? { ...item, snapshotId, status: "available" as const } : item,
+        ),
+      };
+    }
+    return { ...next, sourceDigest: sourceDigest(next) };
+  });
+  const observe = Effect.fn("ProjectBriefService.observe")(function* (state: ProjectBriefState) {
+    let next = state;
+    if (
+      state.synthesis &&
+      ["dispatch-pending", "running", "uncertain"].includes(state.synthesis.status)
+    ) {
+      const synthesis = state.synthesis;
+      const observation = yield* runtime
+        .reconcile({
+          projectId: state.projectId,
+          threadId: synthesis.threadId,
+          runId: synthesis.runId,
+        })
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (observation)
         next = {
           ...next,
-          executions: next.executions.map((item) =>
-            item.id === execution.id ? { ...item, runId: observation.runId, status } : item,
-          ),
+          synthesis: {
+            ...synthesis,
+            runId: observation.runId,
+            status: ["completed", "failed", "interrupted", "cancelled"].includes(observation.status)
+              ? "failed"
+              : "running",
+          },
         };
-      }
-      return next;
-    });
+    }
+    for (const execution of state.executions) {
+      if (
+        ["completed", "cancelled", "failed", "interrupted", "withdrawn"].includes(execution.status)
+      )
+        continue;
+      const observation = yield* runtime
+        .reconcile({
+          projectId: state.projectId,
+          threadId: execution.threadId,
+          runId: execution.runId,
+        })
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (!observation) continue;
+      const status: ProjectBriefExecution["status"] =
+        observation.status === "completed"
+          ? execution.result?.runId === observation.runId
+            ? "needs-review"
+            : "result-missing"
+          : observation.status;
+      next = {
+        ...next,
+        executions: next.executions.map((item) =>
+          item.id === execution.id ? { ...item, runId: observation.runId, status } : item,
+        ),
+      };
+    }
+    return next;
+  });
   const get = (input: ProjectBriefGetInput) =>
     locks.withLock(
       input.projectId,
@@ -321,71 +315,78 @@ const make = Effect.gen(function* () {
         return canonical(next) === canonical(state) ? state : yield* save(state, next);
       }),
     );
-  const archiveGet = (input: ProjectBriefArchiveGetInput) =>
-    Effect.gen(function* () {
-      const rows = yield* sql<{
-        archived_at: string;
-        state_json: string;
-      }>`SELECT archived_at,state_json FROM project_brief_archives WHERE project_id=${input.projectId} AND archive_id=${input.archiveId}`.pipe(
-        Effect.mapError(unavailable),
-      );
-      if (!rows[0]) return yield* fail("invalid_request", "That archived brief was not found.");
-      return {
-        id: input.archiveId,
-        archivedAt: rows[0].archived_at,
-        state: yield* decodeStored(rows[0].state_json).pipe(Effect.mapError(unavailable)),
-      };
-    });
-  const retryStop = (state: ProjectBriefState, executionId: string, fallbackCommandId: string) =>
-    Effect.gen(function* () {
-      const execution = state.executions.find((item) => item.id === executionId);
-      if (
-        !execution?.stopRequested ||
-        !execution.runId ||
-        ["completed", "result-missing", "failed", "cancelled", "interrupted", "withdrawn"].includes(
-          execution.status,
-        )
+  const archiveGet = Effect.fn("ProjectBriefService.archiveGet")(function* (
+    input: ProjectBriefArchiveGetInput,
+  ) {
+    const rows = yield* sql<{
+      archived_at: string;
+      state_json: string;
+    }>`SELECT archived_at,state_json FROM project_brief_archives WHERE project_id=${input.projectId} AND archive_id=${input.archiveId}`.pipe(
+      Effect.mapError(unavailable),
+    );
+    if (!rows[0]) return yield* fail("invalid_request", "That archived brief was not found.");
+    return {
+      id: input.archiveId,
+      archivedAt: rows[0].archived_at,
+      state: yield* decodeStored(rows[0].state_json).pipe(Effect.mapError(unavailable)),
+    };
+  });
+  const retryStop = Effect.fn("ProjectBriefService.retryStop")(function* (
+    state: ProjectBriefState,
+    executionId: string,
+    fallbackCommandId: string,
+  ) {
+    const execution = state.executions.find((item) => item.id === executionId);
+    if (
+      !execution?.stopRequested ||
+      !execution.runId ||
+      ["completed", "result-missing", "failed", "cancelled", "interrupted", "withdrawn"].includes(
+        execution.status,
       )
-        return;
-      yield* runtime.cancel({
-        projectId: state.projectId,
-        threadId: execution.threadId,
-        runId: execution.runId,
-        commandId: execution.stopCommandId ?? fallbackCommandId,
-      });
+    )
+      return;
+    yield* runtime.cancel({
+      projectId: state.projectId,
+      threadId: execution.threadId,
+      runId: execution.runId,
+      commandId: execution.stopCommandId ?? fallbackCommandId,
     });
-  const dispatch = (state: ProjectBriefState, launch: Launch, executionId?: string) =>
-    Effect.gen(function* () {
-      const receipt = yield* runtime.launch(launch).pipe(
-        Effect.map((value) => ({ value, error: null })),
-        Effect.catch((error) => Effect.succeed({ value: null, error })),
-      );
-      const status = receipt.value
-        ? ("running" as const)
-        : receipt.error?.code === "invalid_request" || receipt.error?.code === "forbidden"
-          ? ("failed" as const)
-          : ("uncertain" as const);
-      const next: ProjectBriefState = executionId
-        ? {
-            ...state,
-            executions: state.executions.map((item) =>
-              item.id === executionId
-                ? { ...item, runId: receipt.value?.runId ?? null, status }
-                : item,
-            ),
-          }
-        : {
-            ...state,
-            synthesis: state.synthesis && {
-              ...state.synthesis,
-              runId: receipt.value?.runId ?? null,
-              status,
-            },
-          };
-      const saved = yield* save(state, next);
-      if (status === "failed" && receipt.error) return yield* receipt.error;
-      return saved;
-    });
+  });
+  const dispatch = Effect.fn("ProjectBriefService.dispatch")(function* (
+    state: ProjectBriefState,
+    launch: Launch,
+    executionId?: string,
+  ) {
+    const receipt = yield* runtime.launch(launch).pipe(
+      Effect.map((value) => ({ value, error: null })),
+      Effect.catch((error) => Effect.succeed({ value: null, error })),
+    );
+    const status = receipt.value
+      ? ("running" as const)
+      : receipt.error?.code === "invalid_request" || receipt.error?.code === "forbidden"
+        ? ("failed" as const)
+        : ("uncertain" as const);
+    const next: ProjectBriefState = executionId
+      ? {
+          ...state,
+          executions: state.executions.map((item) =>
+            item.id === executionId
+              ? { ...item, runId: receipt.value?.runId ?? null, status }
+              : item,
+          ),
+        }
+      : {
+          ...state,
+          synthesis: state.synthesis && {
+            ...state.synthesis,
+            runId: receipt.value?.runId ?? null,
+            status,
+          },
+        };
+    const saved = yield* save(state, next);
+    if (status === "failed" && receipt.error) return yield* receipt.error;
+    return saved;
+  });
   const execute = (raw: ProjectBriefCommand) =>
     locks.withLock(
       raw.projectId,

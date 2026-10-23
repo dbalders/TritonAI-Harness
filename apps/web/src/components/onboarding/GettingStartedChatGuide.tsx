@@ -9,7 +9,11 @@ import {
   type GettingStartedRun,
 } from "../../onboarding/gettingStartedEvidence";
 import { mergeIdeaPrompt } from "../ideas/ideaDraft";
-import { useGettingStarted, updateGettingStarted } from "../../onboarding/gettingStartedState";
+import {
+  useGettingStarted,
+  useGettingStartedEnabled,
+  updateGettingStarted,
+} from "../../onboarding/gettingStartedState";
 import { GETTING_STARTED_CHAPTERS } from "../../onboarding/gettingStarted.logic";
 import type { ComposerBannerStackItem } from "../chat/ComposerBannerStack";
 import { Button } from "../ui/button";
@@ -32,6 +36,7 @@ interface GuideChatInput {
 
 export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBannerStackItem | null {
   const state = useGettingStarted();
+  const enabled = useGettingStartedEnabled();
   const { environmentId, threadId, run, runs, timelineEntries } = input;
   const task = state.tasks.find(
     (item) =>
@@ -40,7 +45,7 @@ export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBanne
       item.threadId === threadId,
   );
   useEffect(() => {
-    if (!threadId) return;
+    if (!enabled || !threadId) return;
     for (const event of gettingStartedRunEvents({
       state,
       environmentId,
@@ -50,9 +55,15 @@ export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBanne
     })) {
       void updateGettingStarted(event);
     }
-  }, [environmentId, runs, state, threadId, timelineEntries]);
+  }, [enabled, environmentId, runs, state, threadId, timelineEntries]);
 
-  if (!task || !state.startedAt || state.paused || state.environmentId !== environmentId)
+  if (
+    !enabled ||
+    !task ||
+    !state.startedAt ||
+    state.paused ||
+    state.environmentId !== environmentId
+  )
     return null;
   const complete = state.completed.includes(task.chapter);
   const prepareFollowUp = () => {

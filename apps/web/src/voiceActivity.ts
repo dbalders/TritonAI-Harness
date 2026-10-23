@@ -41,7 +41,7 @@ export async function detectVoiceSpeech(
       channel.port1.addEventListener("message", () => resolve(), { once: true });
       channel.port2.postMessage(null);
     });
-  try {
+  return await (async () => {
     const speech: VoiceSpeechSegment[] = [];
     let sliceStartedAt = performance.now();
     for (let start = 0; start < samples.length; start += FRAME_SAMPLES) {
@@ -68,8 +68,8 @@ export async function detectVoiceSpeech(
     }
     signal?.throwIfAborted();
     return speech;
-  } finally {
+  })().finally(async () => {
     channel.port1.close();
     await model.release();
-  }
+  });
 }

@@ -3,7 +3,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, ServerMemorySyncStartResult } from "@t3tools/contracts";
-import { useCallback, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -25,13 +25,10 @@ export function useMemorySyncActions(refresh: (id: EnvironmentId) => void) {
   const [operations, setOperations] = useState<Readonly<Record<string, MemorySyncOperation>>>({});
   const busy = useRef(new Set<EnvironmentId>());
 
-  const finishSignIn = useCallback(
-    (id: EnvironmentId, error: string | null) => {
-      setOperations((current) => ({ ...current, [id]: { busy: false, flow: null, error } }));
-      refresh(id);
-    },
-    [refresh],
-  );
+  const finishSignIn = (id: EnvironmentId, error: string | null) => {
+    setOperations((current) => ({ ...current, [id]: { busy: false, flow: null, error } }));
+    refresh(id);
+  };
 
   const run = async (id: EnvironmentId, action: MemorySyncAction) => {
     if (busy.current.has(id)) return;
@@ -40,7 +37,7 @@ export function useMemorySyncActions(refresh: (id: EnvironmentId) => void) {
       ...current,
       [id]: { busy: true, flow: null, error: null },
     }));
-    try {
+    return await (async () => {
       const command =
         action === "start" ? start : action === "stop" ? stop : action === "sync" ? sync : signOut;
       const result = await command({ environmentId: id, input: {} });
@@ -65,10 +62,10 @@ export function useMemorySyncActions(refresh: (id: EnvironmentId) => void) {
             : null;
         setOperations((current) => ({ ...current, [id]: { busy: false, flow, error: null } }));
       }
-    } finally {
+    })().finally(async () => {
       busy.current.delete(id);
       refresh(id);
-    }
+    });
   };
 
   return { operations, run, finishSignIn };

@@ -13,6 +13,14 @@ export function getGettingStartedPreparationRevision(): number {
   return preparationRevision;
 }
 
+export function cancelGettingStartedPreparation(): void {
+  preparationRevision += 1;
+}
+
+export function useGettingStartedEnabled(): boolean {
+  return useClientSettings((settings) => settings.experimentalGuidedTourEnabled);
+}
+
 export function useGettingStarted() {
   return useClientSettings((settings) => settings.gettingStarted);
 }
@@ -22,6 +30,7 @@ export function openGettingStarted(environmentId: EnvironmentId): Promise<boolea
 }
 
 export async function updateGettingStarted(event: GettingStartedEvent): Promise<boolean> {
+  if (!getClientSettings().experimentalGuidedTourEnabled) return false;
   // Cancellation is user intent, so it takes effect before a slow settings save.
   const current = getClientSettings().gettingStarted;
   if (
@@ -34,6 +43,7 @@ export async function updateGettingStarted(event: GettingStartedEvent): Promise<
   }
   try {
     await persistClientSettingsUpdate((settings) => {
+      if (!settings.experimentalGuidedTourEnabled) return settings;
       const gettingStarted = reduceGettingStarted(settings.gettingStarted, event);
       return gettingStarted === settings.gettingStarted
         ? settings

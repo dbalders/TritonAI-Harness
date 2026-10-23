@@ -58,10 +58,6 @@ function SelectTrigger({
   );
 }
 
-/**
- * The select-field look for a picker that is not a Select, such as a Menu or
- * Combobox trigger. Render it as that trigger: `<MenuTrigger render={<SelectButton />}>`.
- */
 function SelectButton({
   className,
   size = "default",

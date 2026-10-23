@@ -1,7 +1,11 @@
 import type { GettingStartedChapterId } from "@t3tools/contracts";
 import { BookOpenIcon } from "lucide-react";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-import { useGettingStarted, updateGettingStarted } from "../../onboarding/gettingStartedState";
+import {
+  useGettingStarted,
+  useGettingStartedEnabled,
+  updateGettingStarted,
+} from "../../onboarding/gettingStartedState";
 import { Button } from "../ui/button";
 
 const HINTS: Partial<Record<GettingStartedChapterId, { title: string; description: string }>> = {
@@ -33,9 +37,11 @@ export function GettingStartedContextHint({
   chapters: ReadonlyArray<GettingStartedChapterId>;
 }) {
   const state = useGettingStarted();
+  const enabled = useGettingStartedEnabled();
   const environmentId = usePrimaryEnvironmentId();
   const hint = HINTS[state.activeChapter];
   if (
+    !enabled ||
     !hint ||
     !state.startedAt ||
     state.paused ||

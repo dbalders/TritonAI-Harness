@@ -27,7 +27,12 @@ export function useGettingStartedActions(environmentId: EnvironmentId | null) {
     prompt: string,
     toolNames: ReadonlyArray<string> = [],
   ) => {
-    if (!environmentId || preparingRef.current) return;
+    if (
+      !environmentId ||
+      preparingRef.current ||
+      !getClientSettings().experimentalGuidedTourEnabled
+    )
+      return;
     preparingRef.current = true;
     const generation = getClientSettings().gettingStarted.generation;
     const preparationRevision = getGettingStartedPreparationRevision();
@@ -36,6 +41,7 @@ export function useGettingStartedActions(environmentId: EnvironmentId | null) {
       const current = getClientSettings().gettingStarted;
       return (
         getGettingStartedPreparationRevision() === preparationRevision &&
+        getClientSettings().experimentalGuidedTourEnabled &&
         current.generation === generation &&
         current.environmentId === environmentId &&
         !current.paused &&
