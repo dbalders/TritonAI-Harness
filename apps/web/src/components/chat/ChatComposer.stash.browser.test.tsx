@@ -269,6 +269,62 @@ async function stash() {
   });
 }
 
+function memoryOnlyStash() {
+  const original = usePromptStashStore.getState().stashEntry;
+  usePromptStashStore.setState({
+    stashEntry: (entry, options) => {
+      if (options?.requireDurable) return { evicted: null, written: false, durable: false };
+      return { ...original(entry, options), durable: false };
+    },
+  });
+  return {
+    [Symbol.dispose]() {
+      usePromptStashStore.setState({ stashEntry: original });
+    },
+  };
+}
+
+it("keeps text-only Stash usable in session-memory storage with a reload warning", async () => {
+  using fixture = setup();
+  using _bridge = stubGlobal("desktopBridge", fixture.bridge);
+  using _memory = memoryOnlyStash();
+  useComposerDraftStore.getState().setPrompt(fixture.target, "A session-only prompt");
+  await using screen = await render(<ChatComposer {...fixture.props} />);
+  await expect.element(screen.getByTestId("composer-editor")).toBeInTheDocument();
+  using toast = vi.spyOn(toastManager, "add");
+
+  await stash();
+
+  expect(usePromptStashStore.getState().entries.map((entry) => entry.prompt)).toEqual([
+    "A session-only prompt",
+  ]);
+  expect(useComposerDraftStore.getState().getComposerDraft(fixture.target)?.prompt ?? "").toBe("");
+  expect(toast).toHaveBeenCalledWith(
+    expect.objectContaining({ type: "warning", title: "Stashed prompt will not survive a reload" }),
+  );
+});
+
+it("retains native-file drafts when only session-memory storage is available", async () => {
+  using fixture = setup();
+  using _bridge = stubGlobal("desktopBridge", fixture.bridge);
+  using _xhr = stubGlobal("XMLHttpRequest", fixture.UploadRequest);
+  using _memory = memoryOnlyStash();
+  useComposerDraftStore.getState().setPrompt(fixture.target, "Keep this file draft");
+  await using screen = await render(<ChatComposer {...fixture.props} />);
+  await expect.element(screen.getByTestId("composer-editor")).toBeInTheDocument();
+  const originalFile = await pickFile(screen.container);
+  const attachment = useComposerDraftStore.getState().getComposerDraft(fixture.target)!.files[0]!;
+
+  await stash();
+  await act(() => awaitAttachmentUploads([attachment.id]));
+
+  expect(usePromptStashStore.getState().entries).toHaveLength(0);
+  const retained = useComposerDraftStore.getState().getComposerDraft(fixture.target)!;
+  expect(retained.prompt).toContain("Keep this file draft");
+  expect(retained.files[0]?.file).toBe(originalFile);
+  expect(retained.files[0]?.uploadedAttachmentId).toBe("pending-notes.txt");
+});
+
 it("stashes and restores a native local file only after the user requests Stash", async () => {
   using fixture = setup();
   using _bridge = stubGlobal("desktopBridge", fixture.bridge);

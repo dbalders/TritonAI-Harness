@@ -5359,7 +5359,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           pendingImageCount: images.length,
           ...(stashedRecords.length > 0 ? { records: stashedRecords } : {}),
         },
-        { requireDurable: true },
+        { requireDurable: stashedFiles.length > 0 },
       );
 
       // If it was rejected (quota) the store has already rolled itself back,
@@ -5370,10 +5370,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           type: "error",
           title: "Could not stash this prompt",
           description:
-            "Browser storage rejected the write, so the composer was left as-is. Free up site data and try again.",
+            "Your browser could not save the stash, so your draft was kept. Enable site storage or free up space, then try again.",
           data: { hideCopyButton: true },
         });
         return;
+      }
+      if (!durable) {
+        toastManager.add({
+          type: "warning",
+          title: "Stashed prompt will not survive a reload",
+          description:
+            "Browser storage is unavailable, so this stash is kept in memory only for this session.",
+          data: { hideCopyButton: true },
+        });
       }
 
       promptRef.current = "";
