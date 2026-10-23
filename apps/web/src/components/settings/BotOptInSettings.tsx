@@ -13,7 +13,7 @@ export function BotOptInSettings() {
   return (
     <SettingsRow
       {...searchableSetting("tritonai-bot-opt-in")}
-      description="Your personal bot for Outlook, calendar, OneDrive and Microsoft To Do. Sign in with your own account, then choose your Microsoft permissions. Running approved tasks on this computer requires a separate Allow. Turning this off signs out and stops new tasks here; work already running and saved result delivery can finish."
+      description="Your personal bot for Outlook, calendar, OneDrive and Microsoft To Do. Sign in with your own account, then choose your Microsoft permissions. Running approved tasks on this computer requires a separate Allow. Turning this off signs you out and stops new tasks for every client of this Harness. Work already running and saved result delivery can finish."
       status={
         <div className="space-y-2">
           {error ? (

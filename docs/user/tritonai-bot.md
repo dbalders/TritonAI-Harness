@@ -12,15 +12,17 @@ mobile sign-in are unavailable; no manual device-code fallback is offered.
 
 The managed build supplies the service address. A custom service address can be
 set in **Settings → Connections** if your administrator asks you to use one.
-Changing services stops new tasks here and signs you out of the old service.
+Changing services stops new tasks for every client of this Harness and signs you
+out of the old service.
 Clearing a custom address restores the managed default.
 Enabling Bot does not grant Microsoft access, choose a model, or allow tasks to
 run on this computer. Each requires its own consent or setting.
 
 To disable Bot, turn off its Experimental switch while connected to your Harness.
-This signs out and stops new assignments here. Running work and delivery of saved
-results may finish. Your cloud bot and Microsoft permissions remain; use the bot's
-pause control and Microsoft connections page to manage those separately.
+This signs you out and stops new assignments for every client of this Harness.
+Running work and delivery of saved results may finish. Your cloud bot and Microsoft
+permissions remain; use the bot's pause control and Microsoft connections page to
+manage those separately.
 
 Task permission belongs to the Harness, while the Experimental switch is separate
 in each app or browser. A notice in the main window shows when tasks are allowed

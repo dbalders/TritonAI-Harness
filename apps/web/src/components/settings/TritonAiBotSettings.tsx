@@ -68,7 +68,7 @@ export function TritonAiBotSettings() {
               {error}
             </span>
           ) : (
-            "Clearing the address restores the managed default. Changing services stops new tasks here and signs you out of the previous service. Running work and saved result delivery can finish. The mobile app does not support TritonAI Bot yet."
+            "Clearing the address restores the managed default. Changing services stops new tasks for every client of this Harness and signs you out of the previous service. Running work and saved result delivery can finish. The mobile app does not support TritonAI Bot yet."
           )
         }
         control={
