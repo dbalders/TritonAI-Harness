@@ -139,8 +139,7 @@ $handle = [CodexDirectoryLock]::CreateFile($env:TRITONAI_TEST_RUNTIME_ROOT, 0, 3
 if ($handle -eq [IntPtr]::new(-1)) { throw 'Could not open the disposable directory handle' }
 [Console]::WriteLine('locked')
 [Console]::Out.Flush()
-$null = [Console]::ReadLine()
-$null = [CodexDirectoryLock]::CloseHandle($handle)`;
+$null = [Threading.ManualResetEvent]::new($false).WaitOne()`;
     const child = NodeChildProcess.spawn(
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -257,10 +256,21 @@ describe("native managed Codex lifecycle", () => {
       try {
         const session = f.lockDirectory();
         await session.ready;
+        expect(session.child.exitCode).toBeNull();
+        const probe = `${f.install}.lock-probe`;
+        const blocked = await NodeFSP.rename(f.install, probe).then(
+          () => null,
+          (error: NodeJS.ErrnoException) => error,
+        );
+        if (blocked === null) {
+          await NodeFSP.rename(probe, f.install);
+          throw new Error("The native Windows fixture did not retain its directory lock.");
+        }
+        expect(["EPERM", "EACCES", "EBUSY"]).toContain(blocked.code);
         const update = f.start("retry");
         expect(await update.result).toMatchObject({ phase: "locked" });
         const completed = NodeEvents.EventEmitter.once(update.child, "message");
-        session.child.stdin?.end("\n");
+        session.child.kill("SIGKILL");
         await session.exited;
         expect((await completed)[0]).toMatchObject({ phase: "done", output: "0.151.0" });
         await update.exited;
