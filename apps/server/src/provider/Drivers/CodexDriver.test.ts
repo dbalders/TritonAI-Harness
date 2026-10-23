@@ -36,6 +36,7 @@ import {
   resolveLatestProviderVersion,
 } from "@t3tools/provider-core/server/maintenanceResolver";
 import { CodexDriver } from "./CodexDriver.ts";
+import { managedCodexModelCatalogFileName } from "./CodexModelCatalog.ts";
 import * as CodexAdapterV2 from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -102,6 +103,146 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
+  it.effect.each([
+    { id: "codex_frontier", managed: true, explicitModalities: false },
+    { id: "codex", managed: true, explicitModalities: true },
+    { id: "codex_personal", managed: false, explicitModalities: false },
+    { id: "codex_frontier", managed: false, explicitModalities: false },
+    { id: "codex_personal", managed: false, explicitModalities: true },
+  ])(
+    "passes the right catalog to the launch boundary: $id / managed=$managed / modalities=$explicitModalities",
+    ({ id, managed, explicitModalities }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "codex-catalog-launch-" });
+        const instanceId = ProviderInstanceId.make(id);
+        const model = explicitModalities ? "api-glm-5.3-flash" : "gpt-6.1-sol";
+        const filePath = NodePath.join(homePath, managedCodexModelCatalogFileName(id));
+        const staleCatalog = JSON.stringify({ models: [{ slug: "codex-auto-review" }] });
+        yield* fs.writeFileString(filePath, staleCatalog);
+        const launches: Array<
+          Parameters<CodexAdapterV2.CodexAppServerClientFactoryShape["open"]>[0]
+        > = [];
+        let catalogReads = 0;
+        const spawner = ChildProcessSpawner.make((command) => {
+          if (
+            !ChildProcess.isStandardCommand(command) ||
+            command.args.join(" ") !== "debug models --bundled"
+          ) {
+            // Status probes are outside this launch-boundary fixture.
+            return Effect.interrupt;
+          }
+          catalogReads += 1;
+          return Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+              isRunning: Effect.succeed(false),
+              kill: () => Effect.void,
+              unref: Effect.succeed(Effect.void),
+              stdin: Sink.drain,
+              stdout: Stream.encodeText(
+                Stream.make(
+                  JSON.stringify({
+                    models: [
+                      {
+                        slug: "gpt-6.1-sol",
+                        input_modalities: ["text", "image"],
+                        auto_review_model_override: "codex-auto-review",
+                      },
+                      { slug: "codex-auto-review", visibility: "hide" },
+                    ],
+                  }),
+                ),
+              ),
+              stderr: Stream.empty,
+              all: Stream.empty,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+            }),
+          );
+        });
+        const inheritedLaunchArgs = '-c model_catalog_json="/old/model-catalog.json"';
+        const instance = yield* CodexDriver.create({
+          instanceId,
+          displayName: id,
+          enabled: true,
+          environment: managed
+            ? [
+                {
+                  name: "TRITONAI_API_KEY_SOURCE",
+                  value: id === "codex" ? "TRITONAI_ONPREM_API_KEY" : "TRITONAI_FRONTIER_API_KEY",
+                  sensitive: false,
+                },
+              ]
+            : [],
+          config: {
+            ...CodexDriver.defaultConfig(),
+            binaryPath: "/fixture/codex",
+            homePath,
+            launchArgs: inheritedLaunchArgs,
+            customModels: [model],
+            customModelMetadata: {
+              [model]: {
+                name: "Fixture model",
+                ...(explicitModalities ? { capabilities: { inputModalities: ["text"] } } : {}),
+              },
+            },
+          },
+        }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(CodexAdapterV2.CodexAppServerClientFactory, {
+            open: (launch) =>
+              Effect.sync(() => launches.push(launch)).pipe(
+                Effect.andThen(Effect.die("The fixture stops at the app-server launch boundary")),
+              ),
+          }),
+        );
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "auto",
+          interactionMode: "default",
+          cwd: homePath,
+        });
+        yield* instance.orchestrationAdapter
+          .openSession({
+            threadId: ThreadId.make("catalog-launch-thread"),
+            providerSessionId: ProviderSessionId.make("catalog-launch-session"),
+            modelSelection: { instanceId, model },
+            runtimePolicy,
+          })
+          .pipe(Effect.scoped, Effect.exit);
+
+        expect(launches).toHaveLength(1);
+        const launch = launches[0]!;
+        const appServerArgs = launch.appServerArgs ?? [];
+        expect(launch.runtimePolicy).toEqual(runtimePolicy);
+        expect(launch.settings.launchArgs).toBe(inheritedLaunchArgs);
+        const needsCatalog = managed || explicitModalities;
+        expect(catalogReads).toBe(needsCatalog ? 1 : 0);
+        if (needsCatalog) {
+          expect(appServerArgs).toContain(`model_catalog_json=${JSON.stringify(filePath)}`);
+          const catalog = JSON.parse(yield* fs.readFileString(filePath));
+          expect(catalog.models[0].auto_review_model_override).toBe(
+            managed ? null : "codex-auto-review",
+          );
+          expect(catalog.models.map((entry: { slug: string }) => entry.slug)).toEqual(
+            explicitModalities ? ["gpt-6.1-sol", model] : ["gpt-6.1-sol"],
+          );
+          if (explicitModalities) {
+            expect(
+              catalog.models.find((entry: { slug: string }) => entry.slug === model)
+                .input_modalities,
+            ).toEqual(["text"]);
+          }
+        } else {
+          expect(appServerArgs.some((argument) => argument.startsWith("model_catalog_json="))).toBe(
+            false,
+          );
+          expect(yield* fs.readFileString(filePath)).toBe(staleCatalog);
+        }
+      }).pipe(Effect.scoped),
+  );
+
   it.effect.each([
     ["codex_frontier", "gpt-6.1-sol", "codex", "api-glm-5.3-flash"],
     ["codex", "api-glm-5.3-flash", "codex_frontier", "gpt-6.1-sol"],
