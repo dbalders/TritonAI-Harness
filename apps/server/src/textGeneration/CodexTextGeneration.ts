@@ -47,6 +47,7 @@ import {
   encodeCodexConfigString,
   makeTritonAiCodexConfigArgs,
 } from "../provider/Drivers/TritonAiCodexConfig.ts";
+import * as TritonAiRequestAnalytics from "../telemetry/TritonAiRequestAnalytics.ts";
 
 const DAILY_MEMORY_TIMEOUT_MS = 600_000;
 const IDEAS_TIMEOUT_MS = 300_000;
@@ -100,6 +101,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverConfig = yield* Effect.service(ServerConfig.ServerConfig);
+  const requestAnalytics = yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics;
   const resolvedEnvironment = environment ?? process.env;
 
   const readStreamAsString = <E>(
@@ -467,7 +469,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             ? expandHomePath(effectiveConfig.homePath, yield* HostProcess.HomeDirectory)
             : undefined;
         if (defaultGateway) {
-          providerArgs.push(...makeTritonAiCodexConfigArgs(effectiveEnvironment));
+          providerArgs.push(
+            ...makeTritonAiCodexConfigArgs(effectiveEnvironment, requestAnalytics.headers("help")),
+          );
         } else {
           if (sourceHome) {
             const transport = yield* readCodexHelpTransport({
@@ -737,7 +741,16 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         [
           "exec",
           ...execLaunchArgs,
-          ...makeTritonAiCodexConfigArgs(effectiveEnvironment),
+          ...makeTritonAiCodexConfigArgs(
+            effectiveEnvironment,
+            requestAnalytics.headers(
+              operation === "generateIdeas"
+                ? "ideas"
+                : operation === "generateDailyMemory"
+                  ? "memory"
+                  : "generation",
+            ),
+          ),
           ...(options?.modelCatalogPath
             ? [
                 "--config",

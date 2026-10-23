@@ -54,6 +54,7 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
 import * as Integrations from "../integrations/IntegrationRegistry.ts";
 import { makeTritonAiCodexConfigArgs } from "./Drivers/TritonAiCodexConfig.ts";
+import * as TritonAiRequestAnalytics from "../telemetry/TritonAiRequestAnalytics.ts";
 import { resolveCodexAppServerCommand } from "./Drivers/CodexAppServerCommand.ts";
 import {
   codexRateLimitsFailureMessage,
@@ -88,7 +89,6 @@ const CODEX_DISCOVERY_MARGIN_MS = 250;
 const CODEX_PRESENTATION = {
   displayName: "TritonAI",
   showInteractionModeToggle: true,
-  supportsThreadGoals: true,
   // TritonAI's managed catalog spans Responses API backends with different
   // continuation formats. In particular, hosted models cannot consume the
   // encrypted reasoning items returned by OpenAI models. Keep the existing
@@ -661,7 +661,13 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(fu
   };
   const spawnCommand = yield* resolveCodexAppServerCommand(
     input.binaryPath,
-    [...codexAppServerArgs(input.launchArgs), ...makeTritonAiCodexConfigArgs(environment)],
+    [
+      ...codexAppServerArgs(input.launchArgs),
+      ...makeTritonAiCodexConfigArgs(
+        environment,
+        (yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics).headers("catalog"),
+      ),
+    ],
     {
       env: environment,
       extendEnv: false,

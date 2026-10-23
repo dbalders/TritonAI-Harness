@@ -8,7 +8,7 @@ import {
   type ServerVoiceTranscribeInput,
   type ServerVoiceTranscribeResult,
 } from "@t3tools/contracts";
-import { makeTritonAiClientHeaders } from "./tritonAiClientHeaders.ts";
+import * as TritonAiRequestAnalytics from "./telemetry/TritonAiRequestAnalytics.ts";
 import { resolveTritonAiServiceApiKey } from "./tritonAiCredential.ts";
 
 const MAX_VOICE_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -256,6 +256,7 @@ export const transcribeVoice = Effect.fn("voiceTranscription.transcribeVoice")(f
   const fetchImpl = options?.fetch ?? globalThis.fetch;
   const config = yield* resolveVoiceTranscriptionConfig(input, env);
   const audioBuffer = yield* decodeAudioBase64(input);
+  const clientHeaders = (yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics).headers("voice");
 
   return yield* Effect.tryPromise({
     try: async () => {
@@ -272,7 +273,7 @@ export const transcribeVoice = Effect.fn("voiceTranscription.transcribeVoice")(f
       const response = await fetchImpl(transcriptionEndpoint(config.baseUrl), {
         method: "POST",
         headers: {
-          ...makeTritonAiClientHeaders(),
+          ...clientHeaders,
           Authorization: `Bearer ${config.apiKey}`,
         },
         body: form,

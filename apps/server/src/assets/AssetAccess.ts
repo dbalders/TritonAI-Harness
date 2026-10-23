@@ -117,6 +117,7 @@ const AssetClaimsSchema = Schema.Union([
     filePath: Schema.String,
     device: Schema.String,
     inode: Schema.String,
+    downloadName: Schema.optionalKey(Schema.String),
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -357,11 +358,45 @@ const readImageDimensionsFromHeader = (filePath: string) =>
     Effect.orElseSucceed((): ImageDimensions | null => null),
   );
 
+const finalizeFileDownload = Effect.fn("AssetAccess.finalizeFileDownload")(function* (input: {
+  readonly canonicalFile: string;
+  readonly fileName: string;
+  readonly resource: AssetResource;
+  readonly expiresAt: number;
+}) {
+  const identity = yield* openMediaFile(input.canonicalFile).pipe(
+    Effect.map((file) =>
+      file === null ? null : { device: file.info.dev.toString(), inode: file.info.ino.toString() },
+    ),
+    Effect.scoped,
+    Effect.mapError(
+      (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+    ),
+  );
+  if (identity === null) {
+    return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+  }
+  // Downloads grant one file, never the directory-relative access HTML previews need.
+  return {
+    claims: {
+      version: 1 as const,
+      kind: "media-file-exact" as const,
+      filePath: input.canonicalFile,
+      ...identity,
+      downloadName: input.fileName,
+      expiresAt: input.expiresAt,
+    },
+    fileName: input.fileName,
+    imageDimensions: null,
+  };
+});
+
 const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMediaFileAsset")(
   function* (input: {
     readonly requestedPath: string;
     readonly resource: AssetResource;
     readonly expiresAt: number;
+    readonly download?: boolean;
   }) {
     const path = yield* Path.Path;
     const canonicalFile = yield* resolveCanonicalFile(input.requestedPath).pipe(
@@ -373,6 +408,14 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
       return yield* new AssetWorkspaceAssetNotFoundError({
         resource: input.resource,
         checkedPath: input.requestedPath,
+      });
+    }
+    if (input.download) {
+      return yield* finalizeFileDownload({
+        canonicalFile,
+        fileName: path.basename(input.requestedPath),
+        resource: input.resource,
+        expiresAt: input.expiresAt,
       });
     }
     if (hostPreviewMimeTypeFromExtension(path.extname(canonicalFile)) === null) {
@@ -424,6 +467,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
     readonly requestedPath: string;
     readonly resource: AssetResource;
     readonly expiresAt: number;
+    readonly download?: boolean;
   }) {
     const path = yield* Path.Path;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -442,7 +486,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
             }),
         ),
       );
-    if (!isWorkspacePreviewEntryPath(resolved.relativePath)) {
+    if (!input.download && !isWorkspacePreviewEntryPath(resolved.relativePath)) {
       return yield* new AssetPreviewTypeValidationError({
         resource: input.resource,
       });
@@ -462,6 +506,14 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
     if (!canonicalFile) {
       return yield* new AssetWorkspaceAssetNotFoundError({
         resource: input.resource,
+      });
+    }
+    if (input.download) {
+      return yield* finalizeFileDownload({
+        canonicalFile,
+        fileName: path.basename(resolved.relativePath),
+        resource: input.resource,
+        expiresAt: input.expiresAt,
       });
     }
     const canonicalWorkspaceRoot = yield* fileSystem.realPath(input.workspaceRoot).pipe(
@@ -539,6 +591,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         requestedPath,
         resource: input.resource,
         expiresAt,
+        download: input.resource.disposition === "attachment",
       });
       claims = finalized.claims;
       fileName = finalized.fileName;
@@ -565,6 +618,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         requestedPath: input.resource.path,
         resource: input.resource,
         expiresAt,
+        download: input.resource.disposition === "attachment",
       });
       claims = finalized.claims;
       fileName = finalized.fileName;
@@ -581,6 +635,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           requestedPath: hostPath,
           resource: input.resource,
           expiresAt,
+          download: input.resource.disposition === "attachment",
         });
         claims = finalized.claims;
         fileName = finalized.fileName;
@@ -601,6 +656,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         requestedPath: input.resource.path,
         resource: input.resource,
         expiresAt,
+        download: input.resource.disposition === "attachment",
       });
       claims = finalized.claims;
       fileName = finalized.fileName;
@@ -969,7 +1025,7 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
   if (decodedPath === null) return null;
   const path = yield* Path.Path;
   if (claims.kind === "media-file-exact") {
-    if (decodedPath !== path.basename(claims.filePath)) return null;
+    if (decodedPath !== (claims.downloadName ?? path.basename(claims.filePath))) return null;
     const canonicalFile = yield* resolveCanonicalFile(claims.filePath).pipe(
       Effect.tapError((cause) =>
         Effect.logError("Failed to resolve canonical media path.", {
@@ -980,7 +1036,10 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       Effect.orElseSucceed(() => null),
     );
     if (canonicalFile !== claims.filePath) return null;
-    const mimeType = hostPreviewMimeTypeFromExtension(path.extname(canonicalFile));
+    const mimeType =
+      claims.downloadName === undefined
+        ? hostPreviewMimeTypeFromExtension(path.extname(canonicalFile))
+        : "application/octet-stream";
     if (!mimeType) return null;
     const file = yield* openMediaFile(canonicalFile, claims).pipe(
       Effect.tapError((cause) =>
@@ -989,7 +1048,18 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       Effect.orElseSucceed(() => null),
     );
     return file
-      ? ({ kind: "file", path: canonicalFile, mimeType, file } satisfies ResolvedAsset)
+      ? ({
+          kind: "file",
+          path: canonicalFile,
+          mimeType,
+          file,
+          ...(claims.downloadName === undefined
+            ? {}
+            : {
+                disposition: "attachment" as const,
+                downloadName: claims.downloadName,
+              }),
+        } satisfies ResolvedAsset)
       : null;
   }
   if (claims.kind === "workspace-file-exact") {

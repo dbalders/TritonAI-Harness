@@ -21,6 +21,19 @@ version per day. Count distinct `aid` values instead; the dashboard cannot, so
 filters need matching custom-event goals in Plausible, and `aid` must be allowed if the site
 restricts custom properties.
 
+Managed gateway requests use this same identity as LiteLLM's end-user ID, prefixed with
+`harness-install:`. Only fixed app/version/purpose tags accompany it; client surfaces and
+conversation identifiers do not belong in a long-lived provider process's static headers.
+Plausible remains the source for app events that make no model request. For gateway-active
+installations, count distinct end-user IDs in the reporting window. Filtering `purpose:chat`
+excludes utility generation, but main agent traffic can include scheduled work and delegated
+tasks; it does not establish that a person was active in the UI.
+
+The server's telemetry opt-out suppresses these optional gateway fields too. It does not
+disable the gateway's operational spend accounting. Reporting permissions are separate from
+the inference key; adding tags does not grant access to analytics APIs. Request counts differ
+from turns, and overlapping tag totals must not be added together.
+
 ## Collection boundary
 
 [AnalyticsService.ts](../../apps/server/src/telemetry/AnalyticsService.ts) keeps a per-event

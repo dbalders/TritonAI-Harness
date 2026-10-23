@@ -71,6 +71,7 @@ import {
 } from "@t3tools/shared/model";
 import { rewriteTritonAiFeedbackCommand } from "@t3tools/shared/tritonAiFeedback";
 import { createStdioMcpServerArgs } from "../../provider/CodexMcpConfig.ts";
+import * as TritonAiRequestAnalytics from "../../telemetry/TritonAiRequestAnalytics.ts";
 import {
   encodeCodexConfigString,
   makeTritonAiCodexConfigArgs,
@@ -1630,6 +1631,7 @@ export const layerAppServerClientFactory: Layer.Layer<
     const runner = yield* ProcessRunner.make();
     const runtimeFs = yield* FileSystem.FileSystem;
     const runtimePath = yield* Path.Path;
+    const requestAnalytics = yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics;
 
     return CodexAppServerClientFactory.of({
       open: Effect.fn("CodexAdapterV2.open")(function* (input) {
@@ -1684,7 +1686,7 @@ export const layerAppServerClientFactory: Layer.Layer<
             ...codexAppServerArgs(
               resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
             ),
-            ...makeTritonAiCodexConfigArgs(providerEnvironment),
+            ...makeTritonAiCodexConfigArgs(providerEnvironment, requestAnalytics.headers("chat")),
             "--config",
             "model_providers.ucsd.supports_websockets=false",
             "--config",

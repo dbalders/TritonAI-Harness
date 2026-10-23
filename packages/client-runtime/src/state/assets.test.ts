@@ -80,6 +80,7 @@ describe("createAssetEnvironmentAtoms", () => {
     { name: "primary reconnect", path: "/tmp/frame.png", primary: "reconnecting" },
     { name: "same environment", path: "/tmp/clip.mp4", primary: "same" },
     { name: "non-media", path: "/tmp/report.html" },
+    { name: "explicit download", path: "/tmp/frame.png", download: true },
     { name: "authorization failure", path: "/tmp/clip.mp4", error: "auth" },
   ])("uses the correct environment for $name", (scenario) =>
     Effect.gen(function* () {
@@ -89,6 +90,7 @@ describe("createAssetEnvironmentAtoms", () => {
         _tag: "media-file" as const,
         threadId: ThreadId.make("foreign-thread"),
         path: scenario.path,
+        ...(scenario.download ? { disposition: "attachment" as const } : {}),
       };
       const error =
         scenario.error === "auth"

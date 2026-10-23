@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -25,6 +26,7 @@ import {
 } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
+import * as TritonAiRequestAnalytics from "../telemetry/TritonAiRequestAnalytics.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as TextGeneration from "./TextGeneration.ts";
@@ -365,6 +367,85 @@ function withFakeCodexEnv<A, E, R>(
 }
 
 it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
+  it.effect.each([true, false])(
+    "attributes gateway utility requests with telemetry enabled=%s",
+    (enabled) =>
+      withFakeCodexEnv(
+        {
+          environment: {
+            TRITONAI_API_KEY: "frontier-test-only",
+            TRITONAI_FRONTIER_API_KEY: "frontier-test-only",
+          },
+          helpVersion: managedHarnessConfig.provider.approvedCodexVersion,
+          output: JSON.stringify({
+            answer: "local",
+            title: "local",
+            overview: "local",
+            projects: [],
+            decisions: [],
+            openLoops: [],
+            ideas: [],
+          }),
+        },
+        (generation, callsPath) =>
+          Effect.gen(function* () {
+            yield* generation.generateThreadTitle({
+              cwd: process.cwd(),
+              message: "fixture",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            });
+            yield* generation.generateDailyMemory!({
+              cwd: process.cwd(),
+              day: "2026-10-23",
+              projectNames: [],
+              activity: "fixture",
+              inboxNotes: "",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            });
+            yield* generation.generateIdeas!({
+              cwd: process.cwd(),
+              count: 1,
+              context: "fixture",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            });
+            yield* generation.generateHelp!(HELP_INPUT);
+            const fs = yield* FileSystem.FileSystem;
+            const calls = (yield* fs.readFileString(callsPath))
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as { args: string[] });
+            const requests = calls.filter(
+              ({ args }) => args.includes("exec") && !args.includes("--help"),
+            );
+            expect(requests).toHaveLength(4);
+            const config = yield* ServerConfig.ServerConfig;
+            for (const [index, purpose] of ["generation", "memory", "ideas", "help"].entries()) {
+              const headers = requests[index]?.args.find((arg) =>
+                arg.startsWith("model_providers.ucsd.http_headers="),
+              );
+              expect(headers).toContain('"X-TritonAI-Client"="harness"');
+              if (enabled) {
+                const installId = (yield* fs.readFileString(config.anonymousIdPath)).trim();
+                expect(headers).toContain(`purpose:${purpose}`);
+                expect(headers).toContain(`harness-install:${installId}`);
+              } else {
+                expect(headers).not.toContain("x-litellm-");
+              }
+            }
+          }),
+      ).pipe(
+        Effect.provide(
+          TritonAiRequestAnalytics.layer.pipe(
+            Layer.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: enabled }),
+              ),
+            ),
+          ),
+        ),
+      ),
+  );
+
   it.effect("supports the managed policy's approved Codex version for isolated Help", () =>
     withFakeCodexEnv(
       {

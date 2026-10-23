@@ -39,6 +39,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import { resolveManagedCodexBinary, leaseManagedCodexRuntime } from "./managedCodexRuntime.ts";
 import { materializeCodexShadowHome, resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
 import { makeTritonAiCodexConfigArgs } from "./Drivers/TritonAiCodexConfig.ts";
+import * as TritonAiRequestAnalytics from "../telemetry/TritonAiRequestAnalytics.ts";
 import { resolveCodexAppServerCommand } from "./Drivers/CodexAppServerCommand.ts";
 import { mergeCodexProviderEnvironment } from "./CodexEnvironment.ts";
 import {
@@ -346,7 +347,13 @@ const withCodexClient = Effect.fn("CodexManagement.withCodexClient")(function* <
   );
   const spawnCommand = yield* resolveCodexAppServerCommand(
     binaryPath,
-    ["app-server", ...makeTritonAiCodexConfigArgs(environment)],
+    [
+      "app-server",
+      ...makeTritonAiCodexConfigArgs(
+        environment,
+        (yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics).headers("management"),
+      ),
+    ],
     {
       env: environment,
       extendEnv: false,

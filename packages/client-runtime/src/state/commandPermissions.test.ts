@@ -9,6 +9,7 @@ import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  AuthFilesystemReadScope,
   AuthPreviewOperateScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
@@ -27,6 +28,7 @@ import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentRpcCommand } from "./runtime.ts";
+import { createShellEnvironmentAtoms } from "./shellCommands.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -61,6 +63,43 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("hides OS file actions and rejects launch after the destination grant is lost", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const command = createShellEnvironmentAtoms(runtime).openInEditor;
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        registry.set(
+          sessions(other),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthOrchestrationReadScope],
+            permissions: [AuthFilesystemReadScope],
+          }),
+        );
+        expect(registry.get(command.permissionAtom(env))).toBe(true);
+        expect(registry.get(command.permissionAtom(other))).toBe(false);
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        expect(registry.get(command.permissionAtom(env))).toBe(false);
+        for (const environmentId of [env, other]) {
+          for (const reveal of [false, true]) {
+            const result = yield* Effect.promise(() =>
+              command.run(registry, {
+                environmentId,
+                input: { cwd: "/repo/deck.pptx", editor: "file-manager", reveal },
+              }),
+            );
+            if (result._tag !== "Failure") throw new Error("Expected file launch to be denied");
+            expect(Cause.squash(result.cause)).toMatchObject({
+              _tag: "EnvironmentAuthorizationError",
+              requiredPermission: AuthOrchestrationOperateScope,
+            });
+          }
+        }
+      }),
+    ),
+  );
+
   it.effect("requires the destination preview grant to close a browser tab", () =>
     Effect.scoped(
       Effect.gen(function* () {

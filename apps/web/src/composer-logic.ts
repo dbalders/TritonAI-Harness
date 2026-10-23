@@ -17,20 +17,8 @@ import {
 import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
 
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
-export type ComposerSlashCommand =
-  | "model"
-  | "plan"
-  | "default"
-  | "goal"
-  | "computer-use"
-  | "record-skill";
+export type ComposerSlashCommand = "model" | "plan" | "default" | "computer-use" | "record-skill";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
-export type GoalComposerCommand =
-  | { readonly type: "view" }
-  | { readonly type: "pause" }
-  | { readonly type: "resume" }
-  | { readonly type: "clear" }
-  | { readonly type: "set"; readonly objective: string };
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -366,42 +354,6 @@ export function parseStandaloneComposerSlashCommand(text: string): "plan" | "def
   const command = match[1]?.toLowerCase();
   if (command === "plan") return "plan";
   return "default";
-}
-
-export function parseGoalComposerSlashCommand(text: string): GoalComposerCommand | null {
-  const trimmed = text.trim();
-  if (!/^\/goal(?:\s|$)/i.test(trimmed)) {
-    return null;
-  }
-  const argument = trimmed.slice("/goal".length).trim();
-  if (argument.length === 0) return { type: "view" };
-  const explicitSetMatch = /^set\s+(.+)$/is.exec(argument);
-  if (explicitSetMatch) {
-    return { type: "set", objective: explicitSetMatch[1]!.trim() };
-  }
-  switch (argument.toLowerCase()) {
-    case "set":
-      return { type: "view" };
-    case "pause":
-      return { type: "pause" };
-    case "resume":
-      return { type: "resume" };
-    case "clear":
-      return { type: "clear" };
-    default:
-      return { type: "set", objective: argument };
-  }
-}
-
-export function resolveGoalComposerCommand(
-  text: string,
-  options: { readonly goalArmed: boolean },
-): GoalComposerCommand | null {
-  if (!options.goalArmed) {
-    return parseGoalComposerSlashCommand(text);
-  }
-  const objective = text.trim();
-  return objective.length > 0 ? { type: "set", objective } : null;
 }
 
 export function replaceTextRange(

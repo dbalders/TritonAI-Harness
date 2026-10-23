@@ -1,4 +1,3 @@
-const THREAD_GOAL_MAX_OBJECTIVE_CHARS = 10000;
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
@@ -219,7 +218,6 @@ import {
   type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
   parseStandaloneComposerSlashCommand,
-  resolveGoalComposerCommand,
   composerRequiresModifier,
 } from "../composer-logic";
 import {
@@ -6635,8 +6633,6 @@ export default function ChatView(props: ChatViewProps) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       selectedProvider: ctxSelectedProvider,
-      supportsThreadGoals: ctxSupportsThreadGoals,
-      goalArmed: goalModeArmed,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
@@ -6838,14 +6834,8 @@ export default function ChatView(props: ChatViewProps) {
 
       return;
     }
-    const parsedGoalCommand = ctxSupportsThreadGoals
-      ? resolveGoalComposerCommand(trimmed, { goalArmed: goalModeArmed })
-      : null;
-    const hasGoalComposerIntent =
-      ctxSupportsThreadGoals && (goalModeArmed || parsedGoalCommand !== null);
     if (
       !directAnnotation &&
-      !hasGoalComposerIntent &&
       sendInteractionModeEnabled &&
       showPlanFollowUpPrompt &&
       activeProposedPlan &&
@@ -6924,10 +6914,7 @@ export default function ChatView(props: ChatViewProps) {
       composerReviewComments.length === 0 &&
       composerThreadContexts.length === 0;
     const standaloneSlashCommand =
-      sendInteractionModeEnabled &&
-      settings.planModeEnabled &&
-      !hasGoalComposerIntent &&
-      isStandaloneTextCommand
+      sendInteractionModeEnabled && settings.planModeEnabled && isStandaloneTextCommand
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand && multipleModelSelections === null) {
@@ -6935,28 +6922,6 @@ export default function ChatView(props: ChatViewProps) {
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
-      return;
-    }
-    if (hasGoalComposerIntent && !isStandaloneTextCommand) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Goals are text only",
-          description: "Remove attachments and context cards before setting or managing a goal.",
-        }),
-      );
-      return;
-    }
-    const goalCommand = isStandaloneTextCommand ? parsedGoalCommand : null;
-    const goalObjective = goalCommand?.type === "set" ? goalCommand.objective : null;
-    if (goalObjective && goalObjective.length > THREAD_GOAL_MAX_OBJECTIVE_CHARS) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Goal is too long",
-          description: `Keep the objective under ${THREAD_GOAL_MAX_OBJECTIVE_CHARS.toLocaleString()} characters.`,
-        }),
-      );
       return;
     }
     if (!hasSendableContent) {
@@ -7013,13 +6978,7 @@ export default function ChatView(props: ChatViewProps) {
       .reduce(
         (text, context) =>
           removeInlineContextReference(text, terminalContextReference(context).contextId).prompt,
-        goalCommand
-          ? goalCommand.type === "set"
-            ? `/goal ${goalCommand.objective}`
-            : goalCommand.type === "view"
-              ? "/goal"
-              : `/goal ${goalCommand.type}`
-          : promptForSend,
+        promptForSend,
       )
       .trim();
     // Records bind attachments by the id each side knows: the local id for the optimistic
