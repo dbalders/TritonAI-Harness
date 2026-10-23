@@ -1,7 +1,5 @@
-// @vitest-environment jsdom
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { act, render as renderTest, type Screen } from "../../../test/render";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { BotFileRecipesPanel, type BotFileRecipesPanelProps } from "./BotFileRecipesPanel";
 import type { DotApproval, DotTask } from "./dotClient";
@@ -78,8 +76,8 @@ const archive: DotRecipeFolderListing = {
   note: "This folder has more than 100 items.",
 };
 
-describe("BotFileRecipesPanel", () => {
-  let reactRoot: Root;
+describe("BotFileRecipesPanel", async () => {
+  let reactRoot: Screen;
   let container: HTMLDivElement;
   const handlers = {
     onBrowse: vi.fn<BotFileRecipesPanelProps["onBrowse"]>(),
@@ -89,26 +87,28 @@ describe("BotFileRecipesPanel", () => {
     onStart: vi.fn<BotFileRecipesPanelProps["onStart"]>(),
   };
 
-  beforeEach(() => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  async function setupTest() {
     for (const handler of Object.values(handlers)) handler.mockReset();
     handlers.onBrowse.mockImplementation(async (folderId) =>
       folderId === "folder-inbox" ? inbox : folderId === "folder-big" ? archive : root,
     );
     container = document.createElement("div");
     document.body.append(container);
-    reactRoot = createRoot(container);
-  });
-  afterEach(async () => {
-    await act(async () => reactRoot.unmount());
-    container.remove();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+    reactRoot = await renderTest(null, { container, router: false });
+
+    return {
+      async [Symbol.asyncDispose]() {
+        await act(async () => reactRoot.unmount());
+        container.remove();
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+      },
+    };
+  }
 
   async function render(props: Partial<BotFileRecipesPanelProps> = {}) {
     await act(async () =>
-      reactRoot.render(
+      reactRoot.rerender(
         <BotFileRecipesPanel
           recipes={[recipe()]}
           approvals={[]}
@@ -142,6 +142,7 @@ describe("BotFileRecipesPanel", () => {
   }
 
   it("creates a recipe only for a chosen folder that fits one page, with the owner's instructions and approval choice", async () => {
+    await using _test = await setupTest();
     handlers.onCreate.mockResolvedValue({});
     await render({ recipes: [] });
     await click("New file recipe");
@@ -176,6 +177,7 @@ describe("BotFileRecipesPanel", () => {
   });
 
   it("keeps the editor open with the bot's reason when saving fails, and says when OneDrive is not connected", async () => {
+    await using _test = await setupTest();
     handlers.onCreate.mockRejectedValue(new Error("This folder has more than one page of items."));
     await render({ recipes: [] });
     await click("New file recipe");
@@ -188,7 +190,7 @@ describe("BotFileRecipesPanel", () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("more than one page");
     expect(container.querySelector("form")).not.toBeNull();
     await act(async () => reactRoot.unmount());
-    reactRoot = createRoot(container);
+    reactRoot = await renderTest(null, { container, router: false });
     await render({ recipes: [], oneDriveConnected: false });
     expect(container.textContent).toContain("Connect OneDrive read access");
     expect(
@@ -199,6 +201,7 @@ describe("BotFileRecipesPanel", () => {
   });
 
   it("shows each file's outcome from the decision and task records and lets the owner start only files that did not start", async () => {
+    await using _test = await setupTest();
     const approvals: DotApproval[] = [
       {
         approvalId: "approval-old",
@@ -284,6 +287,7 @@ describe("BotFileRecipesPanel", () => {
   });
 
   it("states paused reasons and incomplete coverage truthfully, and confirms before stopping", async () => {
+    await using _test = await setupTest();
     handlers.onAction.mockResolvedValue({});
     await render({
       recipes: [
@@ -318,6 +322,7 @@ describe("BotFileRecipesPanel", () => {
   });
 
   it("names the full-recipe blocker with its recovery, and says an unconfirmed outcome cannot be started", async () => {
+    await using _test = await setupTest();
     handlers.onAction.mockResolvedValue({});
     await render({
       recipes: [
@@ -358,6 +363,7 @@ describe("BotFileRecipesPanel", () => {
   });
 
   it("refuses to save edits from an outdated version of the recipe", async () => {
+    await using _test = await setupTest();
     handlers.onEdit.mockResolvedValue({});
     await render();
     await click("Edit recipe");
@@ -376,21 +382,24 @@ describe("BotFileRecipesPanel", () => {
   });
 });
 
-describe("BotFileRecipesPanel waiting reasons", () => {
-  let reactRoot: Root;
+describe("BotFileRecipesPanel waiting reasons", async () => {
+  let reactRoot: Screen;
   let container: HTMLDivElement;
-  beforeEach(() => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  async function setupTest() {
     container = document.createElement("div");
     document.body.append(container);
-    reactRoot = createRoot(container);
-  });
-  afterEach(async () => {
-    await act(async () => reactRoot.unmount());
-    container.remove();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+    reactRoot = await renderTest(null, { container, router: false });
+
+    return {
+      async [Symbol.asyncDispose]() {
+        await act(async () => reactRoot.unmount());
+        container.remove();
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+      },
+    };
+  }
+
   const pending: DotApproval = {
     approvalId: "approval-1",
     status: "pending",
@@ -400,6 +409,7 @@ describe("BotFileRecipesPanel waiting reasons", () => {
   };
 
   it("resumes a paused recipe from its status and shows a file's authoritative decision over a stale label", async () => {
+    await using _test = await setupTest();
     const onAction = vi.fn<BotFileRecipesPanelProps["onAction"]>(async () => ({}));
     const onWaitingAction = vi.fn();
     const paused = recipe({
@@ -432,7 +442,7 @@ describe("BotFileRecipesPanel waiting reasons", () => {
       ],
     });
     await act(async () =>
-      reactRoot.render(
+      reactRoot.rerender(
         <BotFileRecipesPanel
           recipes={[paused]}
           approvals={[pending]}
@@ -460,8 +470,9 @@ describe("BotFileRecipesPanel waiting reasons", () => {
   });
 
   it("keeps an older service's wording, without claiming a decision outside the snapshot was recorded", async () => {
+    await using _test = await setupTest();
     await act(async () =>
-      reactRoot.render(
+      reactRoot.rerender(
         <BotFileRecipesPanel
           recipes={[
             recipe({ events: [event({ status: "needs-decision", approvalId: "approval-9" })] }),

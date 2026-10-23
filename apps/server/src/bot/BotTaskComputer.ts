@@ -105,6 +105,11 @@ const CLAIM_INTERVAL_MS = 20_000;
 /** The longest claim the bot grants; a late result is still accepted after it lapses. */
 const LEASE_SECONDS = 7200;
 const REQUEST_TIMEOUT = Duration.seconds(15);
+// A 4 MiB attachment travels as up to 5.6 MiB of JSON, in either direction.
+const TRANSFER_TIMEOUT = Duration.minutes(2);
+const TRANSFER_RETRY = "Task attachment transfer will retry before execution.";
+const transferRetryDelay = (attempt: number) =>
+  Math.min(30 * 60_000, 30_000 * 2 ** Math.min(attempt - 1, 16));
 /** Retry uploads for one day after capturing the completed turn, then report the missing files. */
 const OUTPUT_RETRY_WINDOW_MS = 24 * 3_600_000;
 const PROJECT_GONE = "The project for TritonAI Bot tasks no longer exists.";
@@ -225,6 +230,9 @@ const Held = Schema.Struct({
       }),
     ).check(Schema.isMaxLength(3)),
   ),
+  transferFailures: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  nextTransferAt: Schema.optional(Schema.Number),
+  inputRetryUntil: Schema.optional(Schema.Number),
   outputRetryUntil: Schema.optional(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))),
 }).check(
   Schema.makeFilter(
@@ -381,7 +389,7 @@ export const make = Effect.gen(function* () {
           Effect.flatMap((json) => secrets.set(STATE_SECRET, new TextEncoder().encode(json))),
         );
 
-  const request = (input: HttpClientRequest.HttpClientRequest) =>
+  const request = (input: HttpClientRequest.HttpClientRequest, timeout = REQUEST_TIMEOUT) =>
     httpClient.execute(input).pipe(
       Effect.flatMap((response) =>
         response.json.pipe(
@@ -395,14 +403,20 @@ export const make = Effect.gen(function* () {
           })),
         ),
       ),
-      Effect.timeout(REQUEST_TIMEOUT),
+      Effect.timeout(timeout),
     );
-  const post = (url: string, headers: Record<string, string>, body: unknown) =>
+  const post = (
+    url: string,
+    headers: Record<string, string>,
+    body: unknown,
+    timeout = REQUEST_TIMEOUT,
+  ) =>
     request(
       HttpClientRequest.post(url).pipe(
         HttpClientRequest.setHeaders(headers),
         HttpClientRequest.bodyJsonUnsafe(body),
       ),
+      timeout,
     );
   const workerHeaders = (stored: Stored) => ({
     "x-triton-harness-user": stored.userId,
@@ -486,55 +500,55 @@ export const make = Effect.gen(function* () {
   });
 
   /** Saves the outcome first, so a failed delivery is retried rather than the task rerun. */
-  const retainRejectedReceipt = (
+  const retainRejectedReceipt = Effect.fn("BotTaskComputer.retainRejectedReceipt")(function* (
     stored: Stored,
     task: HeldTask & { readonly outcome: TaskOutcome },
     rejectedStatus: typeof PermanentResultRejection.Type,
     now: number,
-  ) =>
-    Effect.gen(function* () {
-      const key = recoveryReceiptKey(stored, task);
-      const validateExisting = (bytes: Uint8Array) =>
-        Effect.gen(function* () {
-          const receipt = yield* decodeRecoveryReceipt(new TextDecoder().decode(bytes));
-          if (
-            receipt.apiUrl !== stored.apiUrl ||
-            receipt.userId !== stored.userId ||
-            receipt.taskId !== task.taskId ||
-            receipt.claimId !== task.claimId
-          )
-            return yield* failure("Could not validate the retained original task receipt.");
-        });
-      const existing = yield* secrets.get(key);
-      if (Option.isSome(existing)) {
-        yield* validateExisting(existing.value);
-        return;
-      }
-      const json = yield* encodeRecoveryReceipt({
-        version: 1,
-        apiUrl: stored.apiUrl,
-        userId: stored.userId,
-        taskId: task.taskId,
-        claimId: task.claimId,
-        title: task.title,
-        threadId: task.threadId,
-        messageId: task.messageId,
-        claimedAt: task.claimedAt,
-        outcome: task.outcome,
-        rejectedAt: isoAt(now),
-        rejectedStatus,
-      });
-      yield* secrets.create(key, new TextEncoder().encode(json)).pipe(
-        Effect.catchIf(ServerSecretStore.isSecretAlreadyExistsError, () =>
-          Effect.gen(function* () {
-            const saved = yield* secrets.get(key);
-            if (Option.isNone(saved))
-              return yield* failure("Could not confirm the retained original task receipt.");
-            yield* validateExisting(saved.value);
-          }),
-        ),
-      );
+  ) {
+    const key = recoveryReceiptKey(stored, task);
+    const validateExisting = Effect.fn("BotTaskComputer.validateExisting")(function* (
+      bytes: Uint8Array,
+    ) {
+      const receipt = yield* decodeRecoveryReceipt(new TextDecoder().decode(bytes));
+      if (
+        receipt.apiUrl !== stored.apiUrl ||
+        receipt.userId !== stored.userId ||
+        receipt.taskId !== task.taskId ||
+        receipt.claimId !== task.claimId
+      )
+        return yield* failure("Could not validate the retained original task receipt.");
     });
+    const existing = yield* secrets.get(key);
+    if (Option.isSome(existing)) {
+      yield* validateExisting(existing.value);
+      return;
+    }
+    const json = yield* encodeRecoveryReceipt({
+      version: 1,
+      apiUrl: stored.apiUrl,
+      userId: stored.userId,
+      taskId: task.taskId,
+      claimId: task.claimId,
+      title: task.title,
+      threadId: task.threadId,
+      messageId: task.messageId,
+      claimedAt: task.claimedAt,
+      outcome: task.outcome,
+      rejectedAt: isoAt(now),
+      rejectedStatus,
+    });
+    yield* secrets.create(key, new TextEncoder().encode(json)).pipe(
+      Effect.catchIf(ServerSecretStore.isSecretAlreadyExistsError, () =>
+        Effect.gen(function* () {
+          const saved = yield* secrets.get(key);
+          if (Option.isNone(saved))
+            return yield* failure("Could not confirm the retained original task receipt.");
+          yield* validateExisting(saved.value);
+        }),
+      ),
+    );
+  });
 
   const deliver = (
     stored: Stored,
@@ -559,212 +573,234 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => null),
     );
 
-  const settleHeld = (initial: Stored, now: number) =>
-    Effect.gen(function* () {
-      let stored = initial;
-      tasks: for (const original of initial.held) {
-        let task = original;
-        const saveTask = (next: typeof task) =>
-          Effect.gen(function* () {
-            const nextStored = {
-              ...stored,
-              held: stored.held.map((item) => (item.taskId === next.taskId ? next : item)),
-            };
-            yield* writeStored(nextStored);
-            stored = nextStored;
-            task = next;
-          });
-        if (task.outcome === null) {
-          // Only active pairings may keep a definitively unstarted assignment queued.
-          // started:true includes an uncertain dispatch acknowledgement and is never replayed.
-          if (!task.started && task.assignment && stored.active) continue;
-          const thread = task.started
-            ? yield* projections
-                .getThreadDetailById(ThreadId.make(task.threadId), { messageId: task.messageId })
-                .pipe(Effect.map(Option.getOrNull), Effect.option)
-            : Option.some(null);
-          // A failed read is not evidence the thread is gone; check again next pass.
-          if (Option.isNone(thread)) continue;
-          const progress = taskProgress(thread.value, task, now);
-          if (progress.kind === "pending") continue;
-          let outcome: TaskOutcome = {
-            status: progress.status,
-            result: progress.result,
-            ...(progress.structuredResult ? { structuredResult: progress.structuredResult } : {}),
+  const settleHeld = Effect.fn("BotTaskComputer.settleHeld")(function* (
+    initial: Stored,
+    now: number,
+  ) {
+    let stored = initial;
+    tasks: for (const original of initial.held) {
+      let task = original;
+      const saveTask = Effect.fn("BotTaskComputer.saveTask")(function* (next: typeof task) {
+        const nextStored = {
+          ...stored,
+          held: stored.held.map((item) => (item.taskId === next.taskId ? next : item)),
+        };
+        yield* writeStored(nextStored);
+        stored = nextStored;
+        task = next;
+      });
+      if (task.outcome === null) {
+        // Only active pairings may keep a definitively unstarted assignment queued.
+        // started:true includes an uncertain dispatch acknowledgement and is never replayed.
+        if (!task.started && task.assignment && stored.active) continue;
+        const thread = task.started
+          ? yield* projections
+              .getThreadDetailById(ThreadId.make(task.threadId), { messageId: task.messageId })
+              .pipe(Effect.map(Option.getOrNull), Effect.option)
+          : Option.some(null);
+        // A failed read is not evidence the thread is gone; check again next pass.
+        if (Option.isNone(thread)) continue;
+        const progress = taskProgress(thread.value, task, now);
+        if (progress.kind === "pending") continue;
+        let outcome: TaskOutcome = {
+          status: progress.status,
+          result: progress.result,
+          ...(progress.structuredResult ? { structuredResult: progress.structuredResult } : {}),
+        };
+        const outputs = outcome.structuredResult
+          ? yield* Effect.tryPromise(() =>
+              collectTaskOutputFiles(
+                taskOutputDirectory(serverConfig.stateDir, task.outputId ?? task.threadId),
+                platform,
+                { architecture },
+              ),
+            ).pipe(
+              Effect.orElseSucceed(() => ({
+                files: [],
+                blockers: [
+                  "Task output files could not be collected. Open the Harness thread for them.",
+                ],
+              })),
+            )
+          : { files: [], blockers: [] };
+        if (outcome.structuredResult)
+          outcome = {
+            ...outcome,
+            structuredResult: {
+              ...outcome.structuredResult,
+              blockers: [...outputs.blockers, ...outcome.structuredResult.blockers].slice(0, 10),
+            },
           };
-          const outputs = outcome.structuredResult
-            ? yield* Effect.tryPromise(() =>
-                collectTaskOutputFiles(
-                  taskOutputDirectory(serverConfig.stateDir, task.outputId ?? task.threadId),
-                  platform,
-                  { architecture },
-                ),
-              ).pipe(
-                Effect.orElseSucceed(() => ({
-                  files: [],
-                  blockers: [
-                    "Task output files could not be collected. Open the Harness thread for them.",
-                  ],
-                })),
-              )
-            : { files: [], blockers: [] };
-          if (outcome.structuredResult)
-            outcome = {
+        // Capture the receipt and exact bytes atomically before any remote upload.
+        // Later thread edits, deletion, or staged-file changes cannot alter delivery.
+        yield* saveTask({
+          ...task,
+          assignment: undefined,
+          outcome,
+          pendingOutputs: outputs.files,
+          outputRetryUntil: now + OUTPUT_RETRY_WINDOW_MS,
+        });
+      }
+      // Existing journals get one durable deadline; restarting never resets the retry window.
+      if (task.pendingOutputs?.length && task.outputRetryUntil === undefined)
+        yield* saveTask({ ...task, outputRetryUntil: now + OUTPUT_RETRY_WINDOW_MS });
+      const deferTransfer = Effect.gen(function* () {
+        const transferFailures = (task.transferFailures ?? 0) + 1;
+        yield* saveTask({
+          ...task,
+          transferFailures,
+          nextTransferAt: (yield* Clock.currentTimeMillis) + transferRetryDelay(transferFailures),
+        });
+      });
+      while (task.pendingOutputs?.length) {
+        const file = task.pendingOutputs[0]!;
+        const outcome = task.outcome!;
+        if (!outcome.structuredResult) {
+          yield* saveTask({
+            ...task,
+            pendingOutputs: [],
+            outcome: {
+              ...outcome,
+              result: `${outcome.result}\n\nTask output files could not be uploaded because their execution receipt is missing. Open the Harness thread for them.`,
+            },
+          });
+          break;
+        }
+        if (now > task.outputRetryUntil!) {
+          yield* saveTask({
+            ...task,
+            pendingOutputs: [],
+            outcome: {
               ...outcome,
               structuredResult: {
                 ...outcome.structuredResult,
-                blockers: [...outputs.blockers, ...outcome.structuredResult.blockers].slice(0, 10),
+                blockers: [
+                  "Task output uploads could not be completed after 24 hours of retries. Open the Harness thread on the task computer to retrieve the files.",
+                  ...outcome.structuredResult.blockers,
+                ].slice(0, 10),
               },
-            };
-          // Capture the receipt and exact bytes atomically before any remote upload.
-          // Later thread edits, deletion, or staged-file changes cannot alter delivery.
-          yield* saveTask({
-            ...task,
-            assignment: undefined,
-            outcome,
-            pendingOutputs: outputs.files,
-            outputRetryUntil: now + OUTPUT_RETRY_WINDOW_MS,
+            },
           });
+          break;
         }
-        // Existing journals get one durable deadline; restarting never resets the retry window.
-        if (task.pendingOutputs?.length && task.outputRetryUntil === undefined)
-          yield* saveTask({ ...task, outputRetryUntil: now + OUTPUT_RETRY_WINDOW_MS });
-        while (task.pendingOutputs?.length) {
-          const file = task.pendingOutputs[0]!;
-          const outcome = task.outcome!;
-          if (!outcome.structuredResult) {
-            yield* saveTask({
-              ...task,
-              pendingOutputs: [],
-              outcome: {
-                ...outcome,
-                result: `${outcome.result}\n\nTask output files could not be uploaded because their execution receipt is missing. Open the Harness thread for them.`,
-              },
-            });
-            break;
-          }
-          if (now > task.outputRetryUntil!) {
-            yield* saveTask({
-              ...task,
-              pendingOutputs: [],
-              outcome: {
-                ...outcome,
-                structuredResult: {
-                  ...outcome.structuredResult,
-                  blockers: [
-                    "Task output uploads could not be completed after 24 hours of retries. Open the Harness thread on the task computer to retrieve the files.",
-                    ...outcome.structuredResult.blockers,
-                  ].slice(0, 10),
-                },
-              },
-            });
-            break;
-          }
-          const reply = yield* post(
-            `${stored.apiUrl}/harness/tasks/${task.taskId}/artifacts`,
-            workerHeaders(stored),
-            { claimId: task.claimId, ...file },
-          ).pipe(Effect.option);
-          if (Option.isNone(reply)) continue tasks;
-          if (yield* handleRejection(stored, reply.value)) {
-            return { ...stored, active: false, replaced: reply.value.json.replaced === true };
-          }
-          const evidence = outcome.structuredResult;
-          if (permanentResultRejection(reply.value.status) || reply.value.status === 409) {
-            yield* saveTask({
-              ...task,
-              pendingOutputs: reply.value.status === 404 ? [] : task.pendingOutputs.slice(1),
-              outcome: {
-                ...outcome,
-                structuredResult: {
-                  ...evidence,
-                  blockers: [
-                    reply.value.status === 404
-                      ? "This Bot service does not support downloadable task files yet."
-                      : `The Bot could not accept output ${file.name}. Open the Harness thread for that file.`,
-                    ...evidence.blockers,
-                  ].slice(0, 10),
-                },
-              },
-            });
-            continue;
-          }
-          if (reply.value.status !== 200) continue tasks;
-          const metadata = yield* decodeAttachmentMetadata(reply.value.json.attachment).pipe(
-            Effect.option,
-          );
-          if (Option.isNone(metadata)) continue tasks;
-          const attachment = metadata.value;
-          // Persist each receipt before proceeding. If its acknowledgement or journal
-          // write is lost, the service's task/content-scoped ID settles an identical retry.
+        if (now < (task.nextTransferAt ?? 0)) continue tasks;
+        const reply = yield* post(
+          `${stored.apiUrl}/harness/tasks/${task.taskId}/artifacts`,
+          workerHeaders(stored),
+          { claimId: task.claimId, ...file },
+          TRANSFER_TIMEOUT,
+        ).pipe(Effect.option);
+        if (Option.isNone(reply)) {
+          yield* deferTransfer;
+          continue tasks;
+        }
+        if (yield* handleRejection(stored, reply.value)) {
+          return { ...stored, active: false, replaced: reply.value.json.replaced === true };
+        }
+        const evidence = outcome.structuredResult;
+        if (permanentResultRejection(reply.value.status) || reply.value.status === 409) {
           yield* saveTask({
             ...task,
-            pendingOutputs: task.pendingOutputs.slice(1),
+            pendingOutputs: reply.value.status === 404 ? [] : task.pendingOutputs.slice(1),
             outcome: {
               ...outcome,
               structuredResult: {
                 ...evidence,
-                artifacts: [
-                  {
-                    label: attachment.name,
-                    uri: `attachment:${attachment.attachmentId}`,
-                    kind: "artifact" as const,
-                    provenance: "harness-upload" as const,
-                    attachmentId: attachment.attachmentId,
-                  },
-                  ...evidence.artifacts,
-                ].slice(0, 20),
+                blockers: [
+                  reply.value.status === 404
+                    ? "This Bot service does not support downloadable task files yet."
+                    : `The Bot could not accept output ${file.name}. Open the Harness thread for that file.`,
+                  ...evidence.blockers,
+                ].slice(0, 10),
               },
             },
           });
+          continue;
         }
-        let reply = yield* deliver(
+        if (reply.value.status !== 200) {
+          yield* deferTransfer;
+          continue tasks;
+        }
+        const metadata = yield* decodeAttachmentMetadata(reply.value.json.attachment).pipe(
+          Effect.option,
+        );
+        if (Option.isNone(metadata)) {
+          yield* deferTransfer;
+          continue tasks;
+        }
+        const attachment = metadata.value;
+        // Persist each receipt before proceeding. If its acknowledgement or journal
+        // write is lost, the service's task/content-scoped ID settles an identical retry.
+        yield* saveTask({
+          ...task,
+          pendingOutputs: task.pendingOutputs.slice(1),
+          transferFailures: undefined,
+          nextTransferAt: undefined,
+          outcome: {
+            ...outcome,
+            structuredResult: {
+              ...evidence,
+              artifacts: [
+                {
+                  label: attachment.name,
+                  uri: `attachment:${attachment.attachmentId}`,
+                  kind: "artifact" as const,
+                  provenance: "harness-upload" as const,
+                  attachmentId: attachment.attachmentId,
+                },
+                ...evidence.artifacts,
+              ].slice(0, 20),
+            },
+          },
+        });
+      }
+      let reply = yield* deliver(
+        stored,
+        { ...task, outcome: task.outcome! },
+        task.deliveryMode === "minimal" ? task.minimalResult : undefined,
+      );
+      if (reply === null) continue;
+      if (yield* handleRejection(stored, reply)) {
+        return { ...stored, active: false, replaced: reply.json.replaced === true };
+      }
+      if (permanentResultRejection(reply.status) && task.deliveryMode !== "minimal") {
+        // Preserve exact evidence, without credentials or staged file bytes, before changing delivery.
+        yield* retainRejectedReceipt(
           stored,
           { ...task, outcome: task.outcome! },
-          task.deliveryMode === "minimal" ? task.minimalResult : undefined,
+          reply.status,
+          now,
         );
+        yield* saveTask({
+          ...task,
+          deliveryMode: "minimal",
+          minimalResult: minimalTaskResult({ ...task, outcome: task.outcome! }),
+        });
+        reply = yield* deliver(stored, { ...task, outcome: task.outcome! }, task.minimalResult);
         if (reply === null) continue;
-        if (yield* handleRejection(stored, reply)) {
+        if (yield* handleRejection(stored, reply))
           return { ...stored, active: false, replaced: reply.json.replaced === true };
-        }
-        if (permanentResultRejection(reply.status) && task.deliveryMode !== "minimal") {
-          // Preserve exact evidence, without credentials or staged file bytes, before changing delivery.
-          yield* retainRejectedReceipt(
-            stored,
-            { ...task, outcome: task.outcome! },
-            reply.status,
-            now,
-          );
-          yield* saveTask({
-            ...task,
-            deliveryMode: "minimal",
-            minimalResult: minimalTaskResult({ ...task, outcome: task.outcome! }),
-          });
-          reply = yield* deliver(stored, { ...task, outcome: task.outcome! }, task.minimalResult);
-          if (reply === null) continue;
-          if (yield* handleRejection(stored, reply))
-            return { ...stored, active: false, replaced: reply.json.replaced === true };
-        }
-        if (
-          reply.status === 200 ||
-          reply.status === 409 ||
-          (task.deliveryMode === "minimal" && permanentResultRejection(reply.status))
-        ) {
-          if (permanentResultRejection(reply.status))
-            stored = {
-              ...stored,
-              deliveryWarning: {
-                title: task.title,
-                threadId: task.threadId,
-                status: reply.status,
-              },
-            };
-          stored = { ...stored, held: stored.held.filter((item) => item.taskId !== task.taskId) };
-          yield* writeStored(stored);
-        }
       }
-      return stored;
-    });
+      if (
+        reply.status === 200 ||
+        reply.status === 409 ||
+        (task.deliveryMode === "minimal" && permanentResultRejection(reply.status))
+      ) {
+        if (permanentResultRejection(reply.status))
+          stored = {
+            ...stored,
+            deliveryWarning: {
+              title: task.title,
+              threadId: task.threadId,
+              status: reply.status,
+            },
+          };
+        stored = { ...stored, held: stored.held.filter((item) => item.taskId !== task.taskId) };
+        yield* writeStored(stored);
+      }
+    }
+    return stored;
+  });
 
   const readBinding = (stored: Stored, taskId: string) =>
     secrets
@@ -778,467 +814,506 @@ export const make = Effect.gen(function* () {
       );
 
   /** Bindings outlive the active pairing and result delivery, scoped to this API and owner. */
-  const bindTask = (stored: Stored, task: typeof Held.Type, projectId: string) =>
-    Effect.gen(function* () {
-      const existing = yield* readBinding(stored, task.taskId);
-      if (existing) {
-        if (
-          existing.threadId !== task.threadId ||
-          existing.claimId !== task.claimId ||
-          existing.deviceId !== deviceId ||
-          existing.projectId !== projectId ||
-          (existing.workspaceKey !== undefined &&
-            task.workspaceKey !== undefined &&
-            existing.workspaceKey !== task.workspaceKey)
-        )
-          return yield* failure(
-            "This task is already bound to another execution. Nothing was replayed.",
-          );
-        return;
-      }
-      const json = yield* encodeBinding({
-        taskId: task.taskId,
-        claimId: task.claimId,
-        threadId: task.threadId,
-        deviceId,
+  const bindTask = Effect.fn("BotTaskComputer.bindTask")(function* (
+    stored: Stored,
+    task: typeof Held.Type,
+    projectId: string,
+  ) {
+    const existing = yield* readBinding(stored, task.taskId);
+    if (existing) {
+      if (
+        existing.threadId !== task.threadId ||
+        existing.claimId !== task.claimId ||
+        existing.deviceId !== deviceId ||
+        existing.projectId !== projectId ||
+        (existing.workspaceKey !== undefined &&
+          task.workspaceKey !== undefined &&
+          existing.workspaceKey !== task.workspaceKey)
+      )
+        return yield* failure(
+          "This task is already bound to another execution. Nothing was replayed.",
+        );
+      return;
+    }
+    const json = yield* encodeBinding({
+      taskId: task.taskId,
+      claimId: task.claimId,
+      threadId: task.threadId,
+      deviceId,
+      projectId,
+      ...(task.workspaceKey ? { workspaceKey: task.workspaceKey } : {}),
+    });
+    yield* secrets.create(bindingKey(stored, task.taskId), new TextEncoder().encode(json));
+  });
+
+  const migrateHeldBindings = Effect.fn("BotTaskComputer.migrateHeldBindings")(function* (
+    initial: Stored,
+  ) {
+    const held = [...initial.held];
+    let changed = false;
+    for (const [index, task] of initial.held.entries()) {
+      if (
+        !task.started ||
+        (task.projectId !== undefined && !task.workspaceKey?.startsWith("scratch:"))
+      )
+        continue;
+      const shell = yield* projections.getThreadShellById(ThreadId.make(task.threadId));
+      if (Option.isNone(shell)) continue;
+      const projectId = ProjectId.make(task.projectId ?? shell.value.projectId);
+      if (task.projectId === undefined) yield* bindTask(initial, task, projectId);
+      const project = yield* projections.getProjectShellById(projectId);
+      const workspacePath =
+        shell.value.worktreePath ??
+        (Option.isSome(project) ? project.value.workspaceRoot : undefined);
+      held[index] = {
+        ...task,
         projectId,
-        ...(task.workspaceKey ? { workspaceKey: task.workspaceKey } : {}),
-      });
-      yield* secrets.create(bindingKey(stored, task.taskId), new TextEncoder().encode(json));
-    });
-
-  const migrateHeldBindings = (initial: Stored) =>
-    Effect.gen(function* () {
-      const held = [...initial.held];
-      let changed = false;
-      for (const [index, task] of initial.held.entries()) {
-        if (
-          !task.started ||
-          (task.projectId !== undefined && !task.workspaceKey?.startsWith("scratch:"))
-        )
-          continue;
-        const shell = yield* projections.getThreadShellById(ThreadId.make(task.threadId));
-        if (Option.isNone(shell)) continue;
-        const projectId = ProjectId.make(task.projectId ?? shell.value.projectId);
-        if (task.projectId === undefined) yield* bindTask(initial, task, projectId);
-        const project = yield* projections.getProjectShellById(projectId);
-        const workspacePath =
-          shell.value.worktreePath ??
-          (Option.isSome(project) ? project.value.workspaceRoot : undefined);
-        held[index] = {
-          ...task,
-          projectId,
-          ...(workspacePath
-            ? {
-                workspaceKey: normalizeProjectPathForComparison(workspacePath),
-              }
-            : {}),
-        };
-        changed = true;
-      }
-      const stored = changed ? { ...initial, held } : initial;
-      if (changed) yield* writeStored(stored);
-      return stored;
-    });
-
-  const enqueueTask = (stored: Stored, task: typeof ClaimedTask.Type) =>
-    Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis;
-      let held: typeof Held.Type = {
-        taskId: task.taskId,
-        claimId: task.claimId,
-        ...(task.progressVersion === 1 ? { progressVersion: 1 as const } : {}),
-        title: task.title,
-        threadId: yield* crypto.randomUUIDv4(),
-        messageId: yield* crypto.randomUUIDv4(),
-        claimedAt: isoAt(now),
-        started: false,
-        outcome: null,
-        assignment: task,
-        projectId: task.project?.id ?? stored.projectId,
-        turnCommandId: yield* crypto.randomUUIDv4(),
-        createCommandId: yield* crypto.randomUUIDv4(),
+        ...(workspacePath
+          ? {
+              workspaceKey: normalizeProjectPathForComparison(workspacePath),
+            }
+          : {}),
       };
-      let reason: string | null =
-        task.project && task.project.deviceId !== deviceId
-          ? "The selected project belongs to another task computer. Nothing ran."
-          : null;
-      let sourceWorkspaceKey: string | undefined;
-      const duplicate = yield* readBinding(stored, task.taskId);
-      if (duplicate) reason = "This task already has a Harness thread. Nothing was replayed.";
-      if (task.operation !== undefined) {
-        const operation = yield* decodeFollowupOperation(task.operation).pipe(Effect.option);
-        if (Option.isNone(operation)) reason = "This task operation is not supported. Nothing ran.";
+      changed = true;
+    }
+    const stored = changed ? { ...initial, held } : initial;
+    if (changed) yield* writeStored(stored);
+    return stored;
+  });
+
+  const enqueueTask = Effect.fn("BotTaskComputer.enqueueTask")(function* (
+    stored: Stored,
+    task: typeof ClaimedTask.Type,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    let held: typeof Held.Type = {
+      taskId: task.taskId,
+      claimId: task.claimId,
+      ...(task.progressVersion === 1 ? { progressVersion: 1 as const } : {}),
+      title: task.title,
+      threadId: yield* crypto.randomUUIDv4(),
+      messageId: yield* crypto.randomUUIDv4(),
+      claimedAt: isoAt(now),
+      started: false,
+      outcome: null,
+      assignment: task,
+      projectId: task.project?.id ?? stored.projectId,
+      turnCommandId: yield* crypto.randomUUIDv4(),
+      createCommandId: yield* crypto.randomUUIDv4(),
+    };
+    let reason: string | null =
+      task.project && task.project.deviceId !== deviceId
+        ? "The selected project belongs to another task computer. Nothing ran."
+        : null;
+    let sourceWorkspaceKey: string | undefined;
+    const duplicate = yield* readBinding(stored, task.taskId);
+    if (duplicate) reason = "This task already has a Harness thread. Nothing was replayed.";
+    if (task.operation !== undefined) {
+      const operation = yield* decodeFollowupOperation(task.operation).pipe(Effect.option);
+      if (Option.isNone(operation)) reason = "This task operation is not supported. Nothing ran.";
+      else {
+        const source = yield* readBinding(stored, operation.value.parentTaskId);
+        if (!source) reason = "The source task has no saved thread on this computer. Nothing ran.";
+        else if (source.deviceId !== deviceId)
+          reason = "The source task belongs to another computer. Nothing ran.";
         else {
-          const source = yield* readBinding(stored, operation.value.parentTaskId);
-          if (!source)
-            reason = "The source task has no saved thread on this computer. Nothing ran.";
-          else if (source.deviceId !== deviceId)
-            reason = "The source task belongs to another computer. Nothing ran.";
-          else {
-            sourceWorkspaceKey = source.workspaceKey;
-            const thread = yield* projections.getThreadShellById(ThreadId.make(source.threadId));
-            if (Option.isNone(thread))
-              reason = "The source task's Harness thread no longer exists. Nothing ran.";
-            else
-              held = {
-                ...held,
-                threadId: source.threadId,
-                projectId: source.projectId,
-                outputId: held.messageId,
-              };
-          }
+          sourceWorkspaceKey = source.workspaceKey;
+          const thread = yield* projections.getThreadShellById(ThreadId.make(source.threadId));
+          if (Option.isNone(thread))
+            reason = "The source task's Harness thread no longer exists. Nothing ran.";
+          else
+            held = {
+              ...held,
+              threadId: source.threadId,
+              projectId: source.projectId,
+              outputId: held.messageId,
+            };
         }
       }
-      const project = yield* projections.getProjectShellById(ProjectId.make(held.projectId!));
-      if (Option.isNone(project)) reason ??= PROJECT_GONE;
-      else {
-        if (
-          task.project &&
-          normalizeProjectPathForComparison(task.project.workspaceRoot) !==
-            normalizeProjectPathForComparison(project.value.workspaceRoot)
-        )
-          reason ??=
-            "The selected project folder changed after the assignment was reviewed. Nothing ran.";
-        const scratch =
-          normalizeProjectPathForComparison(project.value.workspaceRoot) ===
-          normalizeProjectPathForComparison(scratchWorkspaceRootFor(path, serverConfig.baseDir));
-        const thread =
-          task.operation === undefined
-            ? null
-            : Option.getOrNull(yield* projections.getThreadShellById(ThreadId.make(held.threadId)));
-        held = {
-          ...held,
-          workspaceKey:
-            scratch && !thread?.worktreePath
-              ? `scratch:${held.threadId}`
-              : normalizeProjectPathForComparison(
-                  thread?.worktreePath ?? project.value.workspaceRoot,
-                ),
-        };
-      }
-      if (sourceWorkspaceKey !== undefined && sourceWorkspaceKey !== held.workspaceKey)
-        reason ??= "The source thread folder changed since its original assignment. Nothing ran.";
-      if (reason)
-        held = { ...held, assignment: undefined, outcome: { status: "failed", result: reason } };
-      const next = { ...stored, held: [...stored.held, held] };
-      yield* writeStored(next);
-      return next;
-    });
+    }
+    const project = yield* projections.getProjectShellById(ProjectId.make(held.projectId!));
+    if (Option.isNone(project)) reason ??= PROJECT_GONE;
+    else {
+      if (
+        task.project &&
+        normalizeProjectPathForComparison(task.project.workspaceRoot) !==
+          normalizeProjectPathForComparison(project.value.workspaceRoot)
+      )
+        reason ??=
+          "The selected project folder changed after the assignment was reviewed. Nothing ran.";
+      const scratch =
+        normalizeProjectPathForComparison(project.value.workspaceRoot) ===
+        normalizeProjectPathForComparison(scratchWorkspaceRootFor(path, serverConfig.baseDir));
+      const thread =
+        task.operation === undefined
+          ? null
+          : Option.getOrNull(yield* projections.getThreadShellById(ThreadId.make(held.threadId)));
+      held = {
+        ...held,
+        workspaceKey:
+          scratch && !thread?.worktreePath
+            ? `scratch:${held.threadId}`
+            : normalizeProjectPathForComparison(
+                thread?.worktreePath ?? project.value.workspaceRoot,
+              ),
+      };
+    }
+    if (sourceWorkspaceKey !== undefined && sourceWorkspaceKey !== held.workspaceKey)
+      reason ??= "The source thread folder changed since its original assignment. Nothing ran.";
+    if (reason)
+      held = { ...held, assignment: undefined, outcome: { status: "failed", result: reason } };
+    const next = { ...stored, held: [...stored.held, held] };
+    yield* writeStored(next);
+    return next;
+  });
 
-  const executionWorkspaceKey = (task: typeof Held.Type, fallbackProjectId: string) =>
-    Effect.gen(function* () {
-      const project = yield* projections.getProjectShellById(
-        ProjectId.make(task.projectId ?? fallbackProjectId),
-      );
-      if (Option.isNone(project)) return null;
-      const source = yield* projections.getThreadShellById(ThreadId.make(task.threadId));
-      if (Option.isSome(source) && source.value.worktreePath !== null)
-        return normalizeProjectPathForComparison(source.value.worktreePath);
-      const projectRoot = normalizeProjectPathForComparison(project.value.workspaceRoot);
-      if (task.assignment?.operation !== undefined)
-        return Option.isSome(source) ? projectRoot : null;
-      const scratchRoot = normalizeProjectPathForComparison(
-        scratchWorkspaceRootFor(path, serverConfig.baseDir),
-      );
-      return projectRoot === scratchRoot
-        ? task.executionWorkspacePath
-          ? normalizeProjectPathForComparison(task.executionWorkspacePath)
-          : `scratch:${task.threadId}`
-        : projectRoot;
-    });
+  const executionWorkspaceKey = Effect.fn("BotTaskComputer.executionWorkspaceKey")(function* (
+    task: typeof Held.Type,
+    fallbackProjectId: string,
+  ) {
+    const project = yield* projections.getProjectShellById(
+      ProjectId.make(task.projectId ?? fallbackProjectId),
+    );
+    if (Option.isNone(project)) return null;
+    const source = yield* projections.getThreadShellById(ThreadId.make(task.threadId));
+    if (Option.isSome(source) && source.value.worktreePath !== null)
+      return normalizeProjectPathForComparison(source.value.worktreePath);
+    const projectRoot = normalizeProjectPathForComparison(project.value.workspaceRoot);
+    if (task.assignment?.operation !== undefined) return Option.isSome(source) ? projectRoot : null;
+    const scratchRoot = normalizeProjectPathForComparison(
+      scratchWorkspaceRootFor(path, serverConfig.baseDir),
+    );
+    return projectRoot === scratchRoot
+      ? task.executionWorkspacePath
+        ? normalizeProjectPathForComparison(task.executionWorkspacePath)
+        : `scratch:${task.threadId}`
+      : projectRoot;
+  });
 
-  const verifyExecutionWorkspace = (task: typeof Held.Type, fallbackProjectId: string) =>
-    Effect.gen(function* () {
-      const currentKey = yield* executionWorkspaceKey(task, fallbackProjectId);
-      if (currentKey !== null && currentKey !== task.workspaceKey)
-        return yield* Effect.fail(WORKSPACE_CHANGED);
-    });
+  const verifyExecutionWorkspace = Effect.fn("BotTaskComputer.verifyExecutionWorkspace")(function* (
+    task: typeof Held.Type,
+    fallbackProjectId: string,
+  ) {
+    const currentKey = yield* executionWorkspaceKey(task, fallbackProjectId);
+    if (currentKey !== null && currentKey !== task.workspaceKey)
+      return yield* Effect.fail(WORKSPACE_CHANGED);
+  });
 
   /** Dispatch one persisted assignment. Followups retain their thread and workspace in Auto mode. */
-  const startHeld = (stored: Stored, original: typeof Held.Type) =>
-    Effect.gen(function* () {
-      const task = original.assignment!;
-      let held = original;
-      let next = stored;
-      const save = (updated: typeof held) =>
-        Effect.gen(function* () {
-          next = {
-            ...next,
-            held: next.held.map((item) => (item.taskId === held.taskId ? updated : item)),
-          };
-          yield* writeStored(next);
-          held = updated;
+  const startHeld = Effect.fn("BotTaskComputer.startHeld")(function* (
+    stored: Stored,
+    original: typeof Held.Type,
+  ) {
+    const task = original.assignment!;
+    let held = original;
+    let next = stored;
+    const save = Effect.fn("BotTaskComputer.save")(function* (updated: typeof held) {
+      next = {
+        ...next,
+        held: next.held.map((item) => (item.taskId === held.taskId ? updated : item)),
+      };
+      yield* writeStored(next);
+      held = updated;
+    });
+    const started = yield* Effect.gen(function* () {
+      const settings = yield* settingsService.getSettings;
+      const projectId = ProjectId.make(held.projectId ?? stored.projectId);
+      const project = yield* projections.getProjectShellById(projectId);
+      if (Option.isNone(project)) return yield* Effect.fail(PROJECT_GONE);
+      if (
+        task.project &&
+        normalizeProjectPathForComparison(task.project.workspaceRoot) !==
+          normalizeProjectPathForComparison(project.value.workspaceRoot)
+      )
+        return yield* failure("The reviewed project folder changed. Nothing ran.");
+      const resolved = resolveProjectSettings(settings, projectId, project.value).settings;
+      const createdAt = isoAt(yield* Clock.currentTimeMillis);
+      const followup = task.operation !== undefined;
+      const source = Option.getOrNull(
+        yield* projections.getThreadShellById(ThreadId.make(held.threadId)),
+      );
+      if (followup && !source)
+        return yield* failure("The source thread no longer exists. Nothing ran.");
+      const scratchRoot = scratchWorkspaceRootFor(path, serverConfig.baseDir);
+      const worktreePath = source
+        ? source.worktreePath
+        : normalizeProjectPathForComparison(project.value.workspaceRoot) ===
+            normalizeProjectPathForComparison(scratchRoot)
+          ? (held.executionWorkspacePath ??
+            (yield* claimScratchThreadFolder(scratchRoot, {
+              threadId: held.threadId,
+              createdAt,
+              text: task.title,
+            }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            )))
+          : null;
+      if (
+        !followup &&
+        worktreePath !== null &&
+        held.workspaceKey !== normalizeProjectPathForComparison(worktreePath)
+      )
+        yield* save({
+          ...held,
+          executionWorkspacePath: worktreePath,
+          workspaceKey: normalizeProjectPathForComparison(worktreePath),
         });
-      const started = yield* Effect.gen(function* () {
-        const settings = yield* settingsService.getSettings;
-        const projectId = ProjectId.make(held.projectId ?? stored.projectId);
-        const project = yield* projections.getProjectShellById(projectId);
-        if (Option.isNone(project)) return yield* Effect.fail(PROJECT_GONE);
+      const modelSelection: ModelSelection = source?.modelSelection ??
+        resolved.defaultModelSelection ??
+        settings.defaultModelSelection ?? {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: DEFAULT_MODEL,
+        };
+      const outputDirectory = taskOutputDirectory(
+        serverConfig.stateDir,
+        held.outputId ?? held.threadId,
+      );
+      yield* Effect.tryPromise(() => prepareTaskOutputDirectory(outputDirectory));
+      const attachments: Array<ChatAttachment> = [];
+      for (const attachment of task.attachments ?? []) {
         if (
-          task.project &&
-          normalizeProjectPathForComparison(task.project.workspaceRoot) !==
-            normalizeProjectPathForComparison(project.value.workspaceRoot)
+          attachment.mimeType.startsWith("image/") &&
+          !["image/png", "image/jpeg", "image/webp"].includes(attachment.mimeType)
         )
-          return yield* failure("The reviewed project folder changed. Nothing ran.");
-        const resolved = resolveProjectSettings(settings, projectId, project.value).settings;
-        const createdAt = isoAt(yield* Clock.currentTimeMillis);
-        const followup = task.operation !== undefined;
-        const source = Option.getOrNull(
-          yield* projections.getThreadShellById(ThreadId.make(held.threadId)),
+          return yield* failure("Unsupported task image format.");
+        const reply = yield* request(
+          HttpClientRequest.get(
+            `${stored.apiUrl}/harness/tasks/${task.taskId}/attachments/${attachment.attachmentId}?claimId=${encodeURIComponent(task.claimId)}`,
+          ).pipe(HttpClientRequest.setHeaders(workerHeaders(stored))),
+          TRANSFER_TIMEOUT,
+        ).pipe(Effect.mapError(() => TRANSFER_RETRY));
+        if ([408, 425, 429].includes(reply.status) || reply.status >= 500)
+          return yield* Effect.fail(TRANSFER_RETRY);
+        if (reply.status !== 200)
+          return yield* failure("Could not retrieve a task attachment. Nothing ran.");
+        const downloaded = yield* decodeAttachmentBytes(reply.json);
+        if (
+          downloaded.attachment.attachmentId !== attachment.attachmentId ||
+          downloaded.attachment.sha256 !== attachment.sha256 ||
+          downloaded.attachment.mimeType !== attachment.mimeType
+        )
+          return yield* failure("Task attachment identity changed.");
+        const bytes = yield* Effect.try(() =>
+          verifiedAttachmentBytes({
+            dataBase64: downloaded.dataBase64,
+            size: attachment.size,
+            sha256: attachment.sha256,
+          }),
         );
-        if (followup && !source)
-          return yield* failure("The source thread no longer exists. Nothing ran.");
-        const scratchRoot = scratchWorkspaceRootFor(path, serverConfig.baseDir);
-        const worktreePath = source
-          ? source.worktreePath
-          : normalizeProjectPathForComparison(project.value.workspaceRoot) ===
-              normalizeProjectPathForComparison(scratchRoot)
-            ? (held.executionWorkspacePath ??
-              (yield* claimScratchThreadFolder(scratchRoot, {
-                threadId: held.threadId,
-                createdAt,
-                text: task.title,
-              }).pipe(
-                Effect.provideService(FileSystem.FileSystem, fileSystem),
-                Effect.provideService(Path.Path, path),
-              )))
-            : null;
-        if (
-          !followup &&
-          worktreePath !== null &&
-          held.workspaceKey !== normalizeProjectPathForComparison(worktreePath)
-        )
+        const file = {
+          type: attachment.mimeType.startsWith("image/") ? ("image" as const) : ("file" as const),
+          id: ChatAttachmentId.make(
+            createPendingAttachmentId(attachmentFileExtension(attachment.name)),
+          ),
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.size,
+        };
+        const destination = resolveAttachmentPath({
+          attachmentsDir: serverConfig.attachmentsDir,
+          attachment: file,
+        });
+        if (!destination) return yield* failure("Could not store a task attachment.");
+        yield* fileSystem.writeFile(destination, bytes);
+        attachments.push(file);
+      }
+
+      yield* verifyExecutionWorkspace(held, stored.projectId);
+      yield* bindTask(stored, held, projectId);
+      if (!followup)
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(held.createCommandId!),
+          threadId: ThreadId.make(held.threadId),
+          projectId,
+          title: taskThreadTitle(task.title),
+          modelSelection,
+          runtimeMode: "auto",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          branch: null,
+          worktreePath,
+          createdBy: "agent",
+          creationSource: "server",
+        });
+      if (source && source.runtimeMode !== "auto")
+        yield* engine.dispatch({
+          type: "thread.runtime-mode.set",
+          commandId: CommandId.make(`${held.turnCommandId}:mode`),
+          threadId: ThreadId.make(held.threadId),
+          runtimeMode: "auto",
+        });
+      const turn = {
+        type: "message.dispatch" as const,
+        commandId: CommandId.make(held.turnCommandId!),
+        threadId: ThreadId.make(held.threadId),
+        messageId: MessageId.make(held.messageId),
+        text: taskPrompt(task.title, task.prompt, outputDirectory),
+        attachments,
+        dispatchMode: { type: "queue_after_active" as const },
+        createdBy: "agent" as const,
+        creationSource: "server" as const,
+      };
+      yield* verifyExecutionWorkspace(held, stored.projectId);
+      // After this durable write, never redispatch on restart: reconcile the exact message instead.
+      yield* save({
+        ...held,
+        started: true,
+        startedAt: createdAt,
+        assignment: undefined,
+        nextTransferAt: undefined,
+        transferFailures: undefined,
+        inputRetryUntil: undefined,
+        ...(source?.latestTurn?.turnId ? { previousTurnId: source.latestTurn.turnId } : {}),
+      });
+      yield* engine.dispatch(turn);
+    }).pipe(
+      Effect.as(null),
+      Effect.catchCause((cause) => Effect.succeed(cause)),
+    );
+    if (started !== null && !held.started) {
+      // Re-evaluate the new folder and conflicts on the next pass. No turn was requested.
+      if (Cause.squash(started) === WORKSPACE_CHANGED && task.operation === undefined) return next;
+      if (Cause.squash(started) === TRANSFER_RETRY) {
+        const now = yield* Clock.currentTimeMillis;
+        const inputRetryUntil = held.inputRetryUntil ?? now + OUTPUT_RETRY_WINDOW_MS;
+        if (now < inputRetryUntil) {
+          const transferFailures = (held.transferFailures ?? 0) + 1;
           yield* save({
             ...held,
-            executionWorkspacePath: worktreePath,
-            workspaceKey: normalizeProjectPathForComparison(worktreePath),
+            transferFailures,
+            inputRetryUntil,
+            nextTransferAt: now + transferRetryDelay(transferFailures),
           });
-        const modelSelection: ModelSelection = source?.modelSelection ??
-          resolved.defaultModelSelection ??
-          settings.defaultModelSelection ?? {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: DEFAULT_MODEL,
-          };
-        const outputDirectory = taskOutputDirectory(
-          serverConfig.stateDir,
-          held.outputId ?? held.threadId,
-        );
-        yield* Effect.tryPromise(() => prepareTaskOutputDirectory(outputDirectory));
-        const attachments: Array<ChatAttachment> = [];
-        for (const attachment of task.attachments ?? []) {
-          if (
-            attachment.mimeType.startsWith("image/") &&
-            !["image/png", "image/jpeg", "image/webp"].includes(attachment.mimeType)
-          )
-            return yield* failure("Unsupported task image format.");
-          const reply = yield* request(
-            HttpClientRequest.get(
-              `${stored.apiUrl}/harness/tasks/${task.taskId}/attachments/${attachment.attachmentId}?claimId=${encodeURIComponent(task.claimId)}`,
-            ).pipe(HttpClientRequest.setHeaders(workerHeaders(stored))),
-          );
-          if (reply.status !== 200)
-            return yield* failure("Could not retrieve a task attachment. Nothing ran.");
-          const downloaded = yield* decodeAttachmentBytes(reply.json);
-          if (
-            downloaded.attachment.attachmentId !== attachment.attachmentId ||
-            downloaded.attachment.sha256 !== attachment.sha256 ||
-            downloaded.attachment.mimeType !== attachment.mimeType
-          )
-            return yield* failure("Task attachment identity changed.");
-          const bytes = yield* Effect.try(() =>
-            verifiedAttachmentBytes({
-              dataBase64: downloaded.dataBase64,
-              size: attachment.size,
-              sha256: attachment.sha256,
-            }),
-          );
-          const file = {
-            type: attachment.mimeType.startsWith("image/") ? ("image" as const) : ("file" as const),
-            id: ChatAttachmentId.make(
-              createPendingAttachmentId(attachmentFileExtension(attachment.name)),
-            ),
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.size,
-          };
-          const destination = resolveAttachmentPath({
-            attachmentsDir: serverConfig.attachmentsDir,
-            attachment: file,
-          });
-          if (!destination) return yield* failure("Could not store a task attachment.");
-          yield* fileSystem.writeFile(destination, bytes);
-          attachments.push(file);
-        }
-
-        yield* verifyExecutionWorkspace(held, stored.projectId);
-        yield* bindTask(stored, held, projectId);
-        if (!followup)
-          yield* engine.dispatch({
-            type: "thread.create",
-            commandId: CommandId.make(held.createCommandId!),
-            threadId: ThreadId.make(held.threadId),
-            projectId,
-            title: taskThreadTitle(task.title),
-            modelSelection,
-            runtimeMode: "auto",
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            branch: null,
-            worktreePath,
-            createdBy: "agent",
-            creationSource: "server",
-          });
-        if (source && source.runtimeMode !== "auto")
-          yield* engine.dispatch({
-            type: "thread.runtime-mode.set",
-            commandId: CommandId.make(`${held.turnCommandId}:mode`),
-            threadId: ThreadId.make(held.threadId),
-            runtimeMode: "auto",
-          });
-        const turn = {
-          type: "message.dispatch" as const,
-          commandId: CommandId.make(held.turnCommandId!),
-          threadId: ThreadId.make(held.threadId),
-          messageId: MessageId.make(held.messageId),
-          text: taskPrompt(task.title, task.prompt, outputDirectory),
-          attachments,
-          dispatchMode: { type: "queue_after_active" as const },
-          createdBy: "agent" as const,
-          creationSource: "server" as const,
-        };
-        yield* verifyExecutionWorkspace(held, stored.projectId);
-        // After this durable write, never redispatch on restart: reconcile the exact message instead.
-        yield* save({
-          ...held,
-          started: true,
-          startedAt: createdAt,
-          assignment: undefined,
-          ...(source?.latestTurn?.turnId ? { previousTurnId: source.latestTurn.turnId } : {}),
-        });
-        yield* engine.dispatch(turn);
-      }).pipe(
-        Effect.as(null),
-        Effect.catchCause((cause) => Effect.succeed(cause)),
-      );
-      if (started !== null && !held.started) {
-        // Re-evaluate the new folder and conflicts on the next pass. No turn was requested.
-        if (Cause.squash(started) === WORKSPACE_CHANGED && task.operation === undefined)
           return next;
-        const reason =
-          Cause.squash(started) === PROJECT_GONE
-            ? PROJECT_GONE
-            : Cause.squash(started) === WORKSPACE_CHANGED
-              ? "The source thread's workspace changed. Nothing ran."
-              : "Harness could not start this assignment. Nothing ran.";
-        yield* save({
-          ...held,
-          assignment: undefined,
-          outcome: { status: "failed", result: reason },
-        });
-      }
-      return next;
-    });
-
-  const readProgress = (stored: Stored, now: number) =>
-    Effect.gen(function* () {
-      const progress = [];
-      for (const task of stored.held) {
-        const shell = task.started
-          ? yield* projections
-              .getThreadShellById(ThreadId.make(task.threadId))
-              .pipe(Effect.orElseSucceed(() => Option.none()))
-          : Option.none();
-        const detail = task.started
-          ? yield* projections
-              .getThreadDetailById(ThreadId.make(task.threadId), { messageId: task.messageId })
-              .pipe(Effect.orElseSucceed(() => Option.none()))
-          : Option.none();
-        progress.push({
-          taskId: task.taskId,
-          claimId: task.claimId,
-          progress: botTaskSnapshot(
-            task,
-            { deviceId, projectId: task.projectId ?? stored.projectId, observedAt: isoAt(now) },
-            Option.getOrNull(detail) ?? Option.getOrNull(shell),
-            Option.getOrNull(detail),
-          ),
-        });
-      }
-      yield* Ref.set(snapshots, progress);
-      return progress;
-    });
-
-  const startPending = (initial: Stored, now: number) =>
-    Effect.gen(function* () {
-      let stored = initial;
-      const target = (yield* settingsService.getSettings).botTaskMaxParallel;
-      let launches = 0;
-      for (const queued of initial.held) {
-        if (!queued.assignment || queued.started || queued.outcome !== null) continue;
-        const workspaceKey = yield* executionWorkspaceKey(queued, stored.projectId);
-        const original =
-          queued.assignment.operation === undefined &&
-          workspaceKey !== null &&
-          workspaceKey !== queued.workspaceKey
-            ? { ...queued, workspaceKey }
-            : queued;
-        if (original !== queued) {
-          stored = {
-            ...stored,
-            held: stored.held.map((task) => (task.taskId === original.taskId ? original : task)),
-          };
-          yield* writeStored(stored);
         }
-        const progress = yield* readProgress(stored, now);
-        if (
-          progress.filter(
-            (item) =>
-              stored.held.some(
-                (task) => task.taskId === item.taskId && task.started && task.outcome === null,
-              ) && consumesBotLaunchSlot(item.progress),
-          ).length >= target ||
-          launches >= MAX_CLAIMS_PER_PASS
-        )
-          break;
-        const sameWorkspace = stored.held.some(
-          (task) =>
-            task.taskId !== original.taskId &&
-            task.started &&
-            task.outcome === null &&
-            (task.threadId === original.threadId ||
-              task.workspaceKey === original.workspaceKey ||
-              (task.workspaceKey === undefined &&
-                !original.workspaceKey?.startsWith("scratch:") &&
-                (task.projectId ?? stored.projectId) === original.projectId)),
-        );
-        if (sameWorkspace) continue;
-        if (original.assignment?.operation !== undefined) {
-          const shell = yield* projections.getThreadShellById(ThreadId.make(original.threadId));
-          if (
-            Option.isSome(shell) &&
-            (shell.value.session?.status === "running" ||
-              shell.value.session?.status === "starting" ||
-              shell.value.hasPendingApprovals ||
-              shell.value.hasPendingUserInput ||
-              shell.value.latestTurn?.state === "running")
-          )
-            continue;
-        }
-        stored = yield* startHeld(stored, original);
-        launches++;
       }
-      return stored;
-    });
+      const reason =
+        Cause.squash(started) === PROJECT_GONE
+          ? PROJECT_GONE
+          : Cause.squash(started) === WORKSPACE_CHANGED
+            ? "The source thread's workspace changed. Nothing ran."
+            : "Harness could not start this assignment. Nothing ran.";
+      yield* save({
+        ...held,
+        assignment: undefined,
+        outcome: { status: "failed", result: reason },
+      });
+    }
+    return next;
+  });
 
-  const stopClaiming = (stored: Stored, replaced: boolean, message: string) =>
-    Effect.gen(function* () {
-      yield* writeStored(
-        stored.held.length || stored.deliveryWarning
-          ? { ...stored, active: false, replaced }
-          : null,
+  const readProgress = Effect.fn("BotTaskComputer.readProgress")(function* (
+    stored: Stored,
+    now: number,
+  ) {
+    const progress = [];
+    for (const task of stored.held) {
+      const shell = task.started
+        ? yield* projections
+            .getThreadShellById(ThreadId.make(task.threadId))
+            .pipe(Effect.orElseSucceed(() => Option.none()))
+        : Option.none();
+      const detail = task.started
+        ? yield* projections
+            .getThreadDetailById(ThreadId.make(task.threadId), { messageId: task.messageId })
+            .pipe(Effect.orElseSucceed(() => Option.none()))
+        : Option.none();
+      progress.push({
+        taskId: task.taskId,
+        claimId: task.claimId,
+        progress: botTaskSnapshot(
+          task,
+          { deviceId, projectId: task.projectId ?? stored.projectId, observedAt: isoAt(now) },
+          Option.getOrNull(detail) ?? Option.getOrNull(shell),
+          Option.getOrNull(detail),
+        ),
+      });
+    }
+    yield* Ref.set(snapshots, progress);
+    return progress;
+  });
+
+  const startPending = Effect.fn("BotTaskComputer.startPending")(function* (
+    initial: Stored,
+    now: number,
+  ) {
+    let stored = initial;
+    const target = (yield* settingsService.getSettings).botTaskMaxParallel;
+    let launches = 0;
+    for (const queued of initial.held) {
+      if (
+        !queued.assignment ||
+        queued.started ||
+        queued.outcome !== null ||
+        now < (queued.nextTransferAt ?? 0)
+      )
+        continue;
+      const workspaceKey = yield* executionWorkspaceKey(queued, stored.projectId);
+      const original =
+        queued.assignment.operation === undefined &&
+        workspaceKey !== null &&
+        workspaceKey !== queued.workspaceKey
+          ? { ...queued, workspaceKey }
+          : queued;
+      if (original !== queued) {
+        stored = {
+          ...stored,
+          held: stored.held.map((task) => (task.taskId === original.taskId ? original : task)),
+        };
+        yield* writeStored(stored);
+      }
+      const progress = yield* readProgress(stored, now);
+      if (
+        progress.filter(
+          (item) =>
+            stored.held.some(
+              (task) => task.taskId === item.taskId && task.started && task.outcome === null,
+            ) && consumesBotLaunchSlot(item.progress),
+        ).length >= target ||
+        launches >= MAX_CLAIMS_PER_PASS
+      )
+        break;
+      const sameWorkspace = stored.held.some(
+        (task) =>
+          task.taskId !== original.taskId &&
+          task.started &&
+          task.outcome === null &&
+          (task.threadId === original.threadId ||
+            task.workspaceKey === original.workspaceKey ||
+            (task.workspaceKey === undefined &&
+              !original.workspaceKey?.startsWith("scratch:") &&
+              (task.projectId ?? stored.projectId) === original.projectId)),
       );
-      yield* note({ state: null, message, lastCheckInAt: null });
-    });
+      if (sameWorkspace) continue;
+      if (original.assignment?.operation !== undefined) {
+        const shell = yield* projections.getThreadShellById(ThreadId.make(original.threadId));
+        if (
+          Option.isSome(shell) &&
+          (shell.value.session?.status === "running" ||
+            shell.value.session?.status === "starting" ||
+            shell.value.hasPendingApprovals ||
+            shell.value.hasPendingUserInput ||
+            shell.value.latestTurn?.state === "running")
+        )
+          continue;
+      }
+      stored = yield* startHeld(stored, original);
+      launches++;
+    }
+    return stored;
+  });
+
+  const stopClaiming = Effect.fn("BotTaskComputer.stopClaiming")(function* (
+    stored: Stored,
+    replaced: boolean,
+    message: string,
+  ) {
+    yield* writeStored(
+      stored.held.length || stored.deliveryWarning ? { ...stored, active: false, replaced } : null,
+    );
+    yield* note({ state: null, message, lastCheckInAt: null });
+  });
 
   /** Handles answers that mean this computer no longer runs tasks. Returns true when it stopped. */
   const handleRejection = (stored: Stored, reply: Reply) =>
@@ -1252,50 +1327,49 @@ export const make = Effect.gen(function* () {
             : "TritonAI Bot no longer recognizes this computer. Choose Allow to run tasks here again.",
         ).pipe(Effect.as(true));
 
-  const executionReport = (stored: Stored) =>
-    Effect.gen(function* () {
-      const projects = yield* projections.listProjects;
-      const current = projects.find((project) => project.id === stored.projectId);
-      const settings = yield* settingsService.getSettings;
-      const resolved = current
-        ? resolveProjectSettings(settings, ProjectId.make(current.id), current).settings
-        : settings;
-      const selection = resolved.defaultModelSelection ??
-        settings.defaultModelSelection ?? {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: DEFAULT_MODEL,
-        };
-      const ordered = [...projects].sort(
-        (a, b) => Number(b.id === stored.projectId) - Number(a.id === stored.projectId),
-      );
-      const catalog = ordered.slice(0, 100).map((project) => ({
-        id: project.id,
-        title: project.title.slice(0, 200),
-        workspaceRoot: project.workspaceRoot,
-      }));
-      // Keep the shared pairing record below DynamoDB's item limit, including progress metadata.
-      while (Buffer.byteLength(encodeProjectCatalog(catalog)) > 64_000) catalog.pop();
-      return {
-        projects: {
-          version: 1 as const,
-          defaultProjectId: stored.projectId,
-          hasMore: projects.length > catalog.length,
-          projects: catalog,
-        },
-        readiness: {
-          version: 1 as const,
-          runtime: "desktop" as const,
-          executor: { task: true, query: false },
-          project: { required: true, present: !!current, id: stored.projectId },
-          model: {
-            configured: !!selection?.model,
-            ...(selection ? { provider: selection.instanceId, id: selection.model } : {}),
-          },
-          permissions: { task: "allow" as const, query: "deny" as const },
-          setup: { projectCreation: false },
-        },
+  const executionReport = Effect.fn("BotTaskComputer.executionReport")(function* (stored: Stored) {
+    const projects = yield* projections.listProjects;
+    const current = projects.find((project) => project.id === stored.projectId);
+    const settings = yield* settingsService.getSettings;
+    const resolved = current
+      ? resolveProjectSettings(settings, ProjectId.make(current.id), current).settings
+      : settings;
+    const selection = resolved.defaultModelSelection ??
+      settings.defaultModelSelection ?? {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: DEFAULT_MODEL,
       };
-    });
+    const ordered = [...projects].sort(
+      (a, b) => Number(b.id === stored.projectId) - Number(a.id === stored.projectId),
+    );
+    const catalog = ordered.slice(0, 100).map((project) => ({
+      id: project.id,
+      title: project.title.slice(0, 200),
+      workspaceRoot: project.workspaceRoot,
+    }));
+    // Keep the shared pairing record below DynamoDB's item limit, including progress metadata.
+    while (Buffer.byteLength(encodeProjectCatalog(catalog)) > 64_000) catalog.pop();
+    return {
+      projects: {
+        version: 1 as const,
+        defaultProjectId: stored.projectId,
+        hasMore: projects.length > catalog.length,
+        projects: catalog,
+      },
+      readiness: {
+        version: 1 as const,
+        runtime: "desktop" as const,
+        executor: { task: true, query: false },
+        project: { required: true, present: !!current, id: stored.projectId },
+        model: {
+          configured: !!selection?.model,
+          ...(selection ? { provider: selection.instanceId, id: selection.model } : {}),
+        },
+        permissions: { task: "allow" as const, query: "deny" as const },
+        setup: { projectCreation: false },
+      },
+    };
+  });
 
   const pass = Effect.gen(function* () {
     const saved = yield* readStored;

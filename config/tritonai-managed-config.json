@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "policyVersion": 12,
+  "policyVersion": 13,
   "provider": {
     "driver": "codex",
     "managedBinary": true,
@@ -98,6 +98,9 @@
         "route": "frontier"
       }
     ]
+  },
+  "bot": {
+    "serviceUrl": "https://n90f2a1n3h.execute-api.us-west-2.amazonaws.com"
   },
   "secureSkills": {
     "pollIntervalMinutes": 360

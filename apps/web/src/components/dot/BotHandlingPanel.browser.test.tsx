@@ -1,7 +1,5 @@
-// @vitest-environment jsdom
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { act, render as renderTest, type Screen } from "../../../test/render";
+import { expect, it, vi } from "vite-plus/test";
 
 import { BotHandlingPanel } from "./BotHandlingPanel";
 import type { DotHandlingItem, DotHandlingStopResult, DotHandlingView } from "./dotHandling";
@@ -38,11 +36,10 @@ const result = (patch: Partial<DotHandlingStopResult> = {}): DotHandlingStopResu
   ...patch,
 });
 
-let root: Root;
+let root: Screen;
 let container: HTMLDivElement;
 
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+async function setupTest() {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -57,20 +54,22 @@ beforeEach(() => {
   });
   container = document.createElement("div");
   document.body.append(container);
-  root = createRoot(container);
-});
+  root = await renderTest(null, { container, router: false });
 
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
-});
+  return {
+    async [Symbol.asyncDispose]() {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    },
+  };
+}
 
 async function render(
   handling: DotHandlingView | undefined,
   onStop = vi.fn(async (_item: DotHandlingItem) => result()),
 ) {
-  await act(async () => root.render(<BotHandlingPanel handling={handling} onStop={onStop} />));
+  await act(async () => root.rerender(<BotHandlingPanel handling={handling} onStop={onStop} />));
   return onStop;
 }
 
@@ -91,6 +90,7 @@ function headings() {
 }
 
 it("hides an absent API and updates groups from server states without inventing optional fields", async () => {
+  await using _test = await setupTest();
   const onStop = await render(undefined);
   expect(container.textContent).toBe("");
   await render(
@@ -117,6 +117,7 @@ it("hides an absent API and updates groups from server states without inventing 
 });
 
 it("shows Up next, unknown times, paused status and unavailable sources honestly", async () => {
+  await using _test = await setupTest();
   await render(
     view([item({ upNext: { what: "Wait for the next check" } })], {
       paused: true,
@@ -137,6 +138,7 @@ it("shows Up next, unknown times, paused status and unavailable sources honestly
 });
 
 it("requires confirmation and cancellation never stops an item", async () => {
+  await using _test = await setupTest();
   const onStop = await render(view([item()]));
   await click("Stop Send the budget");
   expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain(
@@ -149,6 +151,7 @@ it("requires confirmation and cancellation never stops an item", async () => {
 });
 
 it("Escape cancels the real dialog without stopping", async () => {
+  await using _test = await setupTest();
   const onStop = await render(view([item()]));
   await click("Stop Send the budget");
   await act(async () => {
@@ -161,6 +164,7 @@ it("Escape cancels the real dialog without stopping", async () => {
 });
 
 it("passes the exact opaque version and announces the confirmed server outcome", async () => {
+  await using _test = await setupTest();
   const selected = item();
   const onStop = await render(view([selected]));
   await click("Stop Send the budget");
@@ -174,6 +178,7 @@ it("passes the exact opaque version and announces the confirmed server outcome",
 });
 
 it("explains that running Harness work cannot be recalled and a stop request is not a stopped task", async () => {
+  await using _test = await setupTest();
   const onStop = vi.fn(async (_item: DotHandlingItem) =>
     result({
       kind: "harness-assignment",
@@ -194,6 +199,7 @@ it("explains that running Harness work cannot be recalled and a stop request is 
 });
 
 it("does not offer Stop when the backend omits it and preserves the backend reason", async () => {
+  await using _test = await setupTest();
   const onStop = await render(
     view([
       item({
@@ -212,6 +218,7 @@ it("does not offer Stop when the backend omits it and preserves the backend reas
 it.each(["conflict", "not-stoppable"] as const)(
   "shows %s results as errors with refresh guidance",
   async (outcome) => {
+    await using _test = await setupTest();
     const onStop = vi.fn(async (_item: DotHandlingItem) =>
       result({ ok: false, stopped: false, outcome, message: "This item changed." }),
     );
@@ -227,6 +234,7 @@ it.each(["conflict", "not-stoppable"] as const)(
 );
 
 it("reports rejected HTTP 409 with refresh guidance and permits cancellation", async () => {
+  await using _test = await setupTest();
   const onStop = vi.fn(async (_item: DotHandlingItem): Promise<DotHandlingStopResult> => {
     throw Object.assign(new Error("The item changed on the server."), { status: 409 });
   });
@@ -244,6 +252,7 @@ it("reports rejected HTTP 409 with refresh guidance and permits cancellation", a
 });
 
 it("blocks confirmation if polling changes the version or removes the stop control", async () => {
+  await using _test = await setupTest();
   const onStop = await render(view([item()]));
   await click("Stop Send the budget");
   await render(view([item({ version: "new/opaque:revision" })]), onStop);
@@ -261,6 +270,7 @@ it("blocks confirmation if polling changes the version or removes the stop contr
 });
 
 it("keeps an in-flight action busy, prevents duplicate stops, and announces failures", async () => {
+  await using _test = await setupTest();
   let rejectStop!: (cause: Error) => void;
   const pending = new Promise<DotHandlingStopResult>((_resolve, reject) => {
     rejectStop = reject;
@@ -285,6 +295,7 @@ it("keeps an in-flight action busy, prevents duplicate stops, and announces fail
 });
 
 it("explains a waiting item with its reason and real next check, offering only recoveries its own controls lack", async () => {
+  await using _test = await setupTest();
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(Date.parse("2026-10-08T12:00:00.000Z"));
   const onWaitingAction = vi.fn();
@@ -324,7 +335,7 @@ it("explains a waiting item with its reason and real next check, offering only r
     },
   });
   await act(async () =>
-    root.render(
+    root.rerender(
       <BotHandlingPanel
         handling={view([waiting, decision])}
         onStop={vi.fn()}

@@ -1,21 +1,24 @@
 # TritonAI Bot
 
-TritonAI Bot is an optional personal assistant that runs as a separate cloud
-service. It is a personal pilot, not an official campus service. Anyone with a
-UC San Diego account can sign in and get their own private bot: an ongoing
-conversation, private memory and reminders, and approvals for anything it wants
-to do on your behalf.
+TritonAI Bot is an optional personal assistant running as a separate cloud service.
+It is a held Experimental candidate, not an official campus service. Availability
+depends on your account and the service's current pilot access policy.
 
-Open **TritonAI Bot** in the sidebar and choose **Sign in with UC San Diego**.
-On desktop, your browser opens campus sign-in and then returns you to Harness
-automatically. In a web browser, sign in and confirm the code shown in Harness.
-The mobile app does not support TritonAI Bot yet.
+In **Settings → General → Experimental**, enable **TritonAI Bot**, then open it
+from the sidebar and sign in with your own UC San Diego account. On desktop,
+your browser opens campus sign-in and returns to Harness through a private local
+callback. This pilot requires the desktop Harness for sign-in. Browser-only and
+mobile sign-in are unavailable; no manual device-code fallback is offered.
 
-The bot appears in the sidebar only when a service address is set. If your build
-does not include a default address, add one in Settings. To use a different service
-or turn the bot off, open
-**Settings → Connections → TritonAI Bot**. Changing or clearing the address signs
-you out of the previous service; your bot session is never sent to another address.
+The managed build supplies the service address. A custom service address can be
+set in **Settings → Connections** if your administrator asks you to use one.
+Enabling Bot does not grant Microsoft access, choose a model, or allow tasks to
+run on this computer. Each requires its own consent or setting.
+
+To disable Bot, turn off its Experimental switch while connected to your Harness.
+This signs out and stops new assignments here. Running work and delivery of saved
+results may finish. Your cloud bot and Microsoft permissions remain; use the bot's
+pause control and Microsoft connections page to manage those separately.
 
 ## Chatting with your bot
 
@@ -56,8 +59,9 @@ you resume. It does not undo actions already started or recall work a task
 computer already picked up. While paused, the conversation shows a **Resume**
 button.
 
-Outlook, calendar, OneDrive and To Do access is limited to the pilot account. For
-other accounts the bot says so and keeps chatting, remembering and reminding.
+Connect your own Microsoft account to use Outlook, calendar, OneDrive and To Do.
+The connection panel distinguishes missing consent, reconnect needs, temporary
+problems and account restrictions. Each account uses its own Microsoft access.
 If Microsoft access expires, the conversation shows **Reconnect Microsoft**. To
 choose what the bot may use, open **Settings → TritonAI Bot → Microsoft
 connections**. If the service is not accepting new users, sign-in tells you so;

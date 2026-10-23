@@ -1023,6 +1023,14 @@ export const SETTINGS_SEARCH_ITEMS = [
       "developer debug diagnostics decision inbox memory routines file inbox panels bot",
     ],
   },
+  {
+    id: "tritonai-bot-opt-in",
+    title: "TritonAI Bot (experimental)",
+    to: "/settings/general",
+    searchTerms: [
+      "personal bot outlook calendar onedrive to do enable disable experimental opt in",
+    ],
+  },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;
 
 export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];

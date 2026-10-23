@@ -1320,6 +1320,11 @@ type WsRpcHandlers = {
 // Keep each registration group below TypeScript's instantiation limit. Both share
 // one handler context and register on the same WebSocket protocol.
 const wsRpcFirstHalfTags = [
+  WS_METHODS.serverGetBotTaskComputer,
+  WS_METHODS.serverAllowBotTaskComputer,
+  WS_METHODS.serverStopBotTaskComputer,
+  WS_METHODS.serverSetBotTaskProject,
+
   WS_METHODS.helpGetContext,
   WS_METHODS.helpAsk,
   WS_METHODS.projectBriefGet,
@@ -3701,6 +3706,11 @@ export const layerWsRpc = (
       };
       return Layer.merge(
         FirstWsRpcGroup.toLayer({
+          [WS_METHODS.serverGetBotTaskComputer]: handlers[WS_METHODS.serverGetBotTaskComputer],
+          [WS_METHODS.serverAllowBotTaskComputer]: handlers[WS_METHODS.serverAllowBotTaskComputer],
+          [WS_METHODS.serverStopBotTaskComputer]: handlers[WS_METHODS.serverStopBotTaskComputer],
+          [WS_METHODS.serverSetBotTaskProject]: handlers[WS_METHODS.serverSetBotTaskProject],
+
           [WS_METHODS.helpGetContext]: handlers[WS_METHODS.helpGetContext],
           [WS_METHODS.helpAsk]: handlers[WS_METHODS.helpAsk],
           [WS_METHODS.projectBriefGet]: handlers[WS_METHODS.projectBriefGet],

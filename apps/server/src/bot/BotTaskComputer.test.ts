@@ -10,6 +10,8 @@ import type {
   OrchestrationProjectShell,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -150,8 +152,11 @@ class FakeBot {
     project?: { id: string; title: string; workspaceRoot: string; deviceId: string };
   }> = [];
   corruptAttachment = false;
+  attachmentStatus = 200;
   onAttachmentDownload: (() => void) | null = null;
   artifactStatus = 200;
+  transferLatency = 0;
+  transferStarted: Deferred.Deferred<void> | null = null;
   artifactStatuses: number[] = [];
   malformedArtifactMetadata = false;
   failArtifactTransport = false;
@@ -192,6 +197,7 @@ class FakeBot {
     }
     if (/^\/harness\/tasks\/[^/]+\/attachments\//u.test(path)) {
       this.onAttachmentDownload?.();
+      if (this.attachmentStatus !== 200) return { status: this.attachmentStatus, json: {} };
       const isDocument = path.endsWith(document.attachmentId);
       return {
         status: 200,
@@ -294,7 +300,16 @@ class FakeBot {
                 request,
                 Response.json(reply.json, { status: reply.status }),
               );
-            }),
+            }).pipe(
+              Effect.tap(() =>
+                request.url.includes("/attachments/") || request.url.endsWith("/artifacts")
+                  ? (this.transferStarted
+                      ? Deferred.succeed(this.transferStarted, undefined)
+                      : Effect.void
+                    ).pipe(Effect.andThen(Effect.sleep(this.transferLatency)))
+                  : Effect.void,
+              ),
+            ),
       ),
     );
   }
@@ -906,6 +921,13 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         yield* Effect.tryPromise(() => NodeFSP.rm(output, { recursive: true }));
         harness.threads.delete(turn.threadId);
         const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        assert.lengthOf(
+          bot.calls.filter((call) => call.path.endsWith("/artifacts")),
+          2,
+          "restart preserves backoff",
+        );
+        yield* TestClock.adjust("30 seconds");
         yield* restarted.tick;
         assert.deepEqual(
           bot.calls
@@ -1545,6 +1567,67 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       }).pipe(Effect.provide(services(bot, harness)));
     },
   );
+
+  it.effect(
+    "retries transient attachment downloads with durable backoff before any execution",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        { taskId: "retry-input", title: "Input", prompt: "Inspect", attachments: [screenshot] },
+      ];
+      bot.attachmentStatus = 503;
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        assert.lengthOf(harness.commands, 0);
+        assert.lengthOf(bot.results, 0);
+        const attempts = () =>
+          bot.calls.filter((call) => call.path.includes("/attachments/")).length;
+        assert.strictEqual(attempts(), 1);
+        const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        yield* TestClock.adjust("29 seconds");
+        yield* restarted.tick;
+        assert.strictEqual(attempts(), 1);
+        yield* TestClock.adjust("1 second");
+        yield* restarted.tick;
+        assert.strictEqual(attempts(), 2);
+        bot.attachmentStatus = 200;
+        yield* TestClock.adjust("59 seconds");
+        yield* restarted.tick;
+        assert.strictEqual(attempts(), 2);
+        yield* TestClock.adjust("1 second");
+        yield* restarted.tick;
+        assert.strictEqual(attempts(), 3);
+        assert.lengthOf(harness.commands, 2);
+        assert.lengthOf(bot.results, 0);
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect("allows an attachment transfer longer than the control-plane timeout", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = [
+      { taskId: "slow-input", title: "Input", prompt: "Inspect", attachments: [screenshot] },
+    ];
+    bot.transferLatency = 20_000;
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      bot.transferStarted = yield* Deferred.make<void>();
+      const pending = yield* allow(computer).pipe(Effect.forkChild);
+      yield* Deferred.await(bot.transferStarted);
+      yield* TestClock.adjust("16 seconds");
+      assert.lengthOf(harness.commands, 0);
+      yield* TestClock.adjust("4 seconds");
+      yield* Fiber.join(pending);
+      assert.lengthOf(harness.commands, 2);
+      assert.lengthOf(bot.results, 0);
+    }).pipe(Effect.provide(services(bot, harness)));
+  });
 
   it.effect("stops locally without sending another service's owner token to the paired bot", () => {
     const bot = new FakeBot(),

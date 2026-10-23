@@ -1,10 +1,8 @@
-// @vitest-environment jsdom
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { act, render as renderTest, type Screen } from "../../../test/render";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { BotRunStatus, botRunStatus } from "./BotRunStatus";
-import type { DotRun } from "./dotClient";
+import { observeBotRun, type DotRun } from "./dotClient";
 
 const now = Date.parse("2026-10-08T12:00:00Z");
 function running(age = 0): DotRun {
@@ -27,6 +25,26 @@ function running(age = 0): DotRun {
 }
 
 describe("run status data", () => {
+  it("uses server time and monotonic elapsed time with client clocks hours ahead or behind", () => {
+    for (const skew of [-7_200_000, 7_200_000]) {
+      const receivedAt = now + skew;
+      const run = observeBotRun(running(80_000), new Date(now).toISOString(), receivedAt);
+      expect(botRunStatus(run, receivedAt)?.phrase).toBe("Checking your calendar");
+      expect(botRunStatus(run, receivedAt)?.expiresAt).toBe(receivedAt + 10_001);
+      expect(botRunStatus(run, receivedAt + 10_001)?.phrase).toBe("Status unavailable");
+    }
+  });
+
+  it("bounds older services to a receipt-relative window without comparing their clock to the client", () => {
+    const run = observeBotRun(running(), undefined, 123);
+    expect(botRunStatus(run, 124)?.phrase).toBe("Checking your calendar");
+    expect(botRunStatus(run, 90_124)?.phrase).toBe("Status unavailable");
+    expect(
+      botRunStatus(observeBotRun({ ...running(), activityFresh: false }, undefined, 123), 124)
+        ?.phrase,
+    ).toBe("Status unavailable");
+  });
+
   it("uses only the service phrase and both freshness signals", () => {
     const run = running();
     const { activityFresh: _fresh, ...noFresh } = run;
@@ -97,28 +115,47 @@ describe("run status data", () => {
   );
 });
 
-describe("run status expiry without polling", () => {
-  let root: Root;
+describe("run status expiry without polling", async () => {
+  let root: Screen;
   let container: HTMLDivElement;
-  beforeEach(() => {
-    vi.useFakeTimers();
+  async function setupTest() {
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     vi.setSystemTime(now);
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     container = document.createElement("div");
     document.body.append(container);
-    root = createRoot(container);
-  });
-  afterEach(async () => {
-    await act(async () => root.unmount());
-    container.remove();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
+    root = await renderTest(null, { container, router: false });
+
+    return {
+      async [Symbol.asyncDispose]() {
+        await act(async () => root.unmount());
+        container.remove();
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+  }
+
   const render = async (run: DotRun) => {
-    await act(async () => root.render(<BotRunStatus run={run} />));
+    await act(async () => root.rerender(<BotRunStatus run={run} />));
   };
 
+  it("expires anchored progress without polling even when wall time jumps", async () => {
+    await using _test = await setupTest();
+    const run = observeBotRun(running(89_000), new Date(now).toISOString());
+    await render(run);
+    vi.setSystemTime(now + 7_200_000);
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(container.textContent).toBe("Checking your calendar");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_001);
+    });
+    expect(container.textContent).toBe("Status unavailable");
+  });
+
   it("expires while props and polling remain unchanged, then has no timer", async () => {
+    await using _test = await setupTest();
     await render(running(89_000));
     expect(container.textContent).toBe("Checking your calendar");
     expect(vi.getTimerCount()).toBe(1);
@@ -130,6 +167,7 @@ describe("run status expiry without polling", () => {
   });
 
   it("replaces an expiry on new telemetry and clears it on terminal state", async () => {
+    await using _test = await setupTest();
     await render(running(89_000));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
@@ -150,6 +188,7 @@ describe("run status expiry without polling", () => {
   });
 
   it("stops asserting progress at the run's lease end when that comes before the progress goes stale", async () => {
+    await using _test = await setupTest();
     // The worker reported progress just now, but its lease ends in 10 seconds; no newer snapshot arrives (an outage).
     await render({ ...running(), leaseExpiresAt: now + 10_000 });
     expect(container.textContent).toBe("Checking your calendar");
@@ -166,6 +205,7 @@ describe("run status expiry without polling", () => {
   });
 
   it("rechecks the clock on foregrounding after timers were suspended", async () => {
+    await using _test = await setupTest();
     await render(running());
     vi.setSystemTime(now + 90_001);
     await act(async () => {
@@ -176,6 +216,7 @@ describe("run status expiry without polling", () => {
   });
 
   it("does not schedule durable approval, queued, or already stale status", async () => {
+    await using _test = await setupTest();
     for (const run of [
       { ...running(), status: "waiting-approval" as const },
       { ...running(), status: "queued" as const },
@@ -187,30 +228,36 @@ describe("run status expiry without polling", () => {
   });
 
   it("cleans up an outstanding expiry on unmount", async () => {
+    await using _test = await setupTest();
     await render(running());
     await act(async () => root.unmount());
     expect(vi.getTimerCount()).toBe(0);
-    root = createRoot(container);
+    root = await renderTest(null, { container, router: false });
   });
 });
 
-describe("run waiting reasons", () => {
-  let root: Root;
+describe("run waiting reasons", async () => {
+  let root: Screen;
   let container: HTMLDivElement;
-  beforeEach(() => {
-    vi.useFakeTimers();
+  async function setupTest() {
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     vi.setSystemTime(now);
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     container = document.createElement("div");
     document.body.append(container);
-    root = createRoot(container);
-  });
-  afterEach(async () => {
-    await act(async () => root.unmount());
-    container.remove();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
+    root = await renderTest(null, { container, router: false });
+
+    return {
+      async [Symbol.asyncDispose]() {
+        await act(async () => root.unmount());
+        container.remove();
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      },
+    };
+  }
+
   const retryAt = new Date(now + 7 * 60_000).toISOString();
   const deferred = (): DotRun => ({
     ...running(),
@@ -225,7 +272,8 @@ describe("run waiting reasons", () => {
   });
 
   it("shows why a queued run waits and its recorded retry time, then marks the retry overdue on one wake", async () => {
-    await act(async () => root.render(<BotRunStatus run={deferred()} />));
+    await using _test = await setupTest();
+    await act(async () => root.rerender(<BotRunStatus run={deferred()} />));
     expect(container.textContent).toContain("Waiting on the bot");
     expect(container.textContent).toContain("Microsoft asked to retry later");
     expect(container.textContent).toContain("Next check: Try again ·");
@@ -238,12 +286,14 @@ describe("run waiting reasons", () => {
   });
 
   it("keeps an older service's queued run as plain Queued", async () => {
+    await using _test = await setupTest();
     const { waiting: _waiting, ...older } = deferred();
-    await act(async () => root.render(<BotRunStatus run={older} />));
+    await act(async () => root.rerender(<BotRunStatus run={older} />));
     expect(container.textContent).toBe("Queued");
   });
 
   it("uses the service's quiet-run reason instead of only 'unavailable', but never over fresh activity", async () => {
+    await using _test = await setupTest();
     const quiet: DotRun = {
       ...running(120_000),
       activityFresh: false,
@@ -255,10 +305,10 @@ describe("run waiting reasons", () => {
         next: [{ kind: "event", what: "Finishes when its current step returns" }],
       },
     };
-    await act(async () => root.render(<BotRunStatus run={quiet} />));
+    await act(async () => root.rerender(<BotRunStatus run={quiet} />));
     expect(container.textContent).toContain("It may still be working");
     await act(async () =>
-      root.render(<BotRunStatus run={{ ...running(), waiting: quiet.waiting! }} />),
+      root.rerender(<BotRunStatus run={{ ...running(), waiting: quiet.waiting! }} />),
     );
     expect(container.textContent).toBe("Checking your calendar");
   });

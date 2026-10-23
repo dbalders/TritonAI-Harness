@@ -1,7 +1,5 @@
-// @vitest-environment jsdom
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import { act, render as renderTest, type Screen } from "../../../test/render";
+import { expect, it, vi } from "vite-plus/test";
 import type { ServerBotTaskComputerStatus } from "@t3tools/contracts";
 import { Cause } from "effect";
 
@@ -20,9 +18,13 @@ const configuration = vi.hoisted(() => ({
   openScratchProject: vi.fn<(environmentId: string) => Promise<{ id: string } | null>>(),
   command: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ _tag: "Success" })),
 }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => configuration.canControlTasks }));
+vi.mock("@effect/atom-react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@effect/atom-react")>()),
+  useAtomValue: () => configuration.canControlTasks,
+}));
 vi.mock("../dot/botService", () => ({ useBotServiceUrl: () => configuration.serviceUrl }));
-vi.mock("@tanstack/react-router", () => ({
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => vi.fn(),
   useLocation: ({
     select,
@@ -88,13 +90,12 @@ const state = (email: string): DotState => ({
   runs: [],
   approvals: [],
 });
-let root: Root;
+let root: Screen;
 let container: HTMLDivElement;
 
-beforeEach(() => {
+async function setupTest() {
   configuration.canControlTasks = true;
   vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   configuration.serviceUrl = firstUrl;
   configuration.local = null;
   configuration.projects = [];
@@ -107,18 +108,22 @@ beforeEach(() => {
   saveDotSession(sessionStorage, secondUrl, secondSession);
   container = document.createElement("div");
   document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  sessionStorage.clear();
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+  root = await renderTest(null, { container, router: false });
+
+  return {
+    async [Symbol.asyncDispose]() {
+      await act(async () => root.unmount());
+      container.remove();
+      sessionStorage.clear();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    },
+  };
+}
 
 it("uses the session for the configured service and ignores an old service's delayed auth failure", async () => {
+  await using _test = await setupTest();
   let rejectOld!: (cause: unknown) => void;
   const seen: string[] = [];
   vi.spyOn(DotClient.prototype, "state").mockImplementation(async (session) => {
@@ -129,9 +134,9 @@ it("uses the session for the configured service and ignores an old service's del
       });
     return state(secondSession.email);
   });
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   configuration.serviceUrl = secondUrl;
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   await act(async () => rejectOld(new DotApiError("Old service sign-in expired", 401)));
   expect(seen).toEqual([firstSession.ownerToken, secondSession.ownerToken]);
   expect(readDotSession(sessionStorage, secondUrl)).toEqual(secondSession);
@@ -141,6 +146,7 @@ it("uses the session for the configured service and ignores an old service's del
 });
 
 it("does not clear a replacement session when a prior account's state request returns 401", async () => {
+  await using _test = await setupTest();
   let rejectOld!: (cause: unknown) => void;
   vi.spyOn(DotClient.prototype, "state").mockImplementation(async (session) => {
     if (session.ownerToken === firstSession.ownerToken)
@@ -149,7 +155,7 @@ it("does not clear a replacement session when a prior account's state request re
       });
     return state(secondSession.email);
   });
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   saveDotSession(sessionStorage, firstUrl, secondSession);
   await act(async () => rejectOld(new DotApiError("Old account sign-in expired", 401)));
   await act(async () => vi.advanceTimersByTimeAsync(30_000));
@@ -159,14 +165,16 @@ it("does not clear a replacement session when a prior account's state request re
 });
 
 it("explains configuration when the Bot is off without sending any session", async () => {
+  await using _test = await setupTest();
   configuration.serviceUrl = null;
   const fetchState = vi.spyOn(DotClient.prototype, "state");
-  await act(async () => root.render(<BotSettings />));
-  expect(container.textContent).toContain("Set a TritonAI Bot service address");
+  await act(async () => root.rerender(<BotSettings />));
+  expect(container.textContent).toContain("Enable TritonAI Bot in Settings");
   expect(fetchState).not.toHaveBeenCalled();
 });
 
 it("shows saved result delivery instead of claiming a finished task is still running", async () => {
+  await using _test = await setupTest();
   configuration.local = {
     state: "idle",
     deviceId: "synthetic-device",
@@ -180,7 +188,7 @@ it("shows saved result delivery instead of claiming a finished task is still run
       "Finished running “Report”. Its saved result and files are awaiting delivery to your bot. Retrying automatically.",
   };
   vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   expect(container.textContent).toContain("Finished running “Report”");
   expect(container.textContent).toContain("saved result and files are awaiting delivery");
   expect(container.textContent).not.toContain("Running “Report” in a Harness thread");
@@ -188,6 +196,7 @@ it("shows saved result delivery instead of claiming a finished task is still run
 });
 
 it("keeps a rejected result notice visible while another Harness task is running", async () => {
+  await using _test = await setupTest();
   configuration.local = {
     state: "running",
     deviceId: "synthetic-device",
@@ -201,7 +210,7 @@ it("keeps a rejected result notice visible while another Harness task is running
       "Your bot could not accept the result for “Earlier report”. The full result and evidence remain saved on this computer. Open “Earlier report” in Harness to review it. Other assignments can continue.",
   };
   vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   expect(container.textContent).toContain("Running “Next report” in a Harness thread");
   expect(container.textContent).toContain("could not accept the result for “Earlier report”");
   expect(container.textContent).toContain("full result and evidence remain saved");
@@ -210,6 +219,7 @@ it("keeps a rejected result notice visible while another Harness task is running
 it.each(["loading", "signed out", "expired session", "unreachable"])(
   "preserves the local running task and result recovery notice when Bot state is %s",
   async (scenario) => {
+    await using _test = await setupTest();
     configuration.local = {
       state: "running",
       deviceId: "synthetic-device",
@@ -228,7 +238,7 @@ it.each(["loading", "signed out", "expired session", "unreachable"])(
     else if (scenario === "unreachable") fetchState.mockRejectedValue(new Error("Unavailable"));
     else fetchState.mockResolvedValue(state(firstSession.email));
     if (scenario === "signed out") saveDotSession(sessionStorage, firstUrl, null);
-    await act(async () => root.render(<BotSettings />));
+    await act(async () => root.rerender(<BotSettings />));
     if (scenario === "expired session") {
       fetchState.mockRejectedValue(new DotApiError("Expired", 401));
       await act(async () => vi.advanceTimersByTimeAsync(30_000));
@@ -253,6 +263,7 @@ it.each(["loading", "signed out", "expired session", "unreachable"])(
 it.each(["signed out", "different service", "service disabled", "unreachable", "expired session"])(
   "can stop locally when %s without transmitting an unrelated owner token",
   async (scenario) => {
+    await using _test = await setupTest();
     configuration.local = {
       state: "idle",
       deviceId: "synthetic-device",
@@ -272,7 +283,7 @@ it.each(["signed out", "different service", "service disabled", "unreachable", "
       if (scenario === "unreachable") throw new Error("Unavailable");
       return state(secondSession.email);
     });
-    await act(async () => root.render(<BotSettings />));
+    await act(async () => root.rerender(<BotSettings />));
     const stop = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent === "Stop running tasks here",
     );
@@ -291,6 +302,7 @@ function projectPicker(): HTMLButtonElement {
 }
 
 it("recovers the controls and reports a rejected Stop request so the owner can retry", async () => {
+  await using _test = await setupTest();
   configuration.local = {
     state: "idle",
     deviceId: "synthetic-device",
@@ -310,7 +322,7 @@ it("recovers the controls and reports a rejected Stop request so the owner can r
         rejectStop = reject;
       }),
   );
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   const stop = Array.from(container.querySelectorAll("button")).find(
     (button) => button.textContent === "Stop running tasks here",
   )!;
@@ -366,6 +378,7 @@ function setProjectSettings(localState: ServerBotTaskComputerStatus["state"] = "
 it.each(["local first", "bot first"])(
   "waits for pairing identity before saving an active computer project when %s loads",
   async (order) => {
+    await using _test = await setupTest();
     setProjectSettings();
     const activeLocal = configuration.local;
     let resolveState!: (value: DotState) => void;
@@ -380,7 +393,7 @@ it.each(["local first", "bot first"])(
       configuration.local = null;
       vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
     }
-    await act(async () => root.render(<BotSettings />));
+    await act(async () => root.rerender(<BotSettings />));
     expect(projectPicker().disabled).toBe(true);
     await act(async () => projectPicker().click());
     expect(configuration.command).not.toHaveBeenCalled();
@@ -403,6 +416,7 @@ it.each(["local first", "bot first"])(
 it.each(["off", "replaced"] as const)(
   "retains a pre-Allow project choice for an %s computer while Bot state loads",
   async (localState) => {
+    await using _test = await setupTest();
     setProjectSettings(localState);
     let resolveState!: (value: DotState) => void;
     vi.spyOn(DotClient.prototype, "state")
@@ -413,7 +427,7 @@ it.each(["off", "replaced"] as const)(
           }),
       )
       .mockResolvedValue(state(firstSession.email));
-    await act(async () => root.render(<BotSettings />));
+    await act(async () => root.rerender(<BotSettings />));
     expect(projectPicker().disabled).toBe(false);
     await chooseProject("Chosen");
     expect(configuration.command).not.toHaveBeenCalled();
@@ -434,9 +448,10 @@ it.each(["off", "replaced"] as const)(
 );
 
 it("follows authoritative local project status after a save and shows later local changes", async () => {
+  await using _test = await setupTest();
   setProjectSettings();
   vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   await chooseProject("Chosen");
   await publishLocal({ ...configuration.local!, projectId: "chosen" });
   expect(projectPicker().textContent).toContain("Chosen");
@@ -445,13 +460,14 @@ it("follows authoritative local project status after a save and shows later loca
 });
 
 it("shows another window's project when the first refresh after a successful save skips that saved project", async () => {
+  await using _test = await setupTest();
   setProjectSettings();
   vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
   configuration.command.mockResolvedValueOnce({
     _tag: "Success",
     value: { ...configuration.local!, projectId: "chosen" },
   });
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   await chooseProject("Chosen");
   await publishLocal({ ...configuration.local!, projectId: "external" });
   expect(projectPicker().textContent).toContain("External");
@@ -465,6 +481,7 @@ it("shows another window's project when the first refresh after a successful sav
 it.each(["different service", "different account"])(
   "keeps a new project as an Allow choice instead of modifying a pairing for a %s",
   async (scenario) => {
+    await using _test = await setupTest();
     setProjectSettings();
     configuration.local = {
       ...configuration.local!,
@@ -472,7 +489,7 @@ it.each(["different service", "different account"])(
       userId: scenario === "different account" ? secondSession.email : firstSession.email,
     };
     vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
-    await act(async () => root.render(<BotSettings />));
+    await act(async () => root.rerender(<BotSettings />));
     await chooseProject("Chosen");
     expect(configuration.command).not.toHaveBeenCalled();
     const allow = Array.from(container.querySelectorAll("button")).find(
@@ -487,6 +504,7 @@ it.each(["different service", "different account"])(
 );
 
 it("ignores an old account's project save after a replacement session becomes authoritative", async () => {
+  await using _test = await setupTest();
   setProjectSettings();
   vi.spyOn(DotClient.prototype, "state").mockImplementation(async (session) =>
     state(session.email),
@@ -498,7 +516,7 @@ it("ignores an old account's project save after a replacement session becomes au
         settle = resolve;
       }),
   );
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   await chooseProject("Chosen");
   saveDotSession(sessionStorage, firstUrl, secondSession);
   configuration.local = {
@@ -514,9 +532,10 @@ it("ignores an old account's project save after a replacement session becomes au
 });
 
 it("does not change an active project through a stale session before the next state refresh", async () => {
+  await using _test = await setupTest();
   setProjectSettings();
   vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   saveDotSession(sessionStorage, firstUrl, secondSession);
   await chooseProject("Chosen");
   expect(configuration.command).not.toHaveBeenCalled();
@@ -524,6 +543,7 @@ it("does not change an active project through a stale session before the next st
 });
 
 it("ignores a prior service's pending project save after the settings service changes", async () => {
+  await using _test = await setupTest();
   setProjectSettings();
   vi.spyOn(DotClient.prototype, "state").mockImplementation(async (session) =>
     state(session.email),
@@ -535,7 +555,7 @@ it("ignores a prior service's pending project save after the settings service ch
         settle = resolve;
       }),
   );
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   await chooseProject("Chosen");
   configuration.serviceUrl = secondUrl;
   configuration.local = {
@@ -544,7 +564,7 @@ it("ignores a prior service's pending project save after the settings service ch
     userId: secondSession.email,
     projectId: "external",
   };
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   await act(async () => settle({ _tag: "Success" }));
   expect(projectPicker().textContent).toContain("External");
   expect(container.textContent).toContain(secondSession.email);
@@ -552,6 +572,7 @@ it("ignores a prior service's pending project save after the settings service ch
 });
 
 it("retains the saved project after a failed change and accepts a later successful selection", async () => {
+  await using _test = await setupTest();
   configuration.projects = ["Saved", "Rejected", "Accepted"].map((title) => ({
     id: title.toLowerCase(),
     title,
@@ -576,7 +597,7 @@ it("retains the saved project after a failed change and accepts a later successf
         settle = resolve;
       }),
   );
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   await chooseProject("Rejected");
   expect(configuration.command).toHaveBeenCalledExactlyOnceWith({
     environmentId: "synthetic-environment",
@@ -601,6 +622,7 @@ it("retains the saved project after a failed change and accepts a later successf
 it.each(["different service", "different account"])(
   "discloses an existing pairing for a %s before describing another task computer",
   async (scenario) => {
+    await using _test = await setupTest();
     configuration.local = {
       state: "idle",
       deviceId: "local-device",
@@ -621,7 +643,7 @@ it.each(["different service", "different account"])(
         online: true,
       },
     });
-    await act(async () => root.render(<BotSettings />));
+    await act(async () => root.rerender(<BotSettings />));
     expect(container.textContent).toContain(
       "This Harness is paired with a different Bot service or account",
     );
@@ -638,6 +660,7 @@ function allowButton(): HTMLButtonElement | undefined {
 }
 
 it("defaults a new task computer to No project and creates it on Allow", async () => {
+  await using _test = await setupTest();
   configuration.scratchRoot = "/synthetic/scratch";
   configuration.openScratchProject.mockResolvedValue({ id: "scratch" });
   configuration.local = {
@@ -652,7 +675,7 @@ it("defaults a new task computer to No project and creates it on Allow", async (
     message: null,
   };
   vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   expect(projectPicker().textContent).toContain("No project");
   expect(container.textContent).toContain("Each task gets its own new folder");
   expect(allowButton()!.disabled).toBe(false);
@@ -665,10 +688,11 @@ it("defaults a new task computer to No project and creates it on Allow", async (
 });
 
 it("does not pair when No project cannot be created", async () => {
+  await using _test = await setupTest();
   configuration.scratchRoot = "/synthetic/scratch";
   configuration.openScratchProject.mockResolvedValue(null);
   vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   await act(async () => allowButton()!.click());
   expect(configuration.openScratchProject).toHaveBeenCalledOnce();
   expect(configuration.command).not.toHaveBeenCalled();
@@ -676,6 +700,7 @@ it("does not pair when No project cannot be created", async () => {
 });
 
 it("shows a saved Scratch project once, as No project", async () => {
+  await using _test = await setupTest();
   setProjectSettings();
   configuration.scratchRoot = "/synthetic/scratch";
   configuration.projects.push({
@@ -686,7 +711,7 @@ it("shows a saved Scratch project once, as No project", async () => {
   });
   configuration.local = { ...configuration.local!, projectId: "scratch" };
   vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   expect(projectPicker().textContent).toContain("No project");
   await act(async () => projectPicker().click());
   const options = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).map(
@@ -702,6 +727,7 @@ it.each([
 ] as const)(
   "pairs with No project only if the session is still current when %s while it is created",
   async (_scenario, sessionAfter, pairs) => {
+    await using _test = await setupTest();
     configuration.scratchRoot = "/synthetic/scratch";
     let resolveScratch!: (project: { id: string } | null) => void;
     configuration.openScratchProject.mockImplementation(
@@ -711,7 +737,7 @@ it.each([
         }),
     );
     vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
-    await act(async () => root.render(<BotSettings />));
+    await act(async () => root.rerender(<BotSettings />));
     await act(async () => allowButton()!.click());
     expect(configuration.openScratchProject).toHaveBeenCalledOnce();
     expect(allowButton()!.disabled).toBe(true);
@@ -732,10 +758,11 @@ it.each([
 );
 
 it("disables task-computer controls when the paired client lacks task permission", async () => {
+  await using _test = await setupTest();
   setProjectSettings("off");
   configuration.canControlTasks = false;
   vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
-  await act(async () => root.render(<BotSettings />));
+  await act(async () => root.rerender(<BotSettings />));
   expect(allowButton()!.disabled).toBe(true);
   expect(projectPicker().disabled).toBe(true);
   await act(async () => allowButton()!.click());

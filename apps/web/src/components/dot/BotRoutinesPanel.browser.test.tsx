@@ -1,7 +1,5 @@
-// @vitest-environment jsdom
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { act, render as renderTest, type Screen } from "../../../test/render";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { BotRoutinesPanel, type BotRoutinesPanelProps } from "./BotRoutinesPanel";
 import type { DotScheduledPrompt, DotWatch } from "./dotRoutines";
@@ -35,30 +33,32 @@ const watch: DotWatch = {
   createdAt: at,
 };
 
-describe("BotRoutinesPanel", () => {
-  let root: Root;
+describe("BotRoutinesPanel", async () => {
+  let root: Screen;
   let container: HTMLDivElement;
   const action = vi.fn<BotRoutinesPanelProps["onPromptAction"]>();
 
-  beforeEach(() => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  async function setupTest() {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse(at));
     action.mockReset();
     container = document.createElement("div");
     document.body.append(container);
-    root = createRoot(container);
-  });
-  afterEach(async () => {
-    await act(async () => root.unmount());
-    container.remove();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+    root = await renderTest(null, { container, router: false });
+
+    return {
+      async [Symbol.asyncDispose]() {
+        await act(async () => root.unmount());
+        container.remove();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+      },
+    };
+  }
 
   async function render(overrides: Partial<BotRoutinesPanelProps> = {}) {
     await act(async () =>
-      root.render(
+      root.rerender(
         <BotRoutinesPanel
           watches={undefined}
           scheduledPrompts={[prompt]}
@@ -81,6 +81,7 @@ describe("BotRoutinesPanel", () => {
   }
 
   it("hides unsupported features, then makes supported empty states reachable through the disclosure", async () => {
+    await using _test = await setupTest();
     await render({ scheduledPrompts: undefined });
     expect(container.textContent).toBe("");
     await render({ watches: [], scheduledPrompts: [] });
@@ -92,6 +93,7 @@ describe("BotRoutinesPanel", () => {
   });
 
   it("exposes watch status and real Teams instructions without inventing mutation buttons", async () => {
+    await using _test = await setupTest();
     await render({ watches: [watch], scheduledPrompts: undefined });
     expect(container.textContent).toContain("Never checked");
     expect(container.textContent).toContain("No successful check yet");
@@ -111,6 +113,7 @@ describe("BotRoutinesPanel", () => {
   });
 
   it("keeps a failed check distinct from a successful check and explains overdue freshness", async () => {
+    await using _test = await setupTest();
     await render({
       watches: [
         {
@@ -135,6 +138,7 @@ describe("BotRoutinesPanel", () => {
   });
 
   it("marks a check due even without new props, then removes its timer when paused", async () => {
+    await using _test = await setupTest();
     vi.restoreAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date(at));
@@ -161,6 +165,7 @@ describe("BotRoutinesPanel", () => {
   });
 
   it("closes the Stop dialog with Escape and restores keyboard focus without deleting", async () => {
+    await using _test = await setupTest();
     await render();
     button("Stop").focus();
     await click("Stop");
@@ -168,12 +173,13 @@ describe("BotRoutinesPanel", () => {
     await act(async () => {
       dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
-    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
-    expect(document.activeElement).toBe(button("Stop"));
+    await expect.poll(() => document.querySelector('[role="alertdialog"]')).toBeNull();
+    await expect.poll(() => document.activeElement).toBe(button("Stop"));
     expect(action).not.toHaveBeenCalled();
   });
 
   it("shows a guarded pause and failed prior run without inventing error details", async () => {
+    await using _test = await setupTest();
     await render({
       scheduledPrompts: [
         {
@@ -191,6 +197,7 @@ describe("BotRoutinesPanel", () => {
   });
 
   it("locks actions while pending and follows refreshed pause/resume state", async () => {
+    await using _test = await setupTest();
     let resolve: (response: unknown) => void = () => {};
     action.mockImplementationOnce(
       () =>
@@ -220,6 +227,7 @@ describe("BotRoutinesPanel", () => {
   });
 
   it("announces rejected actions, preserves current state, and permits a retry", async () => {
+    await using _test = await setupTest();
     action.mockRejectedValueOnce(new Error("Bot is paused"));
     await render();
     await click("Pause");
@@ -238,6 +246,7 @@ describe("BotRoutinesPanel", () => {
     ["waiting-approval", false, "Run needs your approval."],
     ["completed", true, "This request was already received. Run completed."],
   ])("uses the actual %s Run now acknowledgment", async (status, duplicate, expected) => {
+    await using _test = await setupTest();
     action.mockResolvedValueOnce({
       ok: true,
       runId: "new-run",
@@ -258,6 +267,7 @@ describe("BotRoutinesPanel", () => {
     [{ ok: true }, "Run now status is unavailable"],
     [{ ok: false, error: "Wait ten minutes" }, "Wait ten minutes"],
   ])("never reports a failed or unknown run as successful (%j)", async (response, expected) => {
+    await using _test = await setupTest();
     action.mockResolvedValueOnce(response);
     await render();
     await click("Run now");
@@ -267,6 +277,7 @@ describe("BotRoutinesPanel", () => {
   });
 
   it("requires Stop confirmation, supports cancel, and retains the confirmation on failure", async () => {
+    await using _test = await setupTest();
     await render();
     button("Stop").focus();
     await click("Stop");
@@ -275,8 +286,8 @@ describe("BotRoutinesPanel", () => {
     );
     expect(action).not.toHaveBeenCalled();
     await click("Cancel", document);
-    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
-    expect(document.activeElement).toBe(button("Stop"));
+    await expect.poll(() => document.querySelector('[role="alertdialog"]')).toBeNull();
+    await expect.poll(() => document.activeElement).toBe(button("Stop"));
     await click("Stop");
     action.mockRejectedValueOnce(new Error("Could not stop routine"));
     await click("Stop routine", document);
@@ -286,7 +297,7 @@ describe("BotRoutinesPanel", () => {
     expect(button("Stop routine", dialog).disabled).toBe(false);
     action.mockResolvedValueOnce({ ok: true });
     await click("Stop routine", document);
-    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+    await expect.poll(() => document.querySelector('[role="alertdialog"]')).toBeNull();
     expect(container.querySelector('[role="status"]')!.textContent).toContain("Routine stopped");
     await render({ scheduledPrompts: [] });
     expect(container.textContent).toContain("No routines yet");

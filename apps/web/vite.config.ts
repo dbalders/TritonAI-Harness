@@ -8,6 +8,7 @@ import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/te
 import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import * as Hash from "effect/Hash";
+import managedConfig from "../../config/tritonai-managed-config.json" with { type: "json" };
 import pkg from "./package.json" with { type: "json" };
 
 import {
@@ -203,6 +204,9 @@ export default defineConfig(() => {
       ],
     },
     define: {
+      "import.meta.env.VITE_DOT_BRIDGE_URL": JSON.stringify(
+        repoEnv.VITE_DOT_BRIDGE_URL?.trim() || managedConfig.bot.serviceUrl,
+      ),
       "import.meta.env.VITE_WS_URL": JSON.stringify(configuredWsUrl ?? ""),
       // Pinned explicitly rather than left to Vite's automatic VITE_ exposure:
       // under single-origin dev this must stay empty even when a `.env`

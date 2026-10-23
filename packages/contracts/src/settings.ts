@@ -451,6 +451,7 @@ export const ClientSettingsSchema = Schema.Struct({
    * TritonAI Bot service address. `null` follows the build's default service,
    * an empty string turns the bot off, and any other value replaces the default.
    */
+  tritonAiBotEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   tritonAiBotUrl: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1749,6 +1750,7 @@ export const ClientSettingsPatch = Schema.Struct({
   tritonAiFirstRunOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
   gettingStarted: Schema.optionalKey(GettingStartedProgress),
   experimentalGuidedTourEnabled: Schema.optionalKey(Schema.Boolean),
+  tritonAiBotEnabled: Schema.optionalKey(Schema.Boolean),
   tritonAiBotUrl: Schema.optionalKey(Schema.NullOr(Schema.String)),
   tritonAiBotDiagnostics: Schema.optionalKey(Schema.Boolean),
   diffLayout: Schema.optionalKey(DiffLayout),

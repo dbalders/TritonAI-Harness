@@ -1,9 +1,12 @@
-// @vitest-environment jsdom
-import { act, type ReactNode } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { act, render as renderTest, type Screen } from "../../../test/render";
+import type { ReactNode } from "react";
+import { describe, expect, it, vi } from "vite-plus/test";
 
-import { BotCapabilitiesPanel, BotMicrosoftBanner } from "./BotDiscoveryPanels";
+import {
+  BotCapabilitiesPanel,
+  BotMicrosoftBanner,
+  BotMicrosoftConnection,
+} from "./BotDiscoveryPanels";
 import type { DotCapability, DotMicrosoftHealth, DotMicrosoftState } from "./dotDiscovery";
 
 const connectionsUrl = "https://bot.example.test/connections";
@@ -47,28 +50,32 @@ const capabilities: readonly DotCapability[] = [
   },
 ];
 
-let root: Root;
+let root: Screen;
 let container: HTMLDivElement;
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+async function setupTest() {
   container = document.createElement("div");
   document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.unstubAllGlobals();
-});
+  root = await renderTest(null, { container, router: false });
+
+  return {
+    async [Symbol.asyncDispose]() {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.unstubAllGlobals();
+    },
+  };
+}
+
 async function render(component: ReactNode) {
-  await act(async () => root.render(component));
+  await act(async () => root.rerender(component));
 }
 async function renderMicrosoft(microsoft: DotMicrosoftState | undefined) {
   await render(<BotMicrosoftBanner microsoft={microsoft} connectionsUrl={connectionsUrl} />);
 }
 
-describe("Microsoft reconnect discovery", () => {
+describe("Microsoft reconnect discovery", async () => {
   it("does not infer a reconnect from absent or legacy account availability", async () => {
+    await using _test = await setupTest();
     for (const microsoft of [
       undefined,
       {},
@@ -84,6 +91,7 @@ describe("Microsoft reconnect discovery", () => {
   });
 
   it("does not offer reconnect for connected or temporarily degraded health", async () => {
+    await using _test = await setupTest();
     for (const status of ["connected", "degraded"] as const) {
       await renderMicrosoft({ health: health({ calendar: areaHealth(status) }) });
       expect(container.textContent).toBe("");
@@ -92,6 +100,7 @@ describe("Microsoft reconnect discovery", () => {
   });
 
   it("offers the existing connections flow only for areas needing reconnect", async () => {
+    await using _test = await setupTest();
     await renderMicrosoft({
       health: health({
         calendar: areaHealth("needs-reconnect"),
@@ -119,6 +128,7 @@ describe("Microsoft reconnect discovery", () => {
   });
 
   it("keeps explicit account restrictions stronger than a leftover reconnect status", async () => {
+    await using _test = await setupTest();
     const reconnect = health({ calendar: areaHealth("needs-reconnect") });
     await renderMicrosoft({ health: reconnect });
     expect(container.textContent).toContain("Reconnect Microsoft");
@@ -128,6 +138,7 @@ describe("Microsoft reconnect discovery", () => {
   });
 
   it("removes a reconnect notice when the next state is degraded, connected, or absent", async () => {
+    await using _test = await setupTest();
     for (const microsoft of [
       { health: health({ calendar: areaHealth("degraded") }) },
       { health: health({ calendar: areaHealth("connected") }) },
@@ -142,8 +153,9 @@ describe("Microsoft reconnect discovery", () => {
   });
 });
 
-describe("capability discovery", () => {
+describe("capability discovery", async () => {
   it("hides discovery when the service does not report the new field", async () => {
+    await using _test = await setupTest();
     await render(<BotCapabilitiesPanel capabilities={capabilities} />);
     expect(container.querySelector("summary")?.textContent).toBe("What I can do");
     await render(<BotCapabilitiesPanel capabilities={undefined} />);
@@ -151,6 +163,7 @@ describe("capability discovery", () => {
   });
 
   it("opens and closes the native disclosure through its focused summary", async () => {
+    await using _test = await setupTest();
     await render(<BotCapabilitiesPanel capabilities={capabilities} />);
     const details = container.querySelector("details")!;
     const summary = container.querySelector("summary")!;
@@ -177,6 +190,7 @@ describe("capability discovery", () => {
   });
 
   it("keeps a discovery error readable while the empty list remains collapsed", async () => {
+    await using _test = await setupTest();
     const message = "Connection status could not be checked; availability is unknown.";
     await render(<BotCapabilitiesPanel capabilities={[]} capabilitiesError={message} />);
     const details = container.querySelector("details")!;
@@ -191,6 +205,7 @@ describe("capability discovery", () => {
   });
 
   it("shows an error even when capabilities are absent, then clears it on recovery", async () => {
+    await using _test = await setupTest();
     await render(
       <BotCapabilitiesPanel capabilities={undefined} capabilitiesError="Discovery unavailable." />,
     );
@@ -204,6 +219,7 @@ describe("capability discovery", () => {
   });
 
   it("updates availability and service guidance without inventing capability names", async () => {
+    await using _test = await setupTest();
     await render(<BotCapabilitiesPanel capabilities={[capabilities[1]!]} />);
     await act(async () => container.querySelector("summary")!.click());
     expect(container.textContent).toContain("Needs connection");
@@ -220,5 +236,42 @@ describe("capability discovery", () => {
     expect(container.textContent).not.toContain("Open /connections");
     expect(container.textContent).not.toContain("Example prompts");
     expect(container.textContent).not.toContain("opaque-");
+  });
+});
+
+describe("personal Microsoft onboarding", async () => {
+  it("offers connect only for explicit missing consent and removes it on connection", async () => {
+    await using _test = await setupTest();
+    await render(
+      <BotMicrosoftConnection
+        microsoft={{ available: true, connected: false }}
+        connectionsUrl={connectionsUrl}
+      />,
+    );
+    expect(container.textContent).toContain("your own Microsoft account");
+    const link = container.querySelector("a")!;
+    expect(link.textContent).toBe("Connect Microsoft");
+    expect(link.href).toBe(connectionsUrl);
+    await render(
+      <BotMicrosoftConnection
+        microsoft={{ available: true, connected: true }}
+        connectionsUrl={connectionsUrl}
+      />,
+    );
+    expect(container.textContent).toContain("Your Microsoft account is connected");
+    expect(container.textContent).not.toContain("Connect Microsoft");
+  });
+  it("does not claim connected or offer consent for a restricted account", async () => {
+    await using _test = await setupTest();
+    await render(<BotMicrosoftConnection microsoft={undefined} connectionsUrl={connectionsUrl} />);
+    expect(container.textContent).toContain("status is unknown");
+    await render(
+      <BotMicrosoftConnection
+        microsoft={{ available: false, connected: true, message: "Restricted account." }}
+        connectionsUrl={connectionsUrl}
+      />,
+    );
+    expect(container.textContent).toBe("Restricted account.");
+    expect(container.querySelector("a")).toBeNull();
   });
 });

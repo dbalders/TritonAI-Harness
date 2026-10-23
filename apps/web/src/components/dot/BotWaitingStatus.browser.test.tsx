@@ -1,7 +1,5 @@
-// @vitest-environment jsdom
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { act, render as renderTest, type Screen } from "../../../test/render";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { BotWaitingStatus } from "./BotWaitingStatus";
 import {
@@ -26,28 +24,32 @@ const claimed: DotWaitingStatus = {
   changesAt: iso(2),
 };
 
-let root: Root;
+let root: Screen;
 let container: HTMLDivElement;
-beforeEach(() => {
+async function setupTest() {
   vi.useFakeTimers();
   vi.setSystemTime(now);
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+  root = await renderTest(null, { container, router: false });
+
+  return {
+    async [Symbol.asyncDispose]() {
+      await act(async () => root.unmount());
+      container.remove();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    },
+  };
+}
+
 const text = () => container.textContent ?? "";
 
-describe("waiting status", () => {
+describe("waiting status", async () => {
   it("says who it waits on, why, what last confirmed it and its real next check, then turns overdue on one wake", async () => {
+    await using _test = await setupTest();
     await act(async () =>
-      root.render(<BotWaitingStatus waiting={claimed} subject="Budget review" timezone="UTC" />),
+      root.rerender(<BotWaitingStatus waiting={claimed} subject="Budget review" timezone="UTC" />),
     );
     const group = container.querySelector('[role="group"]')!;
     expect(group.getAttribute("aria-label")).toBe("Status of Budget review");
@@ -76,6 +78,7 @@ describe("waiting status", () => {
   });
 
   it("states plainly when nothing is scheduled and offers the recovery only when allowed", async () => {
+    await using _test = await setupTest();
     const decide: DotWaitingAction = {
       kind: "decline",
       label: "Decline it",
@@ -90,7 +93,7 @@ describe("waiting status", () => {
     };
     const onAction = vi.fn();
     await act(async () =>
-      root.render(
+      root.rerender(
         <BotWaitingStatus waiting={waiting} subject="Rebuild summary" onAction={onAction} />,
       ),
     );
@@ -102,7 +105,7 @@ describe("waiting status", () => {
     await act(async () => button.click());
     expect(onAction).toHaveBeenCalledWith(decide);
     await act(async () =>
-      root.render(
+      root.rerender(
         <BotWaitingStatus
           waiting={waiting}
           subject="Rebuild summary"
@@ -114,7 +117,8 @@ describe("waiting status", () => {
     expect(container.querySelector("button")).toBeNull();
   });
 
-  it("drops malformed explanations so older or partial responses keep their own wording", () => {
+  it("drops malformed explanations so older or partial responses keep their own wording", async () => {
+    await using _test = await setupTest();
     expect(usableWaiting(undefined)).toBeUndefined();
     expect(usableWaiting({ code: "queued", on: "you", text: "", next: [] })).toBeUndefined();
     expect(

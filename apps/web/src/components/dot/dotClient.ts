@@ -26,6 +26,8 @@ export interface DotSession {
 }
 
 export interface DotRun {
+  /** Client-only anchor: service snapshot time plus monotonic elapsed time since receipt. */
+  readonly progressClock?: { readonly serverAt: number; readonly receivedAt: number };
   readonly runId: string;
   readonly threadId: string;
   readonly event: {
@@ -65,6 +67,19 @@ export interface DotRun {
   readonly leaseExpiresAt?: number;
   /** Where an unfinished run is: queued, deferred to a recorded retry time, quiet or interrupted. */
   readonly waiting?: DotWaitingStatus;
+}
+
+/** Older services omit generatedAt; bound fresh activity to one receipt-relative window. */
+export function observeBotRun(
+  run: DotRun,
+  generatedAt?: string,
+  receivedAt = performance.now(),
+): DotRun {
+  if (run.status !== "running" || run.activityFresh !== true || !run.activity) return run;
+  const snapshot = Date.parse(generatedAt ?? "");
+  const activityAt = Date.parse(run.activity?.updatedAt ?? "");
+  const serverAt = Number.isFinite(snapshot) ? snapshot : activityAt;
+  return { ...run, progressClock: { serverAt, receivedAt } };
 }
 
 export function isPendingDotRun(run: DotRun): boolean {
@@ -325,6 +340,25 @@ export class DotClient {
     private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
   ) {}
 
+  private readonly legacyProgress = new Map<
+    string,
+    { signature: string; clock: NonNullable<DotRun["progressClock"]> }
+  >();
+
+  private observeRun(run: DotRun, generatedAt?: string): DotRun {
+    const observed = observeBotRun(run, generatedAt);
+    if (!observed.progressClock || Number.isFinite(Date.parse(generatedAt ?? ""))) return observed;
+    const signature = JSON.stringify([run.activity?.updatedAt, run.activity?.step]);
+    const previous = this.legacyProgress.get(run.runId);
+    if (previous?.signature === signature) return { ...observed, progressClock: previous.clock };
+    this.legacyProgress.delete(run.runId);
+    this.legacyProgress.set(run.runId, { signature, clock: observed.progressClock });
+    // Old services have no snapshot clock. Repeated polls of one update must not renew its lifetime.
+    if (this.legacyProgress.size > 256)
+      this.legacyProgress.delete(this.legacyProgress.keys().next().value!);
+    return observed;
+  }
+
   private async request<T>(path: string, session: DotSession | null, body?: unknown): Promise<T> {
     if (session && session.expiresAt <= Date.now() / 1000)
       throw new DotApiError("Sign in again to continue.", 401);
@@ -354,6 +388,24 @@ export class DotClient {
   }
 
   async startConnection(redirectUri?: string): Promise<PendingConnection> {
+    if (!redirectUri)
+      throw new Error(
+        "Sign-in for this pilot requires the desktop Harness. Open TritonAI Bot on your computer.",
+      );
+    const callback = new URL(redirectUri);
+    if (
+      callback.protocol !== "http:" ||
+      callback.hostname !== "127.0.0.1" ||
+      !callback.port ||
+      callback.pathname !== "/dot/callback" ||
+      callback.search ||
+      callback.hash ||
+      callback.username ||
+      callback.password
+    )
+      throw new Error(
+        "The desktop sign-in return address is invalid. Restart Harness and try again.",
+      );
     const codeVerifier = base64Url(crypto.getRandomValues(new Uint8Array(48)));
     const codeChallenge = base64Url(
       new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(codeVerifier))),
@@ -365,17 +417,20 @@ export class DotClient {
     );
     if (new URL(response.verificationUrl).origin !== new URL(this.baseUrl).origin)
       throw new Error("The sign-in address does not match your bot.");
-    // Older bots ignore the redirect and expect browser confirmation instead.
     const { redirectUri: accepted, ...pending } = response;
-    return accepted && accepted === redirectUri
-      ? { ...pending, codeVerifier, redirectUri }
-      : { ...pending, codeVerifier };
+    if (accepted !== redirectUri)
+      throw new Error(
+        "This Bot service does not support secure desktop sign-in. Contact your administrator.",
+      );
+    return { ...pending, codeVerifier, redirectUri };
   }
 
   async pollConnection(
     connection: PendingConnection,
     returnCode?: string,
   ): Promise<DotSession | null> {
+    if (!returnCode || !connection.redirectUri)
+      throw new Error("Finish signing in through the desktop return page.");
     if (connection.expiresAt <= Date.now() / 1000)
       throw new Error("Sign-in expired. Please try again.");
     const response = await this.request<DotSession & { pending?: boolean }>(
@@ -392,8 +447,9 @@ export class DotClient {
       : { ownerToken: response.ownerToken, expiresAt: response.expiresAt, email: response.email };
   }
 
-  state(session: DotSession): Promise<DotState> {
-    return this.request<DotState>("/state", session);
+  async state(session: DotSession): Promise<DotState> {
+    const state = await this.request<DotState>("/state", session);
+    return { ...state, runs: state.runs.map((run) => this.observeRun(run, state.generatedAt)) };
   }
 
   /** Poll active runs, including a newly accepted message not yet listed in /state. */
@@ -445,8 +501,12 @@ export class DotClient {
     return this.request(`/owner-memory/${encodeURIComponent(memoryId)}`, session);
   }
 
-  run(session: DotSession, runId: string): Promise<{ run: DotRun }> {
-    return this.request(`/runs/${encodeURIComponent(runId)}`, session);
+  async run(session: DotSession, runId: string): Promise<{ run: DotRun }> {
+    const response = await this.request<{ run: DotRun; generatedAt?: string }>(
+      `/runs/${encodeURIComponent(runId)}`,
+      session,
+    );
+    return { ...response, run: this.observeRun(response.run, response.generatedAt) };
   }
 
   changeMemory(

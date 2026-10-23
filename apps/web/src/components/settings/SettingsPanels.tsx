@@ -1,3 +1,4 @@
+import { BotOptInSettings } from "./BotOptInSettings";
 import { ComputerUseSetting } from "./ComputerUseSetting";
 import { cancelGettingStartedPreparation } from "../../onboarding/gettingStartedState";
 import { SettingsGroup } from "./SettingsGroup";
@@ -2055,7 +2056,10 @@ function LegacyFeaturesSection() {
   );
 }
 
-const EXPERIMENTAL_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set(["experimental-guided-tour"]);
+const EXPERIMENTAL_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
+  "experimental-guided-tour",
+  "tritonai-bot-opt-in",
+]);
 
 /**
  * Features still being tried out. Each stays off, with no other entry point, until it is
@@ -2072,6 +2076,7 @@ function ExperimentalFeaturesSection() {
       title="Experimental"
       targetIds={EXPERIMENTAL_FEATURE_TARGET_IDS}
     >
+      <BotOptInSettings />
       <SettingsRow
         {...searchableSetting("experimental-guided-tour")}
         description="Guided chapters for people new to AI: practice a conversation, connect your work, use files, and explore Ideas. Turn it on to show Start tour and Getting started."

@@ -1,3 +1,4 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { useAtomValue } from "@effect/atom-react";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import {
@@ -5,7 +6,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useProjects } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -25,10 +26,11 @@ import {
   useClientSettings,
   usePrimarySettings,
   usePrimarySettingsAvailable,
-  useUpdateClientSettings,
+  updateClientSettings,
   useUpdatePrimarySettings,
 } from "../../hooks/useSettings";
 import { ensureLocalApi } from "../../localApi";
+import { BotMicrosoftConnection } from "../dot/BotDiscoveryPanels";
 import { useBotServiceUrl } from "../dot/botService";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -61,7 +63,7 @@ export function BotSettings() {
 }
 
 function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
-  const client = useMemo(() => (serviceUrl ? new DotClient(serviceUrl) : null), [serviceUrl]);
+  const [client] = useState(() => (serviceUrl ? new DotClient(serviceUrl) : null));
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -81,7 +83,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const diagnostics = useClientSettings((settings) => settings.tritonAiBotDiagnostics);
-  const updateSettings = useUpdateClientSettings();
+  const updateSettings = updateClientSettings;
   const maxParallel = usePrimarySettings((settings) => settings.botTaskMaxParallel);
   const serverSettingsAvailable = usePrimarySettingsAvailable();
   const updateServerSettings = useUpdatePrimarySettings();
@@ -133,13 +135,13 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     setChosenProjectId(null);
   }
 
-  const isCurrentSession = useCallback(
+  const isCurrentSession = useStableCallback(
     (token: string) =>
       mounted.current &&
       Boolean(serviceUrl && readDotSession(sessionStorage, serviceUrl)?.ownerToken === token),
-    [serviceUrl],
   );
-  const loadState = useCallback(async () => {
+  const loadState = useStableCallback(async (ownerToken = session?.ownerToken) => {
+    if (ownerToken !== session?.ownerToken) return;
     if (!serviceUrl || !client) return;
     const current = readDotSession(sessionStorage, serviceUrl);
     if (current?.ownerToken !== session?.ownerToken) {
@@ -165,13 +167,13 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
       }
       setError(cause instanceof Error ? cause.message : "Could not reach TritonAI Bot.");
     }
-  }, [client, session, serviceUrl, isCurrentSession]);
+  });
 
   useEffect(() => {
-    void loadState();
-    const timer = setInterval(() => void loadState(), 30_000);
+    void loadState(session?.ownerToken);
+    const timer = setInterval(() => void loadState(session?.ownerToken), 30_000);
     return () => clearInterval(timer);
-  }, [loadState]);
+  }, [loadState, session?.ownerToken]);
 
   /** "No project" becomes the environment's Scratch project, created on first use. */
   const resolveProjectId = async (value: string) => {
@@ -303,10 +305,16 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     <SettingsPageContainer>
       {!serviceUrl ? (
         <p className="text-sm text-muted-foreground">
-          Set a TritonAI Bot service address in Settings → Connections to manage your bot.
+          Enable TritonAI Bot in Settings → General → Experimental to manage your personal bot.
         </p>
       ) : null}
       <SettingsSection id="tritonai-bot-account" title="Account">
+        {session && serviceUrl && state ? (
+          <BotMicrosoftConnection
+            microsoft={state.microsoft}
+            connectionsUrl={`${serviceUrl}/connections`}
+          />
+        ) : null}
         <SettingsRow
           title="Campus account"
           description={
@@ -315,7 +323,21 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
               : "Sign in on the TritonAI Bot page to manage these settings."
           }
           control={
-            session ? undefined : (
+            session ? (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  const current = session;
+                  if (serviceUrl) saveDotSession(sessionStorage, serviceUrl, null);
+                  setSession(null);
+                  setState(null);
+                  void client?.signOut(current).catch(() => undefined);
+                }}
+              >
+                Sign out
+              </Button>
+            ) : (
               <Button size="xs" onClick={() => void navigate({ to: "/dot" })}>
                 Open TritonAI Bot
               </Button>

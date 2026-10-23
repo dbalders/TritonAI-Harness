@@ -55,6 +55,7 @@ export const TritonAiManagedConfig = Schema.Struct({
     ),
     catalog: Schema.Array(ManagedModel).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
   }),
+  bot: Schema.optionalKey(Schema.Struct({ serviceUrl: ManagedHttpsUrl })),
   secureSkills: Schema.Struct({
     endpoint: Schema.optionalKey(ManagedHttpsUrl),
     pollIntervalMinutes: Schema.Int.check(

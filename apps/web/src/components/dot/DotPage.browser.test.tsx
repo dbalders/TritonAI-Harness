@@ -1,7 +1,10 @@
-// @vitest-environment jsdom
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { act, render as renderTest, type Screen } from "../../../test/render";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => vi.fn(),
+}));
 
 const botView = vi.hoisted(() => ({ diagnostics: true }));
 vi.mock("./botService", async (importOriginal) => ({
@@ -18,10 +21,18 @@ vi.mock("../../localApi", () => ({
 }));
 
 import { DotPage } from "./DotPage";
-import { saveDotSession, type DotState, type DotTask } from "./dotClient";
+import {
+  DotClient,
+  readDotSession,
+  saveDotSession,
+  type DotState,
+  type DotTask,
+} from "./dotClient";
 import type { DotResponsibility } from "./dotEnhancements";
 import type { DotScheduledPrompt } from "./dotRoutines";
 
+const desktopRedirect = "http://127.0.0.1:49152/dot/callback";
+let desktopRequestId = "synthetic-request";
 const serviceUrl = "https://bot.example.test";
 const session = {
   ownerToken: "synthetic-owner-token",
@@ -45,6 +56,22 @@ const prompt: DotScheduledPrompt = {
   createdAt: at,
   updatedAt: at,
 };
+// Keep response order under the explicit deferred fixtures instead of browser stream tasks.
+function jsonResponse(body: unknown, init?: ResponseInit): Response {
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "verificationUrl" in body &&
+    "requestId" in body
+  ) {
+    desktopRequestId = String(body.requestId);
+    body = { ...body, redirectUri: desktopRedirect };
+  }
+  const response = Response.json(body, init);
+  Object.defineProperty(response, "json", { value: async () => body });
+  return response;
+}
+
 function snapshot(): DotState {
   return {
     user: { userId: "owner", email: session.email, controlVersion: 3 },
@@ -94,7 +121,7 @@ function withPanels(): DotState {
   };
 }
 
-let root: Root;
+let root: Screen;
 let container: HTMLDivElement;
 let state: DotState;
 let onPost: (path: string, body: Record<string, unknown>) => Promise<Response>;
@@ -102,16 +129,36 @@ let onTaskRead: (taskId: string) => Promise<Response>;
 let onApprovalRead: (approvalId: string) => Promise<Response>;
 let requests: { path: string; body: Record<string, unknown> }[];
 
-beforeEach(() => {
-  vi.useFakeTimers();
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+let latestRefresh: Promise<DotState> | null = null;
+async function setupTest() {
+  latestRefresh = null;
+  vi.stubGlobal("desktopBridge", {
+    startDotSignIn: vi.fn(async () => desktopRedirect),
+    awaitDotSignIn: vi.fn(async () => ({
+      requestId: desktopRequestId,
+      code: "synthetic-return-code",
+    })),
+    cancelDotSignIn: vi.fn(async () => undefined),
+  });
+  const readState = DotClient.prototype.stateWithRunDetails;
+  vi.spyOn(DotClient.prototype, "stateWithRunDetails").mockImplementation(function (
+    this: DotClient,
+    ...args
+  ) {
+    const result = readState.apply(this, args);
+    latestRefresh = result;
+    return result;
+  });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
   botView.diagnostics = true;
   state = snapshot();
   requests = [];
-  onPost = async () => Response.json({ ok: true });
-  onTaskRead = async () => Response.json({ ok: false, error: "Task unavailable" }, { status: 404 });
+  onPost = async () => jsonResponse({ ok: true });
+  onTaskRead = async () => jsonResponse({ ok: false, error: "Task unavailable" }, { status: 404 });
   onApprovalRead = async () =>
-    Response.json({ ok: false, error: "Approval unavailable" }, { status: 404 });
+    jsonResponse({ ok: false, error: "Approval unavailable" }, { status: 404 });
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>(async (input, init) => {
@@ -121,10 +168,10 @@ beforeEach(() => {
         requests.push({ path, body });
         return onPost(path, body);
       }
-      if (path === "/state") return Response.json({ ok: true, ...state });
+      if (path === "/state") return jsonResponse({ ok: true, ...state });
       if (path.startsWith("/owner-memory/")) {
         const memory = state.dotMemory?.find((item) => item.memoryId === path.slice(14));
-        return Response.json(
+        return jsonResponse(
           memory ? { ok: true, memory } : { ok: false, error: "Memory unavailable" },
           { status: memory ? 200 : 404 },
         );
@@ -132,7 +179,7 @@ beforeEach(() => {
       if (path.startsWith("/tasks/")) return onTaskRead(path.slice(7));
       if (path.startsWith("/approvals/")) return onApprovalRead(path.slice(11));
       if (path.startsWith("/runs/"))
-        return Response.json({
+        return jsonResponse({
           ok: true,
           run: {
             runId: path.slice(6),
@@ -155,19 +202,26 @@ beforeEach(() => {
   });
   container = document.createElement("div");
   document.body.append(container);
-  root = createRoot(container);
-});
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  sessionStorage.clear();
-  delete (Element.prototype as Partial<Element>).scrollIntoView;
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+  root = await renderTest(null, { container, router: false });
+
+  return {
+    async [Symbol.asyncDispose]() {
+      await act(async () => root.unmount());
+      container.remove();
+      sessionStorage.clear();
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    },
+  };
+}
+
 async function render() {
-  await act(async () => root.render(<DotPage />));
+  await root.rerender(<DotPage />);
+  await act(async () => {
+    if (latestRefresh) await latestRefresh.catch(() => undefined);
+  });
 }
 function button(label: string): HTMLButtonElement {
   const found = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -180,8 +234,9 @@ async function click(label: string) {
   await act(async () => button(label).click());
 }
 
-describe("TritonAI Bot page integration", () => {
+describe("TritonAI Bot page integration", async () => {
   it("keeps chat usable and hides unsupported panels and ratings on an older bot", async () => {
+    await using _test = await setupTest();
     state = {
       ...snapshot(),
       runs: [
@@ -207,11 +262,12 @@ describe("TritonAI Bot page integration", () => {
   });
 
   it("uses the optional panels and stops a confirmed versioned item, then refreshes it", async () => {
+    await using _test = await setupTest();
     state = withPanels();
     onPost = async (path) => {
       if (path.includes("/handling/")) {
         state = { ...state, handling: { ...state.handling!, items: [] } };
-        return Response.json({
+        return jsonResponse({
           ok: true,
           stopped: true,
           outcome: "stopped",
@@ -220,7 +276,7 @@ describe("TritonAI Bot page integration", () => {
           message: "Reminder stopped.",
         });
       }
-      return Response.json({ ok: true });
+      return jsonResponse({ ok: true });
     };
     await render();
     expect(container.textContent).toContain("What the bot is handling");
@@ -244,18 +300,19 @@ describe("TritonAI Bot page integration", () => {
   it.each(["network", "http400", "http408"])(
     "retains a Run now ID after %s and gives a new click a new ID after acknowledgement",
     async (failure) => {
+      await using _test = await setupTest();
       state = withPanels();
       let attempts = 0;
       onPost = async (path) => {
         if (path.endsWith("/run")) {
           if (++attempts === 1) {
             if (failure === "network") throw new TypeError("Request interrupted");
-            return Response.json(
+            return jsonResponse(
               { ok: false, error: "Request interrupted" },
               { status: failure === "http400" ? 400 : 408 },
             );
           }
-          return Response.json(
+          return jsonResponse(
             {
               ok: true,
               runId: "routine1",
@@ -266,7 +323,7 @@ describe("TritonAI Bot page integration", () => {
             { status: 202 },
           );
         }
-        return Response.json({ ok: true });
+        return jsonResponse({ ok: true });
       };
       await render();
       await click("Run now");
@@ -287,6 +344,7 @@ describe("TritonAI Bot page integration", () => {
   );
 
   it("refreshes a changed handling version on conflict without retrying Stop automatically", async () => {
+    await using _test = await setupTest();
     state = withPanels();
     onPost = async () => {
       state = {
@@ -296,7 +354,7 @@ describe("TritonAI Bot page integration", () => {
           items: [{ ...state.handling!.items[0]!, version: "opaque-v2" }],
         },
       };
-      return Response.json(
+      return jsonResponse(
         { ok: false, stopped: false, outcome: "conflict", message: "This item changed." },
         { status: 409 },
       );
@@ -310,8 +368,9 @@ describe("TritonAI Bot page integration", () => {
   });
 
   it("clears the owner session and private panels after an action returns 401", async () => {
+    await using _test = await setupTest();
     state = withPanels();
-    onPost = async () => Response.json({ ok: false, error: "Sign in again." }, { status: 401 });
+    onPost = async () => jsonResponse({ ok: false, error: "Sign in again." }, { status: 401 });
     await render();
     await click("Run now");
     expect(sessionStorage.getItem(`dot-session:${serviceUrl}`)).toBeNull();
@@ -321,6 +380,7 @@ describe("TritonAI Bot page integration", () => {
   });
 
   it("acknowledges displayed Handling results through their generated timestamp", async () => {
+    await using _test = await setupTest();
     state = withPanels();
     state = {
       ...state,
@@ -332,9 +392,9 @@ describe("TritonAI Bot page integration", () => {
     onPost = async (path, body) => {
       if (path === "/handling/seen") {
         state = { ...state, handling: { ...state.handling!, items: [] } };
-        return Response.json({ ok: true, seenAt: body.through });
+        return jsonResponse({ ok: true, seenAt: body.through });
       }
-      return Response.json({ ok: true });
+      return jsonResponse({ ok: true });
     };
     await render();
     expect(requests).toEqual([]);
@@ -345,6 +405,7 @@ describe("TritonAI Bot page integration", () => {
   });
 
   it("lets the owner mark routine results read without resuming a paused routine", async () => {
+    await using _test = await setupTest();
     state = {
       ...withPanels(),
       scheduledPrompts: [
@@ -363,9 +424,9 @@ describe("TritonAI Bot page integration", () => {
           ...state,
           scheduledPrompts: [{ ...state.scheduledPrompts![0]!, consecutiveUnread: 0 }],
         };
-        return Response.json({ ok: true, prompt: state.scheduledPrompts![0] });
+        return jsonResponse({ ok: true, prompt: state.scheduledPrompts![0] });
       }
-      return Response.json({ ok: true });
+      return jsonResponse({ ok: true });
     };
     await render();
     expect(requests).toEqual([]);
@@ -379,6 +440,7 @@ describe("TritonAI Bot page integration", () => {
   });
 
   it("ignores a late feedback 401 after the owner disconnects and signs in again", async () => {
+    await using _test = await setupTest();
     // Keep the unrelated native hashing job inside the test's deterministic promise chain.
     vi.spyOn(crypto.subtle, "digest").mockResolvedValue(new ArrayBuffer(32));
     const newSession = { ...session, ownerToken: "replacement-owner-token" };
@@ -403,15 +465,15 @@ describe("TritonAI Bot page integration", () => {
           finishRating = resolve;
         });
       if (path === "/client/connect/start")
-        return Response.json({
+        return jsonResponse({
           ok: true,
           requestId: "connection1",
           expiresAt: session.expiresAt,
           verificationUrl: `${serviceUrl}/sign-in`,
           userCode: "SYNTHETIC",
         });
-      if (path === "/client/connect/token") return Response.json({ ok: true, ...newSession });
-      return Response.json({ ok: true });
+      if (path === "/client/connect/token") return jsonResponse({ ok: true, ...newSession });
+      return jsonResponse({ ok: true });
     };
     await render();
     await click("Useful");
@@ -421,7 +483,7 @@ describe("TritonAI Bot page integration", () => {
       newSession.ownerToken,
     );
     await act(async () =>
-      finishRating(Response.json({ ok: false, error: "Old session expired." }, { status: 401 })),
+      finishRating(jsonResponse({ ok: false, error: "Old session expired." }, { status: 401 })),
     );
     expect(JSON.parse(sessionStorage.getItem(`dot-session:${serviceUrl}`)!).ownerToken).toBe(
       newSession.ownerToken,
@@ -431,6 +493,7 @@ describe("TritonAI Bot page integration", () => {
   });
 
   it("keeps a reopened workspace's new session when an unmounted workspace receives a late 401", async () => {
+    await using _test = await setupTest();
     vi.spyOn(crypto.subtle, "digest").mockResolvedValue(new ArrayBuffer(32));
     const newSession = { ...session, ownerToken: "reopened-owner-token" };
     state = {
@@ -454,39 +517,38 @@ describe("TritonAI Bot page integration", () => {
           finishRating = resolve;
         });
       if (path === "/client/connect/start")
-        return Response.json({
+        return jsonResponse({
           ok: true,
           requestId: "reopened-connection",
           expiresAt: session.expiresAt,
           verificationUrl: `${serviceUrl}/sign-in`,
           userCode: "SYNTHETIC",
         });
-      if (path === "/client/connect/token") return Response.json({ ok: true, ...newSession });
-      return Response.json({ ok: true });
+      if (path === "/client/connect/token") return jsonResponse({ ok: true, ...newSession });
+      return jsonResponse({ ok: true });
     };
     await render();
     await click("Useful");
-    await act(async () => root.render(null));
+    await act(async () => root.rerender(null));
     await render();
     await click("Sign out of TritonAI Bot");
     await click("Sign in with UC San Diego");
     await act(async () =>
-      finishRating(
-        Response.json({ ok: false, error: "Unmounted owner expired." }, { status: 401 }),
-      ),
+      finishRating(jsonResponse({ ok: false, error: "Unmounted owner expired." }, { status: 401 })),
     );
     expect(JSON.parse(sessionStorage.getItem(`dot-session:${serviceUrl}`)!).ownerToken).toBe(
       newSession.ownerToken,
     );
     expect(container.textContent).not.toContain("Unmounted owner expired.");
     expect(container.querySelector("aside")).not.toBeNull();
-    await act(async () => root.render(null));
+    await act(async () => root.rerender(null));
     await render();
     expect(container.textContent).not.toContain("Connect to your TritonAI Bot");
     expect(container.querySelector("aside")).not.toBeNull();
   });
 
   it("does not remove a replacement persisted session when the mounted workspace's old request fails", async () => {
+    await using _test = await setupTest();
     const newSession = { ...session, ownerToken: "other-workspace-owner-token" };
     state = {
       ...withPanels(),
@@ -508,12 +570,12 @@ describe("TritonAI Bot page integration", () => {
         ? new Promise<Response>((resolve) => {
             finishRating = resolve;
           })
-        : Response.json({ ok: true });
+        : jsonResponse({ ok: true });
     await render();
     await click("Useful");
     saveDotSession(sessionStorage, serviceUrl, newSession);
     await act(async () =>
-      finishRating(Response.json({ ok: false, error: "Old owner expired." }, { status: 401 })),
+      finishRating(jsonResponse({ ok: false, error: "Old owner expired." }, { status: 401 })),
     );
     expect(JSON.parse(sessionStorage.getItem(`dot-session:${serviceUrl}`)!).ownerToken).toBe(
       newSession.ownerToken,
@@ -521,9 +583,10 @@ describe("TritonAI Bot page integration", () => {
   });
 
   it("sends the displayed controlVersion when pausing and uses the refreshed state", async () => {
+    await using _test = await setupTest();
     onPost = async (path) => {
       state = { ...state, user: { ...state.user, paused: path === "/pause", controlVersion: 4 } };
-      return Response.json({ ok: true, paused: true, controlVersion: 4 });
+      return jsonResponse({ ok: true, paused: true, controlVersion: 4 });
     };
     await render();
     await click("Pause bot");
@@ -564,6 +627,7 @@ async function submitForm(label: string) {
 }
 
 it("opens an inbox review at the existing approval and preserves the approve workflow", async () => {
+  await using _test = await setupTest();
   state = {
     ...withPanels(),
     enhancements: { decisionInbox: true },
@@ -596,7 +660,7 @@ it("opens an inbox review at the existing approval and preserves the approve wor
   onPost = async (path) => {
     if (path === "/approvals/approval1")
       state = { ...state, approvals: [], handling: { ...state.handling!, items: [] } };
-    return Response.json({ ok: true });
+    return jsonResponse({ ok: true });
   };
   await render();
   await click("Review Prepare the report");
@@ -608,11 +672,12 @@ it("opens an inbox review at the existing approval and preserves the approve wor
 });
 
 it("creates an editable recipe with schedule preview and retains one create ID after a lost acknowledgement", async () => {
+  await using _test = await setupTest();
   state = { ...withPanels(), enhancements: { routineEditor: true }, scheduledPrompts: [] };
   let attempts = 0;
   onPost = async (path, body) => {
     if (path === "/scheduled-prompts/preview")
-      return Response.json({
+      return jsonResponse({
         ok: true,
         scheduleText: "Weekdays at 09:00",
         nextRunAt: "2026-10-13T16:00:00Z",
@@ -625,9 +690,9 @@ it("creates an editable recipe with schedule preview and retains one create ID a
           { ...prompt, version: 1, name: String(body.name), prompt: String(body.prompt) },
         ],
       };
-      return Response.json({ ok: true, prompt: state.scheduledPrompts![0] });
+      return jsonResponse({ ok: true, prompt: state.scheduledPrompts![0] });
     }
-    return Response.json({ ok: true });
+    return jsonResponse({ ok: true });
   };
   await render();
   await click("Create routine");
@@ -656,6 +721,7 @@ it("creates an editable recipe with schedule preview and retains one create ID a
 });
 
 it("requires reviewed memory wording, preserves its version, and does not mutate preferences on a rating", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { memoryCorrection: true },
@@ -694,7 +760,7 @@ it("requires reviewed memory wording, preserves its version, and does not mutate
         ...state,
         feedback: [{ outputId: "brief1", kind: "routine", rating: "not-useful" }],
       };
-    return Response.json({ ok: true });
+    return jsonResponse({ ok: true });
   };
   await render();
   await click("Edit memory");
@@ -747,6 +813,7 @@ it("requires reviewed memory wording, preserves its version, and does not mutate
 });
 
 it("follows a task, shows evidence separately from completion, and versions snooze/resume", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { responsibilities: true, resultCards: true },
@@ -784,7 +851,7 @@ it("follows a task, shows evidence separately from completion, and versions snoo
   onPost = async (path, body) => {
     if (path === "/responsibilities") {
       if (body.action === "create" && (!body.responsibilityId || body.expectedVersion !== 0))
-        return Response.json(
+        return jsonResponse(
           { ok: false, error: "Create requires a stable ID and version zero" },
           { status: 400 },
         );
@@ -826,7 +893,7 @@ it("follows a task, shows evidence separately from completion, and versions snoo
           ],
         };
     }
-    return Response.json({ ok: true });
+    return jsonResponse({ ok: true });
   };
   await render();
   expect(container.textContent).toContain("Execution finished");
@@ -861,8 +928,9 @@ it("follows a task, shows evidence separately from completion, and versions snoo
 it.each(["chat", "routine"])(
   "keeps a completed accepted %s reply when later snapshots still omit its run",
   async (kind) => {
+    await using _test = await setupTest();
     if (kind === "routine") state = withPanels();
-    onPost = async () => Response.json({ ok: true, runId: "outside-page", status: "queued" });
+    onPost = async () => jsonResponse({ ok: true, runId: "outside-page", status: "queued" });
     await render();
     if (kind === "routine") await click("Run now");
     else {
@@ -880,12 +948,13 @@ it.each(["chat", "routine"])(
 );
 
 it("shows sending immediately, then the real run phase, and stops claiming work after progress expires", async () => {
+  await using _test = await setupTest();
   const baseFetch = globalThis.fetch;
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>((input, init) =>
       new URL(String(input)).pathname === "/runs/message1"
-        ? Promise.resolve(Response.json({ ok: true, run: state.runs[0] }))
+        ? Promise.resolve(jsonResponse({ ok: true, run: state.runs[0] }))
         : baseFetch(input, init),
     ),
   );
@@ -908,9 +977,7 @@ it("shows sending immediately, then the real run phase, and stops claiming work 
     updatedAt: new Date().toISOString(),
   };
   state = { ...state, runs: [run] };
-  await act(async () =>
-    finishSend(Response.json({ ok: true, runId: run.runId, status: "queued" })),
-  );
+  await act(async () => finishSend(jsonResponse({ ok: true, runId: run.runId, status: "queued" })));
   expect(container.textContent).not.toContain("Sending your message…");
   expect(container.textContent).toContain("Queued");
   expect(container.textContent).not.toContain("Thinking…");
@@ -949,6 +1016,7 @@ it("shows sending immediately, then the real run phase, and stops claiming work 
 });
 
 it("removes sending feedback after a failed request and keeps the message available to retry", async () => {
+  await using _test = await setupTest();
   let failSend!: (cause: Error) => void;
   onPost = () =>
     new Promise<Response>((_resolve, reject) => {
@@ -967,6 +1035,7 @@ it("removes sending feedback after a failed request and keeps the message availa
 });
 
 it("keeps selected files on a failed send and retries the same message before clearing them", async () => {
+  await using _test = await setupTest();
   state = { ...snapshot(), enhancements: { attachments: true } };
   vi.stubGlobal(
     "FileReader",
@@ -984,7 +1053,7 @@ it("keeps selected files on a failed send and retries the same message before cl
   let attempts = 0;
   onPost = async (path, body) => {
     if (path === "/attachments")
-      return Response.json({
+      return jsonResponse({
         ok: true,
         attachment: {
           attachmentId: "file1",
@@ -997,9 +1066,9 @@ it("keeps selected files on a failed send and retries the same message before cl
       });
     if (path === "/message") {
       if (++attempts === 1) throw new TypeError("Send interrupted");
-      return Response.json({ ok: true, runId: "message1", status: "queued" });
+      return jsonResponse({ ok: true, runId: "message1", status: "queued" });
     }
-    return Response.json({ ok: true });
+    return jsonResponse({ ok: true });
   };
   await render();
   const input = container.querySelector<HTMLInputElement>(
@@ -1028,6 +1097,7 @@ it("keeps selected files on a failed send and retries the same message before cl
 });
 
 it("preserves exact owner text when correcting only a memory type", async () => {
+  await using _test = await setupTest();
   const canonical = "Use https://example.invalid <b> and [reference](https://example.invalid)";
   state = {
     ...snapshot(),
@@ -1048,7 +1118,7 @@ it("preserves exact owner text when correcting only a memory type", async () => 
     vi.fn<typeof fetch>((input, init) =>
       new URL(String(input)).pathname === "/owner-memory/memory1"
         ? Promise.resolve(
-            Response.json({ ok: true, memory: { ...state.dotMemory![0]!, text: canonical } }),
+            jsonResponse({ ok: true, memory: { ...state.dotMemory![0]!, text: canonical } }),
           )
         : previousFetch(input, init),
     ),
@@ -1078,6 +1148,7 @@ it("preserves exact owner text when correcting only a memory type", async () => 
 });
 
 it("does not overwrite a newer memory when a correction receives a version conflict", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { memoryCorrection: true },
@@ -1088,7 +1159,7 @@ it("does not overwrite a newer memory when a correction receives a version confl
       ...state,
       dotMemory: [{ ...state.dotMemory![0]!, version: 2, text: "Newer preference" }],
     };
-    return Response.json({ ok: false, error: "This memory changed." }, { status: 409 });
+    return jsonResponse({ ok: false, error: "This memory changed." }, { status: 409 });
   };
   await render();
   await click("Edit memory");
@@ -1107,6 +1178,7 @@ it("does not overwrite a newer memory when a correction receives a version confl
 });
 
 it("preserves interval days and its time window when editing a versioned routine", async () => {
+  await using _test = await setupTest();
   state = {
     ...withPanels(),
     enhancements: { routineEditor: true },
@@ -1123,7 +1195,7 @@ it("preserves interval days and its time window when editing a versioned routine
       },
     ],
   };
-  onPost = async () => Response.json({ ok: true, prompt: state.scheduledPrompts![0] });
+  onPost = async () => jsonResponse({ ok: true, prompt: state.scheduledPrompts![0] });
   await render();
   await click("Edit routine");
   await fill("Routine name", "Updated check");
@@ -1144,6 +1216,7 @@ it("preserves interval days and its time window when editing a versioned routine
 });
 
 it("explains the memory byte limit before sending a multi-byte correction", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { memoryCorrection: true },
@@ -1164,6 +1237,7 @@ it("explains the memory byte limit before sending a multi-byte correction", asyn
 });
 
 it("loads an older followed task once, keeps it through state refresh, and allows reviewed completion", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { responsibilities: true, resultCards: true },
@@ -1198,7 +1272,7 @@ it("loads an older followed task once, keeps it through state refresh, and allow
     })),
   };
   const read = vi.fn(async () =>
-    Response.json({
+    jsonResponse({
       ok: true,
       task: {
         taskId: "older-task",
@@ -1218,7 +1292,7 @@ it("loads an older followed task once, keeps it through state refresh, and allow
         ...state,
         responsibilities: [{ ...state.responsibilities![0]!, version: 4, status: "completed" }],
       };
-    return Response.json({ ok: true });
+    return jsonResponse({ ok: true });
   };
   await render();
   expect(read).not.toHaveBeenCalled();
@@ -1255,6 +1329,7 @@ it("loads an older followed task once, keeps it through state refresh, and allow
 });
 
 it("keeps an unavailable older task unreviewed and offers an explicit retry", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { responsibilities: true },
@@ -1290,6 +1365,7 @@ it("keeps an unavailable older task unreviewed and offers an explicit retry", as
 });
 
 it("requires current completed evidence and a fresh review when a responsibility result changes", async () => {
+  await using _test = await setupTest();
   const freshAt = "2026-10-08T13:00:00Z";
   const laterAt = "2026-10-08T14:00:00Z";
   const task = {
@@ -1329,7 +1405,7 @@ it("requires current completed evidence and a fresh review when a responsibility
     ],
   };
   onTaskRead = async () =>
-    Response.json({ ok: true, task: { ...task, updatedAt: freshAt, result: "Corrected totals" } });
+    jsonResponse({ ok: true, task: { ...task, updatedAt: freshAt, result: "Corrected totals" } });
   await render();
   expect(container.textContent).toContain("The task evidence changed");
   expect(container.textContent).not.toContain("Mark reviewed and complete");
@@ -1358,7 +1434,7 @@ it("requires current completed evidence and a fresh review when a responsibility
     ],
   };
   onTaskRead = async () =>
-    Response.json({
+    jsonResponse({
       ok: true,
       task: { ...task, updatedAt: laterAt, result: "Final corrected totals" },
     });
@@ -1373,6 +1449,7 @@ it("requires current completed evidence and a fresh review when a responsibility
 });
 
 it("does not offer resume for a cancelled responsibility", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { responsibilities: true },
@@ -1401,6 +1478,7 @@ it("does not offer resume for a cancelled responsibility", async () => {
 it.each(["task", "approval"] as const)(
   "loads and opens an older inbox %s outside the recent snapshot",
   async (kind) => {
+    await using _test = await setupTest();
     state = {
       ...withPanels(),
       enhancements: { decisionInbox: true },
@@ -1420,7 +1498,7 @@ it.each(["task", "approval"] as const)(
       },
     };
     const read = vi.fn(async () =>
-      Response.json(
+      jsonResponse(
         kind === "task"
           ? {
               ok: true,
@@ -1473,6 +1551,7 @@ it.each(["task", "approval"] as const)(
 it.each(["task", "approval"] as const)(
   "discards an older inbox %s response after the owner reconnects",
   async (kind) => {
+    await using _test = await setupTest();
     vi.spyOn(crypto.subtle, "digest").mockResolvedValue(new ArrayBuffer(32));
     const newSession = { ...session, ownerToken: "replacement-inbox-owner-token" };
     state = {
@@ -1500,15 +1579,15 @@ it.each(["task", "approval"] as const)(
       });
     onPost = async (path) => {
       if (path === "/client/connect/start")
-        return Response.json({
+        return jsonResponse({
           ok: true,
           requestId: "inbox-connection",
           expiresAt: session.expiresAt,
           verificationUrl: `${serviceUrl}/sign-in`,
           userCode: "SYNTHETIC",
         });
-      if (path === "/client/connect/token") return Response.json({ ok: true, ...newSession });
-      return Response.json({ ok: true });
+      if (path === "/client/connect/token") return jsonResponse({ ok: true, ...newSession });
+      return jsonResponse({ ok: true });
     };
     if (kind === "task") onTaskRead = read;
     else onApprovalRead = read;
@@ -1518,7 +1597,7 @@ it.each(["task", "approval"] as const)(
     await click("Sign in with UC San Diego");
     await act(async () =>
       finish(
-        Response.json(
+        jsonResponse(
           kind === "task"
             ? {
                 ok: true,
@@ -1555,6 +1634,7 @@ it.each(["task", "approval"] as const)(
 );
 
 it("keeps an unavailable inbox target retryable and refuses resolved approvals", async () => {
+  await using _test = await setupTest();
   state = {
     ...withPanels(),
     enhancements: { decisionInbox: true },
@@ -1578,7 +1658,7 @@ it("keeps an unavailable inbox target retryable and refuses resolved approvals",
   expect(container.textContent).toContain("Approval unavailable");
   expect(button("Review Old approval").disabled).toBe(false);
   onApprovalRead = async () =>
-    Response.json({
+    jsonResponse({
       ok: true,
       approval: {
         approvalId: "old-approval",
@@ -1597,6 +1677,7 @@ it("keeps an unavailable inbox target retryable and refuses resolved approvals",
 it.each(["snapshot", "401"] as const)(
   "ignores an older background %s after an action refresh succeeds",
   async (outcome) => {
+    await using _test = await setupTest();
     state = {
       ...withPanels(),
       tasks: [
@@ -1637,7 +1718,7 @@ it.each(["snapshot", "401"] as const)(
             },
           ],
         };
-      return Response.json({ ok: true });
+      return jsonResponse({ ok: true });
     };
     await render();
     await act(async () => {
@@ -1648,8 +1729,8 @@ it.each(["snapshot", "401"] as const)(
     await act(async () =>
       finishPoll(
         outcome === "snapshot"
-          ? Response.json({ ok: true, ...oldSnapshot })
-          : Response.json({ ok: false, error: "Obsolete poll expired." }, { status: 401 }),
+          ? jsonResponse({ ok: true, ...oldSnapshot })
+          : jsonResponse({ ok: false, error: "Obsolete poll expired." }, { status: 401 }),
       ),
     );
     expect(container.textContent).toContain("Updated task result");
@@ -1663,6 +1744,7 @@ it.each(["snapshot", "401"] as const)(
 );
 
 it("waits for a slow background read and eventually applies it without overlapping polls", async () => {
+  await using _test = await setupTest();
   state = withPanels();
   const previousFetch = globalThis.fetch;
   let reads = 0;
@@ -1684,7 +1766,7 @@ it("waits for a slow background read and eventually applies it without overlappi
   expect(reads).toBe(2);
   await act(async () =>
     finishPoll(
-      Response.json({
+      jsonResponse({
         ok: true,
         ...state,
         user: { ...state.user, paused: true, controlVersion: 4 },
@@ -1699,6 +1781,7 @@ it("waits for a slow background read and eventually applies it without overlappi
 });
 
 it("keeps newly loaded task evidence when an older state read finishes later", async () => {
+  await using _test = await setupTest();
   state = {
     ...withPanels(),
     enhancements: { decisionInbox: true },
@@ -1732,7 +1815,7 @@ it("keeps newly loaded task evidence when an older state read finishes later", a
     }),
   );
   const read = vi.fn(async () =>
-    Response.json({
+    jsonResponse({
       ok: true,
       task: {
         taskId: "older-task",
@@ -1751,7 +1834,7 @@ it("keeps newly loaded task evidence when an older state read finishes later", a
     await vi.advanceTimersByTimeAsync(2500);
   });
   await click("Open Older report");
-  await act(async () => finishPoll(Response.json({ ok: true, ...oldSnapshot })));
+  await act(async () => finishPoll(jsonResponse({ ok: true, ...oldSnapshot })));
   expect(container.textContent).toContain("Latest returned evidence");
   expect(container.querySelector<HTMLDetailsElement>("#bot-task-older-task")!.open).toBe(true);
   await click("Open Older report");
@@ -1759,6 +1842,7 @@ it("keeps newly loaded task evidence when an older state read finishes later", a
 });
 
 it("keeps the full long reply expandable alongside structured task evidence", async () => {
+  await using _test = await setupTest();
   const fullReply = `${"Detailed report paragraph.\n".repeat(300)}Final recommendation beyond the summary.`;
   state = {
     ...snapshot(),
@@ -1803,6 +1887,7 @@ it("keeps the full long reply expandable alongside structured task evidence", as
 });
 
 it("edits a canonical memory newer than the poll but still rejects a later version conflict", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { memoryCorrection: true },
@@ -1822,7 +1907,7 @@ it("edits a canonical memory newer than the poll but still rejects a later versi
     vi.fn<typeof fetch>((input, init) =>
       new URL(String(input)).pathname === "/owner-memory/memory1"
         ? Promise.resolve(
-            Response.json({
+            jsonResponse({
               ok: true,
               memory: { ...state.dotMemory![0]!, version: 2, text: "Newest canonical wording" },
             }),
@@ -1844,7 +1929,7 @@ it("edits a canonical memory newer than the poll but still rejects a later versi
       ...state,
       dotMemory: [{ ...state.dotMemory![0]!, version: 3, text: "Concurrent owner correction" }],
     };
-    return Response.json({ ok: false, error: "This memory changed." }, { status: 409 });
+    return jsonResponse({ ok: false, error: "This memory changed." }, { status: 409 });
   };
   await fill("Memory text", "My reviewed correction");
   await act(async () =>
@@ -1861,6 +1946,7 @@ it("edits a canonical memory newer than the poll but still rejects a later versi
 });
 
 it("refuses a canonical memory response for another selected memory", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { memoryCorrection: true },
@@ -1872,7 +1958,7 @@ it("refuses a canonical memory response for another selected memory", async () =
     vi.fn<typeof fetch>((input, init) =>
       new URL(String(input)).pathname === "/owner-memory/memory1"
         ? Promise.resolve(
-            Response.json({ ok: true, memory: { ...state.dotMemory![0]!, memoryId: "memory2" } }),
+            jsonResponse({ ok: true, memory: { ...state.dotMemory![0]!, memoryId: "memory2" } }),
           )
         : previousFetch(input, init),
     ),
@@ -1889,6 +1975,7 @@ it("refuses a canonical memory response for another selected memory", async () =
 it.each(["task", "approval"] as const)(
   "does not restore an older fetched %s over a newer action snapshot",
   async (kind) => {
+    await using _test = await setupTest();
     state = {
       ...withPanels(),
       enhancements: { decisionInbox: true },
@@ -1935,14 +2022,14 @@ it.each(["task", "approval"] as const)(
                 ]
               : [],
         };
-      return Response.json({ ok: true });
+      return jsonResponse({ ok: true });
     };
     await render();
     await click("Open Pending read");
     await click("Pause bot");
     await act(async () =>
       finishRead(
-        Response.json(
+        jsonResponse(
           kind === "task"
             ? {
                 ok: true,
@@ -1977,6 +2064,7 @@ it.each(["task", "approval"] as const)(
 );
 
 it("continues a responsibility from an explicit reply, resolves a held message and keeps waiting state reversible", async () => {
+  await using _test = await setupTest();
   const responsibility = (id: string, title: string, version: number) => ({
     responsibilityId: id,
     version,
@@ -2048,7 +2136,7 @@ it("continues a responsibility from an explicit reply, resolves a held message a
   };
   onPost = async (path) =>
     path === "/message"
-      ? Response.json({
+      ? jsonResponse({
           ok: true,
           runId: "reply1",
           status: "queued",
@@ -2060,7 +2148,7 @@ it("continues a responsibility from an explicit reply, resolves a held message a
             intent: "input",
           },
         })
-      : Response.json({ ok: true });
+      : jsonResponse({ ok: true });
   await render();
   expect(container.textContent).toContain("Waiting for your reply: the signed spreadsheet");
   expect(container.textContent).toContain("Deadline");
@@ -2120,6 +2208,7 @@ it("continues a responsibility from an explicit reply, resolves a held message a
 });
 
 it("never sends a reply target to a service without reply continuation", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { responsibilities: true },
@@ -2139,7 +2228,7 @@ it("never sends a reply target to a service without reply continuation", async (
       },
     ],
   };
-  onPost = async () => Response.json({ ok: true, runId: "chat1", status: "queued" });
+  onPost = async () => jsonResponse({ ok: true, runId: "chat1", status: "queued" });
   await render();
   expect(() => button("Reply in chat")).toThrow();
   expect(() => button("Reopen following")).toThrow();
@@ -2151,6 +2240,7 @@ it("never sends a reply target to a service without reply continuation", async (
 });
 
 it("keeps a rejected reply's draft and target, explains why beside the composer, and still sends ordinary chat", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     enhancements: { responsibilities: true, replyContinuation: true },
@@ -2180,7 +2270,7 @@ it("keeps a rejected reply's draft and target, explains why beside the composer,
   };
   onPost = async (path, body) =>
     path === "/message" && body.responsibilityId
-      ? Response.json(
+      ? jsonResponse(
           {
             ok: false,
             error:
@@ -2188,7 +2278,7 @@ it("keeps a rejected reply's draft and target, explains why beside the composer,
           },
           { status: 409 },
         )
-      : Response.json({ ok: true, runId: "chat1", status: "queued" });
+      : jsonResponse({ ok: true, runId: "chat1", status: "queued" });
   await render();
   await click("Reply in chat");
   await fill("Message your bot", "Here is the signed spreadsheet");
@@ -2210,6 +2300,7 @@ it("keeps a rejected reply's draft and target, explains why beside the composer,
 });
 
 it("offers only Deny for an assignment approval that can no longer start", async () => {
+  await using _test = await setupTest();
   state = {
     ...snapshot(),
     approvals: [
@@ -2222,7 +2313,7 @@ it("offers only Deny for an assignment approval that can no longer start", async
       },
     ],
   };
-  onPost = async () => Response.json({ ok: true });
+  onPost = async () => jsonResponse({ ok: true });
   await render();
   expect(container.textContent).toContain(
     "Can't start: “Budget review” was cancelled. Approving won't run it",
@@ -2232,7 +2323,7 @@ it("offers only Deny for an assignment approval that can no longer start", async
   expect(requests).toEqual([{ path: "/approvals/stale1", body: { approved: false } }]);
 });
 
-describe("waiting reasons", () => {
+describe("waiting reasons", async () => {
   const minutes = (count: number) => new Date(Date.parse(at) + count * 60_000).toISOString();
   function followed(overrides: Partial<DotResponsibility> = {}): DotResponsibility {
     return {
@@ -2263,6 +2354,7 @@ describe("waiting reasons", () => {
   }
 
   it("explains why a followed task waits and resumes a paused bot from its recovery", async () => {
+    await using _test = await setupTest();
     state = {
       ...withFollowed(
         followed({
@@ -2288,6 +2380,7 @@ describe("waiting reasons", () => {
   });
 
   it("labels a reply whose continuation stopped partway with its real outcome, not as continued", async () => {
+    await using _test = await setupTest();
     state = withFollowed(
       followed({
         replies: {
@@ -2324,6 +2417,7 @@ describe("waiting reasons", () => {
   });
 
   it("keeps a file recipe's opened decision outside recent approvals and Handling", async () => {
+    await using _test = await setupTest();
     state = {
       ...withPanels(),
       enhancements: { fileRecipes: true, decisionInbox: true },
@@ -2364,7 +2458,7 @@ describe("waiting reasons", () => {
       ],
     };
     onApprovalRead = async () =>
-      Response.json({
+      jsonResponse({
         ok: true,
         approval: {
           approvalId: "recipe-decision",
@@ -2386,6 +2480,7 @@ describe("waiting reasons", () => {
   });
 
   it("opens a file's assignment outside the newest tasks through the scoped route and keeps its result", async () => {
+    await using _test = await setupTest();
     state = {
       ...withPanels(),
       enhancements: { fileRecipes: true, waitingReasons: true },
@@ -2437,7 +2532,7 @@ describe("waiting reasons", () => {
       ],
     };
     const read = vi.fn(async () =>
-      Response.json({
+      jsonResponse({
         ok: true,
         task: {
           taskId: "old-task",
@@ -2463,6 +2558,7 @@ describe("waiting reasons", () => {
   });
 
   it("opens a finished file's assignment from its row when the service gives no waiting status", async () => {
+    await using _test = await setupTest();
     state = {
       ...withPanels(),
       enhancements: { fileRecipes: true },
@@ -2503,7 +2599,7 @@ describe("waiting reasons", () => {
       ],
     };
     const read = vi.fn(async () =>
-      Response.json({
+      jsonResponse({
         ok: true,
         task: {
           taskId: "old-task",
@@ -2526,6 +2622,7 @@ describe("waiting reasons", () => {
   });
 
   it("checks a reply whose outcome the service couldn't confirm by loading its run into the conversation and keeping it", async () => {
+    await using _test = await setupTest();
     state = withFollowed(
       followed({
         replies: {
@@ -2561,7 +2658,7 @@ describe("waiting reasons", () => {
     );
     const base = globalThis.fetch;
     const read = vi.fn(async () =>
-      Response.json({
+      jsonResponse({
         ok: true,
         run: {
           runId: "old-reply-run",
@@ -2602,6 +2699,7 @@ describe("waiting reasons", () => {
   });
 
   it("never replaces a newer responsibility it already showed with an older copy from a later read", async () => {
+    await using _test = await setupTest();
     const claimed = followed({
       version: 5,
       waiting: {
@@ -2637,6 +2735,7 @@ describe("waiting reasons", () => {
   });
 
   it("drops a late read for the previous owner after switching owners", async () => {
+    await using _test = await setupTest();
     vi.spyOn(crypto.subtle, "digest").mockResolvedValue(new ArrayBuffer(32));
     const newSession = { ...session, ownerToken: "replacement-owner-token" };
     state = withFollowed(
@@ -2664,15 +2763,15 @@ describe("waiting reasons", () => {
     );
     onPost = async (path) => {
       if (path === "/client/connect/start")
-        return Response.json({
+        return jsonResponse({
           ok: true,
           requestId: "connection1",
           expiresAt: session.expiresAt,
           verificationUrl: `${serviceUrl}/sign-in`,
           userCode: "SYNTHETIC",
         });
-      if (path === "/client/connect/token") return Response.json({ ok: true, ...newSession });
-      return Response.json({ ok: true });
+      if (path === "/client/connect/token") return jsonResponse({ ok: true, ...newSession });
+      return jsonResponse({ ok: true });
     };
     await render();
     await act(async () => {
@@ -2693,12 +2792,13 @@ describe("waiting reasons", () => {
       }),
     );
     await click("Sign in with UC San Diego");
-    await act(async () => finishPoll(Response.json({ ok: true, ...previousOwner })));
+    await act(async () => finishPoll(jsonResponse({ ok: true, ...previousOwner })));
     expect(container.textContent).toContain("No computer is set to run Harness tasks.");
     expect(container.textContent).not.toContain(claimedText);
   });
 
   it("keeps the last status while disconnected and says when its own change time has passed", async () => {
+    await using _test = await setupTest();
     state = withFollowed(
       followed({
         waiting: {
@@ -2738,11 +2838,7 @@ describe("waiting reasons", () => {
   });
 });
 
-describe("chat-only view", () => {
-  beforeEach(() => {
-    botView.diagnostics = false;
-  });
-
+describe("chat-only view", async () => {
   function returnedTask(taskId = "returned-task"): DotTask {
     return {
       taskId,
@@ -2792,6 +2888,8 @@ describe("chat-only view", () => {
   it.each(["harness-update", "harness-answer", "harness-result"])(
     "downloads returned files beside the %s reply without showing diagnostic records",
     async (kind) => {
+      await using _test = await setupTest();
+      botView.diagnostics = false;
       state = withReturnedReply(kind);
       const fetchBeforeDownload = fetch;
       vi.stubGlobal(
@@ -2801,7 +2899,7 @@ describe("chat-only view", () => {
             expect(new Headers(init?.headers).get("Authorization")).toBe(
               `Bearer ${session.ownerToken}`,
             );
-            return Response.json({
+            return jsonResponse({
               ok: true,
               attachment: { name: "report.csv", mimeType: "text/csv" },
               dataBase64: btoa("total\n42"),
@@ -2846,13 +2944,15 @@ describe("chat-only view", () => {
   );
 
   it("loads an older reply's exact task, retries a failed read, and keeps its files across refreshes", async () => {
+    await using _test = await setupTest();
+    botView.diagnostics = false;
     state = { ...withReturnedReply(), tasks: [] };
     const taskReads: string[] = [];
     onTaskRead = async (id) => {
       taskReads.push(id);
       return taskReads.length === 1
-        ? Response.json({ ok: false, error: "Try again" }, { status: 503 })
-        : Response.json({ ok: true, task: returnedTask(id) });
+        ? jsonResponse({ ok: false, error: "Try again" }, { status: 503 })
+        : jsonResponse({ ok: true, task: returnedTask(id) });
     };
     await render();
     await click("Load returned files");
@@ -2868,8 +2968,10 @@ describe("chat-only view", () => {
   });
 
   it("does not show files from a different task returned by the detail route", async () => {
+    await using _test = await setupTest();
+    botView.diagnostics = false;
     state = { ...withReturnedReply(), tasks: [] };
-    onTaskRead = async () => Response.json({ ok: true, task: returnedTask("wrong-task") });
+    onTaskRead = async () => jsonResponse({ ok: true, task: returnedTask("wrong-task") });
     await render();
     await click("Load returned files");
     expect(container.textContent).toContain("The selected task evidence is unavailable.");
@@ -2878,6 +2980,8 @@ describe("chat-only view", () => {
   });
 
   it("reports a failed download and lets the owner retry without enabling diagnostics", async () => {
+    await using _test = await setupTest();
+    botView.diagnostics = false;
     state = withReturnedReply();
     const fetchBeforeDownload = fetch;
     let attempts = 0;
@@ -2887,8 +2991,8 @@ describe("chat-only view", () => {
         if (String(input).endsWith("/attachments/returned-file")) {
           attempts += 1;
           return attempts === 1
-            ? Response.json({ ok: false, error: "File temporarily unavailable" }, { status: 503 })
-            : Response.json({
+            ? jsonResponse({ ok: false, error: "File temporarily unavailable" }, { status: 503 })
+            : jsonResponse({
                 ok: true,
                 attachment: { name: "report.csv", mimeType: "text/csv" },
                 dataBase64: btoa("42"),
@@ -2921,6 +3025,8 @@ describe("chat-only view", () => {
   });
 
   it("does not attach returned files to a queued receipt or a progress update", async () => {
+    await using _test = await setupTest();
+    botView.diagnostics = false;
     state = withReturnedReply("approval-response");
     await render();
     expect(container.textContent).not.toContain("Download report.csv");
@@ -2986,10 +3092,12 @@ describe("chat-only view", () => {
   }
 
   it("shows only the conversation, with replies as markdown and approvals inline", async () => {
+    await using _test = await setupTest();
+    botView.diagnostics = false;
     state = fullState();
     onPost = async (path) => {
       if (path === "/approvals/approval1") state = { ...state, approvals: [] };
-      return Response.json({ ok: true });
+      return jsonResponse({ ok: true });
     };
     await render();
     expect(container.querySelector("aside")).toBeNull();
@@ -3006,6 +3114,8 @@ describe("chat-only view", () => {
   });
 
   it("brings the records back beside the chat with the developer setting", async () => {
+    await using _test = await setupTest();
+    botView.diagnostics = false;
     botView.diagnostics = true;
     state = fullState();
     await render();
@@ -3015,10 +3125,12 @@ describe("chat-only view", () => {
   });
 
   it("sends on Enter and keeps Shift+Enter for a new line", async () => {
+    await using _test = await setupTest();
+    botView.diagnostics = false;
     onPost = async (path) =>
       path === "/message"
-        ? Response.json({ ok: true, runId: "message1", status: "queued" })
-        : Response.json({ ok: true });
+        ? jsonResponse({ ok: true, runId: "message1", status: "queued" })
+        : jsonResponse({ ok: true });
     await render();
     await fill("Message your bot", "first line");
     const composer = container.querySelector<HTMLTextAreaElement>(
@@ -3039,10 +3151,12 @@ describe("chat-only view", () => {
   });
 
   it("resumes from the paused notice and keeps pause in the header", async () => {
+    await using _test = await setupTest();
+    botView.diagnostics = false;
     state = { ...snapshot(), user: { ...snapshot().user, paused: true } };
     onPost = async (path) => {
       state = { ...state, user: { ...state.user, paused: path === "/pause", controlVersion: 4 } };
-      return Response.json({ ok: true, paused: path === "/pause", controlVersion: 4 });
+      return jsonResponse({ ok: true, paused: path === "/pause", controlVersion: 4 });
     };
     await render();
     expect(container.textContent).toContain("Your bot is paused.");
@@ -3051,4 +3165,55 @@ describe("chat-only view", () => {
     expect(container.textContent).not.toContain("Your bot is paused.");
     expect(button("Pause bot").disabled).toBe(false);
   });
+});
+
+it("keeps the desktop return listener through sign-in state updates and an unrelated rerender", async () => {
+  await using _test = await setupTest();
+  saveDotSession(sessionStorage, serviceUrl, null);
+  let complete!: (value: { requestId: string; code: string }) => void;
+  const returned = new Promise<{ requestId: string; code: string }>((resolve) => {
+    complete = resolve;
+  });
+  const awaitReturn = vi.fn(async () => returned);
+  const cancelReturn = vi.fn(async () => undefined);
+  vi.stubGlobal("desktopBridge", {
+    startDotSignIn: vi.fn(async () => desktopRedirect),
+    awaitDotSignIn: awaitReturn,
+    cancelDotSignIn: cancelReturn,
+  });
+  vi.spyOn(DotClient.prototype, "startConnection").mockResolvedValue({
+    requestId: "native-request",
+    codeVerifier: "private-verifier",
+    expiresAt: Date.now() / 1000 + 300,
+    verificationUrl: `${serviceUrl}/client/connect?requestId=native-request`,
+    userCode: "unused",
+    redirectUri: desktopRedirect,
+  });
+  const poll = vi.spyOn(DotClient.prototype, "pollConnection").mockResolvedValue(session);
+  await render();
+  await click("Sign in with UC San Diego");
+  expect(awaitReturn).toHaveBeenCalledTimes(1);
+  await root.rerender(<DotPage />);
+  expect(awaitReturn).toHaveBeenCalledTimes(1);
+  expect(cancelReturn).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Finish signing in");
+  await act(async () => complete({ requestId: "native-request", code: "one-time-return" }));
+  expect(poll).toHaveBeenCalledWith(
+    expect.objectContaining({ requestId: "native-request", redirectUri: desktopRedirect }),
+    "one-time-return",
+  );
+  expect(readDotSession(sessionStorage, serviceUrl)?.ownerToken).toBe(session.ownerToken);
+  expect(container.textContent).not.toContain("Sign-in expired");
+});
+
+it("explains desktop-only sign-in in a browser without starting a device-code flow", async () => {
+  await using _test = await setupTest();
+  saveDotSession(sessionStorage, serviceUrl, null);
+  vi.stubGlobal("desktopBridge", undefined);
+  const start = vi.spyOn(DotClient.prototype, "startConnection");
+  await render();
+  expect(button("Sign in with UC San Diego").disabled).toBe(true);
+  expect(container.textContent).toContain("requires the desktop Harness");
+  await click("Sign in with UC San Diego");
+  expect(start).not.toHaveBeenCalled();
 });

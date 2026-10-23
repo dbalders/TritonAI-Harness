@@ -1,3 +1,4 @@
+import { useBotServiceUrl } from "../dot/botService";
 import { GettingStartedSidebarEntry } from "../onboarding/GettingStartedHost";
 import {
   lazy,
@@ -113,12 +114,15 @@ function SettingsSectionIcon({ to }: { to: SettingsPath }) {
 }
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
+  const botServiceUrl = useBotServiceUrl();
   const navigate = useNavigate();
   const currentHash = useLocation({ select: (location) => location.hash });
   const currentSearch = useLocation({ select: (location) => location.search });
   const scopeSearch = validateSettingsScopeSearch(currentSearch);
   const navItems = SETTINGS_NAV_ITEMS.filter(
-    (item) => item.to !== "/settings/projects" || isSettingsOverviewVisible(scopeSearch),
+    (item) =>
+      (item.to !== "/settings/projects" || isSettingsOverviewVisible(scopeSearch)) &&
+      (item.to !== "/settings/tritonai-bot" || botServiceUrl !== null),
   );
   const { isMobile, setOpenMobile, open, setOpen } = useSidebar();
   const searchInputRef = useRef<HTMLInputElement>(null);

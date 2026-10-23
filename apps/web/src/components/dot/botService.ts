@@ -39,7 +39,8 @@ export function resolveBotServiceUrl(
 export function useBotServiceUrl(): string | null {
   const hydrated = useClientSettingsHydrated();
   const setting = useClientSettings((settings) => settings.tritonAiBotUrl);
-  return hydrated ? resolveBotServiceUrl(setting) : null;
+  const enabled = useClientSettings((settings) => settings.tritonAiBotEnabled);
+  return hydrated && enabled ? resolveBotServiceUrl(setting) : null;
 }
 
 /** Whether the bot page shows its records and controls beside the chat (Settings → TritonAI Bot → Developer). */

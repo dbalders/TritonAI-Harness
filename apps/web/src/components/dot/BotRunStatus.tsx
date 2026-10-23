@@ -1,5 +1,5 @@
 import { EllipsisIcon } from "lucide-react";
-import { useEffect, useReducer } from "react";
+import { useEffect, useState } from "react";
 
 import { BotWaitingStatus } from "./BotWaitingStatus";
 import type { DotRun } from "./dotClient";
@@ -21,8 +21,11 @@ export function BotWorkingIndicator({ phrase }: { readonly phrase: string }) {
 
 export function botRunStatus(
   run: DotRun,
-  now = Date.now(),
+  elapsedNow = run.progressClock ? performance.now() : Date.now(),
 ): { phrase: string; expiresAt?: number; waiting?: DotWaitingStatus } | null {
+  const now = run.progressClock
+    ? run.progressClock.serverAt + Math.max(0, elapsedNow - run.progressClock.receivedAt)
+    : elapsedNow;
   if (run.status === "waiting-approval") return { phrase: "Needs your input" };
   // The service says why a queued run waits and when it really tries again; older services only say queued.
   const waiting = usableWaiting(run.waiting);
@@ -59,19 +62,38 @@ export function botRunStatus(
     /[\r\n\t]/.test(activity.phrase)
   )
     return { phrase: "Status unavailable" };
-  return { phrase: activity.phrase, expiresAt };
+  const localExpiry = run.progressClock
+    ? run.progressClock.receivedAt + (expiresAt - run.progressClock.serverAt)
+    : expiresAt;
+  return { phrase: activity.phrase, expiresAt: localExpiry };
 }
 
 /** A single expiry wakeup prevents stale status surviving a stopped/offline poller. */
 export function BotRunStatus({ run }: { readonly run: DotRun }) {
-  "use no memo"; // Read the wall clock on expiry wakeups even when run props are unchanged.
-  const [, refreshClock] = useReducer((value: number) => value + 1, 0);
-  const status = botRunStatus(run);
+  return (
+    <BotRunStatusSnapshot
+      key={`${run.runId}:${run.status}:${run.progressClock?.receivedAt ?? run.activity?.updatedAt ?? "unknown"}`}
+      run={run}
+    />
+  );
+}
+
+function botStatusClock(monotonic: boolean) {
+  return monotonic ? performance.now() : Date.now();
+}
+
+function BotRunStatusSnapshot({ run }: { readonly run: DotRun }) {
+  const monotonic = run.progressClock !== undefined;
+  const [clock, setClock] = useState(() => botStatusClock(monotonic));
+  const status = botRunStatus(run, clock);
   const expiresAt = status?.expiresAt;
   useEffect(() => {
     if (expiresAt === undefined) return;
-    const timer = setTimeout(refreshClock, Math.max(0, expiresAt - Date.now()));
-    const refresh = () => refreshClock();
+    const timer = setTimeout(
+      () => setClock(botStatusClock(monotonic)),
+      Math.max(0, expiresAt - botStatusClock(monotonic)),
+    );
+    const refresh = () => setClock(botStatusClock(monotonic));
     document.addEventListener("visibilitychange", refresh);
     window.addEventListener("focus", refresh);
     return () => {
@@ -79,7 +101,7 @@ export function BotRunStatus({ run }: { readonly run: DotRun }) {
       document.removeEventListener("visibilitychange", refresh);
       window.removeEventListener("focus", refresh);
     };
-  }, [expiresAt]);
+  }, [expiresAt, monotonic]);
   if (status?.waiting)
     return (
       <div className="mt-2">

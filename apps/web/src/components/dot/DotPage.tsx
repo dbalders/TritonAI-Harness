@@ -1,3 +1,4 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ArrowUpIcon,
@@ -11,15 +12,7 @@ import {
   ThumbsUpIcon,
   XIcon,
 } from "lucide-react";
-import {
-  type ComponentProps,
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ComponentProps, Fragment, useEffect, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
 import { ensureLocalApi } from "../../localApi";
@@ -51,7 +44,7 @@ import { BotHandlingPanel } from "./BotHandlingPanel";
 import { BotRoutinesPanel } from "./BotRoutinesPanel";
 import { BotFileRecipesPanel } from "./BotFileRecipesPanel";
 import type { DotFileRecipeInput } from "./dotFileRecipes";
-import { BotCapabilitiesPanel, BotMicrosoftBanner } from "./BotDiscoveryPanels";
+import { BotCapabilitiesPanel, BotMicrosoftConnection } from "./BotDiscoveryPanels";
 import type { DotHandlingItem } from "./dotHandling";
 import type { DotScheduledPrompt, DotScheduledPromptAction } from "./dotRoutines";
 import {
@@ -125,7 +118,7 @@ export function DotPage() {
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
         <h1 className="text-lg font-semibold">TritonAI Bot is off</h1>
         <p className="max-w-sm text-sm text-muted-foreground">
-          Add a TritonAI Bot service address in Settings to use your personal bot.
+          Enable TritonAI Bot in Settings → General → Experimental to use your personal bot.
         </p>
         <Button variant="outline" render={<Link to="/settings/connections" />}>
           Open Connections settings
@@ -136,7 +129,7 @@ export function DotPage() {
 }
 
 function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
-  const client = useMemo(() => new DotClient(serviceUrl), [serviceUrl]);
+  const [client] = useState(() => new DotClient(serviceUrl));
   const navigate = useNavigate();
   const diagnostics = useBotDiagnostics();
   const [session, setSession] = useState<DotSession | null>(() => {
@@ -147,6 +140,9 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const [connected, setConnected] = useState(false);
   const [connection, setConnection] = useState<PendingConnection | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const desktopSignInAvailable = Boolean(
+    window.desktopBridge?.startDotSignIn && window.desktopBridge?.awaitDotSignIn,
+  );
   const threadId = state?.streamId ?? "dot";
   const pendingPromptRuns = useRef(new Map<string, string>());
   const [busyPause, setBusyPause] = useState(false);
@@ -186,45 +182,42 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const activeOwner = useRef(session?.ownerToken);
   const mounted = useRef(true);
 
-  const saveSession = useCallback(
-    (value: DotSession | null) => {
-      if (!mounted.current) return;
-      const storedSession = readDotSession(sessionStorage, serviceUrl);
-      // Another workspace may have replaced the persisted session while this one was waiting.
-      if (value || !storedSession || storedSession.ownerToken === activeOwner.current)
-        saveDotSession(sessionStorage, serviceUrl, value);
-      const ownerChanged = activeOwner.current !== value?.ownerToken;
-      activeOwner.current = value?.ownerToken;
-      setSession(value);
-      if (!value || ownerChanged) {
-        setState(null);
-        setDraft("");
-        setSending(false);
-        setBusyApproval(null);
-        setAttachments([]);
-        setUploading(false);
-        setUploadStatus(null);
-        setPreferenceRun(null);
-        pendingRoutine.current = null;
-        setBusyPause(false);
-        setError(null);
-        setConnected(false);
-        pendingMessage.current = null;
-        setReplyTarget(null);
-        setReplyStatus(null);
-        pendingPromptRuns.current.clear();
-        setBusyFeedback(null);
-        acceptedRunIds.current.clear();
-        taskEvidence.current.clear();
-        approvalEvidence.current.clear();
-        runEvidence.current.clear();
-        openingItems.current.clear();
-        pendingOpen.current = null;
-        latestSnapshot.current = null;
-      }
-    },
-    [serviceUrl],
-  );
+  const saveSession = useStableCallback((value: DotSession | null) => {
+    if (!mounted.current) return;
+    const storedSession = readDotSession(sessionStorage, serviceUrl);
+    // Another workspace may have replaced the persisted session while this one was waiting.
+    if (value || !storedSession || storedSession.ownerToken === activeOwner.current)
+      saveDotSession(sessionStorage, serviceUrl, value);
+    const ownerChanged = activeOwner.current !== value?.ownerToken;
+    activeOwner.current = value?.ownerToken;
+    setSession(value);
+    if (!value || ownerChanged) {
+      setState(null);
+      setDraft("");
+      setSending(false);
+      setBusyApproval(null);
+      setAttachments([]);
+      setUploading(false);
+      setUploadStatus(null);
+      setPreferenceRun(null);
+      pendingRoutine.current = null;
+      setBusyPause(false);
+      setError(null);
+      setConnected(false);
+      pendingMessage.current = null;
+      setReplyTarget(null);
+      setReplyStatus(null);
+      pendingPromptRuns.current.clear();
+      setBusyFeedback(null);
+      acceptedRunIds.current.clear();
+      taskEvidence.current.clear();
+      approvalEvidence.current.clear();
+      runEvidence.current.clear();
+      openingItems.current.clear();
+      pendingOpen.current = null;
+      latestSnapshot.current = null;
+    }
+  });
 
   useEffect(() => {
     mounted.current = true;
@@ -233,18 +226,14 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     };
   }, []);
 
-  const reportError = useCallback(
-    // Pass the owner token a request used: a late failure from a replaced session must not touch the current one.
-    (cause: unknown, ownerToken?: string) => {
-      if (!mounted.current) return;
-      if (ownerToken !== undefined && ownerToken !== activeOwner.current) return;
-      if (cause instanceof DotApiError && cause.status === 401) saveSession(null);
-      setError(cause instanceof Error ? cause.message : "Could not reach your bot.");
-    },
-    [saveSession],
-  );
+  const reportError = useStableCallback((cause: unknown, ownerToken?: string) => {
+    if (!mounted.current) return;
+    if (ownerToken !== undefined && ownerToken !== activeOwner.current) return;
+    if (cause instanceof DotApiError && cause.status === 401) saveSession(null);
+    setError(cause instanceof Error ? cause.message : "Could not reach your bot.");
+  });
 
-  const refresh = useCallback(async () => {
+  const refresh = useStableCallback(async () => {
     if (!session || activeOwner.current !== session.ownerToken || !mounted.current) return;
     const requestSequence = ++stateRequestSequence.current;
     try {
@@ -367,9 +356,10 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       setConnected(false);
       reportError(cause, session.ownerToken);
     }
-  }, [client, reportError, session]);
+  });
 
   useEffect(() => {
+    if (!session) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
@@ -381,7 +371,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [refresh]);
+  }, [refresh, session]);
 
   useEffect(() => {
     if (!connection) return;
@@ -403,7 +393,10 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                 : "Sign-in failed. Please try again.",
             );
           result = await client.pollConnection(connection, returned.code);
-        } else result = await client.pollConnection(connection);
+        } else
+          throw new Error(
+            "Sign-in for this pilot requires the desktop Harness. Open TritonAI Bot on your computer.",
+          );
         if (cancelled) return;
         if (result) {
           saveSession(result);
@@ -432,7 +425,9 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     // Owned here until the connection effect takes it over.
     let listener: string | undefined;
     try {
-      listener = await window.desktopBridge?.startDotSignIn?.();
+      if (!desktopSignInAvailable)
+        throw new Error("Sign-in for this pilot requires the desktop Harness.");
+      listener = await window.desktopBridge!.startDotSignIn!();
       const pending = await client.startConnection(listener);
       if (!mounted.current) return;
       if (pending.redirectUri) listener = undefined;
@@ -446,23 +441,13 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     }
   };
 
-  const runs = useMemo(
-    () =>
-      (state?.runs ?? [])
-        .filter((run) => run.status !== "cancelled")
-        .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt)),
-    [state],
-  );
+  const runs = (state?.runs ?? [])
+    .filter((run) => run.status !== "cancelled")
+    .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-  const feedbackByRun = useMemo(
-    () => new Map((state?.feedback ?? []).map((item) => [item.outputId, item])),
-    [state],
-  );
+  const feedbackByRun = new Map((state?.feedback ?? []).map((item) => [item.outputId, item]));
 
-  const tasksById = useMemo(
-    () => new Map((state?.tasks ?? []).map((task) => [task.taskId, task])),
-    [state?.tasks],
-  );
+  const tasksById = new Map((state?.tasks ?? []).map((task) => [task.taskId, task]));
 
   useEffect(() => {
     if (runs.length || sending) chatEndRef.current?.scrollIntoView({ block: "end" });
@@ -665,7 +650,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     mutate((owner) => client.responsibility(owner, input));
   const memoryEdit = (input: DotMemoryInput) => mutate((owner) => client.editMemory(owner, input));
 
-  const openItem = useCallback((kind: string, id: string) => {
+  const openItem = useStableCallback((kind: string, id: string) => {
     const element = document.getElementById(`bot-${kind}-${id}`);
     if (!element) return;
     if (element instanceof HTMLDetailsElement) element.open = true;
@@ -676,7 +661,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     }
     element.scrollIntoView({ block: "nearest" });
     element.focus();
-  }, []);
+  });
   useEffect(() => {
     const target = pendingOpen.current;
     if (!target || activeOwner.current !== target.ownerToken) return;
@@ -1017,7 +1002,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                   ? "Your campus bot"
                   : state?.microsoft?.available === false
                     ? (state.user.email ?? session.email)
-                    : "Synced with Teams"}
+                    : (state?.user.email ?? session.email)}
               </p>
             </div>
           </div>
@@ -1066,8 +1051,8 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
           <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center gap-4 px-5 text-center">
             <h2 className="text-lg font-semibold">Connect to your TritonAI Bot</h2>
             <p className="max-w-sm text-sm text-muted-foreground">
-              Sign in with your UC San Diego account to get your own personal bot: chat, review
-              approvals, and keep your work moving.
+              Sign in with your own UC San Diego account to use your personal bot. Microsoft access
+              and running tasks on this computer each need your separate consent.
             </p>
             {connection ? (
               <>
@@ -1095,9 +1080,20 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                 </Button>
               </>
             ) : (
-              <Button onClick={() => void signIn()} disabled={connecting}>
-                {connecting ? "Opening sign-in…" : "Sign in with UC San Diego"}
-              </Button>
+              <>
+                <Button
+                  onClick={() => void signIn()}
+                  disabled={connecting || !desktopSignInAvailable}
+                >
+                  {connecting ? "Opening sign-in…" : "Sign in with UC San Diego"}
+                </Button>
+                {!desktopSignInAvailable ? (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    Sign-in for this pilot requires the desktop Harness. Open TritonAI Bot on your
+                    computer.
+                  </p>
+                ) : null}
+              </>
             )}
             {error && (
               <p role="alert" className="text-sm text-destructive">
@@ -1345,7 +1341,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                       </Button>
                     </div>
                   )}
-                  <BotMicrosoftBanner
+                  <BotMicrosoftConnection
                     microsoft={state?.microsoft}
                     connectionsUrl={`${serviceUrl}/connections`}
                   />
