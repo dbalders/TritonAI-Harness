@@ -68,7 +68,7 @@ const layer = (baseDir: string) =>
       getThreadShell: () => Effect.succeed(null),
     }),
     TeamMessageGate.layerMemory(),
-    ServerSettings.layerTest({ memoryEnabled: true }),
+    ServerSettings.layerTest({ memoryEnabled: true, experimentalTeamsEnabled: true }),
     Layer.mock(TextGeneration)({
       generateTeamDailyMemory: (input) =>
         Effect.succeed({

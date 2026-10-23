@@ -55,6 +55,7 @@ it.layer(NodeServices.layer)("memory activity", (it) => {
         const layer = Layer.mergeAll(
           ServerSettings.layerTest({
             memoryEnabled: true,
+            experimentalTeamsEnabled: true,
             providerInstances: {
               [ProviderInstanceId.make("codex")]: {
                 driver: ProviderDriverKind.make("codex"),
