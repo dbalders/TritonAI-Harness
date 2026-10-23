@@ -214,7 +214,7 @@ $null = [Threading.ManualResetEvent]::new($false).WaitOne()`;
 }
 
 describe("native managed Codex lifecycle", () => {
-  it("reads the same native boot GUID in separate processes", async () => {
+  it("reads the same native boot identity in separate processes", async () => {
     const f = await fixture();
     try {
       const first = f.start("boot-id");
@@ -225,7 +225,9 @@ describe("native managed Codex lifecycle", () => {
       await second.exited;
       expect(left).toMatchObject({
         phase: "done",
-        output: expect.stringMatching(/^[a-f0-9-]{36}$/iu),
+        output: expect.stringMatching(
+          nativePlatform === "win32" ? /^windows-boot:\d+$/u : /^[a-f0-9-]{36}$/iu,
+        ),
       });
       expect(right).toEqual(left);
     } finally {

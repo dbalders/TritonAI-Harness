@@ -143,23 +143,21 @@ const removeReleasedLease = (fs: FileSystem.FileSystem, directory: string) =>
         Effect.logWarning("Could not remove a released managed Codex session lease", { cause }),
       ),
     );
-// SystemBootEnvironmentInformation (90) returns the kernel's boot GUID, independent of wall time.
-// Layout: https://github.com/winsiderss/phnt/blob/master/ntexapi.h
+// ProcessTelemetryIdInformation (64) exposes the current OS boot sequence, independent of wall time.
+// Layout: https://learn.microsoft.com/windows/win32/devnotes/process_telemetry_id_information_type
 const WINDOWS_BOOT_ID_COMMAND = `
 $ErrorActionPreference = 'Stop'
 Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class TritonAIBootIdentity {
- [DllImport("ntdll.dll")] private static extern int NtQuerySystemInformation(int kind, [Out] byte[] data, int length, out int returned);
+ [DllImport("ntdll.dll")] private static extern int NtQueryInformationProcess(IntPtr process, int kind, [Out] byte[] data, int length, out int returned);
  public static string Read() {
-  byte[] data = new byte[32]; int returned;
-  int status = NtQuerySystemInformation(90, data, data.Length, out returned);
-  if (status != 0 || returned < 16) throw new InvalidOperationException("Boot identity unavailable");
-  byte[] identity = new byte[16]; Array.Copy(data, identity, identity.Length);
-  Guid id = new Guid(identity);
-  if (id == Guid.Empty) throw new InvalidOperationException("Boot identity unavailable");
-  return id.ToString("D");
+  byte[] data = new byte[65536]; int returned;
+  int status = NtQueryInformationProcess(new IntPtr(-1), 64, data, data.Length, out returned);
+  // BootId follows the architecture-independent header through SessionId at byte 60.
+  if (status != 0 || returned < 64 || BitConverter.ToUInt32(data, 0) < 64) throw new InvalidOperationException("Boot identity unavailable");
+  return "windows-boot:" + BitConverter.ToUInt32(data, 60).ToString(System.Globalization.CultureInfo.InvariantCulture);
  }
 }
 '@

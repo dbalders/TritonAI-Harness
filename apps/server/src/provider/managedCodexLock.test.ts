@@ -185,25 +185,29 @@ it.layer(NodeServices.layer)("managed Codex activation ownership", (it) => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect("retains an incomplete PID handoff until a verified reboot", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "codex-boot-test-" });
-      const boot = NodeCrypto.createHash("sha256").update("old boot").digest("hex");
-      const lease = path.join(root, `.tritonai-codex-session.999999.${boot}.pending`);
-      yield* fs.makeDirectory(lease);
-      const deferred = yield* withManagedCodexLock(root, assertManagedCodexIdle(root)).pipe(
-        Effect.provideService(ManagedCodexBootId, Effect.succeed("old boot")),
-        Effect.exit,
-      );
-      expect(deferred._tag).toBe("Failure");
-      expect(yield* fs.exists(lease)).toBe(true);
-      yield* withManagedCodexLock(root, assertManagedCodexIdle(root)).pipe(
-        Effect.provideService(ManagedCodexBootId, Effect.succeed("new boot")),
-      );
-      expect(yield* fs.exists(lease)).toBe(false);
-    }).pipe(Effect.scoped),
+  it.effect.each(["UUID", "Windows boot sequence"])(
+    "retains an incomplete PID handoff until a verified reboot (%s)",
+    (source) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "codex-boot-test-" });
+        const oldBoot = source === "UUID" ? "old boot" : "windows-boot:41";
+        const newBoot = source === "UUID" ? "new boot" : "windows-boot:42";
+        const boot = NodeCrypto.createHash("sha256").update(oldBoot).digest("hex");
+        const lease = path.join(root, `.tritonai-codex-session.999999.${boot}.pending`);
+        yield* fs.makeDirectory(lease);
+        const deferred = yield* withManagedCodexLock(root, assertManagedCodexIdle(root)).pipe(
+          Effect.provideService(ManagedCodexBootId, Effect.succeed(oldBoot)),
+          Effect.exit,
+        );
+        expect(deferred._tag).toBe("Failure");
+        expect(yield* fs.exists(lease)).toBe(true);
+        yield* withManagedCodexLock(root, assertManagedCodexIdle(root)).pipe(
+          Effect.provideService(ManagedCodexBootId, Effect.succeed(newBoot)),
+        );
+        expect(yield* fs.exists(lease)).toBe(false);
+      }).pipe(Effect.scoped),
   );
   it.effect("retains a recorded live child even when the boot identity differs", () =>
     Effect.gen(function* () {
