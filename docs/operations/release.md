@@ -65,8 +65,11 @@ The workflow:
     `publish=true`, publishes it, updates version metadata on `main`, and announces the release.
 
 Stable and nightly workflows both build macOS and Windows on standard GitHub-hosted runners.
-Stable uses the same signing credentials, plugin configuration, and managed API URL as nightly,
-but stamps the stable version and produces stable app identity and update manifests. The
+Stable uses the same signing credentials and managed API URL as nightly, but stamps the stable
+version and produces stable app identity and update manifests. Stable reads the
+`RELEASE_PLUGIN_CONFIGURATION_JSON` repository secret; nightly reads
+`NIGHTLY_PLUGIN_CONFIGURATION_JSON`. Each configuration's keys must exactly match its own
+reviewed catalog, so changing the stable composition does not replace nightly's configuration. The
 separate `nightly.yml` workflow cannot publish a stable release or update stable version metadata.
 
 ## Local source staging and release scope

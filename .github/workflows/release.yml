@@ -230,7 +230,7 @@ jobs:
       - name: Execute managed plugin configuration validation
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
-          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
         run: |
           node scripts/validate-managed-plugin-configuration.ts \
             --receipt .release-input/managed-plugin-validation-receipt.json
@@ -279,7 +279,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
-          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
         run: |
           set -euo pipefail
           node scripts/update-release-package-versions.ts "$RELEASE_VERSION"
@@ -462,7 +462,7 @@ jobs:
         shell: bash
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
-          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
           UCSD_AI_BASE_URL: ${{ secrets.NIGHTLY_UCSD_AI_BASE_URL }}
           T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
@@ -633,7 +633,7 @@ jobs:
       - name: Prepare source once
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
-          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
           UCSD_AI_BASE_URL: ${{ secrets.NIGHTLY_UCSD_AI_BASE_URL }}
           T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: ${{ steps.resource_monitor_cache.outputs.cache-hit == 'true' }}
         run: |-
