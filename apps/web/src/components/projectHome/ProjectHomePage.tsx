@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -129,10 +129,7 @@ function ProjectMemory({
 }) {
   const navigate = useNavigate();
   const [showAll, setShowAll] = useState(false);
-  const note = useMemo(
-    () => projectMemoryNote(memory.data?.markdown ?? ""),
-    [memory.data?.markdown],
-  );
+  const note = projectMemoryNote(memory.data?.markdown ?? "");
   const history = showAll ? note.history : note.history.slice(0, HISTORY_SHOWN);
   const refreshing = memory.isPending && Boolean(memory.data);
   return (
@@ -293,52 +290,53 @@ function ProjectOverview({
     if (navigationInFlight.current) return;
     navigationInFlight.current = true;
     setOpening(action);
-    try {
-      await request();
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not open new thread",
-        description: error instanceof Error ? error.message : "Please try again.",
-      });
-    } finally {
+    return await (async () => {
+      try {
+        await request();
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not open new thread",
+          description: error instanceof Error ? error.message : "Please try again.",
+        });
+      }
+    })().finally(async () => {
       navigationInFlight.current = false;
       setOpening(null);
-    }
+    });
   };
   const openFolder = async () => {
     if (!canOpenFolder || folderInFlight.current) return;
     folderInFlight.current = true;
     setOpeningFolder(true);
-    try {
-      const result = await openInEditor({
-        environmentId: project.environmentId,
-        input: { cwd: project.workspaceRoot, editor: "file-manager" },
-      });
-      if (result._tag === "Success") {
+    return await (async () => {
+      try {
+        const result = await openInEditor({
+          environmentId: project.environmentId,
+          input: { cwd: project.workspaceRoot, editor: "file-manager" },
+        });
+        if (result._tag === "Success") {
+          toastManager.add({
+            type: "success",
+            title: "Folder opened",
+            description: `Opened on ${environmentLabel}.`,
+          });
+        }
+      } catch (error) {
         toastManager.add({
-          type: "success",
-          title: "Folder opened",
-          description: `Opened on ${environmentLabel}.`,
+          type: "error",
+          title: "Could not open project folder",
+          description: error instanceof Error ? error.message : "Please try again.",
         });
       }
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not open project folder",
-        description: error instanceof Error ? error.message : "Please try again.",
-      });
-    } finally {
+    })().finally(async () => {
       folderInFlight.current = false;
       setOpeningFolder(false);
-    }
+    });
   };
-  const refs = useMemo(
-    () => [scopeProjectRef(project.environmentId, project.id)],
-    [project.environmentId, project.id],
-  );
+  const refs = [scopeProjectRef(project.environmentId, project.id)];
   const threads = useThreadShellsForProjectRefs(refs);
-  const view = useMemo(() => projectHomeThreads(threads), [threads]);
+  const view = projectHomeThreads(threads);
   const memory = useEnvironmentQuery(
     connected
       ? serverEnvironment.projectMemory({
@@ -354,6 +352,8 @@ function ProjectOverview({
     projectId: project.id,
     connected,
     supported: overviewSupported,
+    feedbackSupported:
+      environment?.serverConfig?.environment.capabilities.projectNextStepFeedback === true,
   });
   const openNextStep = (step: ProjectNextStep) => {
     const saved = overview.snapshot?.overview;
@@ -378,7 +378,7 @@ function ProjectOverview({
     if (previousCompletionKey.current === completionKey) return;
     previousCompletionKey.current = completionKey;
     if (connected) refreshMemory();
-  }, [completionKey, connected, refreshMemory]);
+  }, [completionKey, connected, refreshMemory, previousCompletionKey]);
   const reports = new Map(
     memory.data?.recentUpdates.map((report) => [report.threadId, report.text]) ?? [],
   );

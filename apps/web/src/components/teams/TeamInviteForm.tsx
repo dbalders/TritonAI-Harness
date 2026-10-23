@@ -80,7 +80,7 @@ export function TeamInviteForm({
         }}
       >
         <label className="min-w-44 flex-1 text-sm">
-          Invite UCSD staff
+          Invite a UCSD account
           <Input
             className="mt-1"
             type="email"

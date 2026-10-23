@@ -7,7 +7,7 @@ import { Children, cloneElement, isValidElement, type ReactNode } from "react";
 import { SKILL_CHIP_ICON_SVG } from "../composerInlineChip";
 import { ContextChip, ContextChipLabel } from "../ContextChip";
 
-export function SkillInlineText(props: { text: string; skills: ReadonlyArray<InlineSkill> }) {
+function SkillInlineText(props: { text: string; skills: ReadonlyArray<InlineSkill> }) {
   const nodes: ReactNode[] = [];
   let cursor = 0;
 
@@ -65,7 +65,6 @@ function SkillChip(props: { skill: InlineSkill; rawText: string }) {
   );
 }
 
-/** The skill glyph; the surrounding chip sizes its svg. */
 export function SkillChipIcon() {
   return (
     <span

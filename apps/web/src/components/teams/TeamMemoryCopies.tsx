@@ -1,5 +1,6 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
 import type { EnvironmentId, TeamMemoryMirror, TeamProjectCommand } from "@t3tools/contracts";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../ui/button";
 import { useTeamProjectRequest } from "./TeamProjects";
 
@@ -16,12 +17,11 @@ export interface TeamMemoryCopies {
 export function useTeamMemoryCopies(environmentId: EnvironmentId): TeamMemoryCopies {
   const { run, busy, error } = useTeamProjectRequest(environmentId);
   const [mirrors, setMirrors] = useState<readonly TeamMemoryMirror[] | null>(null);
-  const apply = useCallback<TeamMemoryCopies["apply"]>(
-    async (command) => {
+  const apply: TeamMemoryCopies["apply"] = useStableCallback(
+    async (command: Parameters<TeamMemoryCopies["apply"]>[0]) => {
       const result = await run(command);
       if (result && !("error" in result) && result.mirrors) setMirrors(result.mirrors);
     },
-    [run],
   );
   useEffect(() => {
     void apply({ action: "mirror-list" });

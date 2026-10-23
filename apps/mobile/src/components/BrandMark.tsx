@@ -1,7 +1,7 @@
 import Constants from "expo-constants";
 import { View } from "react-native";
 
-import { AppText as Text } from "./AppText";
+import { AppText as Text } from "./ui/AppText";
 import { HarnessLogo } from "./HarnessLogo";
 
 const appVariant = Constants.expoConfig?.extra?.appVariant;

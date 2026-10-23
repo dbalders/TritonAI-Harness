@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Synchronous SHA-256 document fingerprints and campus identity keys use Node crypto.
+import * as ExperimentalTeams from "./experimentalTeams.ts";
 import {
   type AccountStatus,
   type OrchestrationV2Command,
@@ -214,6 +215,7 @@ export class TeamProjectService extends Context.Service<
 >()("t3/teams/TeamProjectService") {}
 
 export const make = Effect.gen(function* () {
+  const teamsAccess = yield* ExperimentalTeams.makeAccess;
   const account = yield* AccountService;
   const storage = yield* TeamStorageService;
   const secrets = yield* ServerSecretStore;
@@ -250,8 +252,8 @@ export const make = Effect.gen(function* () {
    * Makes a signed-in session the one team memory uses here. Another account only takes over
    * once the current one's session is no longer signed in as that account.
    */
-  const noteAccount = (sessionId: string) =>
-    Effect.gen(function* () {
+  const noteAccount = Effect.fn("TeamProjectService.noteAccount")(
+    function* (sessionId: string) {
       const status = yield* account.getStatus(sessionId);
       if (status.status !== "signed-in" || !status.profile) return;
       const identity = mirrorIdentityOf(status.profile);
@@ -275,7 +277,9 @@ export const make = Effect.gen(function* () {
           : DateTime.formatIso(yield* DateTime.now);
       const encoded = yield* encodeMemoryAccount({ sessionId, identity, since });
       yield* secrets.set(ACCOUNT_SECRET_NAME, new TextEncoder().encode(encoded));
-    }).pipe(Effect.ignore);
+    },
+    (effect) => Effect.ignore(effect),
+  );
   const mirrors = yield* makeTeamMemoryMirror({
     account,
     storage,
@@ -327,12 +331,13 @@ export const make = Effect.gen(function* () {
       Effect.mapError(() => failure("Team skill settings could not be saved securely.")),
     );
   /** Turns off the matching skills; callers hold `lock`. */
-  const removeEnabled = (matches: (entry: Enabled) => boolean) =>
-    Effect.gen(function* () {
-      const entries = yield* readEnabled;
-      const next = entries.filter((entry) => !matches(entry));
-      if (next.length !== entries.length) yield* writeEnabled(next);
-    });
+  const removeEnabled = Effect.fn("TeamProjectService.removeEnabled")(function* (
+    matches: (entry: Enabled) => boolean,
+  ) {
+    const entries = yield* readEnabled;
+    const next = entries.filter((entry) => !matches(entry));
+    if (next.length !== entries.length) yield* writeEnabled(next);
+  });
   const activeProject = (projectId: ProjectId) =>
     projects.getById(projectId).pipe(
       Effect.mapError(() => failure("Harness projects could not be read.")),
@@ -357,7 +362,9 @@ export const make = Effect.gen(function* () {
     sessionId: string,
     command: TeamCommand,
   ) {
+    yield* teamsAccess.requireEnabled;
     const result = yield* account.teams(sessionId, command);
+    yield* teamsAccess.requireEnabled;
     yield* noteAccount(sessionId);
     yield* detachArchived(
       [...result.teams, ...(result.team ? [result.team] : [])]
@@ -368,39 +375,43 @@ export const make = Effect.gen(function* () {
   });
   const archived = () => new TeamsError({ code: "not_found", message: "This team was archived." });
   /** Membership for the exact requested team; non-members get the same answer as unknown teams. */
-  const readyTeam = (sessionId: string, teamId: string) =>
-    Effect.gen(function* () {
-      const team = (yield* account.teams(sessionId, { action: "get", teamId })).team;
-      if (!team || team.id !== teamId)
-        return yield* new TeamsError({
-          code: "not_found",
-          message: "This team is not available to your account.",
+  const readyTeam = Effect.fn("TeamProjectService.readyTeam")(function* (
+    sessionId: string,
+    teamId: string,
+  ) {
+    const team = (yield* account.teams(sessionId, { action: "get", teamId })).team;
+    if (!team || team.id !== teamId)
+      return yield* new TeamsError({
+        code: "not_found",
+        message: "This team is not available to your account.",
+      });
+    if (team.state === "archived") {
+      yield* detachArchived([teamId]);
+      return yield* archived();
+    }
+    if (team.state !== "ready" || !team.storage)
+      return yield* failure("The team's private folder is not ready.");
+    return { ...team, storage: team.storage };
+  });
+  const listFor = Effect.fn("TeamProjectService.listFor")(function* (
+    team: { id: string; name: string },
+    links: readonly Link[],
+  ) {
+    const result: TeamProjectLink[] = [];
+    for (const link of links) {
+      if (link.teamId !== team.id) continue;
+      const project = yield* activeProject(link.projectId as ProjectId);
+      if (project)
+        result.push({
+          projectId: project.id,
+          projectTitle: project.title,
+          teamId: link.teamId,
+          teamName: team.name,
+          linkedAt: link.linkedAt,
         });
-      if (team.state === "archived") {
-        yield* detachArchived([teamId]);
-        return yield* archived();
-      }
-      if (team.state !== "ready" || !team.storage)
-        return yield* failure("The team's private folder is not ready.");
-      return { ...team, storage: team.storage };
-    });
-  const listFor = (team: { id: string; name: string }, links: readonly Link[]) =>
-    Effect.gen(function* () {
-      const result: TeamProjectLink[] = [];
-      for (const link of links) {
-        if (link.teamId !== team.id) continue;
-        const project = yield* activeProject(link.projectId as ProjectId);
-        if (project)
-          result.push({
-            projectId: project.id,
-            projectTitle: project.title,
-            teamId: link.teamId,
-            teamName: team.name,
-            linkedAt: link.linkedAt,
-          });
-      }
-      return result;
-    });
+    }
+    return result;
+  });
 
   const signedInProfile = (sessionId: string) =>
     account.getStatus(sessionId).pipe(
@@ -428,85 +439,91 @@ export const make = Effect.gen(function* () {
    * the same team and root it was issued under, and a ready member of that exact team now.
    * Owned references must also come from the same session and campus identity that received them.
    */
-  const authorizeIssued = (sessionId: string, entry: Issued, owned: boolean) =>
-    Effect.gen(function* () {
-      const profile = yield* signedInProfile(sessionId);
-      if (
-        owned &&
-        (entry.sessionId !== sessionId ||
-          entry.issuer !== profile.issuer ||
-          entry.subject !== profile.subject)
-      )
-        return yield* new TeamsError({
-          code: "sign_in_required",
-          message: "This team memory was added under another account. Remove it to send.",
-        });
-      const unchangedLink = Effect.gen(function* () {
-        if (!sameLink(entry.link, yield* linkFor(entry.projectId as ProjectId)))
-          return yield* new TeamsError({
-            code: "not_found",
-            message: "This project's team link changed since the memory was added.",
-          });
-        if (!(yield* activeProject(entry.projectId as ProjectId))) return yield* notLinked();
+  const authorizeIssued = Effect.fn("TeamProjectService.authorizeIssued")(function* (
+    sessionId: string,
+    entry: Issued,
+    owned: boolean,
+  ) {
+    yield* teamsAccess.requireEnabled;
+    const profile = yield* signedInProfile(sessionId);
+    if (
+      owned &&
+      (entry.sessionId !== sessionId ||
+        entry.issuer !== profile.issuer ||
+        entry.subject !== profile.subject)
+    )
+      return yield* new TeamsError({
+        code: "sign_in_required",
+        message: "This team memory was added under another account. Remove it to send.",
       });
-      yield* unchangedLink;
-      const team = yield* readyTeam(sessionId, entry.link.teamId);
-      const root = entry.link.storage;
-      if (
-        team.storage.tenantId.toLowerCase() !== root.tenantId.toLowerCase() ||
-        team.storage.siteId !== root.siteId ||
-        team.storage.driveId !== root.driveId ||
-        team.storage.folderId !== root.folderId
-      )
+    const unchangedLink = Effect.gen(function* () {
+      if (!sameLink(entry.link, yield* linkFor(entry.projectId as ProjectId)))
         return yield* new TeamsError({
-          code: "conflict",
-          message: "This team's folder changed since the memory was added.",
+          code: "not_found",
+          message: "This project's team link changed since the memory was added.",
         });
-      // An account switch or unlink that landed during the membership check wins.
-      const after = yield* signedInProfile(sessionId);
-      if (after.issuer !== profile.issuer || after.subject !== profile.subject)
-        return yield* memoryChanged();
-      yield* unchangedLink;
+      if (!(yield* activeProject(entry.projectId as ProjectId))) return yield* notLinked();
     });
+    yield* unchangedLink;
+    const team = yield* readyTeam(sessionId, entry.link.teamId);
+    const root = entry.link.storage;
+    if (
+      team.storage.tenantId.toLowerCase() !== root.tenantId.toLowerCase() ||
+      team.storage.siteId !== root.siteId ||
+      team.storage.driveId !== root.driveId ||
+      team.storage.folderId !== root.folderId
+    )
+      return yield* new TeamsError({
+        code: "conflict",
+        message: "This team's folder changed since the memory was added.",
+      });
+    // An account switch or unlink that landed during the membership check wins.
+    const after = yield* signedInProfile(sessionId);
+    if (after.issuer !== profile.issuer || after.subject !== profile.subject)
+      return yield* memoryChanged();
+    yield* unchangedLink;
+    // These reads can wait behind account or link updates. A pause that lands
+    // during them must win before any team content reaches the provider.
+    yield* teamsAccess.requireEnabled;
+  });
   const remember = gate.remember;
 
   /**
    * The caller's link, team, and own skills for a project, after the membership check every use
    * of them makes. Losing the team turns the caller's skills for the project off.
    */
-  const projectSkills = (
+  const projectSkills = Effect.fn("TeamProjectService.projectSkills")(function* (
     sessionId: string,
     projectId: ProjectId,
     profile: { issuer: string; subject: string },
-  ) =>
-    Effect.gen(function* () {
-      const link = yield* linkFor(projectId);
-      if (!link || !(yield* activeProject(projectId))) return yield* notLinked();
-      const identity = identityOf(profile);
-      const mineFor = (entry: Enabled) =>
-        entry.identity === identity && entry.link.projectId === projectId;
-      const team = yield* readyTeam(sessionId, link.teamId).pipe(
-        Effect.tapError((error) =>
-          lostTeam(error) ? lock.withPermits(1)(removeEnabled(mineFor)) : Effect.void,
-        ),
-      );
-      const root = link.storage;
-      if (
-        team.storage.tenantId.toLowerCase() !== root.tenantId.toLowerCase() ||
-        team.storage.siteId !== root.siteId ||
-        team.storage.driveId !== root.driveId ||
-        team.storage.folderId !== root.folderId
-      )
-        return yield* new TeamsError({
-          code: "conflict",
-          message: "This project's team folder changed. Unlink the project and link it again.",
-        });
-      // Skills approved under an earlier link of this project never apply to the current one.
-      const mine = (yield* readEnabled).filter(
-        (entry) => mineFor(entry) && sameLink(entry.link, link),
-      );
-      return { link, team, identity, mine };
-    });
+  ) {
+    const link = yield* linkFor(projectId);
+    if (!link || !(yield* activeProject(projectId))) return yield* notLinked();
+    const identity = identityOf(profile);
+    const mineFor = (entry: Enabled) =>
+      entry.identity === identity && entry.link.projectId === projectId;
+    const team = yield* readyTeam(sessionId, link.teamId).pipe(
+      Effect.tapError((error) =>
+        lostTeam(error) ? lock.withPermits(1)(removeEnabled(mineFor)) : Effect.void,
+      ),
+    );
+    const root = link.storage;
+    if (
+      team.storage.tenantId.toLowerCase() !== root.tenantId.toLowerCase() ||
+      team.storage.siteId !== root.siteId ||
+      team.storage.driveId !== root.driveId ||
+      team.storage.folderId !== root.folderId
+    )
+      return yield* new TeamsError({
+        code: "conflict",
+        message: "This project's team folder changed. Unlink the project and link it again.",
+      });
+    // Skills approved under an earlier link of this project never apply to the current one.
+    const mine = (yield* readEnabled).filter(
+      (entry) => mineFor(entry) && sameLink(entry.link, link),
+    );
+    return { link, team, identity, mine };
+  });
   /**
    * Rereads each of the caller's skills for the project now. A removed, changed, or hidden-text
    * document is withheld with its reason, as are all of them when this session has no working
@@ -584,6 +601,7 @@ export const make = Effect.gen(function* () {
     sessionId: string,
     command: OrchestrationV2Command,
   ) {
+    if (!(yield* teamsAccess.enabled)) return command;
     if (
       command.type !== "message.dispatch" ||
       command.createdBy !== "user" ||
@@ -788,6 +806,7 @@ export const make = Effect.gen(function* () {
       !sameLink(link, yield* linkFor(command.projectId))
     )
       return yield* memoryChanged();
+    yield* teamsAccess.requireEnabled;
     const approvedAt = DateTime.formatIso(yield* DateTime.now);
     return yield* lock.withPermits(1)(
       Effect.gen(function* () {
@@ -916,11 +935,13 @@ export const make = Effect.gen(function* () {
     yield* signedInProfile(sessionId);
     const link = yield* linkFor(projectId);
     if (!link) return { projects: [], storage: null };
-    const team = yield* account.teams(sessionId, { action: "get", teamId: link.teamId }).pipe(
-      Effect.map((result) => result.team),
-      // A check that can't complete is not evidence the team is gone.
-      Effect.catch((error) => (lostTeam(error) ? Effect.succeed(null) : Effect.fail(error))),
-    );
+    const team = !(yield* teamsAccess.enabled)
+      ? null
+      : yield* account.teams(sessionId, { action: "get", teamId: link.teamId }).pipe(
+          Effect.map((result) => result.team),
+          // A check that can't complete is not evidence the team is gone.
+          Effect.catch((error) => (lostTeam(error) ? Effect.succeed(null) : Effect.fail(error))),
+        );
     if (team?.id === link.teamId && team.state === "ready")
       return yield* new TeamsError({
         code: "conflict",
@@ -1008,84 +1029,86 @@ export const make = Effect.gen(function* () {
     }
     return { projects: [], storage: null };
   });
-  const commandReferences = (sessionId: string, command: OrchestrationV2Command) =>
-    Effect.gen(function* () {
-      if (command.type !== "message.dispatch" && command.type !== "queued-run.edit")
-        return [] as readonly Issued[];
-      const references = new Map<string, Issued>();
-      if (command.type === "queued-run.edit") {
-        const records = yield* projections
-          .getThreadRecords(command.threadId, ["runs", "messages"])
-          .pipe(Effect.mapError(() => failure("The queued message could not be read.")));
-        const run = records.runs.find((candidate) => candidate.id === command.runId);
-        if (run)
-          for (const entry of yield* gate.previous(run.userMessageId))
-            references.set(entry.id, entry);
-      }
-      for (const id of command.teamReferences ?? []) {
-        const entry = references.get(id) ?? (yield* gate.get(id));
-        if (!entry)
-          return yield* new TeamsError({
-            code: "not_found",
-            message: "This team memory has expired. Remove it and add it again.",
-          });
-        references.set(entry.id, entry);
-      }
-      const declaredHeaders = new Set(
-        [...references.values()].map((entry) => teamContextHeader(entry.block)),
-      );
-      const blocks = teamContextBlocks(command.text);
-      if (blocks.length > 0) {
-        const thread = yield* projections
-          .getThreadShell(command.threadId)
-          .pipe(Effect.mapError(() => failure("The thread could not be read.")));
-        if (!thread) return yield* notLinked();
-        const profile = yield* signedInProfile(sessionId);
-        const matches = yield* gate.matching({
-          text: command.text,
-          sessionId,
-          issuer: profile.issuer,
-          subject: profile.subject,
-          projectId: thread.projectId,
-        });
-        // Explicit IDs (and durable queue snapshots) keep their authority. A different
-        // issuance of identical text must not append an unrelated session/project.
-        const coveredBlocks = new Set([...references.values()].map((entry) => entry.block));
-        for (const entry of matches)
-          if (!coveredBlocks.has(entry.block)) {
-            references.set(entry.id, entry);
-            coveredBlocks.add(entry.block);
-          }
-        // Every complete wrapper needs its own source: an exact owned issuance,
-        // or the original source header of a declared reference whose body was edited.
-        // A valid reference must never exempt unrelated, expired team context.
-        const matchingBlocks = new Set(matches.map((entry) => entry.block));
-        if (
-          blocks.some(
-            (block) => !matchingBlocks.has(block) && !declaredHeaders.has(teamContextHeader(block)),
-          )
-        )
-          return yield* new TeamsError({
-            code: "not_found",
-            message:
-              "This team context has expired or could not be verified. Remove the team context and add it again before sending.",
-          });
-      }
-      if (references.size > MAX_TEAM_MESSAGE_REFERENCES)
+  const commandReferences = Effect.fn("TeamProjectService.commandReferences")(function* (
+    sessionId: string,
+    command: OrchestrationV2Command,
+  ) {
+    if (command.type !== "message.dispatch" && command.type !== "queued-run.edit")
+      return [] as readonly Issued[];
+    const references = new Map<string, Issued>();
+    if (command.type === "queued-run.edit") {
+      const records = yield* projections
+        .getThreadRecords(command.threadId, ["runs", "messages"])
+        .pipe(Effect.mapError(() => failure("The queued message could not be read.")));
+      const run = records.runs.find((candidate) => candidate.id === command.runId);
+      if (run)
+        for (const entry of yield* gate.previous(run.userMessageId))
+          references.set(entry.id, entry);
+    }
+    for (const id of command.teamReferences ?? []) {
+      const entry = references.get(id) ?? (yield* gate.get(id));
+      if (!entry)
         return yield* new TeamsError({
-          code: "invalid_request",
-          message:
-            "This message has too many team references. Remove some team context before sending.",
+          code: "not_found",
+          message: "This team memory has expired. Remove it and add it again.",
         });
-      for (const entry of references.values()) {
-        yield* authorizeIssued(sessionId, entry, true);
-        const thread = yield* projections
-          .getThreadShell(command.threadId)
-          .pipe(Effect.mapError(() => failure("The thread could not be read.")));
-        if (thread?.projectId !== entry.projectId) return yield* notLinked();
-      }
-      return [...references.values()];
-    });
+      references.set(entry.id, entry);
+    }
+    const declaredHeaders = new Set(
+      [...references.values()].map((entry) => teamContextHeader(entry.block)),
+    );
+    const blocks = teamContextBlocks(command.text);
+    if (blocks.length > 0) {
+      const thread = yield* projections
+        .getThreadShell(command.threadId)
+        .pipe(Effect.mapError(() => failure("The thread could not be read.")));
+      if (!thread) return yield* notLinked();
+      const profile = yield* signedInProfile(sessionId);
+      const matches = yield* gate.matching({
+        text: command.text,
+        sessionId,
+        issuer: profile.issuer,
+        subject: profile.subject,
+        projectId: thread.projectId,
+      });
+      // Explicit IDs (and durable queue snapshots) keep their authority. A different
+      // issuance of identical text must not append an unrelated session/project.
+      const coveredBlocks = new Set([...references.values()].map((entry) => entry.block));
+      for (const entry of matches)
+        if (!coveredBlocks.has(entry.block)) {
+          references.set(entry.id, entry);
+          coveredBlocks.add(entry.block);
+        }
+      // Every complete wrapper needs its own source: an exact owned issuance,
+      // or the original source header of a declared reference whose body was edited.
+      // A valid reference must never exempt unrelated, expired team context.
+      const matchingBlocks = new Set(matches.map((entry) => entry.block));
+      if (
+        blocks.some(
+          (block) => !matchingBlocks.has(block) && !declaredHeaders.has(teamContextHeader(block)),
+        )
+      )
+        return yield* new TeamsError({
+          code: "not_found",
+          message:
+            "This team context has expired or could not be verified. Remove the team context and add it again before sending.",
+        });
+    }
+    if (references.size > MAX_TEAM_MESSAGE_REFERENCES)
+      return yield* new TeamsError({
+        code: "invalid_request",
+        message:
+          "This message has too many team references. Remove some team context before sending.",
+      });
+    for (const entry of references.values()) {
+      yield* authorizeIssued(sessionId, entry, true);
+      const thread = yield* projections
+        .getThreadShell(command.threadId)
+        .pipe(Effect.mapError(() => failure("The thread could not be read.")));
+      if (thread?.projectId !== entry.projectId) return yield* notLinked();
+    }
+    return [...references.values()];
+  });
   const authorizeOutgoingCommand = Effect.fn("TeamProjectService.authorizeOutgoingCommand")(
     function* (sessionId: string, command: OrchestrationV2Command) {
       yield* commandReferences(sessionId, command);
@@ -1130,6 +1153,34 @@ export const make = Effect.gen(function* () {
     sessionId: string,
     command: TeamProjectCommand,
   ) {
+    if (!(yield* teamsAccess.enabled)) {
+      if (command.action === "skill-disable") return yield* disableSkill(sessionId, command);
+      if (command.action === "skill-disable-all")
+        return yield* disableAllSkills(sessionId, command.projectId);
+      if (command.action === "remove-link") return yield* removeLink(sessionId, command.projectId);
+      if (command.action === "unbind") {
+        yield* signedInProfile(sessionId);
+        return yield* lock.withPermits(1)(
+          Effect.gen(function* () {
+            const links = yield* readLinks;
+            const link = links.find((entry) => entry.projectId === command.projectId);
+            if (link && link.teamId !== command.teamId) return yield* notLinked();
+            yield* writeLinks(links.filter((entry) => entry.projectId !== command.projectId));
+            yield* removeEnabled((entry) => entry.link.projectId === command.projectId);
+            return { projects: [], storage: null };
+          }),
+        );
+      }
+      if (command.action === "mirror-off") {
+        const profile = yield* signedInProfile(sessionId);
+        return {
+          projects: [],
+          storage: null,
+          mirrors: yield* mirrors.disable(profile, command.teamId),
+        };
+      }
+      yield* teamsAccess.requireEnabled;
+    }
     if (command.action === "list") {
       const team = yield* readyTeam(sessionId, command.teamId);
       return { projects: yield* listFor(team, yield* readLinks), storage: null };
@@ -1227,6 +1278,7 @@ export const make = Effect.gen(function* () {
                 sharingSince: linkedAt,
               },
             ];
+            yield* teamsAccess.requireEnabled;
             yield* writeLinks(next);
           }
           return { projects: yield* listFor(team, next), storage: null };
@@ -1451,6 +1503,8 @@ export const make = Effect.gen(function* () {
         )
       )
         return yield* memoryChanged();
+      // Reading the final approval can also wait after authorizeIssued returns.
+      yield* teamsAccess.requireEnabled;
     }),
   );
   return TeamProjectService.of({

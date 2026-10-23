@@ -11,6 +11,8 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as Account from "./AccountService.ts";
+import { withPrivacyCleanup } from "../teams/experimentalTeams.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { ServerSecretStore } from "./ServerSecretStore.ts";
 
 const serviceUrl = "https://accounts.example.test";
@@ -35,7 +37,9 @@ function fixture(overrides?: {
   serviceUrl?: string;
   allowInsecureLoopback?: boolean;
   beforeRead?: Effect.Effect<void>;
+  teamsEnabled?: boolean;
 }) {
+  let settings: ServerSettings.ServerSettingsService["Service"] | undefined;
   const values = new Map<string, Uint8Array>();
   const calls: { url: string; init: RequestInit | undefined }[] = [];
   let time = 1_800_000_000;
@@ -88,14 +92,23 @@ function fixture(overrides?: {
     advance: (seconds: number) => {
       time += seconds;
     },
-    make: Account.make({
-      serviceUrl: overrides?.serviceUrl ?? serviceUrl,
-      ...(overrides?.allowInsecureLoopback === undefined
-        ? {}
-        : { allowInsecureLoopback: overrides.allowInsecureLoopback }),
-      fetch: fetchImpl,
-      now: () => time,
-    }).pipe(Effect.provideService(ServerSecretStore, store)),
+    setTeamsEnabled: (enabled: boolean) =>
+      settings!.updateSettings({ experimentalTeamsEnabled: enabled }),
+    make: Effect.gen(function* () {
+      settings = yield* ServerSettings.ServerSettingsService;
+      return yield* Account.make({
+        serviceUrl: overrides?.serviceUrl ?? serviceUrl,
+        ...(overrides?.allowInsecureLoopback === undefined
+          ? {}
+          : { allowInsecureLoopback: overrides.allowInsecureLoopback }),
+        fetch: fetchImpl,
+        now: () => time,
+      }).pipe(Effect.provideService(ServerSecretStore, store));
+    }).pipe(
+      Effect.provide(
+        ServerSettings.layerTest({ experimentalTeamsEnabled: overrides?.teamsEnabled ?? true }),
+      ),
+    ),
   };
 }
 
@@ -106,6 +119,7 @@ describe("AccountService", () => {
       Effect.gen(function* () {
         const f = fixture();
         const configuredLayer = Account.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provide(Layer.succeed(ServerSecretStore, f.store)),
           Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
         );
@@ -128,6 +142,7 @@ describe("AccountService", () => {
       Effect.gen(function* () {
         const f = fixture();
         const configuredLayer = Account.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provide(Layer.succeed(ServerSecretStore, f.store)),
           Layer.provide(
             ConfigProvider.layer(
@@ -153,6 +168,7 @@ describe("AccountService", () => {
       const f = fixture();
       for (const value of ["not-a-url", `${serviceUrl}/prod`, "http://accounts.example.test"]) {
         const configuredLayer = Account.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provide(Layer.succeed(ServerSecretStore, f.store)),
           Layer.provide(
             ConfigProvider.layer(
@@ -176,6 +192,7 @@ describe("AccountService", () => {
     Effect.gen(function* () {
       const f = fixture();
       const configuredLayer = Account.layer.pipe(
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provide(Layer.succeed(ServerSecretStore, f.store)),
         Layer.provide(
           ConfigProvider.layer(
@@ -634,6 +651,74 @@ describe("account session renewal", () => {
 });
 
 describe("Teams account proxy", () => {
+  it.effect("blocks remote Teams calls while disabled and leaves sign-out available", () =>
+    Effect.gen(function* () {
+      const f = fixture({ teamsEnabled: false });
+      const account = yield* f.make;
+      yield* account.startLogin("a");
+      f.advance(5);
+      yield* account.pollLogin("a");
+      expect((yield* Effect.flip(account.teams("a", { action: "list" }))).code).toBe("forbidden");
+      expect(f.calls.some((call) => call.url.endsWith("/v1/teams"))).toBe(false);
+      expect((yield* account.signOut("a")).status).toBe("signed-out");
+    }),
+  );
+
+  it.effect("withholds a remote Teams response when the experiment turns off in flight", () =>
+    Effect.gen(function* () {
+      let finish!: (value: Response) => void;
+      let markRequested!: () => void;
+      const response = new Promise<Response>((resolve) => {
+        finish = resolve;
+      });
+      const requested = new Promise<void>((resolve) => {
+        markRequested = resolve;
+      });
+      const f = fixture({
+        fetch: async (input, init) => {
+          if (String(input).endsWith("/v1/teams")) {
+            markRequested();
+            return response;
+          }
+          return f.defaultFetch(input, init);
+        },
+      });
+      const account = yield* f.make;
+      yield* account.startLogin("a");
+      f.advance(5);
+      yield* account.pollLogin("a");
+      const listing = yield* Effect.forkChild(Effect.flip(account.teams("a", { action: "list" })));
+      yield* Effect.promise(() => requested);
+      yield* f.setTeamsEnabled(false);
+      finish(Response.json({ teams: [], invitations: [], team: null, invitationCode: null }));
+      expect((yield* Fiber.join(listing)).code).toBe("forbidden");
+    }),
+  );
+
+  it.effect("limits internal privacy authority to membership reads", () =>
+    Effect.gen(function* () {
+      const f = fixture({
+        teamsEnabled: false,
+        fetch: async (input, init) =>
+          String(input).endsWith("/v1/teams")
+            ? Response.json({ teams: [], invitations: [], team: null, invitationCode: null })
+            : f.defaultFetch(input, init),
+      });
+      const account = yield* f.make;
+      yield* account.startLogin("a");
+      f.advance(5);
+      yield* account.pollLogin("a");
+      expect((yield* withPrivacyCleanup(account.teams("a", { action: "list" }))).teams).toEqual([]);
+      const create = account.teams("a", {
+        action: "create",
+        requestId: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
+        name: "No bypass",
+      });
+      expect((yield* Effect.flip(withPrivacyCleanup(create))).code).toBe("forbidden");
+      expect(f.calls.filter((call) => call.url.endsWith("/v1/teams"))).toHaveLength(1);
+    }),
+  );
+
   it.effect("uses only the owning environment session's campus credential", () =>
     Effect.gen(function* () {
       let teamRequests = 0;

@@ -18,8 +18,9 @@ import {
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { useUcsdAccount } from "../../hooks/useUcsdAccount";
-import { useTeamsPermission } from "./useTeamsPermission";
+import { useTeamsEnabled } from "./useTeamsEnabled";
 import { MAX_DRAFT_TEAM_MEMORY } from "./teamMemoryDrafts";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -72,13 +73,14 @@ export function SignedIn({
   environmentId: EnvironmentId;
   children: (identity: string) => React.ReactNode;
 }) {
-  const allowed = useTeamsPermission(environmentId);
+  const allowed = useTeamsEnabled(environmentId);
   const { account } = useUcsdAccount(environmentId);
   const profile = account?.status === "signed-in" ? account.profile : null;
   if (!allowed)
     return (
       <p className="text-sm text-muted-foreground">
-        Your connection does not have permission to use Teams on this environment.
+        Teams is off or unavailable on this environment. Enable it in Settings → General →
+        Experimental.
       </p>
     );
   if (!account) return <p className="text-sm text-muted-foreground">Checking your account…</p>;
@@ -172,7 +174,7 @@ function ShareForm({
   const [notice, setNotice] = useState<string | null>(null);
   const pending = useRef<Share | null>(null);
   const [deviceId] = useState(teamDocumentDeviceId);
-  const loadTeams = async () => {
+  const loadTeams = useStableCallback(async () => {
     setTeamsError(null);
     const [response, linked] = await Promise.all([
       teamsRequest({ environmentId, input: { action: "list" } }),
@@ -194,11 +196,11 @@ function ShareForm({
         ? current
         : ((writable.find((team) => team.id === linkedId) ?? writable[0])?.id ?? ""),
     );
-  };
+  });
   useEffect(() => {
+    // The dialog remounts for another account or thread; drafts stay while it is open.
     void loadTeams();
-    // Loads once per mount; the dialog remounts for another account or thread.
-  }, []);
+  }, [loadTeams]);
   const team = teams?.find((entry) => entry.id === teamId) ?? null;
   const note = formatTeamNote({ title, project: projectTitle.slice(0, 80), text });
   const limitProblem = shareLimitProblem({ text, note });
@@ -445,7 +447,7 @@ function ContextPicker({
   const [notice, setNotice] = useState<string | null>(null);
   // A changed document's issued block, shown for review and inserted as-is if the user confirms.
   const [issued, setIssued] = useState<TeamMemoryReference | null>(null);
-  const load = async () => {
+  const load = useStableCallback(async () => {
     setNote(null);
     setIssued(null);
     setNotice(null);
@@ -465,7 +467,7 @@ function ContextPicker({
     if (problem) return setNotice(problem);
     setAuthors(listed.authors);
     setFiles((listed.storage?.files ?? []).map(({ path, summary }) => ({ path, summary })));
-  };
+  });
   // A document's row shows what was last read from it, including documents the list didn't summarize.
   const remember = (document: TeamDocument) =>
     setFiles(
@@ -477,9 +479,9 @@ function ContextPicker({
         ) ?? current,
     );
   useEffect(() => {
+    // The dialog remounts for another account or project; drafts stay while it is open.
     void load();
-    // Loads once per mount; the dialog remounts for another account or project.
-  }, []);
+  }, [load]);
   const read = async (path: string) => {
     setNotice(null);
     const result = await run({ action: "skill-read", projectId, path });

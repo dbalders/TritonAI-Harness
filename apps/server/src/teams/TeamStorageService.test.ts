@@ -7,12 +7,14 @@ import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/h
 import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import * as TeamStorage from "./TeamStorageService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 const teamId = "11111111-1111-4111-a111-111111111111";
 const config = { clientId: teamId, tenantId: "22222222-2222-4222-a222-222222222222" };
 // The main Harness Microsoft app, which the Microsoft 365 plugin signs in to.
 const directoryConfig = { ...config, clientId: "33333333-3333-4333-a333-333333333333" };
 function fixture() {
+  let settings: ServerSettings.ServerSettingsService["Service"] | undefined;
   let signedIn = true;
   let member = true;
   let revokeDuringList = false;
@@ -206,11 +208,14 @@ function fixture() {
     return form;
   };
   const makeWithDirectory = (directory: typeof config | null) =>
-    TeamStorage.make(config, directory).pipe(
-      Effect.provideService(AccountService, account),
-      Effect.provideService(ServerSecretStore, secrets),
-      Effect.provideService(HttpClient.HttpClient, http),
-    );
+    Effect.gen(function* () {
+      settings = yield* ServerSettings.ServerSettingsService;
+      return yield* TeamStorage.make(config, directory).pipe(
+        Effect.provideService(AccountService, account),
+        Effect.provideService(ServerSecretStore, secrets),
+        Effect.provideService(HttpClient.HttpClient, http),
+      );
+    }).pipe(Effect.provide(ServerSettings.layerTest({ experimentalTeamsEnabled: true })));
   const make = makeWithDirectory(null);
   const connect = (service: TeamStorage.TeamStorageService["Service"], sessionId = "a") =>
     Effect.gen(function* () {
@@ -220,6 +225,8 @@ function fixture() {
     });
   return {
     make,
+    setTeamsEnabled: (enabled: boolean) =>
+      settings!.updateSettings({ experimentalTeamsEnabled: enabled }),
     makeWithDirectory,
     connect,
     directoryRequests,
@@ -272,6 +279,27 @@ function fixture() {
 }
 
 describe("Teams storage service boundary", () => {
+  it.effect("keeps disabled status and disconnect local, and rejects new storage work", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const service = yield* f.make;
+      yield* f.connect(service);
+      yield* f.setTeamsEnabled(false);
+      f.graphRequests.length = 0;
+      expect((yield* service.execute("a", { action: "status", teamId })).status).toBe(
+        "disconnected",
+      );
+      expect(
+        (yield* Effect.flip(service.execute("a", { action: "list-files", teamId }))).code,
+      ).toBe("forbidden");
+      expect((yield* service.execute("a", { action: "disconnect", teamId })).status).toBe(
+        "disconnected",
+      );
+      expect(f.graphRequests).toHaveLength(0);
+      expect([...f.values.keys()].some((key) => key.startsWith("team-microsoft-"))).toBe(false);
+    }),
+  );
+
   it.effect(
     "reports temporary identity outages as retryable without discarding the connection",
     () =>

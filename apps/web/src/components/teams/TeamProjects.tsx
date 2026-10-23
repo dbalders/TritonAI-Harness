@@ -1,3 +1,4 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { mergeTeamStorageResult } from "@t3tools/client-runtime/state/server";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
@@ -10,7 +11,7 @@ import type {
   TeamStorageCommand,
   TeamStorageStatus,
 } from "@t3tools/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useProjects } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -39,29 +40,30 @@ export function useTeamProjectRequest(environmentId: EnvironmentId) {
     },
     [],
   );
-  const run = useCallback(
+  const run = useStableCallback(
     async (input: TeamProjectCommand): Promise<TeamProjectResult | { error: unknown } | null> => {
       if (inFlight.current) return null;
       inFlight.current = true;
       const requestId = ++generation.current;
       setBusy(true);
       setError(null);
-      try {
-        const response = await request({ environmentId, input });
-        if (response._tag !== "Success") throw squashAtomCommandFailure(response);
-        return generation.current === requestId ? response.value : null;
-      } catch (cause) {
-        if (generation.current !== requestId) return null;
-        setError(cause instanceof Error ? cause.message : "Team projects are unavailable.");
-        return { error: cause };
-      } finally {
-        if (generation.current === requestId) {
-          inFlight.current = false;
-          setBusy(false);
-        }
-      }
+      return request({ environmentId, input })
+        .then((response) => {
+          if (response._tag !== "Success") throw squashAtomCommandFailure(response);
+          return generation.current === requestId ? response.value : null;
+        })
+        .catch((cause: unknown) => {
+          if (generation.current !== requestId) return null;
+          setError(cause instanceof Error ? cause.message : "Team projects are unavailable.");
+          return { error: cause };
+        })
+        .finally(() => {
+          if (generation.current === requestId) {
+            inFlight.current = false;
+            setBusy(false);
+          }
+        });
     },
-    [environmentId, request],
   );
   return { run, busy, error };
 }
@@ -95,24 +97,21 @@ export function TeamProjects({
   useEffect(() => {
     onLinksChangeRef.current = onLinksChange;
   }, [onLinksChange]);
-  const apply = useCallback(
-    async (command: TeamProjectCommand) => {
-      const result = await run(command);
-      if (!result) return;
-      if ("error" in result) {
-        if (!retryable(result.error)) setLinks(null);
-        return;
-      }
-      setLinks(result.projects);
-      setConfirmUnlink(null);
-      if (command.action === "bind") setSharingAcknowledged(false);
-      onLinksChangeRef.current?.(result.projects.length > 0);
-      setOpen((current) =>
-        result.projects.some((link) => link.projectId === current?.projectId) ? current : null,
-      );
-    },
-    [run],
-  );
+  const apply = useStableCallback(async (command: TeamProjectCommand) => {
+    const result = await run(command);
+    if (!result) return;
+    if ("error" in result) {
+      if (!retryable(result.error)) setLinks(null);
+      return;
+    }
+    setLinks(result.projects);
+    setConfirmUnlink(null);
+    if (command.action === "bind") setSharingAcknowledged(false);
+    onLinksChangeRef.current?.(result.projects.length > 0);
+    setOpen((current) =>
+      result.projects.some((link) => link.projectId === current?.projectId) ? current : null,
+    );
+  });
   useEffect(() => {
     void apply({ action: "list", teamId });
   }, [apply, teamId]);
@@ -371,53 +370,50 @@ function TeamProjectDocuments({
   const { projectId } = link;
   // The server resolves the team from the project's link; the team id here only keeps the
   // shared document editor's command shape.
-  const runStorage = useCallback(
-    async (command: TeamStorageCommand) => {
-      const input = projectCommand(kind, projectId, command);
-      if (!input) return null;
-      const result = await run(input);
-      if (!result) return null;
-      if ("error" in result) {
-        if (!retryable(result.error)) {
-          setState(null);
-          setEditorState(null);
-        } else if (
-          result.error instanceof Error &&
-          "code" in result.error &&
-          result.error.code === "sign_in_required"
-        ) {
-          // Campus identity changes unmount the parent; a Microsoft reconnect must keep drafts.
-          setState(null);
-        }
-        return null;
+  const runStorage = useStableCallback(async (command: TeamStorageCommand) => {
+    const input = projectCommand(kind, projectId, command);
+    if (!input) return null;
+    const result = await run(input);
+    if (!result) return null;
+    if ("error" in result) {
+      if (!retryable(result.error)) {
+        setState(null);
+        setEditorState(null);
+      } else if (
+        result.error instanceof Error &&
+        "code" in result.error &&
+        result.error.code === "sign_in_required"
+      ) {
+        // Campus identity changes unmount the parent; a Microsoft reconnect must keep drafts.
+        setState(null);
       }
-      const next = result.storage;
-      if (!next) return null;
-      setState((previous) => mergeTeamStorageResult(previous, next, command));
-      if (next.status === "connected")
-        setEditorState((previous) => mergeTeamStorageResult(previous, next, command));
-      else if (next.status !== "disconnected" && next.status !== "pending") setEditorState(null);
-      if (command.action === "publish" && next.document) {
-        // Show the new note in the list; the listing keeps the open document.
-        const listed = await run({
-          action: kind === "skill" ? "skill-list" : "memory-list",
-          projectId,
-        });
-        if (listed && !("error" in listed) && listed.storage) {
-          const files = listed.storage;
-          setState((previous) =>
+      return null;
+    }
+    const next = result.storage;
+    if (!next) return null;
+    setState((previous) => mergeTeamStorageResult(previous, next, command));
+    if (next.status === "connected")
+      setEditorState((previous) => mergeTeamStorageResult(previous, next, command));
+    else if (next.status !== "disconnected" && next.status !== "pending") setEditorState(null);
+    if (command.action === "publish" && next.document) {
+      // Show the new note in the list; the listing keeps the open document.
+      const listed = await run({
+        action: kind === "skill" ? "skill-list" : "memory-list",
+        projectId,
+      });
+      if (listed && !("error" in listed) && listed.storage) {
+        const files = listed.storage;
+        setState((previous) =>
+          mergeTeamStorageResult(previous, files, { action: "list-files", teamId }),
+        );
+        if (files.status === "connected")
+          setEditorState((previous) =>
             mergeTeamStorageResult(previous, files, { action: "list-files", teamId }),
           );
-          if (files.status === "connected")
-            setEditorState((previous) =>
-              mergeTeamStorageResult(previous, files, { action: "list-files", teamId }),
-            );
-        }
       }
-      return next;
-    },
-    [kind, projectId, run, teamId],
-  );
+    }
+    return next;
+  });
   useEffect(() => {
     void runStorage({ action: "list-files", teamId });
   }, [runStorage, teamId]);

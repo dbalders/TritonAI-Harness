@@ -12,29 +12,24 @@ export const TritonAiCredentialUpdateContext = createContext<{
 
 export function useTritonAiCredentialUpdate(update: UpdateCredentials, connected: boolean) {
   const [phase, setPhase] = useState<UpdatePhase>("idle");
-  const updateCredentials: UpdateCredentials = useCallback(
-    async (input) => {
-      setPhase("saving");
-      try {
-        // IPC waits for backend readiness; the client may still need to reconnect.
-        const result = await update(input);
-        setPhase(result.status === "saved" ? "reconnecting" : "idle");
-        return result;
-      } catch (error) {
-        setPhase("idle");
-        throw error;
-      }
-    },
-    [update],
-  );
-
-  useEffect(() => {
-    if (phase !== "reconnecting" && phase !== "timed-out") return;
-    if (connected) {
+  const updateCredentials: UpdateCredentials = async (input) => {
+    setPhase("saving");
+    try {
+      // IPC waits for backend readiness; the client may still need to reconnect.
+      const result = await update(input);
+      setPhase(result.status === "saved" ? "reconnecting" : "idle");
+      return result;
+    } catch (error) {
       setPhase("idle");
-      return;
+      throw error;
     }
-    if (phase === "timed-out") return;
+  };
+
+  if (connected && (phase === "reconnecting" || phase === "timed-out")) {
+    setPhase("idle");
+  }
+  useEffect(() => {
+    if (connected || phase !== "reconnecting") return;
     const timeout = window.setTimeout(() => setPhase("timed-out"), 10_000);
     return () => window.clearTimeout(timeout);
   }, [connected, phase]);

@@ -1,6 +1,6 @@
 import type { EnvironmentId, ProjectId, TeamProjectSharing, ThreadId } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { readEnvironmentSupportsTeamSharing } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
@@ -16,6 +16,7 @@ export function useProjectTeamSharing(
   environmentId: EnvironmentId | null,
   projectId: ProjectId | null,
   sentMessages: number,
+  teamsEnabled = true,
 ): TeamProjectSharing | null {
   const request = useAtomCommand(serverEnvironment.teamProjects, { reportFailure: false });
   const [accountChanges, setAccountChanges] = useState(0);
@@ -23,7 +24,7 @@ export function useProjectTeamSharing(
     null,
   );
   const key = environmentId && projectId ? `${environmentId}:${projectId}:${accountChanges}` : null;
-  const refresh = key === null ? null : `${key}\n${sentMessages}`;
+  const refresh = key === null ? null : `${key}\n${sentMessages}\n${teamsEnabled}`;
   useEffect(
     () =>
       onUcsdAccountChanged(environmentId, () => {
@@ -76,25 +77,35 @@ export function useProjectTeamSharing(
 /** Turns a thread's team sharing off (Don't share this thread) or back on. */
 export function useSetThreadTeamSharing() {
   const mutate = useAtomCommand(threadEnvironment.setTeamSharing, { reportFailure: true });
-  return useCallback(
-    (environmentId: EnvironmentId, threadId: ThreadId, shared: boolean) => {
-      // Version skew: an older server doesn't understand the command, so it isn't sent.
-      if (!readEnvironmentSupportsTeamSharing(environmentId)) return;
-      void mutate({ environmentId, input: { threadId, shared } });
-    },
-    [mutate],
-  );
+  return (environmentId: EnvironmentId, threadId: ThreadId, shared: boolean) => {
+    // Version skew: an older server doesn't understand the command, so it isn't sent.
+    if (!readEnvironmentSupportsTeamSharing(environmentId)) return;
+    void mutate({ environmentId, input: { threadId, shared } });
+  };
 }
 
 /** What the composer says about a thread in a team workspace. */
-export function threadTeamSharingNotice(sharing: TeamProjectSharing, threadShared: boolean) {
+export function threadTeamSharingNotice(
+  sharing: TeamProjectSharing,
+  threadShared: boolean,
+  teamsEnabled = true,
+) {
   if (!threadShared)
     return {
       variant: "info" as const,
       title: `Not shared with ${sharing.teamName}`,
+      description: teamsEnabled
+        ? "You chose Don't share this thread, so its work stays out of the team's daily memory."
+        : "You chose Don't share this thread, so its work stays out of the team's daily memory. Teams is off on this environment; enable it in Experimental settings before sharing again.",
+      action: teamsEnabled ? "Share this thread" : null,
+    };
+  if (!teamsEnabled)
+    return {
+      variant: "info" as const,
+      title: `Sharing with ${sharing.teamName} is paused`,
       description:
-        "You chose Don't share this thread, so its work stays out of the team's daily memory.",
-      action: "Share this thread",
+        "Teams is off on this environment, so background summaries are paused. Previously shared summaries remain available to team members. You can still choose Don't share this thread.",
+      action: "Don't share this thread",
     };
   if (sharing.state === "held")
     return {

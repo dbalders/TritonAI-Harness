@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { ProjectService } from "../../project/ProjectService.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import { ProjectionStoreV2 } from "../../orchestration-v2/ProjectionStore.ts";
 import * as TeamMessageGate from "../TeamMessageGate.ts";
 import {
@@ -35,6 +36,7 @@ const betaNote = syntheticDocumentPath(4);
 
 const values = new Map<string, Uint8Array>();
 const environment = Layer.mergeAll(
+  ServerSettings.layerTest({ experimentalTeamsEnabled: true }),
   Layer.mock(ServerSecretStore)({
     get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
     set: (name, value) => Effect.sync(() => void values.set(name, value)),
@@ -91,6 +93,91 @@ const linkedAlpha = (as: "owner" | "member" | "reader" = "member") =>
     expect(yield* services.connectMicrosoft).toBe(1);
     return { world, ...services };
   }).pipe(Effect.provide(environment));
+
+describe("Synthetic Teams creation", () => {
+  const requestId = "cccccccc-0000-4000-a000-000000000001";
+
+  it.effect(
+    "creates a fresh owner-only team whose empty drive works through the real storage services",
+    () =>
+      Effect.gen(function* () {
+        values.clear();
+        const world = makeSyntheticTeamsWorld();
+        const services = yield* makeSyntheticTeamServices(world);
+        const created = yield* world.account.teams("s", {
+          action: "create",
+          requestId,
+          name: "SYNTHETIC newly created team",
+        });
+        const team = created.team;
+        if (!team?.storage) throw new Error("The fixture did not provision the created team.");
+        expect(team).toMatchObject({
+          name: "SYNTHETIC newly created team",
+          role: "owner",
+          canManage: true,
+          state: "ready",
+          revision: 1,
+        });
+        expect(team.members).toHaveLength(1);
+        expect(team.members[0]?.email).toBe("synthetic-owner@ucsd.edu");
+        expect(team.storage.driveId).not.toBe(SYNTHETIC_TEAMS.alpha.driveId);
+        expect(team.storage.driveId).not.toBe(SYNTHETIC_TEAMS.beta.driveId);
+        const refreshed = yield* world.account.teams("s", { action: "list" });
+        expect(refreshed.teams.map((entry) => entry.id)).toContain(team.id);
+        expect(yield* services.connectMicrosoft).toBe(1);
+        yield* services.project.execute("s", { action: "bind", teamId: team.id, projectId });
+        const empty = yield* services.project.execute("s", { action: "memory-list", projectId });
+        expect(empty.storage?.files).toEqual([]);
+        yield* services.project.execute("s", {
+          action: "memory-publish",
+          projectId,
+          recordId: "cccccccc-0000-4000-a000-000000000002",
+          deviceId: "dddddddd-0000-4000-a000-000000000002",
+          title: "SYNTHETIC first note",
+          text: "A note in the newly created team's own drive.",
+        });
+        const written = yield* services.project.execute("s", { action: "memory-list", projectId });
+        expect(written.storage?.files).toHaveLength(1);
+        expect(written.storage?.files[0]?.summary?.title).toBe("SYNTHETIC first note");
+        world.switchTo("outsider");
+        expect((yield* world.account.teams("outsider", { action: "list" })).teams).toEqual([]);
+        expect(
+          yield* code(world.account.teams("outsider", { action: "get", teamId: team.id })),
+        ).toBe("not_found");
+        expect(
+          yield* code(services.project.execute("s", { action: "memory-list", projectId })),
+        ).toBe("not_found");
+      }).pipe(Effect.provide(environment)),
+  );
+
+  it.effect(
+    "deduplicates retries per identity without sharing ownership or creating duplicates",
+    () =>
+      Effect.gen(function* () {
+        const world = makeSyntheticTeamsWorld();
+        const command = { action: "create", requestId, name: "SYNTHETIC retry team" } as const;
+        const created = yield* world.account.teams("owner", command);
+        expect((yield* world.account.teams("owner", command)).team?.id).toBe(created.team?.id);
+        expect(world.snapshot().teams).toHaveLength(3);
+        expect(
+          yield* code(world.account.teams("owner", { ...command, name: "Changed retry name" })),
+        ).toBe("conflict");
+        world.switchTo("outsider");
+        const outsider = yield* world.account.teams("outsider", command);
+        expect(outsider.team?.id).not.toBe(created.team?.id);
+        expect(outsider.team?.members).toHaveLength(1);
+        expect(outsider.team?.members[0]?.email).toBe("synthetic-outsider@ucsd.edu");
+        expect(outsider.teams.map((team) => team.id)).toEqual([outsider.team?.id]);
+        world.switchTo("owner");
+        expect(
+          (yield* world.account.teams("owner", { action: "list" })).teams.map((team) => team.id),
+        ).not.toContain(outsider.team?.id);
+        world.signOut();
+        expect(yield* code(world.account.teams("signed-out", command))).toBe("sign_in_required");
+        expect(world.snapshot().teams).toHaveLength(4);
+      }),
+  );
+});
 
 describe("Synthetic Teams world", () => {
   it.effect("reads the linked team's memory and adds its skill through the real services", () =>

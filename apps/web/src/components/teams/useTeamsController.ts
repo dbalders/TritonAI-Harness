@@ -1,3 +1,4 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   type AccountLoginState,
   createTeamsControllerCache,
@@ -6,11 +7,11 @@ import {
 } from "@t3tools/client-runtime/state/server";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { AccountProfile, EnvironmentId, TeamCommand, TeamsResult } from "@t3tools/contracts";
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useTeamsPermission } from "./useTeamsPermission";
+import { useTeamsEnabled } from "./useTeamsEnabled";
 import { accountKey } from "./teamMembershipReview";
 
 const teamsControllers = createTeamsControllerCache();
@@ -21,15 +22,12 @@ const noSubscription = () => () => {};
 /** Sends one Teams command, failing with the service's error. */
 export function useTeamsCommand(environmentId: EnvironmentId) {
   const request = useAtomCommand(serverEnvironment.teams, { reportFailure: false });
-  return useCallback(
-    async (input: TeamCommand): Promise<TeamsResult> => {
-      const response = await request({ environmentId, input });
-      if (response._tag === "Success") return response.value;
-      const error = squashAtomCommandFailure(response);
-      throw error instanceof Error ? error : new Error("Teams could not be reached.");
-    },
-    [environmentId, request],
-  );
+  return useStableCallback(async (input: TeamCommand): Promise<TeamsResult> => {
+    const response = await request({ environmentId, input });
+    if (response._tag === "Success") return response.value;
+    const error = squashAtomCommandFailure(response);
+    throw error instanceof Error ? error : new Error("Teams could not be reached.");
+  });
 }
 
 /** The teams controller every view of one campus account on an environment shares. */
@@ -37,10 +35,10 @@ export function useTeamsController(
   environmentId: EnvironmentId,
   profile: AccountProfile | null,
 ): TeamsController | null {
-  const allowed = useTeamsPermission(environmentId);
+  const allowed = useTeamsEnabled(environmentId);
   const execute = useTeamsCommand(environmentId);
   const key = allowed && profile ? `${environmentId}\n${accountKey(profile)}` : null;
-  return useMemo(() => (key === null ? null : teamsControllers(key, execute)), [execute, key]);
+  return key === null ? null : teamsControllers(key, execute);
 }
 
 /** Pending invitations for the signed-in account, kept current by its existing account checks. */

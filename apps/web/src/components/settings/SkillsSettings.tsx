@@ -60,6 +60,14 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 
 const EMPTY_SKILL_ROWS: ReadonlyArray<CodexSkillRow> = [];
 
+function requireBundledGitHubPlugin(present: boolean): void {
+  if (!present) {
+    throw new Error(
+      "The bundled GitHub plugin is not available in this Harness build. Update Harness, then retry the share.",
+    );
+  }
+}
+
 function unwrapAtomCommandResult<A, E>(result: AtomCommandResult<A, E>): A {
   if (result._tag === "Failure") {
     throw squashAtomCommandFailure(result);
@@ -511,10 +519,7 @@ export function SkillsSettingsPanel() {
   const catalog = newerCatalog(catalogResult?.catalog, refreshedCatalogQuery.data?.catalog);
   // A failed request keeps the last list on screen but cannot vouch for ownership.
   const catalogLoadError = catalogQuery.error;
-  const managedSkillNames = useMemo<ReadonlySet<string>>(
-    () => new Set(catalogResult?.managedSkillNames),
-    [catalogResult],
-  );
+  const managedSkillNames = new Set(catalogResult?.managedSkillNames);
   const managedSkillsStatus: ServerManagedSkillsStatus = catalogLoadError
     ? "unknown"
     : (catalogResult?.managedSkillsStatus ?? "unknown");
@@ -537,45 +542,32 @@ export function SkillsSettingsPanel() {
     readonly environmentId: typeof primaryEnvironmentId;
     readonly byPath: ReadonlyMap<string, ServerSubmitProviderSkillToTritonAiCommonsResult>;
   }>({ environmentId: null, byPath: new Map() });
-  const commonsSubmissions = useMemo<
-    ReadonlyMap<string, ServerSubmitProviderSkillToTritonAiCommonsResult>
-  >(
-    () =>
-      new Map([
-        ...(catalogResult?.commonsSubmissions.map(
-          (submission) => [submission.skillPath, submission] as const,
-        ) ?? []),
-        ...(newCommonsSubmissions.environmentId === primaryEnvironmentId
-          ? newCommonsSubmissions.byPath
-          : []),
-      ]),
-    [catalogResult, newCommonsSubmissions, primaryEnvironmentId],
-  );
+  const commonsSubmissions = new Map([
+    ...(catalogResult?.commonsSubmissions.map(
+      (submission) => [submission.skillPath, submission] as const,
+    ) ?? []),
+    ...(newCommonsSubmissions.environmentId === primaryEnvironmentId
+      ? newCommonsSubmissions.byPath
+      : []),
+  ]);
 
-  const codexProviders = useMemo(() => providers.filter(isCodexProvider), [providers]);
+  const codexProviders = providers.filter(isCodexProvider);
   const installProvider = codexProviders[0] ?? null;
-  const rows = useMemo<ReadonlyArray<CodexSkillRow>>(
-    () =>
-      dedupeProviderSkillRows(
-        codexProviders.flatMap((provider) =>
-          provider.skills.map((skill) => ({ provider, skill }) satisfies CodexSkillRow),
-        ),
-      ).toSorted((left, right) => {
-        const leftName = formatProviderSkillDisplayName(left.skill).toLowerCase();
-        const rightName = formatProviderSkillDisplayName(right.skill).toLowerCase();
-        return (
-          providerLabel(left.provider).localeCompare(providerLabel(right.provider)) ||
-          leftName.localeCompare(rightName) ||
-          left.skill.path.localeCompare(right.skill.path)
-        );
-      }),
-    [codexProviders],
-  );
+  const rows = dedupeProviderSkillRows(
+    codexProviders.flatMap((provider) =>
+      provider.skills.map((skill) => ({ provider, skill }) satisfies CodexSkillRow),
+    ),
+  ).toSorted((left, right) => {
+    const leftName = formatProviderSkillDisplayName(left.skill).toLowerCase();
+    const rightName = formatProviderSkillDisplayName(right.skill).toLowerCase();
+    return (
+      providerLabel(left.provider).localeCompare(providerLabel(right.provider)) ||
+      leftName.localeCompare(rightName) ||
+      left.skill.path.localeCompare(right.skill.path)
+    );
+  });
   const catalogEntries = catalog?.entries ?? [];
-  const skillGroups = useMemo(
-    () => groupProviderSkills({ entries: catalogEntries, rows, managedSkillNames }),
-    [catalogEntries, managedSkillNames, rows],
-  );
+  const skillGroups = groupProviderSkills({ entries: catalogEntries, rows, managedSkillNames });
   const { aiTeamItems, communityItems, managedOnlyRows, otherRows } = skillGroups;
   const disabledCount = rows.filter((row) => !row.skill.enabled).length;
   const installedCatalogCount =
@@ -606,19 +598,19 @@ export function SkillsSettingsPanel() {
     catalogQuery.refresh();
   };
 
-  const installSkill = useCallback(
-    async (
-      source:
-        | { type: "catalog"; catalogEntryId: string; revision: string }
-        | { type: "url"; url: string },
-      key: string,
-    ) => {
-      if (!primaryEnvironmentId || !installProvider) {
-        setOperationError("A Codex provider is required before installing skills.");
-        return;
-      }
-      setInstallingSkillKey(key);
-      setOperationError(null);
+  const installSkill = async (
+    source:
+      | { type: "catalog"; catalogEntryId: string; revision: string }
+      | { type: "url"; url: string },
+    key: string,
+  ) => {
+    if (!primaryEnvironmentId || !installProvider) {
+      setOperationError("A Codex provider is required before installing skills.");
+      return;
+    }
+    setInstallingSkillKey(key);
+    setOperationError(null);
+    return await (async () => {
       try {
         unwrapAtomCommandResult(
           await installSkillCommand({
@@ -631,24 +623,20 @@ export function SkillsSettingsPanel() {
         );
       } catch (error) {
         setOperationError(error instanceof Error ? error.message : "Failed to install skill.");
-      } finally {
-        setInstallingSkillKey((current) => (current === key ? null : current));
       }
-    },
-    [installProvider, installSkillCommand, primaryEnvironmentId],
-  );
+    })().finally(async () => {
+      setInstallingSkillKey((current) => (current === key ? null : current));
+    });
+  };
 
-  const installCatalogSkill = useCallback(
-    async (entry: ServerProviderSkillCatalogEntry) => {
-      await installSkill(
-        { type: "catalog", catalogEntryId: entry.id, revision: entry.revision },
-        `catalog:${entry.id}`,
-      );
-    },
-    [installSkill],
-  );
+  const installCatalogSkill = async (entry: ServerProviderSkillCatalogEntry) => {
+    await installSkill(
+      { type: "catalog", catalogEntryId: entry.id, revision: entry.revision },
+      `catalog:${entry.id}`,
+    );
+  };
 
-  const installLinkedSkill = useCallback(async () => {
+  const installLinkedSkill = async () => {
     const url = installUrl.trim();
     if (!url) {
       setOperationError("Enter a skill URL first.");
@@ -656,18 +644,18 @@ export function SkillsSettingsPanel() {
     }
     await installSkill({ type: "url", url }, "url");
     setInstallUrl("");
-  }, [installSkill, installUrl]);
+  };
 
-  const setSkillEnabled = useCallback(
-    async (
-      providerInstanceId: ProviderInstanceId,
-      skill: ServerProviderSkill,
-      enabled: boolean,
-    ) => {
-      if (!primaryEnvironmentId) return;
-      const skillKey = `${providerInstanceId}:${skill.path || skill.name}`;
-      setUpdatingSkillKey(skillKey);
-      setOperationError(null);
+  const setSkillEnabled = async (
+    providerInstanceId: ProviderInstanceId,
+    skill: ServerProviderSkill,
+    enabled: boolean,
+  ) => {
+    if (!primaryEnvironmentId) return;
+    const skillKey = `${providerInstanceId}:${skill.path || skill.name}`;
+    setUpdatingSkillKey(skillKey);
+    setOperationError(null);
+    return await (async () => {
       try {
         unwrapAtomCommandResult(
           await setSkillEnabledCommand({
@@ -681,25 +669,27 @@ export function SkillsSettingsPanel() {
         );
       } catch (error) {
         setOperationError(error instanceof Error ? error.message : "Failed to update skill.");
-      } finally {
-        setUpdatingSkillKey((current) => (current === skillKey ? null : current));
       }
-    },
-    [primaryEnvironmentId, setSkillEnabledCommand],
-  );
+    })().finally(async () => {
+      setUpdatingSkillKey((current) => (current === skillKey ? null : current));
+    });
+  };
 
-  const removeSkill = useCallback(
-    async (providerInstanceId: ProviderInstanceId, skill: ServerProviderSkill) => {
-      if (!primaryEnvironmentId) return;
-      const displayName = formatProviderSkillDisplayName(skill);
-      const confirmed = await ensureLocalApi().dialogs.confirm(
-        `Remove ${displayName}? This deletes the local skill folder that contains:\n\n${skill.path}`,
-      );
-      if (!confirmed) return;
+  const removeSkill = async (
+    providerInstanceId: ProviderInstanceId,
+    skill: ServerProviderSkill,
+  ) => {
+    if (!primaryEnvironmentId) return;
+    const displayName = formatProviderSkillDisplayName(skill);
+    const confirmed = await ensureLocalApi().dialogs.confirm(
+      `Remove ${displayName}? This deletes the local skill folder that contains:\n\n${skill.path}`,
+    );
+    if (!confirmed) return;
 
-      const skillKey = `${providerInstanceId}:${skill.path || skill.name}`;
-      setRemovingSkillKey(skillKey);
-      setOperationError(null);
+    const skillKey = `${providerInstanceId}:${skill.path || skill.name}`;
+    setRemovingSkillKey(skillKey);
+    setOperationError(null);
+    return await (async () => {
       try {
         unwrapAtomCommandResult(
           await removeSkillCommand({
@@ -712,29 +702,31 @@ export function SkillsSettingsPanel() {
         );
       } catch (error) {
         setOperationError(error instanceof Error ? error.message : "Failed to remove skill.");
-      } finally {
-        setRemovingSkillKey((current) => (current === skillKey ? null : current));
       }
-    },
-    [primaryEnvironmentId, removeSkillCommand],
-  );
+    })().finally(async () => {
+      setRemovingSkillKey((current) => (current === skillKey ? null : current));
+    });
+  };
 
-  const submitSkillToCommons = useCallback(
-    async (providerInstanceId: ProviderInstanceId, skill: ServerProviderSkill) => {
-      if (!primaryEnvironmentId) return;
-      const displayName = formatProviderSkillDisplayName(skill);
-      const confirmed = await ensureLocalApi().dialogs.confirm(
-        tritonAiCommonsPublicShareConfirmation({ displayName, skillPath: skill.path }),
-      );
-      if (!confirmed) return;
+  const submitSkillToCommons = async (
+    providerInstanceId: ProviderInstanceId,
+    skill: ServerProviderSkill,
+  ) => {
+    if (!primaryEnvironmentId) return;
+    const displayName = formatProviderSkillDisplayName(skill);
+    const confirmed = await ensureLocalApi().dialogs.confirm(
+      tritonAiCommonsPublicShareConfirmation({ displayName, skillPath: skill.path }),
+    );
+    if (!confirmed) return;
 
-      const key = `${providerInstanceId}:${skill.path || skill.name}`;
-      setSubmittingSkillKey(key);
-      setCommonsSubmissionErrors((current) => {
-        const next = new Map(current);
-        next.delete(skill.path);
-        return next;
-      });
+    const key = `${providerInstanceId}:${skill.path || skill.name}`;
+    setSubmittingSkillKey(key);
+    setCommonsSubmissionErrors((current) => {
+      const next = new Map(current);
+      next.delete(skill.path);
+      return next;
+    });
+    return await (async () => {
       try {
         const commandResult = await submitSkillToCommonsCommand({
           environmentId: primaryEnvironmentId,
@@ -755,9 +747,8 @@ export function SkillsSettingsPanel() {
             );
             let github = integrations.integrations.find(({ id }) => id === "github");
             if (!github) {
-              throw new Error(
-                "The bundled GitHub plugin is not available in this Harness build. Update Harness, then retry the share.",
-              );
+              requireBundledGitHubPlugin(false);
+              return;
             }
             if (!github.installed) {
               integrations = unwrapAtomCommandResult(
@@ -787,7 +778,8 @@ export function SkillsSettingsPanel() {
             }
             return;
           }
-          throw squashAtomCommandFailure(commandResult);
+          unwrapAtomCommandResult(commandResult);
+          return;
         }
         const result = commandResult.value;
         setNewCommonsSubmissions((current) => ({
@@ -810,19 +802,11 @@ export function SkillsSettingsPanel() {
             error instanceof Error ? error.message : "Failed to submit this skill to Commons.",
           ),
         );
-      } finally {
-        setSubmittingSkillKey((current) => (current === key ? null : current));
       }
-    },
-    [
-      installIntegrationCommand,
-      listIntegrationsCommand,
-      navigate,
-      primaryEnvironmentId,
-      setIntegrationEnabledCommand,
-      submitSkillToCommonsCommand,
-    ],
-  );
+    })().finally(async () => {
+      setSubmittingSkillKey((current) => (current === key ? null : current));
+    });
+  };
 
   return (
     <SettingsPageContainer headerAction={<RecordSkillButton />}>

@@ -1,7 +1,8 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { mergeTeamStorageResult } from "@t3tools/client-runtime/state/server";
 import type { EnvironmentId, TeamStorageCommand, TeamStorageStatus } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ensureLocalApi } from "../../localApi";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -25,15 +26,14 @@ export function TeamSharedStorage({
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const inFlight = useRef(false);
-  const run = useCallback(
-    async (input: TeamStorageCommand) => {
-      if (inFlight.current) return null;
-      inFlight.current = true;
-      const requestId = ++generation.current;
-      setBusy(true);
-      setError(null);
-      try {
-        const response = await request({ environmentId, input });
+  const run = useStableCallback(async (input: TeamStorageCommand) => {
+    if (inFlight.current) return null;
+    inFlight.current = true;
+    const requestId = ++generation.current;
+    setBusy(true);
+    setError(null);
+    return request({ environmentId, input })
+      .then(async (response) => {
         if (response._tag !== "Success") throw squashAtomCommandFailure(response);
         if (generation.current !== requestId) return null;
         const next = response.value;
@@ -44,7 +44,8 @@ export function TeamSharedStorage({
         if (input.action === "connect" && next.verificationUri)
           await ensureLocalApi().shell.openExternal(next.verificationUri);
         return next;
-      } catch (cause) {
+      })
+      .catch((cause: unknown) => {
         if (generation.current === requestId) {
           if (
             !(
@@ -70,15 +71,14 @@ export function TeamSharedStorage({
           setError(cause instanceof Error ? cause.message : "Shared storage is unavailable.");
         }
         return null;
-      } finally {
+      })
+      .finally(() => {
         if (generation.current === requestId) {
           inFlight.current = false;
           setBusy(false);
         }
-      }
-    },
-    [environmentId, request],
-  );
+      });
+  });
   useEffect(() => {
     void run({ action: "status", teamId });
     return () => {

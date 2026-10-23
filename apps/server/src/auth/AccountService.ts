@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - HMAC, encryption and constant-time credential comparisons require Node crypto.
+import * as ExperimentalTeams from "../teams/experimentalTeams.ts";
 import * as NodeCrypto from "node:crypto";
 import { accountCallbackId } from "@t3tools/shared/accountCallback";
-
 import {
   AccountProfile,
   type AccountStatus,
@@ -18,7 +18,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-
 import { ServerSecretStore } from "./ServerSecretStore.ts";
 
 const ShortText = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2_048));
@@ -128,518 +127,520 @@ export class AccountService extends Context.Service<
 >()("t3/auth/AccountService") {}
 
 /** One instance per environment server; the authenticated local session is the ownership boundary. */
-export const make = (
+export const make = Effect.fn("AccountService.make")(function* (
   options: {
     readonly serviceUrl?: string;
     readonly allowInsecureLoopback?: boolean;
     readonly fetch?: typeof globalThis.fetch;
     readonly now?: () => number;
   } = {},
-) =>
-  Effect.gen(function* () {
-    const secrets = yield* ServerSecretStore;
-    const clock = yield* Clock.Clock;
-    const serviceUrl = yield* Effect.try({
-      try: () => resolveAccountServiceUrl(options.serviceUrl ?? "", options.allowInsecureLoopback),
-      catch: () => error("invalid_configuration", "The account service configuration is invalid."),
-    });
-    const fetchImpl = options.fetch ?? globalThis.fetch;
-    const now = options.now ?? (() => Math.floor(clock.currentTimeMillisUnsafe() / 1000));
-    const lanes = new Map<string, SessionLane>();
-    const getLane = (sessionId: string) => {
-      let lane = lanes.get(sessionId);
-      if (!lane) {
-        lane = { semaphore: Semaphore.makeUnsafe(1), generation: 0, pending: null };
-        lanes.set(sessionId, lane);
-      }
-      return lane;
-    };
-    const secretName = (sessionId: string) =>
-      `account-session-${NodeCrypto.createHash("sha256").update(`${serviceUrl}\0${sessionId}`).digest("hex")}`;
-    const signedOut = (): AccountStatus => ({
-      configured: serviceUrl !== null,
-      status: "signed-out",
-      serviceUrl,
-      profile: null,
-      expiresAt: null,
-      verificationUrl: null,
-      userCode: null,
-      pollIntervalSeconds: null,
-    });
-    const pendingStatus = (pending: PendingLogin): AccountStatus => ({
-      ...signedOut(),
-      status: "pending",
-      expiresAt: pending.response.expiresAt,
-      verificationUrl: pending.response.verificationUrl,
-      userCode: pending.response.userCode,
-      pollIntervalSeconds: pending.response.pollIntervalSeconds,
-      ...(pending.response.returnUrl ? { returnUrl: pending.response.returnUrl } : {}),
-    });
-    const signedIn = (
-      credential: Pick<Credential, "profile" | "expiresAt" | "renewalExpiresAt">,
-    ): AccountStatus => ({
-      ...signedOut(),
-      status: "signed-in",
-      profile: credential.profile,
-      expiresAt: credential.expiresAt,
-      ...(credential.renewalExpiresAt !== undefined
-        ? { renewalExpiresAt: credential.renewalExpiresAt }
-        : {}),
-    });
-    const remove = (sessionId: string) =>
-      secrets.remove(secretName(sessionId)).pipe(Effect.mapError(storageError));
-    const save = (sessionId: string, credential: Credential) =>
-      secrets
-        .set(secretName(sessionId), new TextEncoder().encode(encodeCredential(credential)))
-        .pipe(Effect.mapError(storageError));
-    const read = Effect.fn("AccountService.read")(function* (sessionId: string) {
-      const bytes = yield* secrets.get(secretName(sessionId)).pipe(Effect.mapError(storageError));
-      if (Option.isNone(bytes)) return null;
-      const credential = yield* decodeCredential(new TextDecoder().decode(bytes.value)).pipe(
-        Effect.mapError(storageError),
-      );
-      if (
-        credential.expiresAt <= now() &&
-        (!credential.renewalToken ||
-          !credential.renewalExpiresAt ||
-          credential.renewalExpiresAt <= now())
-      ) {
-        yield* remove(sessionId);
-        return null;
-      }
-      return credential;
-    });
-    const request = (path: string, input?: { token?: string; body?: unknown; method?: string }) =>
-      Effect.tryPromise({
-        try: (signal) =>
-          fetchImpl(`${serviceUrl}${path}`, {
-            method: input?.method ?? (input?.body === undefined ? "GET" : "POST"),
-            headers: {
-              Accept: "application/json",
-              ...(input?.token ? { Authorization: `Bearer ${input.token}` } : {}),
-              ...(input?.body === undefined ? {} : { "Content-Type": "application/json" }),
-            },
-            ...(input?.body === undefined ? {} : { body: encodeBody(input.body) }),
-            redirect: "error",
-            credentials: "omit",
-            signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
-          }),
-        catch: () => error("unavailable", "The account service could not be reached. Try again."),
-      });
-    const responseText = (response: Response, maxBytes = 32_768) =>
-      Effect.tryPromise({
-        try: async () => {
-          const reader = response.body?.getReader();
-          if (!reader) throw new Error("Missing body");
-          const chunks: Uint8Array[] = [];
-          let length = 0;
-          try {
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              length += value.length;
-              if (length > maxBytes) throw new Error("Oversize response");
-              chunks.push(value);
-            }
-          } finally {
-            await reader.cancel().catch(() => undefined);
-          }
-          return new TextDecoder().decode(Buffer.concat(chunks));
-        },
-        catch: invalidResponse,
-      }).pipe(Effect.timeout("10 seconds"), Effect.mapError(invalidResponse));
-    const revoke = Effect.fn("AccountService.revoke")(function* (credential: Credential) {
-      const response = yield* request("/v1/logout", {
-        token: credential.renewalToken ?? credential.accessToken,
-        method: "POST",
-      });
-      if (![204, 401].includes(response.status)) {
-        return yield* error(
-          "request_rejected",
-          "Sign-out was not confirmed. Try again to revoke access.",
-        );
-      }
-    });
-    const statusLocked = Effect.fn("AccountService.statusLocked")(function* (
-      sessionId: string,
-      lane: SessionLane,
+) {
+  const teamsAccess = yield* ExperimentalTeams.makeAccess;
+  const secrets = yield* ServerSecretStore;
+  const clock = yield* Clock.Clock;
+  const serviceUrl = yield* Effect.try({
+    try: () => resolveAccountServiceUrl(options.serviceUrl ?? "", options.allowInsecureLoopback),
+    catch: () => error("invalid_configuration", "The account service configuration is invalid."),
+  });
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const now = options.now ?? (() => Math.floor(clock.currentTimeMillisUnsafe() / 1000));
+  const lanes = new Map<string, SessionLane>();
+  const getLane = (sessionId: string) => {
+    let lane = lanes.get(sessionId);
+    if (!lane) {
+      lane = { semaphore: Semaphore.makeUnsafe(1), generation: 0, pending: null };
+      lanes.set(sessionId, lane);
+    }
+    return lane;
+  };
+  const secretName = (sessionId: string) =>
+    `account-session-${NodeCrypto.createHash("sha256").update(`${serviceUrl}\0${sessionId}`).digest("hex")}`;
+  const signedOut = (): AccountStatus => ({
+    configured: serviceUrl !== null,
+    status: "signed-out",
+    serviceUrl,
+    profile: null,
+    expiresAt: null,
+    verificationUrl: null,
+    userCode: null,
+    pollIntervalSeconds: null,
+  });
+  const pendingStatus = (pending: PendingLogin): AccountStatus => ({
+    ...signedOut(),
+    status: "pending",
+    expiresAt: pending.response.expiresAt,
+    verificationUrl: pending.response.verificationUrl,
+    userCode: pending.response.userCode,
+    pollIntervalSeconds: pending.response.pollIntervalSeconds,
+    ...(pending.response.returnUrl ? { returnUrl: pending.response.returnUrl } : {}),
+  });
+  const signedIn = (
+    credential: Pick<Credential, "profile" | "expiresAt" | "renewalExpiresAt">,
+  ): AccountStatus => ({
+    ...signedOut(),
+    status: "signed-in",
+    profile: credential.profile,
+    expiresAt: credential.expiresAt,
+    ...(credential.renewalExpiresAt !== undefined
+      ? { renewalExpiresAt: credential.renewalExpiresAt }
+      : {}),
+  });
+  const remove = (sessionId: string) =>
+    secrets.remove(secretName(sessionId)).pipe(Effect.mapError(storageError));
+  const save = (sessionId: string, credential: Credential) =>
+    secrets
+      .set(secretName(sessionId), new TextEncoder().encode(encodeCredential(credential)))
+      .pipe(Effect.mapError(storageError));
+  const read = Effect.fn("AccountService.read")(function* (sessionId: string) {
+    const bytes = yield* secrets.get(secretName(sessionId)).pipe(Effect.mapError(storageError));
+    if (Option.isNone(bytes)) return null;
+    const credential = yield* decodeCredential(new TextDecoder().decode(bytes.value)).pipe(
+      Effect.mapError(storageError),
+    );
+    if (
+      credential.expiresAt <= now() &&
+      (!credential.renewalToken ||
+        !credential.renewalExpiresAt ||
+        credential.renewalExpiresAt <= now())
     ) {
-      if (!serviceUrl) return signedOut();
-      const generation = lane.generation;
-      let credential = yield* read(sessionId);
-      if (credential) {
-        if (
-          credential.renewalToken &&
-          credential.renewalExpiresAt &&
-          credential.expiresAt <= now() + 300
-        ) {
-          const renewal = yield* request("/v1/session/refresh", {
-            token: credential.renewalToken,
-            method: "POST",
-          });
-          if ([401, 403].includes(renewal.status)) {
-            yield* remove(sessionId);
-            return signedOut();
+      yield* remove(sessionId);
+      return null;
+    }
+    return credential;
+  });
+  const request = (path: string, input?: { token?: string; body?: unknown; method?: string }) =>
+    Effect.tryPromise({
+      try: (signal) =>
+        fetchImpl(`${serviceUrl}${path}`, {
+          method: input?.method ?? (input?.body === undefined ? "GET" : "POST"),
+          headers: {
+            Accept: "application/json",
+            ...(input?.token ? { Authorization: `Bearer ${input.token}` } : {}),
+            ...(input?.body === undefined ? {} : { "Content-Type": "application/json" }),
+          },
+          ...(input?.body === undefined ? {} : { body: encodeBody(input.body) }),
+          redirect: "error",
+          credentials: "omit",
+          signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+        }),
+      catch: () => error("unavailable", "The account service could not be reached. Try again."),
+    });
+  const responseText = (response: Response, maxBytes = 32_768) =>
+    Effect.tryPromise({
+      try: async () => {
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("Missing body");
+        const chunks: Uint8Array[] = [];
+        let length = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            length += value.length;
+            if (length > maxBytes) throw new Error("Oversize response");
+            chunks.push(value);
           }
-          if (renewal.status !== 200)
-            return yield* error(
-              "unavailable",
-              "Your sign-in could not be renewed yet. Harness will retry.",
-            );
-          const renewed = yield* responseText(renewal).pipe(
-            Effect.flatMap(decodeCredential),
-            Effect.mapError(invalidResponse),
-          );
-          if (
-            renewed.profile.issuer !== credential.profile.issuer ||
-            renewed.profile.subject !== credential.profile.subject ||
-            renewed.expiresAt <= now() ||
-            renewed.expiresAt > now() + 3660 ||
-            renewed.expiresAt > credential.renewalExpiresAt ||
-            renewed.renewalExpiresAt !== credential.renewalExpiresAt
-          )
-            return yield* invalidResponse();
-          credential = {
-            ...credential,
-            accessToken: renewed.accessToken,
-            profile: renewed.profile,
-            expiresAt: renewed.expiresAt,
-          };
-          yield* save(sessionId, credential).pipe(Effect.uninterruptible);
+        } finally {
+          await reader.cancel().catch(() => undefined);
         }
-        const response = yield* request("/v1/me", { token: credential.accessToken });
-        if (response.status === 401 || response.status === 403) {
+        return new TextDecoder().decode(Buffer.concat(chunks));
+      },
+      catch: invalidResponse,
+    }).pipe(Effect.timeout("10 seconds"), Effect.mapError(invalidResponse));
+  const revoke = Effect.fn("AccountService.revoke")(function* (credential: Credential) {
+    const response = yield* request("/v1/logout", {
+      token: credential.renewalToken ?? credential.accessToken,
+      method: "POST",
+    });
+    if (![204, 401].includes(response.status)) {
+      return yield* error(
+        "request_rejected",
+        "Sign-out was not confirmed. Try again to revoke access.",
+      );
+    }
+  });
+  const statusLocked = Effect.fn("AccountService.statusLocked")(function* (
+    sessionId: string,
+    lane: SessionLane,
+  ) {
+    if (!serviceUrl) return signedOut();
+    const generation = lane.generation;
+    let credential = yield* read(sessionId);
+    if (credential) {
+      if (
+        credential.renewalToken &&
+        credential.renewalExpiresAt &&
+        credential.expiresAt <= now() + 300
+      ) {
+        const renewal = yield* request("/v1/session/refresh", {
+          token: credential.renewalToken,
+          method: "POST",
+        });
+        if ([401, 403].includes(renewal.status)) {
           yield* remove(sessionId);
           return signedOut();
         }
-        if (response.status !== 200) {
+        if (renewal.status !== 200)
           return yield* error(
-            "request_rejected",
-            "The account service could not confirm your identity.",
+            "unavailable",
+            "Your sign-in could not be renewed yet. Harness will retry.",
           );
-        }
-        const me = yield* responseText(response).pipe(
-          Effect.flatMap(decodeMe),
+        const renewed = yield* responseText(renewal).pipe(
+          Effect.flatMap(decodeCredential),
           Effect.mapError(invalidResponse),
         );
         if (
-          me.expiresAt <= now() ||
-          me.expiresAt > credential.expiresAt ||
-          me.profile.issuer !== credential.profile.issuer ||
-          me.profile.subject !== credential.profile.subject
-        ) {
-          yield* remove(sessionId);
+          renewed.profile.issuer !== credential.profile.issuer ||
+          renewed.profile.subject !== credential.profile.subject ||
+          renewed.expiresAt <= now() ||
+          renewed.expiresAt > now() + 3660 ||
+          renewed.expiresAt > credential.renewalExpiresAt ||
+          renewed.renewalExpiresAt !== credential.renewalExpiresAt
+        )
           return yield* invalidResponse();
-        }
-        return generation === lane.generation
-          ? signedIn({
-              ...me,
-              ...(credential.renewalExpiresAt !== undefined
-                ? { renewalExpiresAt: credential.renewalExpiresAt }
-                : {}),
-            })
-          : signedOut();
+        credential = {
+          ...credential,
+          accessToken: renewed.accessToken,
+          profile: renewed.profile,
+          expiresAt: renewed.expiresAt,
+        };
+        yield* save(sessionId, credential).pipe(Effect.uninterruptible);
       }
-      if (lane.pending && lane.pending.response.expiresAt > now())
-        return pendingStatus(lane.pending);
-      lane.pending = null;
-      return signedOut();
-    });
+      const response = yield* request("/v1/me", { token: credential.accessToken });
+      if (response.status === 401 || response.status === 403) {
+        yield* remove(sessionId);
+        return signedOut();
+      }
+      if (response.status !== 200) {
+        return yield* error(
+          "request_rejected",
+          "The account service could not confirm your identity.",
+        );
+      }
+      const me = yield* responseText(response).pipe(
+        Effect.flatMap(decodeMe),
+        Effect.mapError(invalidResponse),
+      );
+      if (
+        me.expiresAt <= now() ||
+        me.expiresAt > credential.expiresAt ||
+        me.profile.issuer !== credential.profile.issuer ||
+        me.profile.subject !== credential.profile.subject
+      ) {
+        yield* remove(sessionId);
+        return yield* invalidResponse();
+      }
+      return generation === lane.generation
+        ? signedIn({
+            ...me,
+            ...(credential.renewalExpiresAt !== undefined
+              ? { renewalExpiresAt: credential.renewalExpiresAt }
+              : {}),
+          })
+        : signedOut();
+    }
+    if (lane.pending && lane.pending.response.expiresAt > now()) return pendingStatus(lane.pending);
+    lane.pending = null;
+    return signedOut();
+  });
 
-    const getStatus = Effect.fn("AccountService.getStatus")(function* (sessionId: string) {
-      const lane = getLane(sessionId);
-      return yield* lane.semaphore.withPermit(statusLocked(sessionId, lane));
-    });
-    const startLogin = Effect.fn("AccountService.startLogin")(function* (
-      sessionId: string,
-      options: LoginOptions = {},
-    ) {
-      const lane = getLane(sessionId);
-      const generation = lane.generation;
-      return yield* lane.semaphore.withPermit(
-        Effect.gen(function* () {
-          if (!serviceUrl)
-            return yield* error(
-              "not_configured",
-              "UC San Diego sign-in is not configured on this server.",
-            );
-          if (generation !== lane.generation) return signedOut();
-          const current = yield* statusLocked(sessionId, lane);
-          if (generation !== lane.generation) return signedOut();
-          if (current.status !== "signed-out") return current;
-          if (options.returnUrl !== undefined && !accountCallbackId(options.returnUrl))
-            return yield* error("request_rejected", "Invalid native sign-in callback.");
-          const verifier = NodeCrypto.randomBytes(48).toString("base64url");
-          const codeChallenge = NodeCrypto.createHash("sha256")
-            .update(verifier)
-            .digest("base64url");
-          const response = yield* request("/v1/login/start", {
-            body: { codeChallenge, ...options },
-          });
-          if (response.status !== 200)
-            return yield* error("request_rejected", "The account service could not start sign-in.");
-          const started = yield* responseText(response).pipe(
-            Effect.flatMap(decodeStart),
+  const getStatus = Effect.fn("AccountService.getStatus")(function* (sessionId: string) {
+    const lane = getLane(sessionId);
+    return yield* lane.semaphore.withPermit(statusLocked(sessionId, lane));
+  });
+  const startLogin = Effect.fn("AccountService.startLogin")(function* (
+    sessionId: string,
+    options: LoginOptions = {},
+  ) {
+    const lane = getLane(sessionId);
+    const generation = lane.generation;
+    return yield* lane.semaphore.withPermit(
+      Effect.gen(function* () {
+        if (!serviceUrl)
+          return yield* error(
+            "not_configured",
+            "UC San Diego sign-in is not configured on this server.",
+          );
+        if (generation !== lane.generation) return signedOut();
+        const current = yield* statusLocked(sessionId, lane);
+        if (generation !== lane.generation) return signedOut();
+        if (current.status !== "signed-out") return current;
+        if (options.returnUrl !== undefined && !accountCallbackId(options.returnUrl))
+          return yield* error("request_rejected", "Invalid native sign-in callback.");
+        const verifier = NodeCrypto.randomBytes(48).toString("base64url");
+        const codeChallenge = NodeCrypto.createHash("sha256").update(verifier).digest("base64url");
+        const response = yield* request("/v1/login/start", {
+          body: { codeChallenge, ...options },
+        });
+        if (response.status !== 200)
+          return yield* error("request_rejected", "The account service could not start sign-in.");
+        const started = yield* responseText(response).pipe(
+          Effect.flatMap(decodeStart),
+          Effect.mapError(invalidResponse),
+        );
+        const verification = yield* Effect.try({
+          try: () => new URL(started.verificationUrl),
+          catch: invalidResponse,
+        });
+        if (
+          verification.origin !== serviceUrl ||
+          verification.pathname !== "/login" ||
+          verification.username ||
+          verification.password ||
+          verification.hash ||
+          verification.searchParams.get("requestId") !== started.requestId ||
+          [...verification.searchParams.keys()].some((key) => key !== "requestId") ||
+          verification.searchParams.getAll("requestId").length !== 1 ||
+          started.returnUrl !== options.returnUrl ||
+          (options.returnUrl ? started.userCode !== null : started.userCode === null) ||
+          started.expiresAt <= now() ||
+          started.expiresAt > now() + 900
+        )
+          return yield* invalidResponse();
+        if (generation !== lane.generation) return signedOut();
+        lane.pending = {
+          generation,
+          verifier,
+          response: started,
+          nextPollAt: now() + started.pollIntervalSeconds,
+        };
+        return pendingStatus(lane.pending);
+      }),
+    );
+  });
+  const pollLogin = Effect.fn("AccountService.pollLogin")(function* (
+    sessionId: string,
+    completion: LoginCompletion = {},
+  ) {
+    const lane = getLane(sessionId);
+    return yield* lane.semaphore.withPermit(
+      Effect.gen(function* () {
+        const pending = lane.pending;
+        if (!pending) return yield* statusLocked(sessionId, lane);
+        if (pending.response.expiresAt <= now()) {
+          lane.pending = null;
+          return yield* error("login_expired", "Sign-in expired. Start again.");
+        }
+        if (
+          completion.requestId !== undefined &&
+          completion.requestId !== pending.response.requestId
+        )
+          return yield* error("request_rejected", "This callback belongs to another sign-in.");
+        if (pending.response.returnUrl && !completion.completionCode) return pendingStatus(pending);
+        if (
+          pending.response.returnUrl &&
+          (!/^[A-Za-z0-9_-]{43}$/u.test(completion.completionCode ?? "") || !completion.requestId)
+        )
+          return yield* error("request_rejected", "Invalid native sign-in callback.");
+        if (!completion.completionCode && pending.nextPollAt > now()) return pendingStatus(pending);
+        pending.nextPollAt = now() + pending.response.pollIntervalSeconds;
+        const response = yield* request("/v1/login/token", {
+          body: {
+            requestId: pending.response.requestId,
+            codeVerifier: pending.verifier,
+            ...(completion.completionCode ? { completionCode: completion.completionCode } : {}),
+          },
+        });
+        if (response.status === 202) {
+          yield* responseText(response).pipe(
+            Effect.flatMap(decodePending),
             Effect.mapError(invalidResponse),
           );
-          const verification = yield* Effect.try({
-            try: () => new URL(started.verificationUrl),
-            catch: invalidResponse,
-          });
-          if (
-            verification.origin !== serviceUrl ||
-            verification.pathname !== "/login" ||
-            verification.username ||
-            verification.password ||
-            verification.hash ||
-            verification.searchParams.get("requestId") !== started.requestId ||
-            [...verification.searchParams.keys()].some((key) => key !== "requestId") ||
-            verification.searchParams.getAll("requestId").length !== 1 ||
-            started.returnUrl !== options.returnUrl ||
-            (options.returnUrl ? started.userCode !== null : started.userCode === null) ||
-            started.expiresAt <= now() ||
-            started.expiresAt > now() + 900
-          )
-            return yield* invalidResponse();
-          if (generation !== lane.generation) return signedOut();
-          lane.pending = {
-            generation,
-            verifier,
-            response: started,
-            nextPollAt: now() + started.pollIntervalSeconds,
-          };
-          return pendingStatus(lane.pending);
-        }),
-      );
-    });
-    const pollLogin = Effect.fn("AccountService.pollLogin")(function* (
-      sessionId: string,
-      completion: LoginCompletion = {},
-    ) {
-      const lane = getLane(sessionId);
-      return yield* lane.semaphore.withPermit(
-        Effect.gen(function* () {
-          const pending = lane.pending;
-          if (!pending) return yield* statusLocked(sessionId, lane);
-          if (pending.response.expiresAt <= now()) {
-            lane.pending = null;
-            return yield* error("login_expired", "Sign-in expired. Start again.");
-          }
-          if (
-            completion.requestId !== undefined &&
-            completion.requestId !== pending.response.requestId
-          )
-            return yield* error("request_rejected", "This callback belongs to another sign-in.");
-          if (pending.response.returnUrl && !completion.completionCode)
-            return pendingStatus(pending);
-          if (
-            pending.response.returnUrl &&
-            (!/^[A-Za-z0-9_-]{43}$/u.test(completion.completionCode ?? "") || !completion.requestId)
-          )
-            return yield* error("request_rejected", "Invalid native sign-in callback.");
-          if (!completion.completionCode && pending.nextPollAt > now())
-            return pendingStatus(pending);
-          pending.nextPollAt = now() + pending.response.pollIntervalSeconds;
-          const response = yield* request("/v1/login/token", {
-            body: {
-              requestId: pending.response.requestId,
-              codeVerifier: pending.verifier,
-              ...(completion.completionCode ? { completionCode: completion.completionCode } : {}),
-            },
-          });
-          if (response.status === 202) {
-            yield* responseText(response).pipe(
-              Effect.flatMap(decodePending),
-              Effect.mapError(invalidResponse),
-            );
-            return lane.generation === pending.generation ? pendingStatus(pending) : signedOut();
-          }
-          if (response.status !== 200) {
-            if ([400, 401, 403, 404, 410].includes(response.status)) lane.pending = null;
-            return yield* error(
-              "request_rejected",
-              "The account service could not complete sign-in. Start again.",
-            );
-          }
-          const credential = yield* responseText(response).pipe(
-            Effect.flatMap(decodeCredential),
-            Effect.mapError(invalidResponse),
+          return lane.generation === pending.generation ? pendingStatus(pending) : signedOut();
+        }
+        if (response.status !== 200) {
+          if ([400, 401, 403, 404, 410].includes(response.status)) lane.pending = null;
+          return yield* error(
+            "request_rejected",
+            "The account service could not complete sign-in. Start again.",
           );
-          if (
-            (credential.renewalToken === undefined) !==
-              (credential.renewalExpiresAt === undefined) ||
-            (credential.renewalExpiresAt !== undefined &&
-              (!/^[A-Za-z0-9_-]{43}$/u.test(credential.renewalToken ?? "") ||
-                credential.renewalExpiresAt <= credential.expiresAt ||
-                credential.renewalExpiresAt > now() + 30 * 86400 + 60))
-          )
-            return yield* invalidResponse();
-          if (credential.expiresAt <= now() || credential.expiresAt > now() + 3_660)
-            return yield* invalidResponse();
-          // Keep a late token recoverable if cancellation's remote revocation fails. The waiting
-          // sign-out can retry; no success state is returned until its revocation is confirmed.
-          yield* save(sessionId, credential).pipe(Effect.uninterruptible);
-          lane.pending = null;
-          if (lane.generation !== pending.generation) {
-            yield* revoke(credential);
-            yield* remove(sessionId);
-            return signedOut();
-          }
-          return signedIn(credential);
-        }),
-      );
-    });
-    const signOut = Effect.fn("AccountService.signOut")(function* (sessionId: string) {
-      const lane = getLane(sessionId);
-      // Invalidate before waiting for the lane: an already-running poll must not resurrect login.
-      lane.generation++;
-      lane.pending = null;
-      return yield* lane.semaphore.withPermit(
-        Effect.gen(function* () {
-          lane.pending = null;
-          const credential = yield* read(sessionId);
-          if (credential) yield* revoke(credential);
+        }
+        const credential = yield* responseText(response).pipe(
+          Effect.flatMap(decodeCredential),
+          Effect.mapError(invalidResponse),
+        );
+        if (
+          (credential.renewalToken === undefined) !== (credential.renewalExpiresAt === undefined) ||
+          (credential.renewalExpiresAt !== undefined &&
+            (!/^[A-Za-z0-9_-]{43}$/u.test(credential.renewalToken ?? "") ||
+              credential.renewalExpiresAt <= credential.expiresAt ||
+              credential.renewalExpiresAt > now() + 30 * 86400 + 60))
+        )
+          return yield* invalidResponse();
+        if (credential.expiresAt <= now() || credential.expiresAt > now() + 3_660)
+          return yield* invalidResponse();
+        // Keep a late token recoverable if cancellation's remote revocation fails. The waiting
+        // sign-out can retry; no success state is returned until its revocation is confirmed.
+        yield* save(sessionId, credential).pipe(Effect.uninterruptible);
+        lane.pending = null;
+        if (lane.generation !== pending.generation) {
+          yield* revoke(credential);
           yield* remove(sessionId);
           return signedOut();
-        }),
-      );
-    });
-    const teams = Effect.fn("AccountService.teams")(function* (
-      sessionId: string,
-      command: TeamCommand,
-    ) {
-      const lane = getLane(sessionId);
-      return yield* lane.semaphore.withPermit(
-        Effect.gen(function* () {
-          if (!serviceUrl)
-            return yield* new TeamsError({
-              code: "not_configured",
-              message: "UC San Diego sign-in is not configured on this environment.",
-            });
-          const credential = yield* Effect.gen(function* () {
-            const current = yield* read(sessionId);
-            if (current && current.expiresAt <= now() + 300 && current.renewalToken) {
-              yield* statusLocked(sessionId, lane);
-              return yield* read(sessionId);
-            }
-            return current;
-          }).pipe(
-            Effect.mapError(
-              () =>
-                new TeamsError({
-                  code: "unavailable",
-                  message: "Your account could not be read securely.",
-                }),
-            ),
-          );
-          if (!credential)
-            return yield* new TeamsError({
-              code: "sign_in_required",
-              message: "Sign in with UC San Diego to use Teams.",
-            });
-          const generation = lane.generation;
-          const response = yield* request("/v1/teams", {
-            token: credential.accessToken,
-            body: command,
-          }).pipe(
-            Effect.mapError(
-              () =>
-                new TeamsError({
-                  code: "unavailable",
-                  // An unanswered change can still be running on the account service.
-                  message:
-                    command.action === "list" ||
-                    command.action === "get" ||
-                    command.action === "admin-list"
-                      ? "Teams could not be reached. Refresh before retrying a change."
-                      : "Teams did not confirm this change, and it may still be in progress. Refresh before trying again.",
-                }),
-            ),
-          );
-          if (generation !== lane.generation)
-            return yield* new TeamsError({
-              code: "sign_in_required",
-              message: "Your account changed. Sign in again.",
-            });
-          if (response.status === 401) {
-            yield* remove(sessionId).pipe(
-              Effect.mapError(
-                () =>
-                  new TeamsError({
-                    code: "unavailable",
-                    message: "Sign out and reconnect your account.",
-                  }),
-              ),
-            );
-            return yield* new TeamsError({
-              code: "sign_in_required",
-              message: "Your UC San Diego sign-in expired. Sign in again.",
-            });
-          }
-          const body = yield* responseText(response, 262_144).pipe(
-            Effect.mapError(
-              () =>
-                new TeamsError({
-                  code: "unavailable",
-                  message: "Teams returned an invalid response.",
-                }),
-            ),
-          );
-          if (response.status !== 200) {
-            const failure = yield* Schema.decodeUnknownEffect(
-              Schema.fromJsonString(
-                Schema.Struct({
-                  code: TeamsError.fields.code,
-                  error: Schema.String.check(Schema.isMaxLength(1024)),
-                }),
-              ),
-            )(body).pipe(
-              Effect.mapError(
-                () =>
-                  new TeamsError({
-                    code: "unavailable",
-                    message: "Teams is unavailable on this environment.",
-                  }),
-              ),
-            );
-            return yield* new TeamsError({ code: failure.code, message: failure.error });
-          }
-          return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(TeamsResult))(body).pipe(
-            Effect.mapError(
-              () =>
-                new TeamsError({
-                  code: "unavailable",
-                  message: "Teams returned an invalid response.",
-                }),
-            ),
-          );
-        }),
-      );
-    });
-    // The environment owns renewal, so leaving Settings does not stop keeping sign-in alive.
-    if (serviceUrl) {
-      yield* Effect.gen(function* () {
-        while (true) {
-          yield* Effect.sleep("60 seconds");
-          yield* Effect.forEach(
-            [...lanes.entries()],
-            ([sessionId, lane]) =>
-              lane.semaphore
-                .withPermit(
-                  Effect.gen(function* () {
-                    const credential = yield* read(sessionId);
-                    if (credential?.renewalToken && credential.expiresAt <= now() + 300)
-                      yield* statusLocked(sessionId, lane);
-                  }),
-                )
-                .pipe(Effect.catch(() => Effect.void)),
-            { concurrency: 4, discard: true },
-          );
         }
-      }).pipe(Effect.forkScoped);
-    }
-    return AccountService.of({ getStatus, startLogin, pollLogin, signOut, teams });
+        return signedIn(credential);
+      }),
+    );
   });
+  const signOut = Effect.fn("AccountService.signOut")(function* (sessionId: string) {
+    const lane = getLane(sessionId);
+    // Invalidate before waiting for the lane: an already-running poll must not resurrect login.
+    lane.generation++;
+    lane.pending = null;
+    return yield* lane.semaphore.withPermit(
+      Effect.gen(function* () {
+        lane.pending = null;
+        const credential = yield* read(sessionId);
+        if (credential) yield* revoke(credential);
+        yield* remove(sessionId);
+        return signedOut();
+      }),
+    );
+  });
+  const teams = Effect.fn("AccountService.teams")(function* (
+    sessionId: string,
+    command: TeamCommand,
+  ) {
+    const allowed =
+      command.action === "get" || command.action === "list"
+        ? teamsAccess.requireRead
+        : teamsAccess.requireEnabled;
+    yield* allowed;
+    const lane = getLane(sessionId);
+    return yield* lane.semaphore.withPermit(
+      Effect.gen(function* () {
+        if (!serviceUrl)
+          return yield* new TeamsError({
+            code: "not_configured",
+            message: "UC San Diego sign-in is not configured on this environment.",
+          });
+        const credential = yield* Effect.gen(function* () {
+          const current = yield* read(sessionId);
+          if (current && current.expiresAt <= now() + 300 && current.renewalToken) {
+            yield* statusLocked(sessionId, lane);
+            return yield* read(sessionId);
+          }
+          return current;
+        }).pipe(
+          Effect.mapError(
+            () =>
+              new TeamsError({
+                code: "unavailable",
+                message: "Your account could not be read securely.",
+              }),
+          ),
+        );
+        if (!credential)
+          return yield* new TeamsError({
+            code: "sign_in_required",
+            message: "Sign in with UC San Diego to use Teams.",
+          });
+        const generation = lane.generation;
+        yield* allowed;
+        const response = yield* request("/v1/teams", {
+          token: credential.accessToken,
+          body: command,
+        }).pipe(
+          Effect.mapError(
+            () =>
+              new TeamsError({
+                code: "unavailable",
+                // An unanswered change can still be running on the account service.
+                message:
+                  command.action === "list" ||
+                  command.action === "get" ||
+                  command.action === "admin-list"
+                    ? "Teams could not be reached. Refresh before retrying a change."
+                    : "Teams did not confirm this change, and it may still be in progress. Refresh before trying again.",
+              }),
+          ),
+        );
+        yield* allowed;
+        if (generation !== lane.generation)
+          return yield* new TeamsError({
+            code: "sign_in_required",
+            message: "Your account changed. Sign in again.",
+          });
+        if (response.status === 401) {
+          yield* remove(sessionId).pipe(
+            Effect.mapError(
+              () =>
+                new TeamsError({
+                  code: "unavailable",
+                  message: "Sign out and reconnect your account.",
+                }),
+            ),
+          );
+          return yield* new TeamsError({
+            code: "sign_in_required",
+            message: "Your UC San Diego sign-in expired. Sign in again.",
+          });
+        }
+        const body = yield* responseText(response, 262_144).pipe(
+          Effect.mapError(
+            () =>
+              new TeamsError({
+                code: "unavailable",
+                message: "Teams returned an invalid response.",
+              }),
+          ),
+        );
+        yield* allowed;
+        if (response.status !== 200) {
+          const failure = yield* Schema.decodeUnknownEffect(
+            Schema.fromJsonString(
+              Schema.Struct({
+                code: TeamsError.fields.code,
+                error: Schema.String.check(Schema.isMaxLength(1024)),
+              }),
+            ),
+          )(body).pipe(
+            Effect.mapError(
+              () =>
+                new TeamsError({
+                  code: "unavailable",
+                  message: "Teams is unavailable on this environment.",
+                }),
+            ),
+          );
+          return yield* new TeamsError({ code: failure.code, message: failure.error });
+        }
+        return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(TeamsResult))(body).pipe(
+          Effect.mapError(
+            () =>
+              new TeamsError({
+                code: "unavailable",
+                message: "Teams returned an invalid response.",
+              }),
+          ),
+        );
+      }),
+    );
+  });
+  // The environment owns renewal, so leaving Settings does not stop keeping sign-in alive.
+  if (serviceUrl) {
+    yield* Effect.gen(function* () {
+      while (true) {
+        yield* Effect.sleep("60 seconds");
+        yield* Effect.forEach(
+          [...lanes.entries()],
+          ([sessionId, lane]) =>
+            lane.semaphore
+              .withPermit(
+                Effect.gen(function* () {
+                  const credential = yield* read(sessionId);
+                  if (credential?.renewalToken && credential.expiresAt <= now() + 300)
+                    yield* statusLocked(sessionId, lane);
+                }),
+              )
+              .pipe(Effect.catch(() => Effect.void)),
+          { concurrency: 4, discard: true },
+        );
+      }
+    }).pipe(Effect.forkScoped);
+  }
+  return AccountService.of({ getStatus, startLogin, pollLogin, signOut, teams });
+});
 
 export const layer = Layer.effect(
   AccountService,

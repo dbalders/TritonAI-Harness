@@ -23,50 +23,48 @@ const failure = () =>
  * Finds the one directory account whose sign-in name or mail is `email`, with a single Graph
  * request sent by `send` with a delegated User.ReadBasic.All token.
  */
-export const lookupInvitee = (
+export const lookupInvitee = Effect.fn("teamInvitee.lookupInvitee")(function* (
   email: string,
   send: (
     request: HttpClientRequest.HttpClientRequest,
   ) => Effect.Effect<HttpClientResponse.HttpClientResponse, TeamsError>,
-) =>
-  Effect.gen(function* () {
-    const address = email.toLowerCase();
-    const literal = address.replaceAll("'", "''");
-    const query = new URLSearchParams({
-      $filter: `userPrincipalName eq '${literal}' or mail eq '${literal}'`,
-      $select: "id,displayName,mail,userPrincipalName",
-      $top: "2",
-    });
-    const response = yield* send(
-      HttpClientRequest.get(`https://graph.microsoft.com/v1.0/users?${query}`),
-    );
-    // The connection's token doesn't carry the directory permission, or the tenant refused it.
-    if (response.status === 403)
-      return { email: address, status: "not-permitted" } satisfies TeamInviteeLookup;
-    if (response.status !== 200) return yield* failure();
-    const { value } = yield* response.json.pipe(
-      Effect.flatMap(decodeUsers),
-      Effect.mapError(failure),
-    );
-    const people = new Map(
-      value
-        .filter(
-          (user) =>
-            user.userPrincipalName.toLowerCase() === address ||
-            user.mail?.toLowerCase() === address,
-        )
-        .map((user) => [user.id, user]),
-    );
-    const [person, ...others] = people.values();
-    if (!person) return { email: address, status: "not-found" } satisfies TeamInviteeLookup;
-    if (others.length) return { email: address, status: "ambiguous" } satisfies TeamInviteeLookup;
-    if (person.userPrincipalName.toUpperCase().includes("#EXT#"))
-      return { email: address, status: "guest" } satisfies TeamInviteeLookup;
-    return {
-      email: address,
-      status: "found",
-      displayName: person.displayName?.trim() || person.userPrincipalName,
-      userPrincipalName: person.userPrincipalName,
-      mail: person.mail ?? null,
-    } satisfies TeamInviteeLookup;
+) {
+  const address = email.toLowerCase();
+  const literal = address.replaceAll("'", "''");
+  const query = new URLSearchParams({
+    $filter: `userPrincipalName eq '${literal}' or mail eq '${literal}'`,
+    $select: "id,displayName,mail,userPrincipalName",
+    $top: "2",
   });
+  const response = yield* send(
+    HttpClientRequest.get(`https://graph.microsoft.com/v1.0/users?${query}`),
+  );
+  // The connection's token doesn't carry the directory permission, or the tenant refused it.
+  if (response.status === 403)
+    return { email: address, status: "not-permitted" } satisfies TeamInviteeLookup;
+  if (response.status !== 200) return yield* failure();
+  const { value } = yield* response.json.pipe(
+    Effect.flatMap(decodeUsers),
+    Effect.mapError(failure),
+  );
+  const people = new Map(
+    value
+      .filter(
+        (user) =>
+          user.userPrincipalName.toLowerCase() === address || user.mail?.toLowerCase() === address,
+      )
+      .map((user) => [user.id, user]),
+  );
+  const [person, ...others] = people.values();
+  if (!person) return { email: address, status: "not-found" } satisfies TeamInviteeLookup;
+  if (others.length) return { email: address, status: "ambiguous" } satisfies TeamInviteeLookup;
+  if (person.userPrincipalName.toUpperCase().includes("#EXT#"))
+    return { email: address, status: "guest" } satisfies TeamInviteeLookup;
+  return {
+    email: address,
+    status: "found",
+    displayName: person.displayName?.trim() || person.userPrincipalName,
+    userPrincipalName: person.userPrincipalName,
+    mail: person.mail ?? null,
+  } satisfies TeamInviteeLookup;
+});

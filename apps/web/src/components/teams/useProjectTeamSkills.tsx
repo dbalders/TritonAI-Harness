@@ -24,13 +24,14 @@ export function useProjectTeamSkills(
   environmentId: EnvironmentId | null,
   projectId: ProjectId | null,
   sentMessages: number,
+  teamsEnabled = true,
 ): ProjectTeamSkills | null {
   const request = useAtomCommand(serverEnvironment.teamProjects, { reportFailure: false });
   const [accountChanges, setAccountChanges] = useState(0);
   const [state, setState] = useState<{ key: string; value: ProjectTeamSkills | null } | null>(null);
   const key = environmentId && projectId ? `${environmentId}:${projectId}:${accountChanges}` : null;
   // Read again whenever the project, the thread's sent messages, or the account changes.
-  const refresh = key === null ? null : `${key}\n${sentMessages}`;
+  const refresh = key === null ? null : `${key}\n${sentMessages}\n${teamsEnabled}`;
   useEffect(
     () =>
       onUcsdAccountChanged(environmentId, () => {

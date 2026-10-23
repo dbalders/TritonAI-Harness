@@ -17,6 +17,10 @@ import {
   AuthRelayWriteScope,
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
+  AuthSessionId,
+  EnvironmentId,
+  type AuthEnvironmentScope,
+  type HelpContext,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -32,6 +36,7 @@ import {
   requiredScopeForDeviceList,
 } from "./RpcAuthorization.ts";
 import * as RpcAuthorization from "./RpcAuthorization.ts";
+import type * as EnvironmentAuth from "./EnvironmentAuth.ts";
 
 describe("RPC authorization scopes", () => {
   it("declares exactly one scope for every RPC in the server group", () => {
@@ -156,8 +161,6 @@ describe("RPC authorization scopes", () => {
   });
 
   it("reads the reviewer menu under the same scope as the pull request it belongs to", () => {
-    // The candidate list is a read like the detail beside it, and asking somebody for a review is
-    // a write like every other pull request operation.
     expect(requiredScopeForRpcMethod(WS_METHODS.pullRequestsChecks)).toBe(
       AuthOrchestrationReadScope,
     );
@@ -302,6 +305,191 @@ describe("RPC scope middleware", () => {
       expect(handled).toEqual([]);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("reports only authorized requests that succeed", () =>
+    Effect.gen(function* () {
+      const observed: Array<string> = [];
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(WS_METHODS.serverProbe, () => Effect.succeed({})),
+            group.toLayerHandler(WS_METHODS.serverRetryResourceTelemetry, () => Effect.never),
+            RpcAuthorization.layer([AuthOrchestrationReadScope], (method) =>
+              Effect.sync(() => void observed.push(method)),
+            ),
+          ),
+        ),
+      );
+
+      yield* client[WS_METHODS.serverProbe]({});
+      yield* client[WS_METHODS.serverRetryResourceTelemetry]({}).pipe(Effect.flip);
+      expect(observed).toEqual([WS_METHODS.serverProbe]);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("Help RPC authorization", () => {
+  const tested = [WS_METHODS.helpGetContext, WS_METHODS.helpAsk] as const;
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, (typeof tested)[number]> =>
+        !(tested as ReadonlyArray<string>).includes(tag),
+    ),
+  );
+  const context = {
+    capturedAt: "2026-10-22T12:00:00.000Z",
+    environmentId: EnvironmentId.make("help-environment"),
+    environmentName: "Help test environment",
+    version: "test",
+    platform: "darwin",
+    mode: "desktop",
+    paths: [],
+    providers: [],
+    modelLabel: "Test model",
+    diagnostics: {
+      recordCount: 1,
+      failureCount: 0,
+      slowSpanCount: 0,
+      partial: false,
+      recentFailures: [],
+    },
+  } satisfies HelpContext;
+  const question = {
+    messages: [{ role: "user" as const, content: "Where can I find provider settings?" }],
+  };
+  const authenticatedSession = (
+    scopes: ReadonlyArray<AuthEnvironmentScope>,
+  ): EnvironmentAuth.AuthenticatedSession => ({
+    sessionId: AuthSessionId.make("help-session"),
+    subject: "help-test-user",
+    method: "bearer-access-token",
+    scopes,
+  });
+  const makeClient = (session: EnvironmentAuth.AuthenticatedSession, handled: Array<string>) =>
+    RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.helpGetContext, () =>
+            Effect.sync(() => {
+              handled.push("context");
+              return context;
+            }),
+          ),
+          group.toLayerHandler(WS_METHODS.helpAsk, () =>
+            Effect.sync(() => {
+              handled.push("ask");
+              return { answer: "Open Settings > Providers.", context };
+            }),
+          ),
+          // Match /ws: grants come from the authenticated connection, not its request payload.
+          RpcAuthorization.layer(session.scopes),
+        ),
+      ),
+    );
+
+  it.effect("allows a read-and-diagnostics session to read the Help snapshot", () =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const client = yield* makeClient(
+        authenticatedSession([AuthDiagnosticsReadScope, AuthOrchestrationReadScope]),
+        handled,
+      );
+
+      expect(yield* client[WS_METHODS.helpGetContext]({})).toEqual(context);
+      expect(handled).toEqual(["context"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { scopes: [], missing: AuthOrchestrationOperateScope },
+    { scopes: [AuthDiagnosticsReadScope], missing: AuthOrchestrationOperateScope },
+    { scopes: [AuthOrchestrationOperateScope], missing: AuthDiagnosticsReadScope },
+    {
+      scopes: [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope],
+      missing: AuthOrchestrationReadScope,
+    },
+    {
+      scopes: [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+      missing: AuthDiagnosticsReadScope,
+    },
+  ])("denies Help invocation without $missing before the handler runs", ({ scopes, missing }) =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const session = authenticatedSession(scopes);
+      const client = yield* makeClient(session, handled);
+      const forgedGrants = {
+        ...question,
+        scopes: [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope],
+        permissions: [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope],
+        requiredScopes: [],
+        session: {
+          ...session,
+          scopes: [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope],
+        },
+      };
+
+      for (const input of [question, forgedGrants]) {
+        expect(yield* client[WS_METHODS.helpAsk](input).pipe(Effect.flip)).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: missing,
+        });
+      }
+      expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects forged snapshot grants when the session lacks diagnostics access", () =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const session = authenticatedSession([AuthOrchestrationOperateScope]);
+      const client = yield* makeClient(session, handled);
+      const forgedGrants = {
+        scopes: [AuthDiagnosticsReadScope],
+        permissions: [AuthDiagnosticsReadScope],
+        session: { ...session, scopes: [AuthDiagnosticsReadScope] },
+      };
+
+      expect(
+        yield* client[WS_METHODS.helpGetContext](forgedGrants).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: AuthDiagnosticsReadScope,
+      });
+      expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("does not expose host settings or plugin inventory to diagnostics-only sessions", () =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const client = yield* makeClient(authenticatedSession([AuthDiagnosticsReadScope]), handled);
+      expect(yield* client[WS_METHODS.helpGetContext]({}).pipe(Effect.flip)).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: AuthOrchestrationReadScope,
+      });
+      expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("allows Help invocation when the authenticated session has all required grants", () =>
+    Effect.gen(function* () {
+      const handled: Array<string> = [];
+      const client = yield* makeClient(
+        authenticatedSession([
+          AuthOrchestrationOperateScope,
+          AuthDiagnosticsReadScope,
+          AuthOrchestrationReadScope,
+        ]),
+        handled,
+      );
+
+      expect(yield* client[WS_METHODS.helpAsk](question)).toEqual({
+        answer: "Open Settings > Providers.",
+        context,
+      });
+      expect(handled).toEqual(["ask"]);
+    }).pipe(Effect.scoped),
+  );
 });
 
 describe("settings mutation authorization", () => {
@@ -410,6 +598,58 @@ it.effect("requires task permission before attaching a prepared worktree to a th
   }).pipe(Effect.scoped),
 );
 
+describe("thread context authorization", () => {
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (
+        tag,
+      ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.gitRunStackedAction> =>
+        tag !== WS_METHODS.gitRunStackedAction,
+    ),
+  );
+
+  it.effect.each(["commit", "push", "commit_push", "create_pr", "commit_push_pr"] as const)(
+    "%s needs thread read permission only when generating a PR from a thread",
+    (action) =>
+      Effect.gen(function* () {
+        const handled: string[] = [];
+        const handler = group.toLayerHandler(WS_METHODS.gitRunStackedAction, ({ actionId }) =>
+          Stream.fromEffect(Effect.sync(() => handled.push(actionId))).pipe(Stream.drain),
+        );
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.merge(handler, RpcAuthorization.layer([AuthSourceControlWriteScope])),
+          ),
+        );
+        const input = { actionId: "without-thread", cwd: "/repo", action };
+        const withThread = { ...input, actionId: "with-thread", threadId: ThreadId.make("thread") };
+        yield* Stream.runDrain(client[WS_METHODS.gitRunStackedAction](input));
+        if (action === "create_pr" || action === "commit_push_pr") {
+          expect(
+            yield* Stream.runDrain(client[WS_METHODS.gitRunStackedAction](withThread)).pipe(
+              Effect.flip,
+            ),
+          ).toMatchObject({ requiredPermission: AuthOrchestrationReadScope });
+          expect(handled).toEqual(["without-thread"]);
+        } else {
+          yield* Stream.runDrain(client[WS_METHODS.gitRunStackedAction](withThread));
+          expect(handled).toEqual(["without-thread", "with-thread"]);
+        }
+        const reader = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.merge(
+              handler,
+              RpcAuthorization.layer([AuthSourceControlWriteScope, AuthOrchestrationReadScope]),
+            ),
+          ),
+        );
+        yield* Stream.runDrain(
+          reader[WS_METHODS.gitRunStackedAction]({ ...withThread, actionId: "allowed" }),
+        );
+        expect(handled.at(-1)).toBe("allowed");
+      }).pipe(Effect.scoped),
+  );
+});
 it.effect("does not expose captured project files with only orchestration read access", () =>
   Effect.gen(function* () {
     const group = WsRpcGroup.omit(
@@ -640,10 +880,14 @@ it.effect("protects cached project overviews with filesystem permission", () =>
           | typeof WS_METHODS.projectOverviewGet
           | typeof WS_METHODS.projectOverviewSubscribe
           | typeof WS_METHODS.projectOverviewEnsure
+          | typeof WS_METHODS.projectOverviewDismiss
+          | typeof WS_METHODS.projectOverviewRestore
         > =>
           tag !== WS_METHODS.projectOverviewGet &&
           tag !== WS_METHODS.projectOverviewSubscribe &&
-          tag !== WS_METHODS.projectOverviewEnsure,
+          tag !== WS_METHODS.projectOverviewEnsure &&
+          tag !== WS_METHODS.projectOverviewDismiss &&
+          tag !== WS_METHODS.projectOverviewRestore,
       ),
     );
     let handled = false;
@@ -659,6 +903,8 @@ it.effect("protects cached project overviews with filesystem permission", () =>
             Stream.fromEffect(denyHandler()),
           ),
           group.toLayerHandler(WS_METHODS.projectOverviewEnsure, denyHandler),
+          group.toLayerHandler(WS_METHODS.projectOverviewDismiss, denyHandler),
+          group.toLayerHandler(WS_METHODS.projectOverviewRestore, denyHandler),
           RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
         ),
       ),
@@ -673,6 +919,18 @@ it.effect("protects cached project overviews with filesystem permission", () =>
     expect(yield* client[WS_METHODS.projectOverviewEnsure](input).pipe(Effect.flip)).toMatchObject({
       requiredPermission: AuthFilesystemReadScope,
     });
+    expect(
+      yield* client[WS_METHODS.projectOverviewDismiss]({
+        ...input,
+        stepId: "step",
+        kind: "done",
+      }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(yield* client[WS_METHODS.projectOverviewRestore](input).pipe(Effect.flip)).toMatchObject(
+      {
+        requiredPermission: AuthFilesystemReadScope,
+      },
+    );
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );

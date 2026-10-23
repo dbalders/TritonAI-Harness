@@ -2,6 +2,7 @@ import { noTeamDailyHost } from "../memory/teamDailySource.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  type IntegrationSummary,
   type OrchestrationV2DomainEvent,
   ProjectId,
   type ProjectOverviewSnapshot,
@@ -284,6 +285,152 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
         } as OrchestrationV2DomainEvent);
         assert.isNull((yield* Queue.take(snapshots)).overview);
       }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("labels settled threads and dates them by their latest message", () =>
+    Effect.gen(function* () {
+      const { calls, layer } = yield* harness(() => Effect.succeed(result()));
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const service = yield* ProjectOverview.make;
+        yield* service.ensure(input);
+        yield* service.awaitIdle(projectId);
+        assert.include(calls[0]!.context, "Thread status: active; last message 2026-10-17.");
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE projection_threads SET settled_at='2026-10-18T12:00:00.000Z' WHERE thread_id='thread-1'`;
+        yield* service.ensure(input);
+        yield* service.awaitIdle(projectId);
+        assert.lengthOf(calls, 2);
+        assert.include(calls[1]!.context, "Thread status: settled (the user marked it handled)");
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("hides dismissed steps, avoids them in later suggestions, and restores them", () =>
+    Effect.gen(function* () {
+      let obeyAvoid = false;
+      const { calls, layer } = yield* harness(() =>
+        Effect.sync(() =>
+          obeyAvoid
+            ? {
+                ...result(),
+                ideas: [{ ...result().ideas[0]!, topic: "other", title: "Schedule the pilot" }],
+              }
+            : result(),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const service = yield* ProjectOverview.make;
+        yield* service.ensure(input);
+        yield* service.awaitIdle(projectId);
+        const step = (yield* service.get(input)).overview!.nextSteps[0]!;
+        const missing = yield* service
+          .dismiss({ ...input, stepId: "missing", kind: "done" })
+          .pipe(Effect.flip);
+        assert.include(missing.message, "no longer available");
+
+        const dismissed = yield* service.dismiss({ ...input, stepId: step.id, kind: "done" });
+        assert.lengthOf(dismissed.overview!.nextSteps, 0);
+        assert.equal(dismissed.dismissedCount, 1);
+        const restored = yield* service.restore({ ...input, stepId: step.id });
+        assert.deepStrictEqual(restored.overview!.nextSteps, [step]);
+        assert.equal(restored.dismissedCount, 0);
+
+        yield* service.dismiss({ ...input, stepId: step.id, kind: "not-relevant" });
+        // The model repeats the dismissed step; it is told to avoid it and hidden anyway.
+        yield* service.ensure({ ...input, force: true });
+        yield* service.awaitIdle(projectId);
+        assert.include(calls[1]!.context, '"title":"Review the pilot checklist"');
+        assert.include(calls[1]!.context, '"because":"not relevant"');
+        assert.lengthOf((yield* service.get(input)).overview!.nextSteps, 0);
+        // Restoring after that regeneration still brings the step back.
+        const all = yield* service.restore(input);
+        assert.equal(all.dismissedCount, 0);
+        assert.lengthOf(all.overview!.nextSteps, 1);
+        assert.lengthOf(calls, 2);
+
+        // When a regeneration honored the avoid list, Restore asks again without it.
+        yield* service.dismiss({ ...input, stepId: step.id, kind: "done" });
+        obeyAvoid = true;
+        yield* service.ensure({ ...input, force: true });
+        yield* service.awaitIdle(projectId);
+        assert.deepStrictEqual(
+          (yield* service.get(input)).overview!.nextSteps.map((next) => next.title),
+          ["Schedule the pilot"],
+        );
+        obeyAvoid = false;
+        yield* service.restore({ ...input, stepId: step.id });
+        yield* service.awaitIdle(projectId);
+        assert.lengthOf(calls, 4);
+        assert.notInclude(calls[3]!.context, '"because"');
+        assert.deepStrictEqual((yield* service.get(input)).overview!.nextSteps, [step]);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("describes turned-on plugins by version and available tools", () =>
+    Effect.sync(() => {
+      const plugin = (
+        id: string,
+        overrides: Partial<IntegrationSummary> = {},
+      ): IntegrationSummary => ({
+        id,
+        name: id === "m365" ? "Microsoft 365" : "Jira",
+        description: "Plugin",
+        version: "1.4.0",
+        apiVersion: "tritonai.harness/v2",
+        installed: true,
+        enabled: true,
+        requiresConnection: true,
+        connectionState: "connected",
+        accountLabel: null,
+        statusMessage: null,
+        capabilities: [],
+        tools: [
+          {
+            name: "a",
+            displayName: "Search mail",
+            description: "d",
+            capabilities: [],
+            effect: "read",
+            available: true,
+          },
+          {
+            name: "b",
+            displayName: "Create reply draft",
+            description: "d",
+            capabilities: [],
+            effect: "write",
+            available: true,
+          },
+          {
+            name: "c",
+            displayName: "Send mail",
+            description: "d",
+            capabilities: [],
+            effect: "write",
+            available: false,
+          },
+        ],
+        skills: [],
+        ...overrides,
+      });
+      assert.isNull(ProjectOverview.formatPluginSource([]));
+      const source = ProjectOverview.formatPluginSource([
+        plugin("m365"),
+        plugin("jira", { version: "1.1.1", connectionState: "not_connected" }),
+      ]);
+      assert.equal(source?.ref, "plugin:enabled");
+      assert.equal(
+        source?.text,
+        [
+          "Installed and turned on now:",
+          "- Jira 1.1.1 (needs sign-in): Search mail, Create reply draft",
+          "- Microsoft 365 1.4.0: Search mail, Create reply draft",
+        ].join("\n"),
+      );
     }),
   );
 

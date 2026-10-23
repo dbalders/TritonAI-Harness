@@ -50,6 +50,10 @@ It brings together requests waiting on you, work in progress, recent agent updat
 and the project's background memory notes. Follow a thread to see its full context;
 an agent finishing a turn does not mean its work was reviewed or released.
 
+The **In progress** list keeps a fixed order, with newer threads first. Progress
+reports and tool activity update each row without moving it. **Latest updates**
+stays ordered by recent activity.
+
 The overview also suggests **What’s next** from this project's conversations and
 keeps a short project description alongside its history. Opening the project checks
 for new context automatically. Saved suggestions stay visible while an update runs;
@@ -59,6 +63,11 @@ model configured on the project's environment.
 Choose **Open in new thread** on a suggestion to prepare a short request in that
 project. Its source conversations are attached as thread references so the agent can
 read their history when needed. Review or edit the draft, then send it when ready.
+
+Suggestions skip work in threads you have settled, and they take into account the plugins you
+have turned on. If a suggestion is stale anyway, choose **Already done** or **Not relevant**.
+It disappears, and the project stops suggesting it. **Restore** below the list brings back
+hidden suggestions.
 
 Use the folder icon to expand or collapse its threads without leaving the overview.
 Thread activity updates live. Memory notes appear as the background summarizer
@@ -177,8 +186,9 @@ Press `Escape` while dragging to cancel.
 
 By default, environments mark done inactive threads after three days and mark done
 threads whose pull request merged. A closed pull request can also mark done an idle
-thread. Work in progress, pending questions or approvals, and live background work
-prevent automatic mark donement. An open pull request does not prevent inactivity
+thread. An empty thread's inactivity counts from when it was created.
+Work in progress, pending questions or approvals, and live background work
+prevent automatic mark donement . An open pull request does not prevent inactivity
 mark donement unless you turn on **Keep threads with a PR** in **Settings → General**,
 but an old closed or merged pull request does not mark done work you
 resumed after it closed. Only your own messages count as resuming. A turn that
@@ -234,8 +244,8 @@ continuation. You can cancel it from the thread. Enable **Auto-resume limited
 threads** in **Settings → General** on web and desktop, or **Settings → Thread
 behavior** on mobile, to schedule limit stops by default.
 The environment must be running when the reset arrives; it resumes overdue
-continuations after a restart. Sending a new message, archiving, or settling the
-thread prevents a pending continuation from starting.
+continuations after a restart. Stopping the thread, sending a new message,
+archiving, or settling it prevents a pending continuation from starting.
 
 Choose **Snooze until reset** to hide the thread until its allowance returns.
 Snooze and auto-resume are independent: snooze alone wakes the thread without

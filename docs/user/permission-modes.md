@@ -43,6 +43,33 @@ existing threads are unchanged.
 For Grok, **Always allow this session** remembers the matching command or tool input. Other
 actions still ask for approval. It does not change the thread to **Full access**.
 
+## Opening Websites in the Browser
+
+When an agent asks to open a website in the TritonAI browser, the approval shows the complete
+address, so check it before you allow it. Blank tabs and local dev servers, such as
+`localhost:5173`, open without asking.
+
+- **Codex** asks in every mode except **Full access**, whichever browser tools it uses, including
+  the ones it reaches through the TritonAI Harness tool server.
+- **Claude** asks in **Supervised** and **Auto-accept edits**. In **Auto** and **Full access**,
+  Claude opens websites without asking.
+- Other providers follow their own tool approval settings for the browser.
+
+Opening a tab under a named browser profile, which uses that profile's saved sign-ins, also asks,
+and the approval names the profile.
+
+**Always allow this session** lets the agent keep browsing in that thread without asking again. It
+covers every tab and every browser profile in the thread, including profiles with saved sign-ins,
+so choose **Approve** if you want to approve each website or profile separately.
+
+If a website forwards the browser to a different site, the agent is told afterwards that the page
+ended up somewhere else and that the new site was not approved. This applies to Codex and Claude
+browser tools, including pages started from a local address such as `localhost:5173`. Pages
+opened through a dev-server port target are not checked. This check happens only after the page
+has loaded. It does not block the
+forwarding, and it does not stop a site or tracker from seeing your network address. Opening any
+website reveals your network address to that site.
+
 ## Choosing a Mode
 
 Use **Full access** for work in a worktree or a sandbox you can throw away.

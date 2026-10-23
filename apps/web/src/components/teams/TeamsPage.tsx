@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+import { useTeamsEnabled } from "./useTeamsEnabled";
 import { TeamSharedStorage } from "./TeamSharedStorage";
 import { TeamInviteForm } from "./TeamInviteForm";
 import { StuckProjectLinks, TeamProjects } from "./TeamProjects";
@@ -52,14 +54,16 @@ import { useTeamsCommand, useTeamsController } from "./useTeamsController";
 
 export function TeamsPage({
   linkProject,
+  initialEnvironmentId,
 }: {
   /** Opens on this project's environment with the project chosen in each team's link form. */
   linkProject: { environmentId: EnvironmentId; projectId: ProjectId } | null;
+  initialEnvironmentId?: EnvironmentId;
 }) {
   const { environments } = useEnvironments();
   const primary = usePrimaryEnvironmentId();
   const [selected, setSelected] = useState<EnvironmentId | null>(
-    linkProject?.environmentId ?? null,
+    initialEnvironmentId ?? linkProject?.environmentId ?? null,
   );
   const environmentId = selected ?? primary;
   const linkProjectTitle = useProject(linkProject)?.title ?? null;
@@ -131,14 +135,48 @@ function TeamAccount({
   linkProjectId: ProjectId | null;
 }) {
   const allowed = useTeamsPermission(environmentId);
-  const { account, busy, error, controller, canSignIn, canSignOut } = useUcsdAccount(environmentId);
-  const signedIn = account?.status === "signed-in" && account.profile;
+  const enabled = useTeamsEnabled(environmentId);
   if (!allowed)
     return (
       <p className="text-sm text-muted-foreground">
         Your connection does not have permission to use Teams on this environment.
       </p>
     );
+  if (!enabled)
+    return (
+      <div className="space-y-3 rounded-xl border border-border p-4">
+        <h3 className="text-sm font-medium">Teams is off on this environment</h3>
+        <p className="text-sm text-muted-foreground">
+          Teams is experimental. Enable it to create or join a team with your UC San Diego account.
+          While it is off, new Teams operations, background sharing, and team skills are paused
+          here. Existing teams and project links are kept.
+        </p>
+        <Button
+          variant="outline"
+          render={
+            <Link
+              to="/settings/general"
+              search={{ machine: environmentId }}
+              hash="experimental-teams"
+            />
+          }
+        >
+          Open Experimental settings
+        </Button>
+      </div>
+    );
+  return <EnabledTeamAccount environmentId={environmentId} linkProjectId={linkProjectId} />;
+}
+
+function EnabledTeamAccount({
+  environmentId,
+  linkProjectId,
+}: {
+  environmentId: EnvironmentId;
+  linkProjectId: ProjectId | null;
+}) {
+  const { account, busy, error, controller, canSignIn, canSignOut } = useUcsdAccount(environmentId);
+  const signedIn = account?.status === "signed-in" && account.profile;
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border p-4">
@@ -151,7 +189,7 @@ function TeamAccount({
             <p className="mt-1 text-xs text-muted-foreground">
               {signedIn
                 ? account.profile!.email
-                : "Teams are available to staff in the UCSD pilot."}
+                : "Create or join a team with your UC San Diego account."}
             </p>
           </div>
         </div>
@@ -721,7 +759,7 @@ export function TeamWorkspace({
           )}
           {team.state === "ready" ? (
             <TeamSharedStorage
-              key={`${team.id}:${team.storage?.folderId ?? ""}`}
+              key={`storage:${team.id}:${team.storage?.folderId ?? ""}`}
               environmentId={environmentId}
               teamId={team.id}
               canWrite={team.role !== "reader" || team.canManage}
@@ -729,7 +767,7 @@ export function TeamWorkspace({
           ) : null}
           {team.state === "ready" ? (
             <TeamProjects
-              key={`${team.id}:${team.storage?.folderId ?? ""}`}
+              key={`projects:${team.id}:${team.storage?.folderId ?? ""}`}
               environmentId={environmentId}
               teamId={team.id}
               linkProjectId={linkProjectId}

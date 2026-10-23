@@ -40,6 +40,8 @@ export const ProjectOverviewSnapshot = Schema.Struct({
     state: Schema.Literals(["idle", "generating", "error"]),
     message: Schema.NullOr(Schema.String),
   }),
+  /** Steps the user dismissed in this project. Absent on servers without next-step feedback. */
+  dismissedCount: Schema.optionalKey(Schema.Number),
 });
 export type ProjectOverviewSnapshot = typeof ProjectOverviewSnapshot.Type;
 export const ProjectOverviewGetInput = Schema.Struct({ projectId: ProjectId });
@@ -49,6 +51,21 @@ export const ProjectOverviewEnsureInput = Schema.Struct({
   force: Schema.optionalKey(Schema.Boolean),
 });
 export type ProjectOverviewEnsureInput = typeof ProjectOverviewEnsureInput.Type;
+/** done: the user already handled it. not-relevant: the user does not want it. */
+export const ProjectNextStepFeedbackKind = Schema.Literals(["done", "not-relevant"]);
+export type ProjectNextStepFeedbackKind = typeof ProjectNextStepFeedbackKind.Type;
+export const ProjectOverviewDismissInput = Schema.Struct({
+  projectId: ProjectId,
+  stepId: boundedText(100),
+  kind: ProjectNextStepFeedbackKind,
+});
+export type ProjectOverviewDismissInput = typeof ProjectOverviewDismissInput.Type;
+/** Restores one dismissed step, or every dismissed step in the project when stepId is absent. */
+export const ProjectOverviewRestoreInput = Schema.Struct({
+  projectId: ProjectId,
+  stepId: Schema.optionalKey(boundedText(100)),
+});
+export type ProjectOverviewRestoreInput = typeof ProjectOverviewRestoreInput.Type;
 export class ProjectOverviewError extends Schema.TaggedError<ProjectOverviewError>()(
   "ProjectOverviewError",
   { message: Schema.String },

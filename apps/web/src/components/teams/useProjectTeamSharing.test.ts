@@ -10,6 +10,28 @@ const sharing = {
 };
 
 describe("threadTeamSharingNotice", () => {
+  it("shows paused sharing while Teams is off and keeps the privacy opt-out available", () => {
+    expect(threadTeamSharingNotice(sharing, true, false)).toMatchObject({
+      variant: "info",
+      title: "Sharing with Alpha is paused",
+      action: "Don't share this thread",
+    });
+    expect(
+      threadTeamSharingNotice({ ...sharing, state: "held" }, true, false).description,
+    ).toContain("Previously shared summaries remain available");
+  });
+
+  it("does not offer to resume an opted-out thread until Teams is enabled again", () => {
+    expect(threadTeamSharingNotice(sharing, false, false)).toMatchObject({
+      title: "Not shared with Alpha",
+      action: null,
+    });
+    expect(threadTeamSharingNotice(sharing, false, false).description).toContain(
+      "Experimental settings",
+    );
+    expect(threadTeamSharingNotice(sharing, false, true).action).toBe("Share this thread");
+  });
+
   it("says a thread in a team project is shared, and offers the way out", () => {
     expect(threadTeamSharingNotice(sharing, true)).toMatchObject({
       variant: "info",

@@ -23,6 +23,7 @@ import { ProjectionStoreV2 } from "../../orchestration-v2/ProjectionStore.ts";
 import * as TeamMessageGate from "../TeamMessageGate.ts";
 import * as TeamProject from "../TeamProjectService.ts";
 import * as TeamStorage from "../TeamStorageService.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 
 export const teamA = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
 export const teamB = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
@@ -45,6 +46,7 @@ export const identityOf = (subject: string) =>
  * change membership, roles, and storage roots through the returned handles.
  */
 export function teamProjectFixture() {
+  let settings: ServerSettings.ServerSettingsService["Service"] | undefined;
   let subject = "alice";
   let signedIn = true;
   // The membership service is unreachable while set.
@@ -83,6 +85,7 @@ export function teamProjectFixture() {
     null;
   // Runs once, after the next membership read is answered, to land a change behind that read.
   let afterTeams: (() => void) | null = null;
+  let heldStatusRead: { skip: number; effect: Effect.Effect<void> } | null = null;
   const writes: { method: string; url: string; body: string }[] = [];
   const status = (): AccountStatus => ({
     configured: true,
@@ -102,7 +105,16 @@ export function teamProjectFixture() {
     pollIntervalSeconds: null,
   });
   const account = AccountService.of({
-    getStatus: () => Effect.sync(status),
+    getStatus: () =>
+      Effect.gen(function* () {
+        const snapshot = status();
+        if (heldStatusRead && heldStatusRead.skip-- === 0) {
+          const held = heldStatusRead;
+          heldStatusRead = null;
+          yield* held.effect;
+        }
+        return snapshot;
+      }),
     startLogin: () => Effect.sync(status),
     pollLogin: () => Effect.sync(status),
     signOut: () => Effect.sync(status),
@@ -344,6 +356,7 @@ export function teamProjectFixture() {
   });
   const makeWithGate = (sharedGate?: TeamMessageGate.TeamMessageGate["Service"]) =>
     Effect.gen(function* () {
+      settings = yield* ServerSettings.ServerSettingsService;
       const storageService = yield* TeamStorage.make(config).pipe(
         Effect.provideService(AccountService, account),
         Effect.provideService(ServerSecretStore, secrets),
@@ -368,8 +381,10 @@ export function teamProjectFixture() {
           yield* storageService.execute("s", { action: "poll", teamId, flowId: flow.flowId! });
         });
       return { service, connect, account, storage: storageService, gate };
-    });
+    }).pipe(Effect.provide(ServerSettings.layerTest({ experimentalTeamsEnabled: true })));
   return {
+    setTeamsEnabled: (enabled: boolean) =>
+      settings!.updateSettings({ experimentalTeamsEnabled: enabled }),
     make: makeWithGate(),
     makeWithGate,
     queuedMessages,
@@ -397,6 +412,10 @@ export function teamProjectFixture() {
     /** Holds the next token refresh for which `when` holds while `effect` runs. */
     duringTokenRefresh: (when: () => boolean, effect: Effect.Effect<unknown, TeamsError>) => {
       duringToken = { when, effect };
+    },
+    /** Holds one account read after `skip` reads have completed, retaining its original snapshot. */
+    holdAccountStatusRead: (skip: number, effect: Effect.Effect<void>) => {
+      heldStatusRead = { skip, effect };
     },
     afterMembershipRead: (change: () => void) => {
       afterTeams = change;

@@ -150,6 +150,48 @@ describe("scoped settings targets", () => {
 });
 
 describe("scoped settings writes", () => {
+  it("persists the Teams experiment only to the selected environment and preserves explicit opt-out", async () => {
+    const current = new Map(
+      environments
+        .filter((entry) => entry.serverConfig)
+        .map((entry) => [entry.environmentId, entry.serverConfig!.settings]),
+    );
+    const save = vi.fn(
+      async ({
+        environmentId,
+        input,
+      }: Parameters<Parameters<typeof persistScopedSettingsPatch>[1]>[0]) => {
+        const next = applyServerSettingsPatch(current.get(environmentId)!, input.patch);
+        current.set(environmentId, next);
+        return { _tag: "Success" as const, value: next };
+      },
+    );
+    const enable = planScopedSettingsPatch(named, environments, { experimentalTeamsEnabled: true });
+    expect(enable.clientPatch).toEqual({});
+    expect(enable.serverWrites.map((write) => write.environmentId)).toEqual([server.environmentId]);
+    await persistScopedSettingsPatch(enable, save, vi.fn());
+    expect(current.get(server.environmentId)?.experimentalTeamsEnabled).toBe(true);
+    expect(current.get(laptop.environmentId)?.experimentalTeamsEnabled).toBe(false);
+    const updated = environments.map((entry) =>
+      entry.serverConfig
+        ? {
+            ...entry,
+            serverConfig: { ...entry.serverConfig, settings: current.get(entry.environmentId)! },
+          }
+        : entry,
+    );
+    const disable = planScopedSettingsPatch(named, updated, { experimentalTeamsEnabled: false });
+    await persistScopedSettingsPatch(disable, save, vi.fn());
+    expect(current.get(server.environmentId)?.experimentalTeamsEnabled).toBe(false);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(
+      planScopedSettingsPatch(project, environments, { experimentalTeamsEnabled: true }),
+    ).toMatchObject({
+      serverWrites: [],
+      unavailableReason: "This setting is environment-wide and cannot be overridden by a project.",
+    });
+  });
+
   it("edits the effective machine policy without changing other machines' rules", () => {
     const custom = environment("Laptop", {
       settings: {
@@ -233,7 +275,6 @@ describe("scoped settings writes", () => {
   });
 
   describe("an environment that saves but drops keys it does not know", () => {
-    // Laptop knows every key; Server is an older build that keeps its settings as they were.
     const upgradedLaptop = (saved: Partial<ServerSettings>) =>
       vi.fn(async ({ environmentId }: { environmentId: EnvironmentId }) => ({
         _tag: "Success" as const,
@@ -763,4 +804,60 @@ it("routes legacy model preference keys exclusively to the selected environment"
       patch,
     },
   ]);
+});
+
+describe("model selection patches at project scope", () => {
+  const codex = ProviderInstanceId.make("codex");
+  const claude = ProviderInstanceId.make("claudeAgent");
+  const saved = {
+    instanceId: codex,
+    model: "gpt-5.6",
+    options: [{ id: "reasoningEffort", value: "high" }],
+  };
+  const customized = environment("Server", {
+    settings: {
+      projectSettingsOverrides: {
+        [projectId]: {
+          defaultModelSelection: saved,
+          sourceControlWriterModelSelection: saved,
+          reviewGuideModelSelection: saved,
+          textGenerationModelSelection: saved,
+        },
+      },
+    },
+  });
+
+  it("replaces old options when changing model selections", () => {
+    const plan = planScopedSettingsPatch(checkout, [customized], {
+      defaultModelSelection: { instanceId: claude, model: "claude-opus-4-8" },
+      sourceControlWriterModelSelection: { instanceId: codex, model: "gpt-5.6-mini" },
+      reviewGuideModelSelection: { instanceId: codex, model: "gpt-5.6-mini" },
+      textGenerationModelSelection: { instanceId: claude, model: "claude-sonnet-4-6" },
+    });
+    expect(plan.serverWrites[0]?.patch.projectSettingsOverrides?.[projectId]).toEqual({
+      defaultModelSelection: { instanceId: claude, model: "claude-opus-4-8" },
+      sourceControlWriterModelSelection: { instanceId: codex, model: "gpt-5.6-mini" },
+      reviewGuideModelSelection: { instanceId: codex, model: "gpt-5.6-mini" },
+      textGenerationModelSelection: { instanceId: claude, model: "claude-sonnet-4-6" },
+    });
+  });
+
+  it("completes partial text-generation selections without retaining old options", () => {
+    const modelPlan = planScopedSettingsPatch(checkout, [customized], {
+      textGenerationModelSelection: { model: "gpt-5.6-mini" },
+    });
+    expect(
+      modelPlan.serverWrites[0]?.patch.projectSettingsOverrides?.[projectId]
+        ?.textGenerationModelSelection,
+    ).toEqual({ instanceId: codex, model: "gpt-5.6-mini" });
+
+    const options = [{ id: "reasoningEffort", value: "low" }];
+    const optionsPlan = planScopedSettingsPatch(checkout, [customized], {
+      textGenerationModelSelection: { options },
+    });
+    expect(
+      optionsPlan.serverWrites[0]?.patch.projectSettingsOverrides?.[projectId]
+        ?.textGenerationModelSelection,
+    ).toEqual({ ...saved, options });
+  });
 });

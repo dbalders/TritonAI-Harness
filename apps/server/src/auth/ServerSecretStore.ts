@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Key derivation, encryption and constant-time key comparison require Node crypto.
 import * as NodeCrypto from "node:crypto";
-
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
 import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
@@ -15,7 +14,6 @@ import * as PlatformError from "effect/PlatformError";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-
 import * as ServerConfig from "../config.ts";
 import { acquireSqliteProcessLock, releaseSqliteProcessLock } from "./SqliteProcessLock.ts";
 
@@ -184,7 +182,6 @@ export const isSecretAlreadyExistsError = (error: SecretStoreError): boolean =>
 export class ServerSecretStore extends Context.Service<
   ServerSecretStore,
   {
-    /** File-backed stores expose their directory for cross-process credential leases. */
     readonly directory?: string;
     readonly get: (name: string) => Effect.Effect<Option.Option<Uint8Array>, SecretStoreError>;
     readonly set: (name: string, value: Uint8Array) => Effect.Effect<void, SecretStoreError>;
@@ -567,47 +564,48 @@ export const make = Effect.gen(function* () {
     });
   };
 
-  const getUnlocked: ServerSecretStore["Service"]["get"] = (name) =>
-    Effect.gen(function* () {
-      const storedOption: Option.Option<Uint8Array> = yield* fileSystem
-        .readFile(resolveSecretPath(name))
-        .pipe(
-          Effect.withSpan("ServerSecretStore.readFile"),
-          Effect.map((bytes): Option.Option<Uint8Array> => Option.some(Uint8Array.from(bytes))),
-          Effect.mapError(
-            (cause) =>
-              new SecretStoreReadError({
-                resource: `secret ${name}`,
-                cause,
-              }),
-          ),
-          Effect.catch((error) =>
-            isPlatformError(error.cause) && error.cause.reason._tag === "NotFound"
-              ? Effect.succeed(Option.none<Uint8Array>())
-              : Effect.fail(error),
-          ),
-        );
-      if (Option.isNone(storedOption)) {
-        yield* retireLegacyAuthorization(name);
-        return Option.none<Uint8Array>();
-      }
-
-      const stored = storedOption.value;
-      if (isTrustedLegacyValue(name, stored, keys, legacyFingerprints)) {
-        // Only bytes fingerprinted while the OS-protected data key was first
-        // created are eligible for migration. This prevents damaged envelope
-        // headers from being reclassified as unauthenticated plaintext.
-        yield* retireLegacyAuthorization(name, persistReplacing(name, stored));
-        return Option.some(Uint8Array.from(stored));
-      }
-
-      const decoded = yield* decodeEnvelope(name, stored, keys);
-      if (decoded.keyIndex !== 0) {
-        yield* persistReplacing(name, decoded.value);
-      }
+  const getUnlocked: ServerSecretStore["Service"]["get"] = Effect.fn(
+    "ServerSecretStore.getUnlocked",
+  )(function* (name) {
+    const storedOption: Option.Option<Uint8Array> = yield* fileSystem
+      .readFile(resolveSecretPath(name))
+      .pipe(
+        Effect.withSpan("ServerSecretStore.readFile"),
+        Effect.map((bytes): Option.Option<Uint8Array> => Option.some(Uint8Array.from(bytes))),
+        Effect.mapError(
+          (cause) =>
+            new SecretStoreReadError({
+              resource: `secret ${name}`,
+              cause,
+            }),
+        ),
+        Effect.catch((error) =>
+          isPlatformError(error.cause) && error.cause.reason._tag === "NotFound"
+            ? Effect.succeed(Option.none<Uint8Array>())
+            : Effect.fail(error),
+        ),
+      );
+    if (Option.isNone(storedOption)) {
       yield* retireLegacyAuthorization(name);
-      return Option.some(decoded.value);
-    });
+      return Option.none<Uint8Array>();
+    }
+
+    const stored = storedOption.value;
+    if (isTrustedLegacyValue(name, stored, keys, legacyFingerprints)) {
+      // Only bytes fingerprinted while the OS-protected data key was first
+      // created are eligible for migration. This prevents damaged envelope
+      // headers from being reclassified as unauthenticated plaintext.
+      yield* retireLegacyAuthorization(name, persistReplacing(name, stored));
+      return Option.some(Uint8Array.from(stored));
+    }
+
+    const decoded = yield* decodeEnvelope(name, stored, keys);
+    if (decoded.keyIndex !== 0) {
+      yield* persistReplacing(name, decoded.value);
+    }
+    yield* retireLegacyAuthorization(name);
+    return Option.some(decoded.value);
+  });
 
   const withSecretLock = <A, R>(
     name: string,

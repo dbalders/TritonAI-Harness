@@ -209,6 +209,33 @@ describe("searchSettings", () => {
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
   });
 
+  it("keeps the environment Teams opt-in discoverable while Team Skills are hidden", () => {
+    const available = filterAvailableSettingsSearchItems({
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+      hasTeams: false,
+    });
+    expect(searchSettings("teams", available)).toContainEqual(
+      expect.objectContaining({
+        id: "experimental-teams",
+        to: "/settings/general",
+        scope: "environment-defaults",
+      }),
+    );
+    expect(available.some((item) => item.id === "team-skills")).toBe(false);
+    const target = getSettingsSearchTargetScope("experimental-teams");
+    expect(target?.scope).toBe("environment-defaults");
+    expect(isSettingsSearchScopeAvailable(target!.scope, "all")).toBe(true);
+    expect(isSettingsSearchScopeAvailable(target!.scope, "environment")).toBe(true);
+    expect(isSettingsSearchScopeAvailable(target!.scope, "project")).toBe(false);
+    expect(isSettingsSearchScopeAvailable(target!.scope, "checkout")).toBe(false);
+  });
+
   it("finds Team Skills only where Teams is configured", () => {
     const availability = {
       hasCloudPublicConfig: false,
@@ -248,7 +275,6 @@ describe("searchSettings", () => {
     expect(remoteOnly).not.toContain("t3-connect");
     expect(remoteOnly).not.toContain("publish-agent-activity");
     expect(remoteOnly).not.toContain("wsl-backend");
-    // Browsers without access:write still render CloudLinkRow for their host.
     const browser = filterAvailableSettingsSearchItems(availability).map((item) => item.id);
     expect(browser).toContain("publish-agent-activity");
   });

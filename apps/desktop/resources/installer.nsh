@@ -124,6 +124,15 @@
 # Backup cleanup is best-effort: a scanner may briefly retain a handle, but the
 # completed new installation must remain usable and the next run will retry.
 !macro customInstall
+  !ifndef DO_NOT_CREATE_START_MENU_SHORTCUT
+    ${IfNot} ${FileExists} "$newStartMenuLink"
+      !insertmacro createMenuDirectory
+      CreateShortCut "$newStartMenuLink" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
+      ClearErrors
+      WinShell::SetLnkAUMI "$newStartMenuLink" "${APP_ID}"
+    ${EndIf}
+  !endif
+
   ClearErrors
   FileOpen $0 "$INSTDIR\${TRITONAI_INSTALL_COMPLETE_MARKER}" w
   ${if} ${Errors}

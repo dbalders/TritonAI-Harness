@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { View } from "react-native";
-
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 
 export type ThreadInspectorMode = "route" | "git" | "files";

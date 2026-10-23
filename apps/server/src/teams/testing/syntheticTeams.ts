@@ -21,6 +21,7 @@ import { noTeamMirrorHost, TeamMirrorHost } from "../../memory/sync/teamMirror.t
 import { noTeamDailyHost, TeamDailyHost } from "../../memory/teamDailySource.ts";
 import * as TeamProject from "../TeamProjectService.ts";
 import * as TeamStorage from "../TeamStorageService.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 /**
  * A synthetic campus membership service, Microsoft sign-in, and SharePoint drive for exercising
@@ -84,9 +85,21 @@ export const SYNTHETIC_TEAMS = {
     roles: Partial<Record<SyntheticIdentity, TeamMemberRole>>;
   }
 >;
-type SyntheticTeam = keyof typeof SYNTHETIC_TEAMS;
-const isSyntheticTeam = (value: string): value is SyntheticTeam =>
-  Object.hasOwn(SYNTHETIC_TEAMS, value);
+type SyntheticTeam = keyof typeof SYNTHETIC_TEAMS | `created-${number}`;
+type SyntheticTeamState = {
+  id: string;
+  reference: string;
+  name: string;
+  driveId: string;
+  siteId: string;
+  key: SyntheticTeam;
+  revision: number;
+  archived: boolean;
+  roles: Map<SyntheticIdentity, TeamMemberRole>;
+  rootId: string;
+  originalRootId: string;
+  downloadHost: string;
+};
 
 const DEVICE_ID = "5e7e7e7e-0000-4000-a000-00000000de71";
 const recordId = (n: number) => `5e7e7e7e-0000-4000-a000-${n.toString(16).padStart(12, "0")}`;
@@ -221,6 +234,8 @@ export function makeSyntheticTeamsWorld() {
   // URL a browser would open. `connectMicrosoft` arms it for the duration of its own flow.
   let deviceFlowArmed = 0;
   let counter = 0;
+  let createdTeamCount = 0;
+  const creationRequests = new Map<string, { team: SyntheticTeam; name: string }>();
   const next = () => ++counter;
   const sessions = new Set<string>();
   const trace: SyntheticTraceEntry[] = [];
@@ -247,18 +262,7 @@ export function makeSyntheticTeamsWorld() {
         downloadHost: SYNTHETIC_SITE_HOST as string,
       },
     ]),
-  ) as Record<
-    SyntheticTeam,
-    (typeof SYNTHETIC_TEAMS)[SyntheticTeam] & {
-      key: SyntheticTeam;
-      revision: number;
-      archived: boolean;
-      roles: Map<SyntheticIdentity, TeamMemberRole>;
-      rootId: string;
-      originalRootId: string;
-      downloadHost: string;
-    }
-  >;
+  ) as Record<SyntheticTeam, SyntheticTeamState>;
   const teamOfDrive = (driveId: string) =>
     Object.values(teams).find((team) => team.driveId === driveId) ?? null;
   const addItem = (
@@ -283,7 +287,7 @@ export function makeSyntheticTeamsWorld() {
     [...items.values()].find((item) => item.parentId === parentId && item.name === name);
   const ensureFolder = (driveId: string, parentId: string, name: string) =>
     childNamed(parentId, name) ?? addItem({ driveId, name, parentId, kind: "folder", text: "" });
-  for (const team of Object.values(teams)) {
+  const provisionRoot = (team: SyntheticTeamState) => {
     const driveRoot = addItem({
       id: `01SYNTHROOT-${team.key}`,
       driveId: team.driveId,
@@ -302,10 +306,11 @@ export function makeSyntheticTeamsWorld() {
     });
     team.rootId = root.id;
     team.originalRootId = root.id;
-  }
+  };
+  for (const team of Object.values(teams)) provisionRoot(team);
   const seedPaths: Array<{ team: SyntheticTeam; path: string }> = [];
   SEED.forEach((seed, index) => {
-    const team = teams[seed.team];
+    const team = teams[seed.team]!;
     const path = syntheticDocumentPath(index);
     const parts = path.split("/");
     let parentId = team.rootId;
@@ -342,7 +347,7 @@ export function makeSyntheticTeamsWorld() {
     userCode: null,
     pollIntervalSeconds: null,
   });
-  const detail = (team: (typeof teams)[SyntheticTeam], role: TeamMemberRole) => ({
+  const detail = (team: SyntheticTeamState, role: TeamMemberRole) => ({
     id: team.id,
     reference: team.reference,
     name: team.name,
@@ -371,7 +376,7 @@ export function makeSyntheticTeamsWorld() {
       const role = team.roles.get(current);
       return role ? [{ team, role }] : [];
     });
-  const identityOfMember = (team: (typeof teams)[SyntheticTeam], identityId: string) =>
+  const identityOfMember = (team: SyntheticTeamState, identityId: string) =>
     [...team.roles.keys()].find((identity) => syntheticIdentityId(identity) === identityId);
 
   /** Membership commands as the campus service answers them, over the synthetic state. */
@@ -388,6 +393,44 @@ export function makeSyntheticTeamsWorld() {
         invitationCode: null,
       });
       if (command.action === "list") return Effect.succeed(result(null));
+      if (command.action === "create") {
+        const name = command.name.trim();
+        if (name.length === 0 || name.length > 80)
+          return fail("invalid_request", "Use a team name between 1 and 80 characters.");
+        // Requests belong to an immutable synthetic identity, as they do in the real service.
+        const requestKey = `${ISSUER}\n${SYNTHETIC_IDENTITIES[current].subject}\n${command.requestId}`;
+        const previous = creationRequests.get(requestKey);
+        if (previous) {
+          if (previous.name !== name)
+            return fail("conflict", "This creation request already used a different name.");
+          const team = teams[previous.team]!;
+          const role = team.roles.get(current);
+          return role
+            ? Effect.succeed(result(detail(team, role)))
+            : fail("not_found", "Team unavailable");
+        }
+        const sequence = ++createdTeamCount;
+        const key = `created-${sequence}` as const;
+        const team: SyntheticTeamState = {
+          key,
+          id: recordId(0x100000 + sequence),
+          reference: `T-${sequence.toString(16).toUpperCase().padStart(8, "0")}`,
+          name,
+          driveId: `b!synthetic-${key}-drive`,
+          siteId: `${SYNTHETIC_SITE_HOST},${recordId(0x200000 + sequence * 2)},${recordId(0x200001 + sequence * 2)}`,
+          revision: 1,
+          archived: false,
+          roles: new Map([[current, "owner"]]),
+          rootId: "",
+          originalRootId: "",
+          downloadHost: SYNTHETIC_SITE_HOST,
+        };
+        teams[key] = team;
+        // Creation is immediate in this fixture; real provisioning remains covered by service tests.
+        provisionRoot(team);
+        creationRequests.set(requestKey, { team: key, name });
+        return Effect.succeed(result(detail(team, "owner")));
+      }
       if (!("teamId" in command))
         return fail("invalid_request", "Invitations are disabled in the synthetic Teams fixture.");
       const team = Object.values(teams).find((entry) => entry.id === command.teamId);
@@ -836,14 +879,14 @@ export function makeSyntheticTeamsWorld() {
   );
 
   const documentAt = (team: SyntheticTeam, path: string) => {
-    const root = items.get(teams[team].rootId);
+    const root = items.get(teams[team]!.rootId);
     let at: Item | undefined = root;
     for (const name of path.split("/")) at = at && childNamed(at.id, name);
     return at?.kind === "file" ? at : undefined;
   };
   const teamOrFail = (team: string) => {
-    if (!isSyntheticTeam(team)) throw new Error(`Unknown synthetic team "${team}".`);
-    return teams[team];
+    if (!Object.hasOwn(teams, team)) throw new Error(`Unknown synthetic team "${team}".`);
+    return teams[team as SyntheticTeam]!;
   };
   const identityOrFail = (identity: string) => {
     if (!isSyntheticIdentity(identity))
@@ -960,9 +1003,12 @@ type SyntheticTeamsWorld = ReturnType<typeof makeSyntheticTeamsWorld>;
 /** The real TeamStorage and TeamProject services over a synthetic world's account and HTTP client. */
 export const makeSyntheticTeamServices = (world: SyntheticTeamsWorld) =>
   Effect.gen(function* () {
+    // Share the running environment's current settings; the fixture must obey its opt-in.
+    const settings = yield* ServerSettingsService;
     const storage = yield* TeamStorage.make(SYNTHETIC_OAUTH).pipe(
       Effect.provideService(AccountService, world.account),
       Effect.provideService(HttpClient.HttpClient, world.http),
+      Effect.provideService(ServerSettingsService, settings),
     );
     // The running server's memory vault keeps team copies; standalone fixtures keep none.
     const mirrorHost = Option.getOrElse(
@@ -978,6 +1024,7 @@ export const makeSyntheticTeamServices = (world: SyntheticTeamsWorld) =>
       Effect.provideService(TeamStorage.TeamStorageService, storage),
       Effect.provideService(TeamMirrorHost, mirrorHost),
       Effect.provideService(TeamDailyHost, dailyHost),
+      Effect.provideService(ServerSettingsService, settings),
     );
     /** Connects Microsoft for every app session the account service has seen, as the current identity. */
     const connectMicrosoft = Effect.gen(function* () {

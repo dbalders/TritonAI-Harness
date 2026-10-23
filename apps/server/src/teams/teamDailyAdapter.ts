@@ -20,6 +20,7 @@ import type {
   TeamDailyWrite,
 } from "../memory/teamDailySource.ts";
 import { teamDailyMarkerAuthor } from "../memory/teamDaily.ts";
+import { withPrivacyCleanup } from "./experimentalTeams.ts";
 import { identityOf, type TeamMemoryAccount } from "./teamMemoryMirror.ts";
 import type { TeamStorageService } from "./TeamStorageService.ts";
 
@@ -80,7 +81,7 @@ export const makeTeamDailySource = (input: {
     accountSince !== null && accountSince > link.sharingSince ? accountSince : link.sharingSince;
   /** The team's current folder, after checking it is still a team the account can write to. */
   const teamFolder = (sessionId: string, teamId: string) =>
-    account.teams(sessionId, { action: "get", teamId }).pipe(
+    withPrivacyCleanup(account.teams(sessionId, { action: "get", teamId })).pipe(
       Effect.map((detail) => {
         const team = detail.team;
         if (!team || team.id !== teamId || team.state === "archived")
@@ -98,100 +99,99 @@ export const makeTeamDailySource = (input: {
       ),
     );
 
-  const accountFor: TeamDailySource["account"] = (known) =>
-    Effect.gen(function* () {
-      const session = yield* signedIn;
-      if (session.kind !== "current") return session;
-      const listed = yield* account
-        .teams(session.sessionId, { action: "list" })
-        .pipe(Effect.result);
-      if (listed._tag === "Failure") return unavailable(listed.failure.message);
-      const links = yield* input.links.pipe(Effect.result);
-      if (links._tag === "Failure") return unavailable(links.failure.message);
-      const teamIds = [...new Set([...links.success.map((link) => link.teamId), ...known])];
-      const workspaces: TeamDailyWorkspace[] = [];
-      for (const teamId of teamIds) {
-        const summary = listed.success.teams.find((team) => team.id === teamId);
-        const base = { teamId, teamName: summary?.name ?? "", projects: [], storageKey: null };
-        if (!summary || summary.state === "archived") {
-          workspaces.push({ ...base, access: "lost" });
-          continue;
-        }
-        if (summary.state !== "ready") {
-          workspaces.push({
-            ...base,
-            access: "held",
-            message: "The team's folder is being checked.",
-          });
-          continue;
-        }
-        if (summary.role === "reader") {
-          workspaces.push({
-            ...base,
-            access: "held",
-            message: "You have read-only access to this team, so your work isn't shared with it.",
-          });
-          continue;
-        }
-        const folder = yield* teamFolder(session.sessionId, teamId);
-        if (folder.kind !== "ready") {
-          workspaces.push(
-            folder.kind === "lost"
-              ? { ...base, access: "lost" }
-              : { ...base, access: "held", message: folder.message },
-          );
-          continue;
-        }
-        // Links pin the folder they were made for; one that no longer matches shares nothing.
+  const accountFor: TeamDailySource["account"] = Effect.fn("teamMemory.account")(function* (
+    known: ReadonlyArray<string>,
+  ) {
+    const session = yield* signedIn;
+    if (session.kind !== "current") return session;
+    const listed = yield* withPrivacyCleanup(
+      account.teams(session.sessionId, { action: "list" }),
+    ).pipe(Effect.result);
+    if (listed._tag === "Failure") return unavailable(listed.failure.message);
+    const links = yield* input.links.pipe(Effect.result);
+    if (links._tag === "Failure") return unavailable(links.failure.message);
+    const teamIds = [...new Set([...links.success.map((link) => link.teamId), ...known])];
+    const workspaces: TeamDailyWorkspace[] = [];
+    for (const teamId of teamIds) {
+      const summary = listed.success.teams.find((team) => team.id === teamId);
+      const base = { teamId, teamName: summary?.name ?? "", projects: [], storageKey: null };
+      if (!summary || summary.state === "archived") {
+        workspaces.push({ ...base, access: "lost" });
+        continue;
+      }
+      if (summary.state !== "ready") {
         workspaces.push({
           ...base,
-          access: "ready",
-          storageKey: storageKeyOf(folder.folder),
-          projects: links.success
-            .filter((link) => link.teamId === teamId && sameStorage(link.storage, folder.folder))
-            .map((link) => ({
-              projectId: link.projectId,
-              sharingSince: sinceOf(link, session.since),
-            })),
+          access: "held",
+          message: "The team's folder is being checked.",
         });
+        continue;
       }
-      return {
-        kind: "signed-in",
-        author: identityOf(session.profile),
-        authorName: session.profile.displayName || session.profile.email,
-        workspaces,
-      } satisfies TeamDailyAccount;
-    });
+      if (summary.role === "reader") {
+        workspaces.push({
+          ...base,
+          access: "held",
+          message: "You have read-only access to this team, so your work isn't shared with it.",
+        });
+        continue;
+      }
+      const folder = yield* teamFolder(session.sessionId, teamId);
+      if (folder.kind !== "ready") {
+        workspaces.push(
+          folder.kind === "lost"
+            ? { ...base, access: "lost" }
+            : { ...base, access: "held", message: folder.message },
+        );
+        continue;
+      }
+      // Links pin the folder they were made for; one that no longer matches shares nothing.
+      workspaces.push({
+        ...base,
+        access: "ready",
+        storageKey: storageKeyOf(folder.folder),
+        projects: links.success
+          .filter((link) => link.teamId === teamId && sameStorage(link.storage, folder.folder))
+          .map((link) => ({
+            projectId: link.projectId,
+            sharingSince: sinceOf(link, session.since),
+          })),
+      });
+    }
+    return {
+      kind: "signed-in",
+      author: identityOf(session.profile),
+      authorName: session.profile.displayName || session.profile.email,
+      workspaces,
+    } satisfies TeamDailyAccount;
+  });
 
   /** The session to act as, after checking the author, the team, and the folder. */
-  const acting = (request: {
+  const acting = Effect.fn("teamMemory.acting")(function* (request: {
     readonly teamId: string;
     readonly author: string;
     readonly storageKey: string | null;
-  }) =>
-    Effect.gen(function* () {
-      const session = yield* signedIn;
-      if (session.kind === "unavailable")
-        return { kind: "held", message: session.message } as const;
-      if (session.kind === "signed-out")
-        return { kind: "held", message: "Sign in with UC San Diego to share your work." } as const;
-      // Files are only ever written as their own author.
-      if (identityOf(session.profile) !== request.author)
-        return { kind: "held", message: "A different UC San Diego account is signed in." } as const;
-      const folder = yield* teamFolder(session.sessionId, request.teamId);
-      if (folder.kind !== "ready") return folder;
-      // Never redirected to another folder: an earlier file stays where it was published.
-      if (request.storageKey !== null && request.storageKey !== storageKeyOf(folder.folder))
-        return {
-          kind: "rejected",
-          message:
-            "The team's folder changed, so Harness can't update this day's shared memory in the folder it was published to.",
-        } as const;
-      return { kind: "ready", session, folder: folder.folder } as const;
-    });
+  }) {
+    const session = yield* signedIn;
+    if (session.kind === "unavailable") return { kind: "held", message: session.message } as const;
+    if (session.kind === "signed-out")
+      return { kind: "held", message: "Sign in with UC San Diego to share your work." } as const;
+    // Files are only ever written as their own author.
+    if (identityOf(session.profile) !== request.author)
+      return { kind: "held", message: "A different UC San Diego account is signed in." } as const;
+    const folder = yield* teamFolder(session.sessionId, request.teamId);
+    if (folder.kind !== "ready") return folder;
+    // Never redirected to another folder: an earlier file stays where it was published.
+    if (request.storageKey !== null && request.storageKey !== storageKeyOf(folder.folder))
+      return {
+        kind: "rejected",
+        message:
+          "The team's folder changed, so Harness can't update this day's shared memory in the folder it was published to.",
+      } as const;
+    return { kind: "ready", session, folder: folder.folder } as const;
+  });
 
-  const write: TeamDailySource["write"] = (request) =>
-    Effect.gen(function* () {
+  const write: TeamDailySource["write"] = Effect.fn("teamMemory.write")(
+    function* (request: Parameters<TeamDailySource["write"]>[0]) {
       let mutationUncertain = false;
       const held = (message: string): TeamDailyWrite => ({
         kind: "held",
@@ -271,41 +271,46 @@ export const makeTeamDailySource = (input: {
         return { kind: "changed", message: result.failure.message } satisfies TeamDailyWrite;
       // Membership was just confirmed: a failed write is held, never taken as access ending.
       return held(result.failure.message);
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.succeed<TeamDailyWrite>({ kind: "held", message: error.message }),
-      ),
-    );
+    },
+    (effect, request) =>
+      request.privacyCleanup && request.freshProjects.length === 0
+        ? withPrivacyCleanup(effect)
+        : effect,
+    Effect.catch((error) =>
+      Effect.succeed<TeamDailyWrite>({ kind: "held", message: error.message }),
+    ),
+  );
 
-  const inspect: TeamDailySource["inspect"] = (request) =>
-    Effect.gen(function* () {
-      const ready = yield* acting(request);
-      if (ready.kind === "lost") return ready;
-      if (ready.kind !== "ready")
-        return { kind: "held", message: ready.message } satisfies TeamDailyInspection;
-      const read = yield* storage
-        .execute(
-          ready.session.sessionId,
-          { action: "read-file", teamId: request.teamId, path: request.path },
-          { storage: ready.folder },
-        )
-        .pipe(Effect.result);
-      if (read._tag === "Failure")
-        return read.failure.code === "not_found"
-          ? ({ kind: "missing" } satisfies TeamDailyInspection)
-          : ({ kind: "held", message: read.failure.message } satisfies TeamDailyInspection);
-      const document = read.success.document;
-      if (!document)
-        return {
-          kind: "held",
-          message: "Connect Microsoft in Teams to share your work.",
-        } satisfies TeamDailyInspection;
+  const inspect: TeamDailySource["inspect"] = Effect.fn("teamMemory.inspect")(function* (
+    request: Parameters<TeamDailySource["inspect"]>[0],
+  ) {
+    const ready = yield* acting(request);
+    if (ready.kind === "lost") return ready;
+    if (ready.kind !== "ready")
+      return { kind: "held", message: ready.message } satisfies TeamDailyInspection;
+    const read = yield* storage
+      .execute(
+        ready.session.sessionId,
+        { action: "read-file", teamId: request.teamId, path: request.path },
+        { storage: ready.folder },
+      )
+      .pipe(Effect.result);
+    if (read._tag === "Failure")
+      return read.failure.code === "not_found"
+        ? ({ kind: "missing" } satisfies TeamDailyInspection)
+        : ({ kind: "held", message: read.failure.message } satisfies TeamDailyInspection);
+    const document = read.success.document;
+    if (!document)
       return {
-        kind: "file",
-        text: document.text,
-        etag: document.etag,
+        kind: "held",
+        message: "Connect Microsoft in Teams to share your work.",
       } satisfies TeamDailyInspection;
-    });
+    return {
+      kind: "file",
+      text: document.text,
+      etag: document.etag,
+    } satisfies TeamDailyInspection;
+  }, withPrivacyCleanup);
 
   return { account: accountFor, write, inspect };
 };

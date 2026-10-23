@@ -1,5 +1,6 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
 import type { TeamCommand, TeamsResult } from "@t3tools/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../ui/button";
 
 export type HeldTeam = TeamsResult["teams"][number];
@@ -23,20 +24,22 @@ export function HeldTeams({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
-  const load = useCallback(async () => {
+  const load = useStableCallback(async () => {
     const request = ++generation.current;
     setBusy(true);
     setError(null);
-    try {
-      const result = await execute({ action: "admin-list" });
-      if (generation.current === request) setTeams(result.teams);
-    } catch (cause) {
-      if (generation.current === request)
-        setError(cause instanceof Error ? cause.message : "Teams could not be reached.");
-    } finally {
-      if (generation.current === request) setBusy(false);
-    }
-  }, [execute]);
+    return execute({ action: "admin-list" })
+      .then((result) => {
+        if (generation.current === request) setTeams(result.teams);
+      })
+      .catch((cause: unknown) => {
+        if (generation.current === request)
+          setError(cause instanceof Error ? cause.message : "Teams could not be reached.");
+      })
+      .finally(() => {
+        if (generation.current === request) setBusy(false);
+      });
+  });
   useEffect(() => {
     void load();
     return () => {

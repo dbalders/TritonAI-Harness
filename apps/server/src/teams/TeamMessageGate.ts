@@ -140,22 +140,21 @@ const make = (store: Store) =>
         ),
       );
     return TeamMessageGate.of({
-      remember: (reference) =>
-        Effect.gen(function* () {
-          // Automatic skills recur on every message. Reuse their ID so they neither evict
-          // an unsent draft nor expire a queued message's projected reference IDs.
-          if (reference.applied)
-            for (const existing of yield* references()) {
-              if (existing.applied && authorityKey(existing) === authorityKey(reference))
-                return existing;
-            }
-          yield* store.set(
-            "teams_issued_references",
-            reference.id,
-            yield* encodeReference(reference).pipe(Effect.mapError(unavailable)),
-          );
-          return reference;
-        }),
+      remember: Effect.fn("TeamMessageGate.remember")(function* (reference: Reference) {
+        // Automatic skills recur on every message. Reuse their ID so they neither evict
+        // an unsent draft nor expire a queued message's projected reference IDs.
+        if (reference.applied)
+          for (const existing of yield* references()) {
+            if (existing.applied && authorityKey(existing) === authorityKey(reference))
+              return existing;
+          }
+        yield* store.set(
+          "teams_issued_references",
+          reference.id,
+          yield* encodeReference(reference).pipe(Effect.mapError(unavailable)),
+        );
+        return reference;
+      }),
       get: (id) =>
         store
           .get("teams_issued_references", id)
@@ -185,69 +184,68 @@ const make = (store: Store) =>
                 ).values(),
               ]),
             ),
-      bind: (input) =>
-        Effect.gen(function* () {
-          if (input.references.length === 0) return;
-          const existingJson = yield* store.get(
-            "teams_message_contexts",
-            key(input.messageId, input.text),
-          );
-          const existing =
-            existingJson === null
-              ? null
-              : yield* decodeBinding(existingJson).pipe(Effect.mapError(unavailable));
-          if (existing && existing.threadId !== input.threadId)
-            return yield* new TeamsError({
-              code: "conflict",
-              message: "This message already belongs to another thread.",
-            });
-          const references = uniqueReferences([
-            ...(existing?.references ?? []),
-            ...input.references,
-          ]);
-          yield* store.set(
-            "teams_message_contexts",
-            key(input.messageId, input.text),
-            yield* encodeBinding({
-              messageId: input.messageId,
-              threadId: input.threadId,
-              references,
-              textHash: hash(input.text),
-            }).pipe(Effect.mapError(unavailable)),
-          );
-        }),
+      bind: Effect.fn("TeamMessageGate.bind")(function* (
+        input: Parameters<TeamMessageGate["Service"]["bind"]>[0],
+      ) {
+        if (input.references.length === 0) return;
+        const existingJson = yield* store.get(
+          "teams_message_contexts",
+          key(input.messageId, input.text),
+        );
+        const existing =
+          existingJson === null
+            ? null
+            : yield* decodeBinding(existingJson).pipe(Effect.mapError(unavailable));
+        if (existing && existing.threadId !== input.threadId)
+          return yield* new TeamsError({
+            code: "conflict",
+            message: "This message already belongs to another thread.",
+          });
+        const references = uniqueReferences([...(existing?.references ?? []), ...input.references]);
+        yield* store.set(
+          "teams_message_contexts",
+          key(input.messageId, input.text),
+          yield* encodeBinding({
+            messageId: input.messageId,
+            threadId: input.threadId,
+            references,
+            textHash: hash(input.text),
+          }).pipe(Effect.mapError(unavailable)),
+        );
+      }),
       previous,
       registerValidator: (validate) =>
         Effect.sync(() => {
           validator = validate;
         }),
-      verifyBeforeSend: (input) =>
-        Effect.gen(function* () {
-          const json = yield* store.get("teams_message_contexts", key(input.messageId, input.text));
-          if (json === null) {
-            if ((yield* previous(input.messageId)).length > 0)
-              return yield* new TeamsError({
-                code: "conflict",
-                message:
-                  "This queued team message changed without a new access check. Edit it again before sending.",
-              });
-            return;
-          }
-          const binding = yield* decodeBinding(json).pipe(Effect.mapError(unavailable));
-          if (binding.threadId !== input.threadId || binding.textHash !== hash(input.text))
-            return yield* unavailable();
-          if (validator === undefined) return yield* unavailable();
-          for (const reference of binding.references)
-            yield* validator(reference).pipe(
-              Effect.mapError(
-                (error) =>
-                  new TeamsError({
-                    code: error.code,
-                    message: `${error.message} Restore team access to send this queued message, or cancel it and compose a new message without team context.`,
-                  }),
-              ),
-            );
-        }),
+      verifyBeforeSend: Effect.fn("TeamMessageGate.verifyBeforeSend")(function* (
+        input: Parameters<TeamMessageGate["Service"]["verifyBeforeSend"]>[0],
+      ) {
+        const json = yield* store.get("teams_message_contexts", key(input.messageId, input.text));
+        if (json === null) {
+          if ((yield* previous(input.messageId)).length > 0)
+            return yield* new TeamsError({
+              code: "conflict",
+              message:
+                "This queued team message changed without a new access check. Edit it again before sending.",
+            });
+          return;
+        }
+        const binding = yield* decodeBinding(json).pipe(Effect.mapError(unavailable));
+        if (binding.threadId !== input.threadId || binding.textHash !== hash(input.text))
+          return yield* unavailable();
+        if (validator === undefined) return yield* unavailable();
+        for (const reference of binding.references)
+          yield* validator(reference).pipe(
+            Effect.mapError(
+              (error) =>
+                new TeamsError({
+                  code: error.code,
+                  message: `${error.message} Restore team access to send this queued message, or cancel it and compose a new message without team context.`,
+                }),
+            ),
+          );
+      }),
     });
   });
 
@@ -265,25 +263,28 @@ export const layer = Layer.effect(
           Effect.map((rows) => rows[0]?.payload_json ?? null),
           Effect.mapError(unavailable),
         ),
-      set: (table, id, json) =>
-        Effect.gen(function* () {
-          const row =
-            table === "teams_message_contexts"
-              ? {
-                  context_key: id,
-                  message_id: (yield* decodeBinding(json).pipe(Effect.mapError(unavailable)))
-                    .messageId,
-                  payload_json: json,
-                }
-              : { id, payload_json: json };
-          yield* sql`INSERT INTO ${sql(table)} ${sql.insert(row)} ON CONFLICT(${sql(column(table))}) DO UPDATE SET payload_json = excluded.payload_json`.pipe(
+      set: Effect.fn("TeamMessageGate.store.set")(function* (
+        table: Parameters<Store["set"]>[0],
+        id: string,
+        json: string,
+      ) {
+        const row =
+          table === "teams_message_contexts"
+            ? {
+                context_key: id,
+                message_id: (yield* decodeBinding(json).pipe(Effect.mapError(unavailable)))
+                  .messageId,
+                payload_json: json,
+              }
+            : { id, payload_json: json };
+        yield* sql`INSERT INTO ${sql(table)} ${sql.insert(row)} ON CONFLICT(${sql(column(table))}) DO UPDATE SET payload_json = excluded.payload_json`.pipe(
+          Effect.mapError(unavailable),
+        );
+        if (table === "teams_issued_references")
+          yield* sql`DELETE FROM teams_issued_references WHERE rowid NOT IN (SELECT rowid FROM teams_issued_references ORDER BY rowid DESC LIMIT 256)`.pipe(
             Effect.mapError(unavailable),
           );
-          if (table === "teams_issued_references")
-            yield* sql`DELETE FROM teams_issued_references WHERE rowid NOT IN (SELECT rowid FROM teams_issued_references ORDER BY rowid DESC LIMIT 256)`.pipe(
-              Effect.mapError(unavailable),
-            );
-        }),
+      }),
       list: (table, messageId) =>
         (messageId === undefined
           ? sql<{ payload_json: string }>`SELECT payload_json FROM ${sql(table)} ORDER BY rowid`
@@ -312,19 +313,21 @@ export const layerMemory = (values = new Map<string, string>()) =>
             for (const old of keys.slice(0, -256)) values.delete(old);
           }
         }),
-      list: (table, messageId) =>
-        Effect.gen(function* () {
-          const rows = [...values]
-            .filter(([id]) => id.startsWith(`${table}:`))
-            .map(([, value]) => value);
-          if (messageId === undefined) return rows;
-          const selected = [];
-          for (const row of rows)
-            if (
-              (yield* decodeBinding(row).pipe(Effect.mapError(unavailable))).messageId === messageId
-            )
-              selected.push(row);
-          return selected;
-        }),
+      list: Effect.fn("TeamMessageGate.memory.list")(function* (
+        table: Parameters<Store["list"]>[0],
+        messageId?: string,
+      ) {
+        const rows = [...values]
+          .filter(([id]) => id.startsWith(`${table}:`))
+          .map(([, value]) => value);
+        if (messageId === undefined) return rows;
+        const selected = [];
+        for (const row of rows)
+          if (
+            (yield* decodeBinding(row).pipe(Effect.mapError(unavailable))).messageId === messageId
+          )
+            selected.push(row);
+        return selected;
+      }),
     }),
   );

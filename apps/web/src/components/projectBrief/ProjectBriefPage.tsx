@@ -1,3 +1,4 @@
+import { useEnvironmentProviders } from "~/state/environments";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -77,7 +78,7 @@ export function ProjectBriefPage({
     projectId,
     project ?? undefined,
   ).settings;
-  const providers = environment?.serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS;
+  const providers = useEnvironmentProviders().get(environmentId) ?? EMPTY_SERVER_PROVIDERS;
   const modelSelection =
     selectedModel ??
     resolveDefaultProviderModelSelection(providers, projectSettings.defaultModelSelection);
@@ -116,32 +117,34 @@ export function ProjectBriefPage({
       projectId,
       expectedRevision: state.revision,
     };
-    try {
-      const response = await execute({ environmentId, input: command });
-      if (response._tag !== "Success") {
-        const cause = squashAtomCommandFailure(response);
+    return await (async () => {
+      try {
+        const response = await execute({ environmentId, input: command });
+        if (response._tag !== "Success") {
+          const cause = squashAtomCommandFailure(response);
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : "The request could not be completed. Refresh the brief before retrying.",
+          );
+          query.refresh();
+          return false;
+        }
+        setResponseState(response.value);
+        return true;
+      } catch (cause) {
         setError(
           cause instanceof Error
             ? cause.message
-            : "The request could not be completed. Refresh the brief before retrying.",
+            : "The connection interrupted this request. Refresh the brief to check what happened.",
         );
         query.refresh();
         return false;
       }
-      setResponseState(response.value);
-      return true;
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? cause.message
-          : "The connection interrupted this request. Refresh the brief to check what happened.",
-      );
-      query.refresh();
-      return false;
-    } finally {
+    })().finally(async () => {
       inFlight.current = false;
       setBusy(false);
-    }
+    });
   }
 
   return (

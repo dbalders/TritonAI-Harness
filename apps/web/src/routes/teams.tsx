@@ -9,13 +9,18 @@ export interface TeamsSearch {
 }
 
 export const Route = createFileRoute("/teams")({
-  validateSearch: (raw: Record<string, unknown>): TeamsSearch =>
-    typeof raw.environmentId === "string" &&
-    raw.environmentId &&
-    typeof raw.projectId === "string" &&
-    raw.projectId
-      ? { environmentId: raw.environmentId as EnvironmentId, projectId: raw.projectId as ProjectId }
-      : {},
+  validateSearch: (raw: Record<string, unknown>): TeamsSearch => {
+    const environmentId =
+      typeof raw.environmentId === "string" && raw.environmentId
+        ? (raw.environmentId as EnvironmentId)
+        : undefined;
+    return {
+      ...(environmentId ? { environmentId } : {}),
+      ...(environmentId && typeof raw.projectId === "string" && raw.projectId
+        ? { projectId: raw.projectId as ProjectId }
+        : {}),
+    };
+  },
   beforeLoad: ({ context }) => {
     if (
       context.authGateState.status !== "authenticated" &&
@@ -31,8 +36,9 @@ function TeamsRoute() {
   const linkProject = environmentId && projectId ? { environmentId, projectId } : null;
   return (
     <TeamsPage
-      key={linkProject ? `${linkProject.environmentId}:${linkProject.projectId}` : ""}
+      key={`${environmentId ?? ""}:${projectId ?? ""}`}
       linkProject={linkProject}
+      {...(environmentId ? { initialEnvironmentId: environmentId } : {})}
     />
   );
 }

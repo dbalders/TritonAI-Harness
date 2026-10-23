@@ -35,7 +35,6 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-
 import * as ServerConfig from "../../config.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -257,15 +256,18 @@ export const make = Effect.gen(function* () {
     );
 
   /** Writes next to the target, then renames, so readers never see half a file. */
-  const writeBytesAtomically = (filePath: string, bytes: Uint8Array) =>
-    Effect.gen(function* () {
+  const writeBytesAtomically = Effect.fn("MemorySync.writeBytesAtomically")(
+    function* (filePath: string, bytes: Uint8Array) {
       yield* fs.makeDirectory(path.dirname(filePath), { recursive: true });
       const temporary = `${filePath}.sync.tmp`;
       yield* fs.writeFile(temporary, bytes);
       yield* fs.rename(temporary, filePath);
-    }).pipe(
-      Effect.mapError(() => new MemorySyncFailure({ message: `Could not write ${filePath}.` })),
-    );
+    },
+    (effect, filePath) =>
+      effect.pipe(
+        Effect.mapError(() => new MemorySyncFailure({ message: `Could not write ${filePath}.` })),
+      ),
+  );
 
   const toLocalPath = (relativePath: string) => path.join(vault.root, ...relativePath.split("/"));
 
@@ -273,43 +275,45 @@ export const make = Effect.gen(function* () {
    * The current bytes at a vault path, or null when no file is there. Any
    * other read error fails: a file sync cannot read must never look deleted.
    */
-  const readLocal = (relativePath: string) =>
-    Effect.gen(function* () {
+  const readLocal = Effect.fn("MemorySync.readLocal")(
+    function* (relativePath: string) {
       const filePath = toLocalPath(relativePath);
       const info = yield* fs.stat(filePath);
       if (info.type !== "File") return null;
       return yield* fs.readFile(filePath);
-    }).pipe(
-      Effect.catchIf(isNotFound, () => Effect.succeed(null)),
-      Effect.mapError(
-        () =>
-          new MemorySyncFailure({
-            message: `Could not read ${relativePath} from the memory folder.`,
-          }),
+    },
+    (effect, relativePath) =>
+      effect.pipe(
+        Effect.catchIf(isNotFound, () => Effect.succeed(null)),
+        Effect.mapError(
+          () =>
+            new MemorySyncFailure({
+              message: `Could not read ${relativePath} from the memory folder.`,
+            }),
+        ),
       ),
-    );
+  );
 
   /** Every file the plan cares about, with its bytes and hash. */
-  const readLocalFiles = (device: MemoryDevice) =>
-    Effect.gen(function* () {
-      const entries = yield* fs.readDirectory(vault.root, { recursive: true }).pipe(
-        // No memory folder at all is an empty vault; sync restores it.
-        Effect.catchIf(isNotFound, () => Effect.succeed<ReadonlyArray<string>>([])),
-        Effect.mapError(
-          () => new MemorySyncFailure({ message: "Could not read the memory folder." }),
-        ),
-      );
-      const files = new Map<string, { readonly bytes: Uint8Array; readonly sha256: string }>();
-      for (const entry of entries) {
-        const relativePath = entry.split(path.sep).join("/");
-        const pathClass = classifyVaultPath(relativePath, device);
-        // Team copies come from their team's folder and never go to OneDrive.
-        if (pathClass === "ignored" || pathClass === "team") continue;
-        const bytes = yield* readLocal(relativePath);
-        if (bytes !== null) files.set(relativePath, { bytes, sha256: sha256Bytes(bytes) });
-      }
-      return files;
-    });
+  const readLocalFiles = Effect.fn("MemorySync.readLocalFiles")(function* (device: MemoryDevice) {
+    const entries = yield* fs.readDirectory(vault.root, { recursive: true }).pipe(
+      // No memory folder at all is an empty vault; sync restores it.
+      Effect.catchIf(isNotFound, () => Effect.succeed<ReadonlyArray<string>>([])),
+      Effect.mapError(
+        () => new MemorySyncFailure({ message: "Could not read the memory folder." }),
+      ),
+    );
+    const files = new Map<string, { readonly bytes: Uint8Array; readonly sha256: string }>();
+    for (const entry of entries) {
+      const relativePath = entry.split(path.sep).join("/");
+      const pathClass = classifyVaultPath(relativePath, device);
+      // Team copies come from their team's folder and never go to OneDrive.
+      if (pathClass === "ignored" || pathClass === "team") continue;
+      const bytes = yield* readLocal(relativePath);
+      if (bytes !== null) files.set(relativePath, { bytes, sha256: sha256Bytes(bytes) });
+    }
+    return files;
+  });
 
   const readWritten = (device: MemoryDevice) =>
     fs.readFileString(path.join(vault.devices, device.id, "written.json")).pipe(
@@ -813,6 +817,10 @@ export const make = Effect.gen(function* () {
   const teamLock = yield* Semaphore.make(1);
   const teamsDirectory = path.join(vault.root, "teams");
   const teamStateFile = path.join(vault.root, ".sync", "teams.json");
+  const teamsEnabled = settingsService.getSettings.pipe(
+    Effect.map((settings) => settings.experimentalTeamsEnabled),
+    Effect.orElseSucceed(() => false),
+  );
 
   // Without a readable ownership record, existing local files remain unmanaged.
   const readTeamState = fs.readFileString(teamStateFile).pipe(
@@ -856,24 +864,55 @@ export const make = Effect.gen(function* () {
         )
       : Effect.void;
 
+  /** Pausing removes only journaled copies; preferences and ownership survive until resumed. */
+  const pauseTeamCopies = (teams: Record<string, TeamMirrorEntry>) =>
+    Effect.forEach(Object.keys(teams), (folder) => removeTeamCopy(folder, teams), {
+      discard: true,
+    });
+  const pauseIfDisabled = Effect.fn("memorySync.pauseIfDisabled")(function* (
+    teams: Record<string, TeamMirrorEntry>,
+  ) {
+    if (yield* teamsEnabled) return false;
+    yield* pauseTeamCopies(teams);
+    return true;
+  });
+
+  /** Recheck after the asynchronous temporary write, immediately before installing the copy. */
+  const installTeamBytes = Effect.fn("memorySync.installTeamBytes")(
+    function* (filePath: string, bytes: Uint8Array) {
+      yield* fs.makeDirectory(path.dirname(filePath), { recursive: true });
+      const temporary = `${filePath}.sync.tmp`;
+      yield* fs.writeFile(temporary, bytes);
+      if (!(yield* teamsEnabled)) {
+        yield* fs.remove(temporary).pipe(Effect.catchIf(isNotFound, () => Effect.void));
+        return false;
+      }
+      yield* fs.rename(temporary, filePath);
+      return yield* teamsEnabled;
+    },
+    (effect, filePath) =>
+      effect.pipe(
+        Effect.mapError(() => new MemorySyncFailure({ message: `Could not write ${filePath}.` })),
+      ),
+  );
+
   /**
    * Removes inactive copies only from the ownership record. Other content in
    * the vault's teams/ folder was never reserved for Harness.
    */
-  const pruneTeamCopies = (
+  const pruneTeamCopies = Effect.fn("memorySync.pruneTeamCopies")(function* (
     teams: Record<string, TeamMirrorEntry>,
     active: ReadonlyArray<TeamMirrorTeam>,
-  ) =>
-    Effect.gen(function* () {
-      const keep = new Map(active.map((team) => [team.folder, team.teamId]));
-      for (const [folder, entry] of Object.entries(teams)) {
-        // A folder handed to another team starts over.
-        if (keep.get(folder) !== entry.teamId) {
-          yield* removeTeamCopy(folder, teams);
-          delete teams[folder];
-        }
+  ) {
+    const keep = new Map(active.map((team) => [team.folder, team.teamId]));
+    for (const [folder, entry] of Object.entries(teams)) {
+      // A folder handed to another team starts over.
+      if (keep.get(folder) !== entry.teamId) {
+        yield* removeTeamCopy(folder, teams);
+        delete teams[folder];
       }
-    });
+    }
+  });
 
   const activeTeams = (source: TeamMirrorSource) =>
     source.teams.pipe(
@@ -893,6 +932,7 @@ export const make = Effect.gen(function* () {
     team: TeamMirrorTeam,
     teams: Record<string, TeamMirrorEntry>,
   ) {
+    if (yield* pauseIfDisabled(teams)) return;
     // A missing or unreadable journal cannot make existing user content ours.
     if (
       !Object.hasOwn(teams, team.folder) &&
@@ -908,6 +948,7 @@ export const make = Effect.gen(function* () {
       delete teams[team.folder];
     });
     const listing = yield* source.list(team.teamId);
+    if (yield* pauseIfDisabled(teams)) return;
     if (listing.kind === "detached") return yield* detach;
     if (listing.kind === "unavailable") return;
     const prefix = `teams/${team.folder}/`;
@@ -984,6 +1025,7 @@ export const make = Effect.gen(function* () {
     for (const action of actions.toSorted(
       (left, right) => Number(unchangedReadSkip(left)) - Number(unchangedReadSkip(right)),
     )) {
+      if (yield* pauseIfDisabled(teams)) return;
       switch (action.kind) {
         case "download": {
           if (downloads >= TEAM_DOWNLOADS_PER_PASS) {
@@ -992,6 +1034,7 @@ export const make = Effect.gen(function* () {
           }
           downloads++;
           const document = yield* source.read(team.teamId, action.path.slice(prefix.length));
+          if (yield* pauseIfDisabled(teams)) return;
           if (document.kind === "detached") return yield* detach;
           // Access couldn't be checked: keep what was copied and stop for this pass.
           if (document.kind === "unavailable") return;
@@ -1019,7 +1062,10 @@ export const make = Effect.gen(function* () {
             skipped++;
             break;
           }
-          yield* writeBytesAtomically(toLocalPath(action.path), bytes);
+          if (!(yield* installTeamBytes(toLocalPath(action.path), bytes))) {
+            yield* pauseTeamCopies(teams);
+            return;
+          }
           entry.synced[action.path] = downloaded;
           delete entry.pendingDownloads[action.path];
           break;
@@ -1061,11 +1107,13 @@ export const make = Effect.gen(function* () {
   ) =>
     teamLock.withPermits(1)(
       Effect.gen(function* () {
-        const source = yield* Ref.get(teamSource);
-        // Nothing is known about team copies until the Teams side attaches.
-        if (!source) return;
         const teams = yield* readTeamState;
+        // OFF needs no remote membership/listing call, even before Teams attaches.
+        if (yield* pauseIfDisabled(teams)) return;
+        const source = yield* Ref.get(teamSource);
+        if (!source) return;
         const active = yield* activeTeams(source);
+        if (yield* pauseIfDisabled(teams)) return;
         yield* pruneTeamCopies(teams, active).pipe(
           Effect.ensuring(writeTeamState(teams).pipe(Effect.ignore)),
         );
@@ -1080,7 +1128,18 @@ export const make = Effect.gen(function* () {
 
   const teamHost = TeamMirrorHost.of({
     attach: (source) => Ref.set(teamSource, source),
-    prune: withTeamSource(() => Effect.void),
+    // OFF can prune while a previous download is still waiting on its response. That pass
+    // cannot install after the pause because every installation rereads the same setting.
+    prune: teamsEnabled.pipe(
+      Effect.flatMap((enabled) =>
+        enabled
+          ? withTeamSource(() => Effect.void)
+          : readTeamState.pipe(
+              Effect.flatMap(pauseTeamCopies),
+              Effect.catch((error) => Effect.logWarning("team memory copy failed", { error })),
+            ),
+      ),
+    ),
     sync: withTeamSource((source, teams, active) =>
       Effect.forEach(
         active,
@@ -1117,6 +1176,9 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const service = yield* make;
     const settings = yield* ServerSettingsService;
+    // Remove paused copies before any provider can discover them at startup, without waiting
+    // for the first scheduled pass or for the Teams source to attach.
+    yield* service.teams.prune;
     yield* Effect.sleep(STARTUP_DELAY).pipe(
       Effect.andThen(
         service.syncNow.pipe(
@@ -1130,6 +1192,15 @@ export const layer = Layer.effect(
       Stream.map((next) => next.memoryEnabled && next.memorySyncEnabled),
       Stream.changes,
       Stream.runForEach(() => service.syncNow),
+      Effect.forkScoped,
+    );
+    yield* settings.streamChanges.pipe(
+      Stream.map((next) => next.experimentalTeamsEnabled),
+      Stream.changes,
+      Stream.switchMap((enabled) =>
+        Stream.fromEffect(enabled ? service.teams.sync : service.teams.prune),
+      ),
+      Stream.runDrain,
       Effect.forkScoped,
     );
     return service;

@@ -1,7 +1,7 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { ThreadId, type EnvironmentId, type ProjectId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useThreadShellsForProjectRefs } from "../../state/entities";
 import { useEnvironmentThread } from "../../state/threads";
 
@@ -16,10 +16,7 @@ export function ProjectMessageSourcePicker({
   disabled: boolean;
   onSelect: (threadId: string, messageId: string) => void;
 }) {
-  const refs = useMemo(
-    () => [scopeProjectRef(environmentId, projectId)],
-    [environmentId, projectId],
-  );
+  const refs = [scopeProjectRef(environmentId, projectId)];
   const threads = useThreadShellsForProjectRefs(refs);
   const [selectedThread, setSelectedThread] = useState("");
   const [selectedMessage, setSelectedMessage] = useState("");

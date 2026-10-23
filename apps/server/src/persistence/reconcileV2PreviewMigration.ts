@@ -8,7 +8,9 @@ import Ideas from "./Migrations/058_Ideas.ts";
 
 // Earlier Harness V2 candidates used 56, then 57. Preserve their schema and
 // import progress while keeping the released Harness migration identities.
-export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigration")(function* () {
+export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigration")(function* ({
+  includeTeams = true,
+}: { readonly includeTeams?: boolean } = {}) {
   const sql = yield* SqlClient.SqlClient;
   return yield* sql.withTransaction(
     Effect.gen(function* () {
@@ -19,6 +21,21 @@ export const reconcileV2PreviewMigration = Effect.fn("reconcileV2PreviewMigratio
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 33
       `;
+      // Unreleased Teams candidates used 72 before main shipped that ID for
+      // project dismissals. Re-run the idempotent Teams migration at its new
+      // appended ID after main's migrations; retain all existing Teams data.
+      const teamsPreview = history.find(
+        (row) => row.migration_id === 72 && row.name === "TeamSharing",
+      );
+      if (teamsPreview && includeTeams) {
+        if (history.some((row) => row.migration_id > 72)) {
+          return yield* new Migrator.MigrationError({
+            kind: "BadState",
+            message: "Cannot upgrade this Teams preview: unexpected later migration history.",
+          });
+        }
+        yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 72 AND name = 'TeamSharing'`;
+      }
       const legacy = history.find((row) => row.name === "OrchestrationV2" && row.migration_id < 59);
       if (!legacy) return [];
       const valid =

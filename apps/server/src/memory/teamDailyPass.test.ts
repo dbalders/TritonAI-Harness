@@ -2,7 +2,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { TextGenerationError } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -275,6 +277,7 @@ const withSql = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
 /** Echoes each thread's activity as its summary, so files show exactly what the model saw. */
 const makeHarness = (options: {
   readonly memoryEnabled?: boolean;
+  readonly teamsEnabled?: boolean;
   readonly during?: (input: TeamDailyMemoryGenerationInput) => Effect.Effect<void>;
   readonly fail?: () => boolean;
 }) =>
@@ -301,7 +304,10 @@ const makeHarness = (options: {
         };
       });
     const layer = Layer.mergeAll(
-      ServerSettings.layerTest({ memoryEnabled: options.memoryEnabled ?? true }),
+      ServerSettings.layerTest({
+        memoryEnabled: options.memoryEnabled ?? true,
+        experimentalTeamsEnabled: options.teamsEnabled ?? true,
+      }),
       Layer.mock(TextGeneration)({ generateTeamDailyMemory: generate }),
     ).pipe(
       Layer.provideMerge(SqlitePersistenceMemory),
@@ -378,6 +384,192 @@ const seedWorld = Effect.gen(function* () {
 });
 
 it.layer(NodeServices.layer)("team daily memory", (it) => {
+  it.effect(
+    "does not read the Teams account or generate memory while Experimental Teams is off",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ teamsEnabled: false });
+        yield* Effect.gen(function* () {
+          yield* seedWorld;
+          yield* say("t-a1", "private until enabled", at(10, 12));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          let accounts = 0;
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach({
+            ...teams.source,
+            account: (known) =>
+              Effect.sync(() => accounts++).pipe(Effect.andThen(teams.source.account(known))),
+          });
+          yield* pass.run;
+          assert.strictEqual(accounts, 0);
+          assert.strictEqual(harness.prompts.length, 0);
+          assert.strictEqual(teams.allWrites.length, 0);
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect(
+    "pauses remote publication, retains its record, and still withdraws sharing while Teams is off",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          const settings = yield* ServerSettings.ServerSettingsService;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          yield* TestClock.setTime(new Date(2026, 9, 10, 12).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "published baseline", at(10, 10));
+          yield* say("t-a1-other", "withdraw later", at(10, 10));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          const device = yield* deviceIdOf(harness.baseDir);
+          const stateFile = path.join(harness.baseDir, "team-daily", "state.json");
+          const before = yield* fs.readFileString(stateFile);
+          const remote = teams.file(TEAM_A, dayOf(10), device);
+          const writes = teams.allWrites.length;
+          const prompts = harness.prompts.length;
+          yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+          yield* say("t-a1", "unpublished while paused", at(10, 13));
+          yield* TestClock.adjust(PARTIAL_INTERVAL_MS + 60_000);
+          yield* pass.run;
+          assert.strictEqual(yield* fs.readFileString(stateFile), before);
+          assert.strictEqual(teams.file(TEAM_A, dayOf(10), device), remote);
+          assert.strictEqual(teams.allWrites.length, writes);
+          assert.strictEqual(harness.prompts.length, prompts);
+
+          yield* setSharing("t-a1-other", false);
+          yield* pass.run;
+          const withdrawn = teams.file(TEAM_A, dayOf(10), device)!;
+          assert.include(withdrawn, "published baseline");
+          assert.notInclude(withdrawn, "withdraw later");
+          assert.notInclude(withdrawn, "unpublished while paused");
+          assert.strictEqual(harness.prompts.length, prompts);
+          assert.include((yield* pass.status(TEAM_A))!.message!, "Experimental Teams is off");
+
+          yield* settings.updateSettings({ experimentalTeamsEnabled: true });
+          yield* pass.run;
+          assert.include(teams.file(TEAM_A, dayOf(10), device)!, "unpublished while paused");
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect("keeps an uncertain publication and its journal untouched while Teams is paused", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* TestClock.setTime(new Date(2026, 9, 10, 12).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "published baseline", at(10, 10));
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        const device = yield* deviceIdOf(harness.baseDir);
+        yield* say("t-a1", "sent before pausing", at(10, 13));
+        yield* TestClock.adjust(PARTIAL_INTERVAL_MS + 60_000);
+        teams.state.delayPaths = /\.md$/;
+        yield* pass.run;
+        const stateFile = path.join(harness.baseDir, "team-daily", "state.json");
+        const journal = yield* fs.readFileString(stateFile);
+        assert.include(journal, '"attempt"');
+        const remote = teams.file(TEAM_A, dayOf(10), device);
+        yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+        yield* pass.run;
+        assert.strictEqual(yield* fs.readFileString(stateFile), journal);
+        assert.strictEqual(teams.file(TEAM_A, dayOf(10), device), remote);
+        teams.completeDelayedWrites();
+        const landed = teams.file(TEAM_A, dayOf(10), device)!;
+        assert.include(landed, "sent before pausing");
+        yield* pass.run;
+        assert.strictEqual(teams.file(TEAM_A, dayOf(10), device), landed);
+        assert.strictEqual(yield* fs.readFileString(stateFile), journal);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("discards a deferred model answer when Experimental Teams is turned off", () =>
+    Effect.gen(function* () {
+      const reached = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({
+        during: () =>
+          Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      });
+      yield* Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* TestClock.setTime(new Date(2026, 9, 10, 12).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "late model answer", at(10, 10));
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        const running = yield* pass.run.pipe(Effect.forkChild);
+        yield* Deferred.await(reached);
+        yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(running);
+        assert.strictEqual(harness.prompts.length, 1);
+        assert.strictEqual(teams.allWrites.length, 0);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect(
+    "refuses a late publish after Teams is paused, then completes only its withdrawal",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          const settings = yield* ServerSettings.ServerSettingsService;
+          yield* TestClock.setTime(new Date(2026, 9, 10, 12).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "published baseline", at(10, 10));
+          yield* say("t-a1-other", "withdraw later", at(10, 10));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          const device = yield* deviceIdOf(harness.baseDir);
+          yield* say("t-a1", "new work must wait", at(10, 13));
+          yield* setSharing("t-a1-other", false);
+          yield* TestClock.adjust(PARTIAL_INTERVAL_MS + 60_000);
+          const reached = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let first = true;
+          teams.state.beforeRequest = Effect.suspend(() => {
+            if (!first) return Effect.void;
+            first = false;
+            return Deferred.succeed(reached, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+            );
+          });
+          const running = yield* pass.run.pipe(Effect.forkChild);
+          yield* Deferred.await(reached);
+          yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(running);
+          const text = teams.file(TEAM_A, dayOf(10), device)!;
+          assert.include(text, "published baseline");
+          assert.notInclude(text, "withdraw later");
+          assert.notInclude(text, "new work must wait");
+          assert.isFalse(
+            teams.writes.some((write) => write.text?.includes("new work must wait") === true),
+          );
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
   it.effect("uses V2 sharing and resume boundaries when legacy history has the same thread", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({});
@@ -817,7 +1009,9 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
             stateDir: on.baseDir,
             deviceLabel: "Test Mac",
             settings: yield* ServerSettings.ServerSettingsService.pipe(
-              Effect.provide(ServerSettings.layerTest({ memoryEnabled: false })),
+              Effect.provide(
+                ServerSettings.layerTest({ memoryEnabled: false, experimentalTeamsEnabled: true }),
+              ),
             ),
             textGeneration: yield* TextGeneration,
             maxCatchUpDays: MAX_CATCH_UP_DAYS,

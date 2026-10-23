@@ -3,6 +3,7 @@ import Migration0068 from "./Migrations/068_ProjectBriefs.ts";
 import Migration0069 from "./Migrations/069_ProjectBriefDispatches.ts";
 import Migration0070 from "./Migrations/070_ProjectBriefArchives.ts";
 import Migration0071 from "./Migrations/071_ProjectOverviews.ts";
+import Migration0072 from "./Migrations/072_ProjectNextStepDismissals.ts";
 /**
  * Migration runner with an inline loader.
  *
@@ -27,7 +28,6 @@ import V2Migration0060 from "./Migrations/060_ThreadSnapshotWindowIndexes.ts";
 import V2Migration0061 from "./Migrations/061_PullRequestReviewGuides.ts";
 import V2Migration0062 from "./Migrations/062_ThreadFailureLookupIndex.ts";
 
-// Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
 import Migration0002 from "./Migrations/002_OrchestrationCommandReceipts.ts";
 import Migration0003 from "./Migrations/003_CheckpointDiffBlobs.ts";
@@ -86,18 +86,14 @@ import UpstreamMigration0052 from "./Migrations/052_ProjectionThreadTitleState.t
 import UpstreamMigration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
 import UpstreamMigration0054 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
 import Migration0058 from "./Migrations/058_Ideas.ts";
-import Migration0072 from "./Migrations/072_TeamSharing.ts";
+import TeamSharingMigration from "./Migrations/072_TeamSharing.ts";
 
-/**
- * Migration loader with all migrations defined inline.
- *
- * Key format: "{id}_{name}" where:
- * - id: numeric migration ID (determines execution order)
- * - name: descriptive name for the migration
- *
- * Uses Migrator.fromRecord which parses the key format and
- * returns migrations sorted by ID.
- */
+import UpstreamMigration0063 from "./Migrations/063_DropUnusedV1Projections.ts";
+import UpstreamMigration0064 from "./Migrations/064_CanonicalizeThreadPullRequestLinks.ts";
+import UpstreamMigration0065 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
+import UpstreamMigration0066 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
+import UpstreamMigration0067 from "./Migrations/067_WebhookDedupe.ts";
+
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
@@ -175,7 +171,13 @@ export const migrationEntries = [
   [69, "ProjectBriefDispatches", Migration0069],
   [70, "ProjectBriefArchives", Migration0070],
   [71, "ProjectOverviews", Migration0071],
-  [72, "TeamSharing", Migration0072],
+  [72, "ProjectNextStepDismissals", Migration0072],
+  [73, "DropUnusedV1Projections", UpstreamMigration0063],
+  [74, "CanonicalizeThreadPullRequestLinks", UpstreamMigration0064],
+  [75, "CodexUsageNativeTurnIndex", UpstreamMigration0065],
+  [76, "RepairClientSettlementTimestamps", UpstreamMigration0066],
+  [77, "WebhookDedupe", UpstreamMigration0067],
+  [78, "TeamSharing", TeamSharingMigration],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -196,8 +198,7 @@ const FIRST_V2_MIGRATION_ID = 59;
  * Fail before migrating when the migrator would skip one of V2's own
  * migrations. It skips every id up to the highest recorded one, whatever name
  * was recorded, so a database that took a V2 id for another migration would
- * start without V2's schema and fail on first use. Earlier ids keep the
- * warning below: databases with a site-local migration there still work.
+ * start without V2's schema and fail on first use.
  */
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
   throughId?: number,
@@ -231,67 +232,60 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
   });
 });
 
-/**
- * Migrator run function - no schema dumping needed
- * Uses the base Migrator.make without platform dependencies
- */
 const run = Migrator.make({});
 
 export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
 }
 
-/**
- * Run all pending migrations.
- *
- * Creates the migrations tracking table (effect_sql_migrations) if it doesn't exist,
- * then runs any migrations with ID greater than the latest recorded migration.
- *
- * Returns array of [id, name] tuples for migrations that were run.
- *
- * @returns Effect containing array of executed migrations
- */
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  const includesV2 =
-    toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
-  const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
-  if (includesV2) {
-    yield* assertV2MigrationsCanRun(toMigrationInclusive);
-  }
-  const executedMigrations = [
-    ...previewMigrations,
-    ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
-  ];
-  const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
-  yield* migrations.length === 0
-    ? Effect.logDebug("Database schema is current")
-    : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
-
-  // The migrator keys on migration_id: a database that recorded a different
-  // migration under a shared id (local or fork builds) keeps that id and
-  // silently skips this build's migration at it. Surface the divergence so the
-  // skipped schema change is diagnosable.
   const sql = yield* SqlClient.SqlClient;
-  const recorded = yield* sql<{
-    readonly migration_id: number;
-    readonly name: string;
-  }>`SELECT migration_id, name FROM effect_sql_migrations`;
-  const manifestNames = new Map<number, string>(migrationEntries.map(([id, name]) => [id, name]));
-  const divergent = recorded.flatMap((row) => {
-    const expected = manifestNames.get(row.migration_id);
-    if (expected === undefined) {
-      return [`${row.migration_id}:${row.name} (unknown to this build)`];
-    }
-    return expected === row.name
-      ? []
-      : [`${row.migration_id}:${row.name} (this build: ${expected})`];
-  });
-  if (divergent.length > 0) {
-    yield* Effect.logWarning(
-      "Database migration history diverges from this build; recorded migration ids are skipped, not reconciled by name.",
-    ).pipe(Effect.annotateLogs({ divergent }));
-  }
-  return executedMigrations;
+  // Preview reconciliation and the upgrade batch must commit together.
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const includesV2 =
+        toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
+      const previewMigrations = includesV2
+        ? yield* reconcileV2PreviewMigration({
+            includeTeams: toMigrationInclusive === undefined || toMigrationInclusive >= 78,
+          })
+        : [];
+      if (includesV2) {
+        yield* assertV2MigrationsCanRun(toMigrationInclusive);
+      }
+      const executedMigrations = [
+        ...previewMigrations,
+        ...(yield* run({ loader: makeMigrationLoader(toMigrationInclusive) })),
+      ];
+      const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
+      yield* migrations.length === 0
+        ? Effect.logDebug("Database schema is current")
+        : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
+
+      const recorded = yield* sql<{
+        readonly migration_id: number;
+        readonly name: string;
+      }>`SELECT migration_id, name FROM effect_sql_migrations`;
+      const manifestNames = new Map<number, string>(
+        migrationEntries.map(([id, name]) => [id, name]),
+      );
+      const divergent = recorded.flatMap((row) => {
+        const expected = manifestNames.get(row.migration_id);
+        if (expected === undefined) {
+          return [`${row.migration_id}:${row.name} (unknown to this build)`];
+        }
+        return expected === row.name
+          ? []
+          : [`${row.migration_id}:${row.name} (this build: ${expected})`];
+      });
+      if (divergent.length > 0) {
+        yield* Effect.logWarning(
+          "Database migration history diverges from this build; recorded migration ids are skipped, not reconciled by name.",
+        ).pipe(Effect.annotateLogs({ divergent }));
+      }
+      return executedMigrations;
+    }),
+  );
 });

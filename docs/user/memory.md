@@ -2,7 +2,7 @@
 
 Memory keeps a daily summary of your threads in a folder of Markdown notes, and lets Codex agents look back through it when earlier work matters.
 
-Memory is on by default for new and existing installations, including Nightly. When you install an update that adds Memory, it starts automatically unless you have explicitly turned it off. The switch is under **Settings > General > Memory**. Each machine keeps its own memory, so the setting appears when one environment is selected.
+Memory is on by default for new and existing installations, including Nightly. When you install an update that adds Memory, it starts automatically unless you have explicitly turned it off. The setting is under **Settings > General > Memory**. Choose **All environments** to turn Memory on or off across connected computers, or select one environment to change it separately. **Mixed** means the connected computers have different settings. Offline computers keep their settings until you reconnect and apply the change.
 
 ## What it writes
 
@@ -32,7 +32,7 @@ The summary uses your text generation model under **Settings > General > Text ge
 
 ## Sync between your computers
 
-To see every computer's notes on each of them, turn on **Sync memory with OneDrive** under **Settings > General > Memory**. If the Microsoft 365 plugin is already connected, sync starts right away. Otherwise Memory shows a code to enter at Microsoft's sign-in page with your UC San Diego account.
+To see every computer's notes on each of them, turn on **Sync memory with OneDrive** under **Settings > General > Memory**. If the Microsoft 365 plugin is already connected, sync starts right away. Otherwise Memory shows a code to enter at Microsoft's sign-in page with your UC San Diego account. You can turn sync on or off for all connected environments. Expand **Manage environments** for each computer's status, sign-in, sync, and folder actions. If you sign in for a remote computer, open Microsoft's page on your current computer and enter that remote computer's code; the remote environment receives and stores its own credentials. Pending sign-ins identify the computer they authorize. Sync pauses on computers where Memory is off.
 
 Your notes stay in the same local folder. Memory copies them to `TritonAI Harness/memory/general` in your OneDrive (Nightly uses `TritonAI Harness Nightly`) and brings in your other computers' notes about every five minutes. Each computer only changes its own notes, so they never overwrite each other. The `Notes` folder syncs both ways; if you edit the same note on two computers before they sync, you keep both versions, one with "conflict" and the computer's name in its title.
 

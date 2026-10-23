@@ -1,7 +1,13 @@
-# Teams pilot
+# Teams (experimental)
 
-Open **Teams** in the sidebar and sign in with UC San Diego. Your administrator
-must enable your account and the team storage service for this staff pilot.
+Open **Settings → General → Experimental** and turn on **Teams** for the
+Harness environment you want to use. Each environment starts with Teams off;
+changing this requires permission to edit its settings. Then choose **Open Teams**
+or **Teams** in the sidebar and sign in with UC San Diego. The team storage
+service must be configured by your administrator.
+Turning Teams off pauses new Teams operations, background sharing, and team
+skills on that environment. Existing teams, invitations, and project links are
+kept, so you can turn it on again to continue.
 Teams is available in the web and desktop clients. Once Teams is set up, the
 command palette offers **Open Teams**, **Link project to a team** for the
 current project, and, in a project thread, the share and team skill actions
@@ -77,7 +83,7 @@ and reload its latest version before retrying.
 Every open document and preview shows who last changed it and when. Choose
 **History** on an open document to list the versions shared storage kept,
 newest first, with who saved each one, and to read an earlier version's text.
-Any team member can view history. History is read-only in the pilot: a restore
+Any team member can view history. History is read-only in this experimental version: a restore
 would replace the document without the checks a save makes, that no one else
 changed it first and that a skill has no hidden characters. To bring back
 earlier text, copy it into the document and save it. Names come from the

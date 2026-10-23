@@ -27,6 +27,7 @@ import {
   teamProjectFixture as fixture,
   threadId,
 } from "./testing/teamProjectFixture.ts";
+import type { ServerSettingsService } from "../serverSettings.ts";
 import type { AccountService } from "../auth/AccountService.ts";
 import type { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import type { TeamMirrorHost } from "../memory/sync/teamMirror.ts";
@@ -56,6 +57,55 @@ const agentMessage = (text: string) =>
   ({ ...turn(text), createdBy: "agent", creationSource: "server" }) as const;
 
 describe("Team project memory", () => {
+  it.effect(
+    "blocks new Teams work while off, keeps plain messages and local unlink available",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture();
+        const { service, connect } = yield* f.make;
+        yield* connect(teamA);
+        yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+        yield* f.setTeamsEnabled(false);
+        f.graph.length = 0;
+        expect(yield* code(service.teams("s", { action: "list" }))).toBe("forbidden");
+        expect(yield* code(service.execute("s", { action: "memory-list", projectId }))).toBe(
+          "forbidden",
+        );
+        expect(yield* service.prepareOutgoingCommand("s", turn("Plain message"))).toEqual(
+          turn("Plain message"),
+        );
+        yield* service.execute("s", { action: "unbind", teamId: teamA, projectId });
+        expect(f.graph).toHaveLength(0);
+        yield* f.setTeamsEnabled(true);
+        expect(yield* code(service.execute("s", { action: "memory-list", projectId }))).toBe(
+          "not_found",
+        );
+      }),
+  );
+
+  it.effect("prevents a publish after Teams turns off during the storage read", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const { service, connect } = yield* f.make;
+      yield* connect(teamA);
+      yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+      f.interleave(f.setTeamsEnabled(false).pipe(Effect.orDie));
+      expect(
+        yield* code(
+          service.execute("s", {
+            action: "memory-publish",
+            projectId,
+            recordId,
+            deviceId,
+            title: "T",
+            text: "Held contribution",
+          }),
+        ),
+      ).toBe("forbidden");
+      expect(f.writes).toHaveLength(0);
+    }),
+  );
+
   it.effect("reads and publishes only the linked team's memory with project provenance", () =>
     Effect.gen(function* () {
       const f = fixture();
@@ -737,6 +787,7 @@ describe("Team skills in a linked project", () => {
       // the mirror host, and work leaves only through the daily memory host's checked writes.
       expectTypeOf<Effect.Services<typeof TeamProject.make>>().toEqualTypeOf<
         | AccountService
+        | ServerSettingsService
         | ServerSecretStore
         | ProjectService
         | ProjectionStoreV2
@@ -783,6 +834,27 @@ describe("Team skills turned on for a project", () => {
         .pipe(Effect.map((command) => (command.type === "message.dispatch" ? command.text : "")));
     return { f, ...made, enable, enabled, sent };
   });
+
+  it.effect("pauses approved skills and holds queued references when the experiment is off", () =>
+    Effect.gen(function* () {
+      const { f, service, enable, sent, gate } = yield* linked;
+      yield* enable();
+      const prepared = yield* service.prepareOutgoingCommand("s", turn("With skill"));
+      expect(prepared.type === "message.dispatch" && prepared.text).toContain("team-skill");
+      yield* f.setTeamsEnabled(false);
+      expect(yield* sent("Plain message")).toBe("Plain message");
+      expect(prepared.type).toBe("message.dispatch");
+      if (prepared.type !== "message.dispatch") return;
+      expect(
+        yield* code(
+          gate.verifyBeforeSend({ messageId: prepared.messageId, threadId, text: prepared.text }),
+        ),
+      ).toBe("forbidden");
+      yield* service.execute("s", { action: "skill-disable-all", projectId });
+      yield* f.setTeamsEnabled(true);
+      expect(yield* sent("Still plain")).toBe("Still plain");
+    }),
+  );
 
   it.effect("is off until reviewed, then adds exactly the approved skill to each message", () =>
     Effect.gen(function* () {

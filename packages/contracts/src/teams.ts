@@ -687,7 +687,6 @@ export const TeamProjectResult = Schema.Struct({
    * and skill lists and previews. Former members are absent.
    */
   authors: Schema.optionalKey(Schema.Record(Identity, Schema.String)),
-  /** From `stuck-links`. */
   stuckLinks: Schema.optionalKey(Schema.Array(StuckTeamProjectLink)),
   /** From the `mirror-*` actions: every local copy the caller's campus account has here. */
   mirrors: Schema.optionalKey(Schema.Array(TeamMemoryMirror)),

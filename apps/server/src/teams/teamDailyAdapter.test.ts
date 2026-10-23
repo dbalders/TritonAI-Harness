@@ -82,7 +82,73 @@ describe("Daily team memory writes", () => {
     }),
   );
 
+  it.effect(
+    "while Teams is paused permits only explicitly marked withdrawal writes without fresh work",
+    () =>
+      Effect.gen(function* () {
+        const team = yield* linked;
+        expect(yield* team.write("# already shared")).toMatchObject({ kind: "written" });
+        yield* team.f.setTeamsEnabled(false);
+        const before = team.changes().length;
+        expect(yield* team.write(null)).toMatchObject({ kind: "held" });
+        const request = {
+          teamId: teamA,
+          author,
+          path,
+          text: null,
+          etag: "v1",
+          storageKey: team.workspace.storageKey,
+          freshProjects: [],
+          stillShared: Effect.succeed(true),
+          privacyCleanup: true as const,
+        };
+        expect(
+          yield* team.source.write({
+            ...request,
+            text: "new work",
+            freshProjects: team.workspace.projects,
+          }),
+        ).toMatchObject({ kind: "held" });
+        expect(team.changes()).toHaveLength(before);
+        expect(yield* team.source.write(request)).toMatchObject({ kind: "written" });
+        expect(team.changes().slice(before)).toEqual([
+          expect.objectContaining({ method: "DELETE" }),
+        ]);
+      }),
+  );
+
+  it.effect(
+    "withdrawal while Teams is paused still verifies membership and the author's identity",
+    () =>
+      Effect.gen(function* () {
+        const team = yield* linked;
+        yield* team.f.setTeamsEnabled(false);
+        delete team.f.roles[teamA]!.alice;
+        const request = {
+          teamId: teamA,
+          author,
+          path,
+          text: null,
+          etag: "v1",
+          storageKey: team.workspace.storageKey,
+          freshProjects: [],
+          stillShared: Effect.succeed(true),
+          privacyCleanup: true as const,
+        };
+        expect(yield* team.source.write(request)).toMatchObject({ kind: "lost" });
+        team.f.roles[teamA]!.alice = "owner";
+        team.f.switchTo("mallory");
+        expect(yield* team.source.write(request)).toMatchObject({ kind: "held" });
+        expect(team.changes()).toEqual([]);
+      }),
+  );
+
   const changesDuringRefresh = [
+    {
+      name: "Experimental Teams is turned off",
+      change: (team: Effect.Success<typeof linked>) =>
+        team.f.setTeamsEnabled(false).pipe(Effect.orDie),
+    },
     {
       name: "a thread is chosen as Don't share",
       change: (team: Effect.Success<typeof linked>) => Effect.sync(() => team.optOut()),

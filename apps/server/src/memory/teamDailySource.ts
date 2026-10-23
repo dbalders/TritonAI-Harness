@@ -95,6 +95,8 @@ export interface TeamDailySource {
     }>;
     /** Whether every thread in `text` is still shared. */
     readonly stillShared: Effect.Effect<boolean>;
+    /** Internal removal-only rewrite, fence, or its marker; never carries fresh project work. */
+    readonly privacyCleanup?: true;
   }) => Effect.Effect<TeamDailyWrite>;
   /** Reads this device's own file where it was written, to learn whether a write landed. */
   readonly inspect: (input: {

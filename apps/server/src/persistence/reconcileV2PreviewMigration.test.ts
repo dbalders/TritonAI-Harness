@@ -10,7 +10,6 @@ import PullRequestFilesViewed from "./Migrations/053_PullRequestFilesViewed.ts";
 import RemoveRedundantProjectionIndexes from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import OrchestrationV2 from "./Migrations/055_OrchestrationV2.ts";
 
-// Harness preview schemas retain their completed migration and lazy-import progress.
 const seedPreview = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* runMigrations({ toMigrationInclusive: 55 });
@@ -49,7 +48,13 @@ describe("V2 preview upgrade", () => {
         [69, "ProjectBriefDispatches"],
         [70, "ProjectBriefArchives"],
         [71, "ProjectOverviews"],
-        [72, "TeamSharing"],
+        [72, "ProjectNextStepDismissals"],
+        [73, "DropUnusedV1Projections"],
+        [74, "CanonicalizeThreadPullRequestLinks"],
+        [75, "CodexUsageNativeTurnIndex"],
+        [76, "RepairClientSettlementTimestamps"],
+        [77, "WebhookDedupe"],
+        [78, "TeamSharing"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -141,7 +146,13 @@ describe("V2 preview upgrade", () => {
         [69, "ProjectBriefDispatches"],
         [70, "ProjectBriefArchives"],
         [71, "ProjectOverviews"],
-        [72, "TeamSharing"],
+        [72, "ProjectNextStepDismissals"],
+        [73, "DropUnusedV1Projections"],
+        [74, "CanonicalizeThreadPullRequestLinks"],
+        [75, "CodexUsageNativeTurnIndex"],
+        [76, "RepairClientSettlementTimestamps"],
+        [77, "WebhookDedupe"],
+        [78, "TeamSharing"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

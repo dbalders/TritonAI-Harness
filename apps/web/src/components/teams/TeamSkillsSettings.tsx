@@ -1,3 +1,5 @@
+import { useStableCallback } from "../../hooks/useStableCallback";
+import { useTeamsEnabledEnvironments } from "./useTeamsEnabled";
 import {
   formatTeamContext,
   shortTeamSkillVersion,
@@ -10,7 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { UsersIcon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useOptionalSettingsScope } from "../settings/SettingsScopeContext";
 import { SettingsRow, SettingsSection } from "../settings/settingsLayout";
 import { searchableSetting } from "../settings/settingsSearch";
@@ -51,8 +53,10 @@ const badges: Record<
  */
 export function TeamSkillsSettingsSection() {
   const scope = useOptionalSettingsScope();
-  if (!scope || scope.scope.kind === "unavailable") return null;
-  const projectTargets = scope.targets.filter((target) => target.projectId !== null);
+  const enabled = useTeamsEnabledEnvironments(scope?.targets ?? []);
+  const targets = scope?.targets.filter((target) => enabled.has(target.environmentId)) ?? [];
+  if (!scope || scope.scope.kind === "unavailable" || targets.length === 0) return null;
+  const projectTargets = targets.filter((target) => target.projectId !== null);
   const projectTitle =
     scope.scope.kind === "project" || scope.scope.kind === "checkout"
       ? scope.scope.group.displayName
@@ -84,7 +88,7 @@ export function TeamSkillsSettingsSection() {
           ))
         )
       ) : (
-        scope.targets.map((target) => (
+        targets.map((target) => (
           <SignedIn key={target.environmentId} environmentId={target.environmentId}>
             {(identity) => (
               <LinkedProjects
@@ -199,7 +203,7 @@ function ProjectTeamSkills({
   // Why the team couldn't be checked; the skills shown are then only the user's own approvals.
   const [problem, setProblem] = useState<string | null>(null);
   const [review, setReview] = useState<Review | null>(null);
-  const load = useCallback(async () => {
+  const load = useStableCallback(async () => {
     const current = await run({ action: "skill-enabled", projectId });
     setNotice(null);
     if (!current) return;
@@ -227,7 +231,7 @@ function ProjectTeamSkills({
     if (storage) return setNotice(storage);
     setAuthors(listed.authors);
     setFiles((listed.storage?.files ?? []).map(({ path, summary }) => ({ path, summary })));
-  }, [projectId, run]);
+  });
   useEffect(() => {
     void load();
   }, [load]);

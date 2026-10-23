@@ -4,15 +4,22 @@ import * as NodeFS from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import type { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import type {
+  ExecutionEnvironmentDescriptor,
+  ServerSettings as Settings,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
@@ -272,7 +279,8 @@ class FakeOneDrive {
             ]),
           );
           const url = new URL(request.url);
-          for (const [key, value] of request.urlParams) url.searchParams.append(key, value);
+          for (const [key, value] of request.urlParams)
+            url.searchParams.append(key, typeof value === "string" ? value : Redacted.value(value));
           const held = this.hold?.(url, new URLSearchParams(new TextDecoder().decode(body)));
           if (held) yield* held;
           const reply = this.handle(request.method, url, headers, body);
@@ -293,7 +301,11 @@ class FakeOneDrive {
  */
 const makeDeniableFileSystem = (fs: FileSystem.FileSystem, path: Path.Path) => {
   const denied = new Map<string, "writes" | "everything">();
-  const hooks = { afterRename: null as ((from: string, to: string) => void) | null };
+  const hooks = {
+    afterRename: null as ((from: string, to: string) => void) | null,
+    afterWrite: null as ((target: string) => Effect.Effect<void>) | null,
+    afterRemove: null as ((target: string) => Effect.Effect<void>) | null,
+  };
   const under = (target: string, directory: string) => {
     const relative = path.relative(directory, target);
     return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
@@ -337,8 +349,13 @@ const makeDeniableFileSystem = (fs: FileSystem.FileSystem, path: Path.Path) => {
     makeDirectory: (target, options) =>
       guard("makeDirectory", target, "write", fs.makeDirectory(target, options)),
     writeFile: (target, data, options) =>
-      guard("writeFile", target, "write", fs.writeFile(target, data, options)),
-    remove: (target, options) => guard("remove", target, "write", fs.remove(target, options)),
+      guard("writeFile", target, "write", fs.writeFile(target, data, options)).pipe(
+        Effect.tap(() => Effect.suspend(() => hooks.afterWrite?.(target) ?? Effect.void)),
+      ),
+    remove: (target, options) =>
+      guard("remove", target, "write", fs.remove(target, options)).pipe(
+        Effect.tap(() => Effect.suspend(() => hooks.afterRemove?.(target) ?? Effect.void)),
+      ),
     rename: (from, to) =>
       guard("rename", from, "write", guard("rename", to, "write", fs.rename(from, to))).pipe(
         Effect.tap(() => Effect.sync(() => hooks.afterRename?.(from, to))),
@@ -363,7 +380,7 @@ const IMAC: Computer = {
   name: "iMac",
 };
 
-const setup = (drive: FakeOneDrive, computer: Computer) =>
+const setup = (drive: FakeOneDrive, computer: Computer, teamsEnabled = true, scheduled = false) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -399,8 +416,42 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
       });
 
     const lock = yield* Semaphore.make(1);
+    const settingsChanges = yield* PubSub.unbounded<Settings>();
+    const settingsSubscriptions = yield* Ref.make(0);
+    const settingsReady = yield* Deferred.make<void>();
+    const settingsLayer = Layer.effect(
+      ServerSettings.ServerSettingsService,
+      Effect.gen(function* () {
+        const original = yield* ServerSettings.ServerSettingsService;
+        return ServerSettings.ServerSettingsService.of({
+          ...original,
+          updateSettings: (patch) =>
+            original
+              .updateSettings(patch)
+              .pipe(Effect.tap((next) => PubSub.publish(settingsChanges, next))),
+          streamChanges: Stream.unwrap(
+            PubSub.subscribe(settingsChanges).pipe(
+              Effect.tap(() =>
+                Ref.updateAndGet(settingsSubscriptions, (count) => count + 1).pipe(
+                  Effect.flatMap((count) =>
+                    count >= 2 ? Deferred.succeed(settingsReady, undefined) : Effect.succeed(false),
+                  ),
+                ),
+              ),
+              Effect.map(Stream.fromSubscription),
+            ),
+          ),
+        });
+      }),
+    ).pipe(
+      Layer.provide(
+        ServerSettings.layerTest({ memoryEnabled: true, experimentalTeamsEnabled: teamsEnabled }),
+      ),
+    );
     // The service without its schedule, so each test decides when a pass runs.
-    const layer = Layer.effect(MemorySync.MemorySync, MemorySync.make).pipe(
+    const layer = (
+      scheduled ? MemorySync.layer : Layer.effect(MemorySync.MemorySync, MemorySync.make)
+    ).pipe(
       Layer.provide(
         Layer.effect(MicrosoftSignIn.MicrosoftSignIn, MicrosoftSignIn.make(OAUTH)).pipe(
           Layer.provide(drive.layer()),
@@ -409,7 +460,7 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
       Layer.provideMerge(drive.layer()),
       Layer.provideMerge(
         Layer.mergeAll(
-          ServerSettings.layerTest({ memoryEnabled: true }),
+          settingsLayer,
           Layer.mock(ServerEnvironment)({
             getDescriptor: Effect.succeed({
               environmentId: computer.environmentId,
@@ -436,6 +487,7 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
     );
     // One set of services per computer for the whole test, like a running app.
     const context = yield* Layer.build(layer);
+    if (scheduled) yield* Deferred.await(settingsReady);
     return {
       vault,
       label,
@@ -495,6 +547,7 @@ const fakeTeamSource = (folder = FOLDER.slice("teams/".length)) => {
     reads: [] as string[],
     reports: [] as TeamMirrorOutcome[],
     beforeRead: null as (() => void) | null,
+    duringRead: Effect.void as Effect.Effect<void>,
     skippedPaths: new Set<string>(),
   };
   const source: TeamMirrorSource = {
@@ -510,9 +563,10 @@ const fakeTeamSource = (folder = FOLDER.slice("teams/".length)) => {
         );
       }),
     read: (_teamId, path) =>
-      Effect.sync((): TeamMirrorDocument => {
+      Effect.gen(function* (): Effect.fn.Return<TeamMirrorDocument> {
         state.reads.push(path);
         state.beforeRead?.();
+        yield* state.duringRead;
         if (state.document) return state.document;
         if (state.skippedPaths.has(path)) return { kind: "skip" };
         const file = state.files.get(path);
@@ -1322,6 +1376,156 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
       );
       assert.isNull(drive.file("TritonAI Harness/memory/general/teams"));
     }),
+  );
+
+  it.effect("keeps personal OneDrive sync running while Experimental Teams is off", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC, false);
+      const sync = yield* connectSync.pipe(Effect.provide(mac.layer));
+      const team = fakeTeamSource();
+      team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "Team note" });
+      yield* sync.teams.attach(team.source);
+      yield* mac.registerDevice;
+      yield* mac.write("Notes/personal.md", "Personal note");
+      yield* sync.syncNow;
+      yield* sync.teams.sync;
+      assert.strictEqual(
+        drive.file("TritonAI Harness/memory/general/Notes/personal.md"),
+        "Personal note",
+      );
+      assert.strictEqual(team.lists, 0);
+      assert.strictEqual(team.reads.length, 0);
+      assert.isNull(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`));
+    }),
+  );
+
+  it.effect(
+    "pauses only recorded team folders without remote reads and retains their journal",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        const settings = yield* ServerSettings.ServerSettingsService.pipe(
+          Effect.provide(mac.layer),
+        );
+        const team = fakeTeamSource();
+        team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "Team note" });
+        yield* sync.teams.attach(team.source);
+        yield* sync.teams.sync;
+        const journal = yield* mac.read(".sync/teams.json");
+        yield* mac.write("teams/personal/note.md", "Personal team notes");
+        const reads = team.reads.length;
+        const lists = team.lists;
+        yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+        yield* sync.teams.prune;
+        yield* sync.teams.sync;
+        assert.isNull(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`));
+        assert.strictEqual(yield* mac.read("teams/personal/note.md"), "Personal team notes");
+        assert.strictEqual(yield* mac.read(".sync/teams.json"), journal);
+        assert.strictEqual(team.reads.length, reads);
+        assert.strictEqual(team.lists, lists);
+        assert.strictEqual(team.kept, true);
+        yield* settings.updateSettings({ experimentalTeamsEnabled: true });
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "Team note");
+      }),
+  );
+
+  it.effect(
+    "prunes owned mirrors on the settings change while an earlier remote read is still pending",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC, true, true);
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        const settings = yield* ServerSettings.ServerSettingsService.pipe(
+          Effect.provide(mac.layer),
+        );
+        const team = fakeTeamSource();
+        const relative = `${FOLDER}/Memory/a/d/1.md`;
+        team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "Existing team note" });
+        yield* sync.teams.attach(team.source);
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(relative), "Existing team note");
+        const reached = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const removed = yield* Deferred.make<void>();
+        team.files.set("Memory/a/d/1.md", { eTag: "e2", text: "Late replacement" });
+        team.duringRead = Deferred.succeed(reached, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        );
+        mac.hooks.afterRemove = (target) =>
+          target === mac.path.join(mac.vault, FOLDER)
+            ? Deferred.succeed(removed, undefined).pipe(Effect.asVoid)
+            : Effect.void;
+        const running = yield* sync.teams.sync.pipe(Effect.forkChild);
+        yield* Deferred.await(reached);
+        yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+        yield* Deferred.await(removed);
+        assert.isNull(yield* mac.read(relative));
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(running);
+        assert.isNull(yield* mac.read(relative));
+      }),
+  );
+
+  it.effect("discards a deferred team download after Experimental Teams is paused", () =>
+    Effect.gen(function* () {
+      const mac = yield* setup(new FakeOneDrive(), MAC);
+      const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+      const settings = yield* ServerSettings.ServerSettingsService.pipe(Effect.provide(mac.layer));
+      const team = fakeTeamSource();
+      team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "Team note" });
+      yield* sync.teams.attach(team.source);
+      const reached = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      team.duringRead = Deferred.succeed(reached, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      );
+      const running = yield* sync.teams.sync.pipe(Effect.forkChild);
+      yield* Deferred.await(reached);
+      yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(running);
+      assert.isNull(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`));
+      assert.strictEqual(team.reads.length, 1);
+      yield* sync.teams.sync;
+      assert.strictEqual(team.reads.length, 1);
+    }),
+  );
+
+  it.effect(
+    "rechecks Experimental Teams after writing temporary bytes before installing a copy",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        const settings = yield* ServerSettings.ServerSettingsService.pipe(
+          Effect.provide(mac.layer),
+        );
+        const team = fakeTeamSource();
+        const relative = `${FOLDER}/Memory/a/d/1.md`;
+        team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "Late team note" });
+        yield* sync.teams.attach(team.source);
+        const reached = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        mac.hooks.afterWrite = (target) =>
+          target === mac.path.join(mac.vault, `${relative}.sync.tmp`)
+            ? Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void;
+        const running = yield* sync.teams.sync.pipe(Effect.forkChild);
+        yield* Deferred.await(reached);
+        yield* settings.updateSettings({ experimentalTeamsEnabled: false });
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(running);
+        assert.isNull(yield* mac.read(relative));
+        assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, FOLDER)));
+        assert.isNotNull(yield* mac.read(".sync/teams.json"));
+        mac.hooks.afterWrite = null;
+        yield* settings.updateSettings({ experimentalTeamsEnabled: true });
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(relative), "Late team note");
+      }),
   );
 
   it.effect("copies a team's documents, follows its changes, and bounds each pass", () =>

@@ -12,8 +12,10 @@ import {
   type IntegrationsListResult,
 } from "@t3tools/contracts";
 import { compareSemverVersions } from "@t3tools/shared/semver";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as NodeCrypto from "node:crypto";
@@ -47,6 +49,13 @@ import {
   type IntegrationProviderTool,
 } from "./IntegrationTool.ts";
 
+import {
+  makeDocumentTextExtractor,
+  type DocumentTextRequest,
+  type DocumentTextResult,
+  type IntegrationDocumentTextExtractor,
+} from "./IntegrationDocumentText.ts";
+
 export type { IntegrationProviderTool } from "./IntegrationTool.ts";
 
 export interface IntegrationProviderStatus {
@@ -60,6 +69,12 @@ export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
   /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
+  /**
+   * Present for read invocations. Extracts bounded text from PDF or DOCX bytes in an isolated,
+   * time- and memory-limited process bound to this invocation's signal, so a provider never has
+   * to hand raw document bytes to the model. Older hosts omit it.
+   */
+  extractDocumentText?(request: DocumentTextRequest): Promise<DocumentTextResult>;
   /**
    * Present only for a write invocation. Providers must await this immediately before their
    * narrow external mutation and use the returned signal for every fallible commit-tail step.
@@ -199,6 +214,8 @@ interface PersistedIntegrationState {
     }
   >;
   readonly removing?: Record<string, { readonly version: string; readonly tombstone: string }>;
+  /** Explicit removals must survive startup defaults and later catalog reintroductions. */
+  readonly uninstalled?: ReadonlyArray<string>;
 }
 
 type InstalledIntegrationState = PersistedIntegrationState["installed"][string];
@@ -253,6 +270,8 @@ export type IntegrationToolAvailability =
 export interface RegistryRuntimeOptions {
   readonly providerStatusTimeoutMs?: number;
   readonly providerOperationTimeoutMs?: number;
+  /** Defaults to the isolated `__document-text` process extractor. */
+  readonly documentText?: IntegrationDocumentTextExtractor;
   /** Observes every provider fault, which otherwise surfaces only as a reset prompt. */
   readonly onProviderFault?: (fault: IntegrationProviderFault) => void;
 }
@@ -363,12 +382,16 @@ function decodePersistedState(value: unknown): PersistedIntegrationState {
   const state = value as Record<string, unknown>;
   if (
     state.version !== 1 ||
-    !hasOnlyKeys(state, new Set(["version", "installed", "removing"])) ||
+    !hasOnlyKeys(state, new Set(["version", "installed", "removing", "uninstalled"])) ||
     !state.installed ||
     typeof state.installed !== "object" ||
     Array.isArray(state.installed) ||
     (state.removing !== undefined &&
-      (!state.removing || typeof state.removing !== "object" || Array.isArray(state.removing)))
+      (!state.removing || typeof state.removing !== "object" || Array.isArray(state.removing))) ||
+    (state.uninstalled !== undefined &&
+      (!Array.isArray(state.uninstalled) ||
+        state.uninstalled.some((id) => !isIntegrationId(id)) ||
+        new Set(state.uninstalled).size !== state.uninstalled.length))
   ) {
     throw new Error("Unsupported integration state version or shape.");
   }
@@ -428,7 +451,14 @@ function decodePersistedState(value: unknown): PersistedIntegrationState {
     }
     removing[id] = { version: entry.version, tombstone: entry.tombstone };
   }
-  return { version: 1, installed, removing };
+  return {
+    version: 1,
+    installed,
+    removing,
+    ...(state.uninstalled !== undefined
+      ? { uninstalled: [...(state.uninstalled as ReadonlyArray<string>)].toSorted() }
+      : {}),
+  };
 }
 
 function dependencyCapabilityIds(input: {
@@ -904,6 +934,7 @@ export class RegistryRuntime {
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
   readonly #providerSummaryRefreshWork = new Map<IntegrationProvider, Set<Promise<void>>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
+  readonly #documentText: IntegrationDocumentTextExtractor;
   #closing = false;
   #closePromise: Promise<void> | null = null;
 
@@ -925,6 +956,7 @@ export class RegistryRuntime {
     this.#providerOperationTimeoutMs =
       options.providerOperationTimeoutMs ?? DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS;
     this.#onProviderFault = options.onProviderFault;
+    this.#documentText = options.documentText ?? makeDocumentTextExtractor();
     if (
       !Number.isSafeInteger(this.#providerStatusTimeoutMs) ||
       this.#providerStatusTimeoutMs <= 0 ||
@@ -1118,7 +1150,20 @@ export class RegistryRuntime {
     await NodeFSP.rm(stagingRoot, { recursive: true, force: true });
     for (const integration of this.#catalog.values()) {
       const { manifest } = integration;
-      const installed = ownRecordValue(this.#state.installed, manifest.id);
+      // Only this reviewed included plugin starts on. Manifest capability defaults alone
+      // never install another integration, and an explicit removal always wins.
+      // Migration policy: this new package ID has no previously shipped uninstall history.
+      // Legacy state without an installed record or removal marker means first appearance;
+      // old state cannot distinguish an unpublished experimental removal from no install.
+      const installed =
+        ownRecordValue(this.#state.installed, manifest.id) ??
+        (manifest.id === "ucsd-assistant" && !this.#state.uninstalled?.includes(manifest.id)
+          ? {
+              version: manifest.version,
+              enabled: true,
+              enabledCapabilities: [...selectedCapabilityIds(manifest, undefined)].toSorted(),
+            }
+          : undefined);
       if (!installed) continue;
 
       const staging = NodePath.join(stagingRoot, `${manifest.id}.${crypto.randomUUID()}`);
@@ -1364,9 +1409,10 @@ export class RegistryRuntime {
         await NodeFSP.rename(installedRoot, tombstone);
       }
       await this.#save({
-        version: 1,
+        ...this.#state,
         installed: withoutOwnKey(this.#state.installed, id),
         removing: withoutOwnKey(this.#state.removing, id),
+        uninstalled: [...new Set([...(this.#state.uninstalled ?? []), id])].toSorted(),
       });
       await this.#removeInstalledPackage(tombstone).catch(() => undefined);
     }
@@ -2765,6 +2811,7 @@ export class RegistryRuntime {
         await this.#summarize(integration);
         return;
       }
+      const explicitlyUninstalled = this.#state.uninstalled?.includes(id) === true;
       const versionRoot = NodePath.join(this.#root, "installed", id, manifest.version);
       const staging = `${versionRoot}.${crypto.randomUUID()}.staging`;
       try {
@@ -2773,6 +2820,9 @@ export class RegistryRuntime {
         await NodeFSP.rename(staging, versionRoot);
         await this.#updateState((state) => ({
           ...state,
+          ...(state.uninstalled !== undefined
+            ? { uninstalled: state.uninstalled.filter((uninstalledId) => uninstalledId !== id) }
+            : {}),
           installed: {
             ...state.installed,
             [id]: {
@@ -2787,7 +2837,13 @@ export class RegistryRuntime {
         await this.#updateState((state) => {
           const nextInstalled = { ...state.installed };
           delete nextInstalled[id];
-          return { ...state, installed: nextInstalled };
+          return {
+            ...state,
+            installed: nextInstalled,
+            ...(explicitlyUninstalled
+              ? { uninstalled: [...new Set([...(state.uninstalled ?? []), id])].toSorted() }
+              : {}),
+          };
         }).catch(() => undefined);
         await this.#syncSkills({ integrationId: id, packageRoot: null, activeSkills: [] }).catch(
           () => undefined,
@@ -3172,7 +3228,12 @@ export class RegistryRuntime {
           const nextRemovals = { ...state.removing };
           delete nextInstalled[id];
           delete nextRemovals[id];
-          return { ...state, installed: nextInstalled, removing: nextRemovals };
+          return {
+            ...state,
+            installed: nextInstalled,
+            removing: nextRemovals,
+            uninstalled: [...new Set([...(state.uninstalled ?? []), id])].toSorted(),
+          };
         });
       } catch (error) {
         if (moved) await NodeFSP.rename(tombstone, installedRoot).catch(() => undefined);
@@ -3504,7 +3565,11 @@ export class RegistryRuntime {
                     return commitSignal;
                   },
                 }
-              : { signal },
+              : {
+                  signal,
+                  extractDocumentText: (request: DocumentTextRequest) =>
+                    this.#documentText(request, signal),
+                },
           );
         };
         const invocationWork = Promise.resolve().then(() =>
@@ -3640,6 +3705,23 @@ export function getIntegrationRegistry(): RegistryRuntime {
 export function getIntegrationRegistryOptional(): RegistryRuntime | null {
   return activeRegistry;
 }
+
+/** Installed, enabled integrations; empty when the registry is not running or does not answer in time. */
+export const listEnabledIntegrations = Effect.suspend(() => {
+  const registry = activeRegistry;
+  if (!registry) return Effect.succeed<ReadonlyArray<IntegrationSummary>>([]);
+  return Effect.tryPromise(() => registry.list()).pipe(
+    Effect.timeoutOption(Duration.seconds(5)),
+    Effect.map(
+      Option.match({
+        onNone: (): ReadonlyArray<IntegrationSummary> => [],
+        onSome: (listed) =>
+          listed.integrations.filter((integration) => integration.installed && integration.enabled),
+      }),
+    ),
+    Effect.orElseSucceed((): ReadonlyArray<IntegrationSummary> => []),
+  );
+});
 
 export function awaitIntegrationRegistry(): Promise<RegistryRuntime> {
   if (activeRegistry) return Promise.resolve(activeRegistry);

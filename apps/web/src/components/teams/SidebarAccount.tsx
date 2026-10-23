@@ -11,7 +11,8 @@ export function SidebarAccount({
   controller,
   canSignIn,
   canSignOut,
-}: ReturnType<typeof useUcsdAccount>) {
+  teamsEnabled = false,
+}: ReturnType<typeof useUcsdAccount> & { teamsEnabled?: boolean }) {
   if (account?.configured === false && !error) return null;
   const profile = account?.status === "signed-in" ? account.profile : null;
   if (profile) {
@@ -39,7 +40,7 @@ export function SidebarAccount({
           <span className="min-w-0 truncate text-xs">{profile.displayName}</span>
         </MenuTrigger>
         <MenuPopup side="top" align="start">
-          <MenuItem render={<Link to="/teams" />}>Teams</MenuItem>
+          {teamsEnabled ? <MenuItem render={<Link to="/teams" />}>Teams</MenuItem> : null}
           <MenuItem render={<Link to="/settings/connections" hash="ucsd-account" />}>
             Account settings
           </MenuItem>

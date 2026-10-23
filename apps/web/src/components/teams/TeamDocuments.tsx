@@ -6,7 +6,7 @@ import {
   type TeamStorageCommand,
   type TeamStorageStatus,
 } from "@t3tools/contracts";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
@@ -54,7 +54,7 @@ export function TeamDocuments({
   const [description, setDescription] = useState("");
   const [project, setProject] = useState("");
   const [text, setText] = useState("");
-  const [edit, setEdit] = useState("");
+  const [edit, setEdit] = useState(document?.text ?? "");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [history, setHistory] = useState<TeamStorageStatus["history"] | null>(null);
   const [prior, setPrior] = useState<TeamStorageStatus["priorVersion"] | null>(null);
@@ -63,13 +63,23 @@ export function TeamDocuments({
   const documentPath = document?.path;
   const documentEtag = document?.etag;
   const documentText = document?.text ?? "";
-  useEffect(() => {
+  const [documentVersion, setDocumentVersion] = useState({
+    path: documentPath,
+    etag: documentEtag,
+    text: documentText,
+  });
+  if (
+    documentVersion.path !== documentPath ||
+    documentVersion.etag !== documentEtag ||
+    documentVersion.text !== documentText
+  ) {
+    setDocumentVersion({ path: documentPath, etag: documentEtag, text: documentText });
     setEdit(documentText);
     setConfirmDelete(false);
     // Another document, or a newer version of this one, has a different history.
     setHistory(null);
     setPrior(null);
-  }, [documentPath, documentEtag, documentText]);
+  }
   const showHistory = async (path: string) => {
     if (history) {
       setHistory(null);
