@@ -26,7 +26,6 @@ import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import { getAnonymousInstallId } from "./Identify.ts";
@@ -89,6 +88,10 @@ const PLAUSIBLE_EVENT_PROPERTIES = {
   "provider.request.responded": ["provider", "decision"],
   "provider.conversation.rolled_back": ["provider", "turns"],
   "provider.sessions.stopped_all": ["sessionCount"],
+  "ideas.viewed": ["visibleCount", "personalCount", "toolCount", "starterCount"],
+  "ideas.feedback": ["kind", "section"],
+  "ideas.sent": ["section"],
+  "ideas.generated": ["requested", "outcome", "generatedCount", "starterCount"],
 } as const satisfies Readonly<Record<string, ReadonlyArray<string>>>;
 
 const TelemetryEnvConfig = Config.all({
@@ -196,181 +199,176 @@ function positiveMilliseconds(value: number | undefined, fallback: number): numb
   return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-const makeWithOptions = (options: AnalyticsServiceOptions = {}) =>
-  Effect.gen(function* () {
-    const telemetryConfig = yield* TelemetryEnvConfig;
-    const httpClient = yield* HttpClient.HttpClient;
-    const serverConfig = yield* ServerConfig.ServerConfig;
-    const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
-    const deliveredEventCountRef = yield* Ref.make(0);
-    const flushSemaphore = yield* Semaphore.make(1);
-    const maxBufferedEvents = Math.max(0, Math.floor(telemetryConfig.maxBufferedEvents));
-    const requestTimeoutMs = positiveMilliseconds(
-      options.requestTimeoutMs,
-      TELEMETRY_REQUEST_TIMEOUT_MS,
+const makeWithOptions = Effect.fn("AnalyticsService.makeWithOptions")(function* (
+  options: AnalyticsServiceOptions = {},
+) {
+  const telemetryConfig = yield* TelemetryEnvConfig;
+  const httpClient = yield* HttpClient.HttpClient;
+  const serverConfig = yield* ServerConfig.ServerConfig;
+  const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
+  const deliveredEventCountRef = yield* Ref.make(0);
+  const flushSemaphore = yield* Semaphore.make(1);
+  const maxBufferedEvents = Math.max(0, Math.floor(telemetryConfig.maxBufferedEvents));
+  const requestTimeoutMs = positiveMilliseconds(
+    options.requestTimeoutMs,
+    TELEMETRY_REQUEST_TIMEOUT_MS,
+  );
+  const shutdownTimeoutMs = positiveMilliseconds(
+    options.shutdownTimeoutMs,
+    TELEMETRY_SHUTDOWN_TIMEOUT_MS,
+  );
+  const clientType = serverConfig.mode === "desktop" ? "desktop-app" : "cli-web-client";
+  const hostPlatform = yield* HostProcessPlatform;
+  const hostArchitecture = yield* HostProcessArchitecture;
+  const userAgent = `TritonAI-Harness/${packageJson.version}`;
+  const eventUrl = `https://${telemetryConfig.plausibleSiteId}/`;
+  // Opted-out installs never create an ID file.
+  const installId = telemetryConfig.enabled ? yield* getAnonymousInstallId : Option.none<string>();
+
+  const enqueueBufferedEvent = (
+    event: string,
+    properties: Readonly<Record<string, PlausiblePropertyValue>>,
+  ) =>
+    Ref.modify(bufferRef, (current) => {
+      const appended = [
+        ...current,
+        {
+          event,
+          properties,
+        } satisfies BufferedAnalyticsEvent,
+      ];
+
+      const next =
+        appended.length > maxBufferedEvents
+          ? appended.slice(appended.length - maxBufferedEvents)
+          : appended;
+
+      return [
+        {
+          size: next.length,
+          dropped: next.length !== appended.length,
+        } as const,
+        next,
+      ] as const;
+    });
+
+  const sendEvent = Effect.fn("AnalyticsService.sendEvent")(function* (
+    event: BufferedAnalyticsEvent,
+  ) {
+    if (!telemetryConfig.enabled) return;
+
+    const payload = {
+      domain: telemetryConfig.plausibleSiteId,
+      name: event.event,
+      url: eventUrl,
+      props: {
+        ...event.properties,
+        platform: hostPlatform,
+        wsl: Option.isSome(telemetryConfig.wslDistroName),
+        arch: hostArchitecture,
+        version: packageJson.version,
+        clientType,
+        serverOs: serverOsFromNodePlatform(hostPlatform),
+        serverArch: hostArchitecture,
+        serverAppVersion: packageJson.version,
+        serverMode: serverConfig.mode,
+        ...(Option.isSome(installId) ? { aid: installId.value } : {}),
+      },
+    };
+
+    yield* HttpClientRequest.post(telemetryConfig.plausibleEventsEndpoint).pipe(
+      HttpClientRequest.setHeader("user-agent", userAgent),
+      HttpClientRequest.bodyJson(payload),
+      Effect.flatMap(httpClient.execute),
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.interruptible,
+      Effect.timeout(Duration.millis(requestTimeoutMs)),
     );
-    const shutdownTimeoutMs = positiveMilliseconds(
-      options.shutdownTimeoutMs,
-      TELEMETRY_SHUTDOWN_TIMEOUT_MS,
-    );
-    const clientType = serverConfig.mode === "desktop" ? "desktop-app" : "cli-web-client";
-    const hostPlatform = yield* HostProcessPlatform;
-    const hostArchitecture = yield* HostProcessArchitecture;
-    const userAgent = `TritonAI-Harness/${packageJson.version}`;
-    const eventUrl = `https://${telemetryConfig.plausibleSiteId}/`;
-    // Opted-out installs never create an ID file.
-    const installId = telemetryConfig.enabled
-      ? yield* getAnonymousInstallId
-      : Option.none<string>();
+  });
 
-    const enqueueBufferedEvent = (
-      event: string,
-      properties: Readonly<Record<string, PlausiblePropertyValue>>,
-    ) =>
-      Ref.modify(bufferRef, (current) => {
-        const appended = [
-          ...current,
-          {
-            event,
-            properties,
-          } satisfies BufferedAnalyticsEvent,
-        ];
+  const requeueBufferedEvent = (event: BufferedAnalyticsEvent) =>
+    Ref.update(bufferRef, (current) => {
+      const restored = [event, ...current];
+      return restored.length > maxBufferedEvents ? restored.slice(0, maxBufferedEvents) : restored;
+    });
 
-        const next =
-          appended.length > maxBufferedEvents
-            ? appended.slice(appended.length - maxBufferedEvents)
-            : appended;
-
-        return [
-          {
-            size: next.length,
-            dropped: next.length !== appended.length,
-          } as const,
-          next,
-        ] as const;
+  const flushUnlocked = Effect.gen(function* () {
+    while (true) {
+      const event = yield* Ref.modify(bufferRef, (current) => {
+        if (current.length === 0) {
+          return [null, current] as const;
+        }
+        return [current[0] ?? null, current.slice(1)] as const;
       });
 
-    const sendEvent = Effect.fn("AnalyticsService.sendEvent")(function* (
-      event: BufferedAnalyticsEvent,
-    ) {
+      if (event === null) {
+        return;
+      }
+
+      yield* sendEvent(event).pipe(
+        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : requeueBufferedEvent(event))),
+      );
+      yield* Ref.update(deliveredEventCountRef, (count) => count + 1);
+    }
+  });
+
+  const flushAttempt = Effect.gen(function* () {
+    const deliveredBefore = yield* Ref.get(deliveredEventCountRef);
+    const exit = yield* flushSemaphore
+      .withPermit(flushUnlocked)
+      .pipe(
+        Effect.interruptible,
+        Effect.timeout(Duration.millis(shutdownTimeoutMs)),
+        Effect.result,
+      );
+    if (Result.isSuccess(exit)) return true;
+
+    // A large healthy backlog can consume the scope budget after making
+    // progress. Only apply outage backoff when nothing was delivered.
+    const deliveredAfter = yield* Ref.get(deliveredEventCountRef);
+    if (deliveredAfter > deliveredBefore) return true;
+
+    yield* Effect.logWarning("Telemetry delivery unavailable; buffered events retained");
+    return false;
+  });
+
+  const flush: AnalyticsService["Service"]["flush"] = flushAttempt.pipe(Effect.asVoid);
+
+  const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
+    function* (event, properties) {
       if (!telemetryConfig.enabled) return;
 
-      const payload = {
-        domain: telemetryConfig.plausibleSiteId,
-        name: event.event,
-        url: eventUrl,
-        props: {
-          ...event.properties,
-          platform: hostPlatform,
-          wsl: Option.isSome(telemetryConfig.wslDistroName),
-          arch: hostArchitecture,
-          version: packageJson.version,
-          clientType,
-          serverOs: serverOsFromNodePlatform(hostPlatform),
-          serverArch: hostArchitecture,
-          serverAppVersion: packageJson.version,
-          serverMode: serverConfig.mode,
-          ...(Option.isSome(installId) ? { aid: installId.value } : {}),
-        },
-      };
+      const plausibleProperties = toPlausibleProperties(event, properties);
+      if (plausibleProperties === null) return;
 
-      yield* HttpClientRequest.post(telemetryConfig.plausibleEventsEndpoint).pipe(
-        HttpClientRequest.setHeader("user-agent", userAgent),
-        HttpClientRequest.bodyJson(payload),
-        Effect.flatMap(httpClient.execute),
-        Effect.flatMap(HttpClientResponse.filterStatusOk),
-        Effect.interruptible,
-        Effect.timeout(Duration.millis(requestTimeoutMs)),
-      );
-    });
-
-    const requeueBufferedEvent = (event: BufferedAnalyticsEvent) =>
-      Ref.update(bufferRef, (current) => {
-        const restored = [event, ...current];
-        return restored.length > maxBufferedEvents
-          ? restored.slice(0, maxBufferedEvents)
-          : restored;
-      });
-
-    const flushUnlocked = Effect.gen(function* () {
-      while (true) {
-        const event = yield* Ref.modify(bufferRef, (current) => {
-          if (current.length === 0) {
-            return [null, current] as const;
-          }
-          return [current[0] ?? null, current.slice(1)] as const;
+      const enqueueResult = yield* enqueueBufferedEvent(event, plausibleProperties);
+      if (enqueueResult.dropped) {
+        yield* Effect.logDebug("analytics buffer full; dropping oldest event", {
+          size: enqueueResult.size,
+          incomingEvent: event,
         });
-
-        if (event === null) {
-          return;
-        }
-
-        yield* sendEvent(event).pipe(
-          Effect.onExit((exit) =>
-            Exit.isSuccess(exit) ? Effect.void : requeueBufferedEvent(event),
-          ),
-        );
-        yield* Ref.update(deliveredEventCountRef, (count) => count + 1);
       }
-    });
+    },
+  );
 
-    const flushAttempt = Effect.gen(function* () {
-      const deliveredBefore = yield* Ref.get(deliveredEventCountRef);
-      const exit = yield* flushSemaphore
-        .withPermit(flushUnlocked)
-        .pipe(
-          Effect.interruptible,
-          Effect.timeout(Duration.millis(shutdownTimeoutMs)),
-          Effect.result,
+  if (telemetryConfig.enabled) {
+    yield* Effect.addFinalizer(() => flush);
+
+    yield* Effect.gen(function* () {
+      let consecutiveFailures = 0;
+      while (true) {
+        const randomUnit = yield* Random.next;
+        yield* Effect.sleep(
+          Duration.millis(telemetryFlushDelayMs(consecutiveFailures, randomUnit)),
         );
-      if (Result.isSuccess(exit)) return true;
+        const succeeded = yield* flushAttempt;
+        consecutiveFailures = succeeded ? 0 : consecutiveFailures + 1;
+      }
+    }).pipe(Effect.forkScoped);
+  }
 
-      // A large healthy backlog can consume the scope budget after making
-      // progress. Only apply outage backoff when nothing was delivered.
-      const deliveredAfter = yield* Ref.get(deliveredEventCountRef);
-      if (deliveredAfter > deliveredBefore) return true;
-
-      yield* Effect.logWarning("Telemetry delivery unavailable; buffered events retained");
-      return false;
-    });
-
-    const flush: AnalyticsService["Service"]["flush"] = flushAttempt.pipe(Effect.asVoid);
-
-    const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
-      function* (event, properties) {
-        if (!telemetryConfig.enabled) return;
-
-        const plausibleProperties = toPlausibleProperties(event, properties);
-        if (plausibleProperties === null) return;
-
-        const enqueueResult = yield* enqueueBufferedEvent(event, plausibleProperties);
-        if (enqueueResult.dropped) {
-          yield* Effect.logDebug("analytics buffer full; dropping oldest event", {
-            size: enqueueResult.size,
-            incomingEvent: event,
-          });
-        }
-      },
-    );
-
-    if (telemetryConfig.enabled) {
-      yield* Effect.addFinalizer(() => flush);
-
-      yield* Effect.gen(function* () {
-        let consecutiveFailures = 0;
-        while (true) {
-          const randomUnit = yield* Random.next;
-          yield* Effect.sleep(
-            Duration.millis(telemetryFlushDelayMs(consecutiveFailures, randomUnit)),
-          );
-          const succeeded = yield* flushAttempt;
-          consecutiveFailures = succeeded ? 0 : consecutiveFailures + 1;
-        }
-      }).pipe(Effect.forkScoped);
-    }
-
-    return AnalyticsService.of({ record, flush });
-  });
+  return AnalyticsService.of({ record, flush });
+});
 
 const make = makeWithOptions();
 

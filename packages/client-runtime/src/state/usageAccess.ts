@@ -1,10 +1,8 @@
 import {
   AuthDiagnosticsReadScope,
-  type AuthSessionState,
   sessionGrantsScope,
   type SessionGrantInput,
 } from "@t3tools/contracts";
-
 import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 
 export function resolveUsageAccess(input: {

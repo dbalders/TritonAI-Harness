@@ -134,7 +134,6 @@ describe("mergeUsage", () => {
   });
 
   it("counts a shared transcript directory once", () => {
-    // Two worktree servers on one machine resolve the same provider home.
     const shared = { provider: "claude" as const, hostId: "mac", homePath: "/home/theo/.claude" };
     const merged = mergeUsage(
       [
@@ -171,7 +170,6 @@ describe("mergeUsage", () => {
       USAGE_CONTRACT_VERSION,
     );
 
-    // env-b's claude bucket is dropped, its codex bucket survives.
     expect(merged.costUsd).toBe(14);
     expect(merged.providers.map((provider) => provider.provider).sort()).toEqual([
       "claude",
@@ -603,7 +601,6 @@ describe("mergeUsage", () => {
                 costSource: "unpriced",
                 unpricedRecords: 5,
               }),
-              // Reported cost on one record, no rates for the other four.
               bucket({
                 provider: "codex",
                 model: "partly-reported",
@@ -668,8 +665,6 @@ describe("mergeUsage", () => {
   });
 
   it("keeps two machines apart when hostname and home path collide", () => {
-    // Every Mac resolves /Users/theo/.claude, so a hostname clash used to make
-    // one machine's usage vanish. Filesystem identity separates them.
     const shape = { provider: "claude" as const, hostId: "mac", homePath: "/Users/theo/.claude" };
     const merged = mergeUsage(
       [
@@ -703,8 +698,6 @@ describe("mergeUsage", () => {
   });
 
   it("totals sessions from per-directory distinct counts, not per-bucket sums", () => {
-    // One session that spans two days appears in two buckets. Summing bucket
-    // sessions would say 2; the source's distinct count says 1.
     const merged = mergeUsage(
       [
         environment(

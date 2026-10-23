@@ -12,7 +12,6 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentSession } from "./session";
 
-// Re-pairing changes the prepared connection, invalidating its cached ticket.
 const previewStreamAccessAtom = Atom.family((environmentId: EnvironmentId) =>
   connectionAtomRuntime
     .atom((get) => {
@@ -34,7 +33,6 @@ export function refreshPreviewStreamAccess(environmentId: EnvironmentId): void {
   appAtomRegistry.refresh(previewStreamAccessAtom(environmentId));
 }
 
-/** Fresh stream access for a long-lived viewer outside React, e.g. system picture in picture. */
 export function readPreviewStreamAccess(
   environmentId: EnvironmentId,
   refresh: boolean,

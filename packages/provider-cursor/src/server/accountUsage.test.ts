@@ -6,14 +6,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientError from "effect/http/HttpClientError";
-import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Path from "effect/Path";
-
 import * as CursorKeychain from "./CursorKeychain.ts";
 import { readCursorAccountUsage } from "./accountUsage.ts";
 
-/** A scoped temporary directory holding `auth.json` with `accessToken`. */
 const writeAuth = (accessToken: string) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -24,7 +21,6 @@ const writeAuth = (accessToken: string) =>
     return { dir, authPath };
   });
 
-/** One dashboard request as Cursor sees it: the URL, the fetch options and the decoded page. */
 interface DashboardRequest {
   readonly url: string;
   readonly init: RequestInit;
@@ -32,7 +28,6 @@ interface DashboardRequest {
   readonly headers: Headers;
 }
 
-/** Stands in for Cursor's dashboard: `answer` replies to each page request. */
 const dashboard = (answer: (request: DashboardRequest) => Response | Promise<Response>) =>
   HttpClient.make((request, url, signal, fiber) =>
     Effect.tryPromise({
@@ -55,7 +50,6 @@ const dashboard = (answer: (request: DashboardRequest) => Response | Promise<Res
     }),
   );
 
-/** Runs `readCursorAccountUsage` against `answer` standing in for Cursor. */
 const readAccountUsage = (
   credentialSource: Parameters<typeof readCursorAccountUsage>[0],
   sinceMs: number,
@@ -345,7 +339,6 @@ describe("readCursorAccountUsage", () => {
         async ({ page }) => {
           inFlight++;
           mostInFlight = Math.max(mostInFlight, inFlight);
-          // Later pages answer first, so record order cannot come from arrival order.
           for (let turn = page; turn < 9; turn++) await Promise.resolve();
           inFlight--;
           return Response.json({
@@ -375,7 +368,6 @@ describe("readCursorAccountUsage", () => {
         totalUsageEventsCount: 8001,
         usageEventsDisplay: Array.from({ length: 1000 }, () => ({ tokenUsage: null })),
       };
-      // Page 3 fails while the pages after it are still waiting on Cursor.
       for (const [secondPage, error] of [
         [() => Response.json(fullPage), "Cursor account usage could not be read."],
         [

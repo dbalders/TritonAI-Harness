@@ -41,8 +41,8 @@ const make = Effect.gen(function* () {
   const markerPath = yield* Ref.make(Option.none<string>());
 
   /** Newest file mtime in a directory; appending to a log leaves the directory's own mtime alone. */
-  const newestFileMtime = (directory: string) =>
-    Effect.gen(function* () {
+  const newestFileMtime = Effect.fn("DesktopLegacyLocalStorage.newestFileMtime")(
+    function* (directory: string) {
       let newest = 0;
       for (const name of yield* fs.readDirectory(directory)) {
         const info = yield* fs.stat(path.join(directory, name)).pipe(Effect.option);
@@ -54,9 +54,10 @@ const make = Effect.gen(function* () {
         newest = Math.max(newest, mtime);
       }
       return newest;
-    }).pipe(Effect.option);
+    },
+    (effect, _directory) => effect.pipe(Effect.option),
+  );
 
-  /** The V1 profile whose Local Storage was written most recently, if any. */
   const findV1LocalStorage = Effect.gen(function* () {
     let newest: { readonly directory: string; readonly mtime: number } | null = null;
     for (const name of desktopProfileNames(environment).legacy) {
@@ -81,7 +82,6 @@ const make = Effect.gen(function* () {
   });
 
   const load = Effect.fn("desktop.legacyLocalStorage.load")(function* (userDataPath: string) {
-    // Development already shares its profile between versions.
     if (environment.isDevelopment) return;
     const marker = path.join(userDataPath, MARKER_FILE_NAME);
     if (yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => true))) return;
@@ -107,7 +107,6 @@ const make = Effect.gen(function* () {
 
   return DesktopLegacyLocalStorage.of({
     load,
-    // Taking clears the items, so a reload before `complete` cannot merge twice.
     take: Ref.getAndSet(items, Option.none()),
     complete: writeMarker,
   });

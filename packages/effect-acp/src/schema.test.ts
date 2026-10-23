@@ -1,6 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
-
 import * as V1 from "./_generated/schema-v1.gen.ts";
 import * as V2 from "./schema.ts";
 

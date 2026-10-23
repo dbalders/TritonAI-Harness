@@ -2,7 +2,6 @@ import type { PullRequestReviewGuideNote } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import { GuideProse } from "./GuideProse";
 
-/** The letter that ties a note to its line in an excerpt. */
 export function GuideNoteMarker({ marker }: { marker: string }) {
   return (
     <span
@@ -14,7 +13,6 @@ export function GuideNoteMarker({ marker }: { marker: string }) {
   );
 }
 
-/** A stop's notes, lettered in the order the excerpts mark them. */
 export function GuideNotes({
   notes,
   className,

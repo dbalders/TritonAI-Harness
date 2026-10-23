@@ -148,110 +148,92 @@ function useDeliverRecordedSkill() {
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
 
-  const send = useCallback(
-    async (threadRef: ScopedThreadRef, prompt: string) => {
-      queueRecordedSkill(scopedThreadKey(threadRef), prompt);
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(threadRef),
-      });
-    },
-    [navigate],
-  );
+  const send = async (threadRef: ScopedThreadRef, prompt: string) => {
+    queueRecordedSkill(scopedThreadKey(threadRef), prompt);
+    await navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(threadRef),
+    });
+  };
 
   // An existing conversation keeps the recording while it is still there.
-  const sendToThread = useCallback(
-    async (threadRef: ScopedThreadRef, prompt: string): Promise<boolean> => {
-      if (!readThreadShell(threadRef)) return false;
-      await send(threadRef, prompt);
-      return true;
-    },
-    [send],
-  );
+  const sendToThread = async (threadRef: ScopedThreadRef, prompt: string): Promise<boolean> => {
+    if (!readThreadShell(threadRef)) return false;
+    await send(threadRef, prompt);
+    return true;
+  };
 
-  const sendToNewThread = useCallback(
-    async (input: {
-      readonly environmentId: EnvironmentId;
-      readonly projectId: ProjectId | null;
-      readonly title: string;
-      readonly prompt: string;
-    }): Promise<string | null> => {
-      // Prefer the project the recording started in, then "No project", then
-      // the conversation the user is in; never a silent pick.
-      const currentProjectId =
-        input.projectId ?? activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
-      const findProject = (projectId: ProjectId | null) =>
-        projects.find(
-          (entry) => entry.environmentId === input.environmentId && entry.id === projectId,
-        ) ?? null;
-      const project =
-        (input.projectId ? findProject(input.projectId) : null) ??
-        (scratchWorkspaceRootFor(input.environmentId) !== null
-          ? await openScratchProject(input.environmentId)
-          : findProject(currentProjectId));
-      if (!project) {
-        return scratchWorkspaceRootFor(input.environmentId) !== null
-          ? "Harness couldn't open a place for the new conversation."
-          : "This computer doesn't allow conversations without a project. Open a conversation in a project, then record the skill again.";
-      }
-      const serverConfig = serverConfigs.get(input.environmentId);
-      const projectSettings = resolveProjectSettings(
-        serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
-        project.id,
-        project,
-      ).settings;
-      const drafts = useComposerDraftStore.getState();
-      // The same choice a new thread here would start with.
-      const modelSelection = resolveDefaultProviderModelSelection(
-        serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS,
-        projectSettings.defaultModelSelection ??
-          (drafts.stickyActiveProvider
-            ? (drafts.stickyModelSelectionByProvider[drafts.stickyActiveProvider] ?? null)
-            : null),
-      );
-      if (!modelSelection) return "No provider is ready. Set one up in Settings → Providers.";
+  const sendToNewThread = async (input: {
+    readonly environmentId: EnvironmentId;
+    readonly projectId: ProjectId | null;
+    readonly title: string;
+    readonly prompt: string;
+  }): Promise<string | null> => {
+    // Prefer the project the recording started in, then "No project", then
+    // the conversation the user is in; never a silent pick.
+    const currentProjectId =
+      input.projectId ?? activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
+    const findProject = (projectId: ProjectId | null) =>
+      projects.find(
+        (entry) => entry.environmentId === input.environmentId && entry.id === projectId,
+      ) ?? null;
+    const project =
+      (input.projectId ? findProject(input.projectId) : null) ??
+      (scratchWorkspaceRootFor(input.environmentId) !== null
+        ? await openScratchProject(input.environmentId)
+        : findProject(currentProjectId));
+    if (!project) {
+      return scratchWorkspaceRootFor(input.environmentId) !== null
+        ? "Harness couldn't open a place for the new conversation."
+        : "This computer doesn't allow conversations without a project. Open a conversation in a project, then record the skill again.";
+    }
+    const serverConfig = serverConfigs.get(input.environmentId);
+    const projectSettings = resolveProjectSettings(
+      serverConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
+      project.id,
+      project,
+    ).settings;
+    const drafts = useComposerDraftStore.getState();
+    // The same choice a new thread here would start with.
+    const modelSelection = resolveDefaultProviderModelSelection(
+      serverConfig?.providers ?? EMPTY_SERVER_PROVIDERS,
+      projectSettings.defaultModelSelection ??
+        (drafts.stickyActiveProvider
+          ? (drafts.stickyModelSelectionByProvider[drafts.stickyActiveProvider] ?? null)
+          : null),
+    );
+    if (!modelSelection) return "No provider is ready. Set one up in Settings → Providers.";
 
-      const threadId = newThreadId();
-      const created = await createThread({
-        environmentId: input.environmentId,
-        input: {
-          threadId,
-          projectId: project.id,
-          title: input.title,
-          modelSelection,
-          runtimeMode: projectSettings.defaultRuntimeMode,
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-          createdAt: new Date().toISOString(),
-        },
-      });
-      if (created._tag === "Failure") return "Harness couldn't start the conversation.";
+    const threadId = newThreadId();
+    const created = await createThread({
+      environmentId: input.environmentId,
+      input: {
+        threadId,
+        projectId: project.id,
+        title: input.title,
+        modelSelection,
+        runtimeMode: projectSettings.defaultRuntimeMode,
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdAt: new Date().toISOString(),
+      },
+    });
+    if (created._tag === "Failure") return "Harness couldn't start the conversation.";
 
-      const threadRef = scopeThreadRef(input.environmentId, threadId);
-      // The route treats a thread it hasn't received yet as missing and leaves.
-      const arrived = await waitForThreadShell(threadRef).then(
-        () => true,
-        () => false,
-      );
-      if (!arrived) {
-        useComposerDraftStore.getState().setPrompt(threadRef, input.prompt);
-        return `Harness created the conversation "${input.title}" with your recording, but couldn't open it. Find it in the sidebar and send it from there.`;
-      }
-      await send(threadRef, input.prompt);
-      return null;
-    },
-    [
-      activeDraftThread?.projectId,
-      activeThread?.projectId,
-      createThread,
-      openScratchProject,
-      projects,
-      scratchWorkspaceRootFor,
-      send,
-      serverConfigs,
-    ],
-  );
+    const threadRef = scopeThreadRef(input.environmentId, threadId);
+    // The route treats a thread it hasn't received yet as missing and leaves.
+    const arrived = await waitForThreadShell(threadRef).then(
+      () => true,
+      () => false,
+    );
+    if (!arrived) {
+      useComposerDraftStore.getState().setPrompt(threadRef, input.prompt);
+      return `Harness created the conversation "${input.title}" with your recording, but couldn't open it. Find it in the sidebar and send it from there.`;
+    }
+    await send(threadRef, input.prompt);
+    return null;
+  };
 
   return { sendToThread, sendToNewThread };
 }

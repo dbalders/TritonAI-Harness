@@ -8,13 +8,13 @@ Ideas come from:
 - **From your projects**: documents and data files you changed recently in your project folders.
 - **Try with your tools**: plugins you have turned on and skills in the TritonAI catalog.
 - **New in TritonAI**: plugins and skills that appeared since you started using Ideas.
-- **Ideas to try**: starter ideas for anyone, which need no project or setup. A new installation starts with these.
+- **Ideas to try**: ready-made ideas that need no project, plus ideas for plugins you have connected, such as a digest of your recent email. A new installation starts with these.
 
-Each card lists what it is based on. Ideas never cite a thread, note, or file that does not exist.
+Each card lists what it is based on. Ideas never cite a thread, note, or file that does not exist, and every idea is ready to send as written, with nothing to fill in. To keep the page varied, no more than two ideas at a time are about the same project or tool. Ideas based on your work or tools are replaced after about three days, since the work moves on.
 
 ## Use an idea
 
-**Open draft** puts the idea's message in a new thread's composer, or **Continue in thread** puts it in the thread the idea is about. Nothing is sent until you send it, so you can fill in the parts in square brackets or change anything first. The card stays on the page, marked **Draft open**, until you send the message.
+**Open draft** puts the idea's message in a new thread's composer, or **Continue in thread** puts it in the thread the idea is about. Nothing is sent until you send it, so you can change anything first. The card stays on the page, marked **Draft open**, until you send the message.
 
 ## Shape what you see
 
@@ -29,4 +29,4 @@ Each of these offers **Undo** for a few seconds. Ideas you use, open, or push aw
 
 ## How ideas are made
 
-Ideas are written by your text generation model under **Settings > General > Text generation**, which must be a Codex model. If you have opened Ideas in the past week, new ones are added in the background every few hours when there is new activity, up to 20 model requests a day. Ideas are kept on this computer.
+Ideas are written by your text generation model under **Settings > General > Text generation**, which must be a Codex model. If you have opened Ideas in the past two days, new ones are added in the background every few hours when there is new activity, up to 20 model requests a day. If it has been longer, opening Ideas checks for new ones then. Ideas are kept on this computer.
