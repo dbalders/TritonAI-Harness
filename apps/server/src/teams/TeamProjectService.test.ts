@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Synchronous SHA-256 document fingerprints and campus identity keys use Node crypto.
 import { describe, expect, it } from "@effect/vitest";
-import { expectTypeOf } from "vite-plus/test";
+import { expectTypeOf, vi } from "vite-plus/test";
 import * as NodeCrypto from "node:crypto";
 import {
   CommandId,
@@ -28,6 +28,7 @@ import {
   threadId,
 } from "./testing/teamProjectFixture.ts";
 import type { ServerSettingsService } from "../serverSettings.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import type { AccountService } from "../auth/AccountService.ts";
 import type { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import type { TeamMirrorHost } from "../memory/sync/teamMirror.ts";
@@ -37,6 +38,7 @@ import type { ProjectionStoreV2 } from "../orchestration-v2/ProjectionStore.ts";
 import type { TeamMessageGate } from "./TeamMessageGate.ts";
 import type * as TeamProject from "./TeamProjectService.ts";
 import type * as TeamStorage from "./TeamStorageService.ts";
+import * as ExperimentalTeams from "./experimentalTeams.ts";
 
 const code = <A>(effect: Effect.Effect<A, TeamsError>) =>
   Effect.flip(effect).pipe(Effect.map((error) => error.code));
@@ -834,6 +836,84 @@ describe("Team skills turned on for a project", () => {
         .pipe(Effect.map((command) => (command.type === "message.dispatch" ? command.text : "")));
     return { f, ...made, enable, enabled, sent };
   });
+
+  it.effect.each(
+    (["skill-enabled", "remove-link"] as const).flatMap((action) =>
+      [false, true].map((reenableBeforeObservation) => ({ action, reenableBeforeObservation })),
+    ),
+  )(
+    "keeps approvals and the link when $action is paused (re-enabled before observation: $reenableBeforeObservation)",
+    ({ action, reenableBeforeObservation }) =>
+      Effect.gen(function* () {
+        const { f, service, account, enable, enabled, sent } = yield* linked;
+        yield* enable();
+        const savedLink = f.values.get("team-project-links")!.slice();
+        const savedSkills = f.values.get("team-project-skills")!.slice();
+        // Fail with the real gate's exact error after the caller's initial ON check.
+        const access = yield* ExperimentalTeams.makeAccess.pipe(
+          Effect.provide(ServerSettings.layerTest()),
+        );
+        const original = account.teams;
+        using lookup = vi.spyOn(account, "teams").mockImplementation((sessionId, command) =>
+          command.action === "get"
+            ? f.setTeamsEnabled(false).pipe(
+                Effect.orDie,
+                Effect.andThen(access.requireEnabled),
+                Effect.tapError((error) => {
+                  expect(ExperimentalTeams.isExperimentPaused(error)).toBe(true);
+                  return reenableBeforeObservation
+                    ? f.setTeamsEnabled(true).pipe(Effect.orDie)
+                    : Effect.void;
+                }),
+                Effect.andThen(original(sessionId, command)),
+              )
+            : original(sessionId, command),
+        );
+        f.graph.length = 0;
+        expect(yield* code(service.execute("s", { action, projectId }))).toBe("forbidden");
+        expect(f.graph).toHaveLength(0);
+        expect(f.values.get("team-project-links")).toEqual(savedLink);
+        expect(f.values.get("team-project-skills")).toEqual(savedSkills);
+        lookup.mockRestore();
+        yield* f.setTeamsEnabled(true);
+        expect(yield* enabled()).toEqual([
+          expect.objectContaining({ path: skillPath, state: "active" }),
+        ]);
+        expect(yield* sent("Resume.")).toBe(`Resume.\n\n${appliedBlock(skillText)}`);
+        const restarted = yield* f.make;
+        const resumed = yield* restarted.service.prepareOutgoingCommand("s", turn("Restart."));
+        expect(resumed.type === "message.dispatch" && resumed.text).toBe(
+          `Restart.\n\n${appliedBlock(skillText)}`,
+        );
+      }),
+  );
+
+  it.effect.each(["forbidden", "not_found"] as const)(
+    "still clears approvals and allows removing a link after genuine %s membership loss",
+    (lostCode) =>
+      Effect.gen(function* () {
+        const { f, service, account, enable, enabled, sent } = yield* linked;
+        yield* enable();
+        const original = account.teams;
+        using lookup = vi
+          .spyOn(account, "teams")
+          .mockImplementation((sessionId, command) =>
+            command.action === "get"
+              ? Effect.fail(new TeamsError({ code: lostCode, message: "Team access ended." }))
+              : original(sessionId, command),
+          );
+        expect(yield* code(enabled())).toBe(lostCode);
+        expect(JSON.parse(new TextDecoder().decode(f.values.get("team-project-skills")))).toEqual(
+          [],
+        );
+        yield* service.execute("s", { action: "remove-link", projectId });
+        expect(JSON.parse(new TextDecoder().decode(f.values.get("team-project-links")))).toEqual(
+          [],
+        );
+        lookup.mockRestore();
+        expect(yield* sent("Plain.")).toBe("Plain.");
+      }),
+  );
 
   it.effect("pauses approved skills and holds queued references when the experiment is off", () =>
     Effect.gen(function* () {

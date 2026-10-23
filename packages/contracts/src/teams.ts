@@ -307,9 +307,7 @@ export const formatTeamContext = (input: {
     ...(input.kind === "skill"
       ? [version === undefined ? TEAM_SKILL_PREAMBLE : TEAM_PROJECT_SKILL_PREAMBLE]
       : []),
-    input.text
-      .replace(/\r\n?/gu, "\n")
-      .replace(/<\/(team-memory|team-skill)>/giu, (_match, name: string) => `<\\/${name}>`),
+    input.text.replace(/\r\n?/gu, "\n").replace(/<\/(?=\s*team-(?:memory|skill)\b)/giu, "<\\/"),
     `</${tag}>`,
   ].join("\n");
 };

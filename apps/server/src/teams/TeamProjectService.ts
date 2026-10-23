@@ -109,7 +109,9 @@ const identityOf = (profile: { issuer: string; subject: string }) =>
     .digest("base64url");
 const versionOf = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");
 /** Losing the team itself, as opposed to failing to check it. */
-const lostTeam = (error: TeamsError) => error.code === "not_found" || error.code === "forbidden";
+const lostTeam = (error: TeamsError) =>
+  !ExperimentalTeams.isExperimentPaused(error) &&
+  (error.code === "not_found" || error.code === "forbidden");
 const failure = (message: string) => new TeamsError({ code: "unavailable", message });
 const notLinked = () =>
   new TeamsError({

@@ -1,11 +1,48 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import {
+  formatTeamContext,
   formatTeamNote,
   MAX_TEAM_DOCUMENT_BYTES,
   TeamProjectCommand,
   TeamStorageCommand,
 } from "./teams.ts";
+
+describe("team context attribution", () => {
+  const closingTags = [
+    "</team-memory>",
+    "</team-skill>",
+    "</TEAM-SKILL>",
+    "</team-memory >",
+    "</team-skill\n>",
+    "</ \tteam-memory>",
+    '</team-skill ignored="attribute">',
+    '</\nTEAM-MEMORY\nignored="attribute" >',
+    "</team-skill",
+  ];
+
+  for (const kind of ["memory", "skill"] as const) {
+    it.each(closingTags)(`keeps ${kind} text inside its attributed block with %j`, (closing) => {
+      const block = formatTeamContext({
+        kind,
+        teamName: "Research team",
+        path: "Shared note.md",
+        text: `Before ${closing}\nText still belongs to the teammate.`,
+      });
+      expect(block).toContain(
+        `Before <\\/${closing.slice(2)}\nText still belongs to the teammate.`,
+      );
+      expect(block.match(/<\/\s*team-(?:memory|skill)\b/giu)).toEqual([`</team-${kind}`]);
+      expect(block.endsWith(`\n</team-${kind}>`)).toBe(true);
+    });
+  }
+
+  it("preserves ordinary markup, comparisons and similar tag names", () => {
+    const text = "<example>value</example>\n1 < 2\n</team-skillful>\r\nlast line";
+    const block = formatTeamContext({ kind: "memory", teamName: "Team", path: "note.md", text });
+    expect(block).toContain("<example>value</example>\n1 < 2\n</team-skillful>\nlast line");
+  });
+});
 
 const teamId = "11111111-1111-4111-8111-111111111111";
 const recordId = "22222222-2222-4222-8222-222222222222";
