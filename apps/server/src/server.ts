@@ -71,6 +71,9 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import * as Help from "./help/Help.ts";
+import * as HelpDocumentation from "./help/HelpDocumentation.ts";
+import * as HelpIntegrations from "./help/HelpIntegrations.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -530,6 +533,12 @@ const IntegrationRegistryStartupLive = IntegrationRegistry.startupLayer.pipe(
   Layer.provide(Layer.mergeAll(ServerSecretStore.layer, layerServerSettings)),
 );
 
+// This named observational adapter reads only the application's existing cached inventory.
+const layerHelpIntegrations = HelpIntegrations.layerFromSnapshot(
+  () =>
+    IntegrationRegistry.getIntegrationRegistryOptional()?.snapshot() ?? Promise.resolve(undefined),
+);
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
@@ -708,6 +717,9 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
 );
 
 const layerRuntimeDependencies = TritonAiCommonsAction.runtimeLayer.pipe(
+  Layer.provideMerge(
+    Help.layer.pipe(Layer.provide(Layer.mergeAll(layerHelpIntegrations, HelpDocumentation.layer))),
+  ),
   // Memory sync takes the summarizer's lock while it touches the vault.
   Layer.provideMerge(MemorySync.layer.pipe(Layer.provide(MicrosoftSignIn.layer))),
   // Ideas read threads, memory notes, and plugins, and call text generation.

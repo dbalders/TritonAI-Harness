@@ -1,6 +1,7 @@
 import type {
   BranchNamingOptions,
   ChatAttachment,
+  HelpContext,
   ModelSelection,
   PullRequestReviewGuide,
   TextGenerationError,
@@ -95,7 +96,7 @@ export type ReviewGuideGenerationResult = Omit<
 >;
 
 export interface DailyMemoryGenerationInput {
-  /** Working directory for the generation process. Nothing in it is read. */
+  /** Working directory for an opted-in prompt-only adapter. It must not read from it. */
   cwd: string;
   /** The local day being summarized, `YYYY-MM-DD`. */
   day: string;
@@ -149,8 +150,28 @@ export interface IdeasGenerationResult {
   description?: string;
 }
 
-/** Commit, change request, branch, and title generation backed by one provider instance. */
+export interface HelpGenerationInput {
+  /** Working directory for the generation process. Nothing in it is read. */
+  cwd: string;
+  modelSelection: ModelSelection;
+  /** Conversation content has already been redacted by the Help service. */
+  messages: ReadonlyArray<{ readonly role: "user" | "assistant"; readonly content: string }>;
+  context: HelpContext;
+}
+
+export interface HelpGenerationResult {
+  answer: string;
+}
+
+/** Text generation backed by one provider instance. */
 export interface ProviderTextGeneration {
+  /**
+   * Explain the current release using only supplied context. Present only when the
+   * adapter guarantees no tools and no implicit filesystem or instruction context.
+   */
+  readonly generateHelp?: (
+    input: HelpGenerationInput,
+  ) => Effect.Effect<HelpGenerationResult, TextGenerationError>;
   /** Summarize an opt-in memory day; supplied by Codex. */
   readonly generateDailyMemory?: (
     input: DailyMemoryGenerationInput,

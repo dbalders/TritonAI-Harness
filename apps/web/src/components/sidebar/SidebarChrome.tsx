@@ -1,4 +1,10 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, LightbulbIcon, SettingsIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  ChartNoAxesColumnIcon,
+  CircleHelpIcon,
+  LightbulbIcon,
+  SettingsIcon,
+} from "lucide-react";
 import { type ReactElement, type ReactNode, memo } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
@@ -185,6 +191,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const isOnUtilityPage = useLocation({
     select: (location) => isSidebarUtilityPage(location.pathname),
   });
+  const isOnHelpPage = useLocation({ select: (location) => location.pathname === "/help" });
   const pullRequestsSupported = usePullRequestsSupported();
   const closeMobileSidebar = () => {
     if (isMobile) {
@@ -216,38 +223,52 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   };
 
   return (
-    <SidebarMenu className="flex-row items-center">
-      {isOnUtilityPage ? (
-        <SidebarMenuItem className="min-w-0 flex-1">
-          <SidebarMenuButton onClick={handleBackClick}>
-            <ArrowLeftIcon />
-            <span>Back</span>
+    <div className="flex min-w-0 flex-col gap-2">
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={isOnHelpPage}
+            onClick={closeMobileSidebar}
+            render={<Link to="/help" />}
+          >
+            <CircleHelpIcon />
+            <span>Help</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
-      ) : (
-        <>
-          <SidebarUtilityItem
-            icon={<SettingsIcon />}
-            label="Settings"
-            onClick={handleSettingsClick}
-          />
-          {pullRequestsSupported ? (
+      </SidebarMenu>
+      <SidebarMenu className="flex-row items-center">
+        {isOnUtilityPage ? (
+          <SidebarMenuItem className="min-w-0 flex-1">
+            <SidebarMenuButton onClick={handleBackClick}>
+              <ArrowLeftIcon />
+              <span>Back</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ) : (
+          <>
             <SidebarUtilityItem
-              icon={<PullRequestGlyph.pullRequest />}
-              label="Pull Requests"
-              onClick={handlePullRequestsClick}
+              icon={<SettingsIcon />}
+              label="Settings"
+              onClick={handleSettingsClick}
             />
-          ) : null}
-          <SidebarUtilityItem
-            icon={<ChartNoAxesColumnIcon />}
-            label="Usage"
-            onClick={handleUsageClick}
-          />
-          <SidebarIdeasItem onClick={closeMobileSidebar} />
-        </>
-      )}
-      <SidebarUpdatePill />
-    </SidebarMenu>
+            {pullRequestsSupported ? (
+              <SidebarUtilityItem
+                icon={<PullRequestGlyph.pullRequest />}
+                label="Pull Requests"
+                onClick={handlePullRequestsClick}
+              />
+            ) : null}
+            <SidebarUtilityItem
+              icon={<ChartNoAxesColumnIcon />}
+              label="Usage"
+              onClick={handleUsageClick}
+            />
+            <SidebarIdeasItem onClick={closeMobileSidebar} />
+          </>
+        )}
+        <SidebarUpdatePill />
+      </SidebarMenu>
+    </div>
   );
 });
 

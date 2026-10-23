@@ -292,7 +292,13 @@ const LegacyConfirmQuit = Schema.Boolean.pipe(
 
 const QuitConfirmationModeSetting = Schema.Union([QuitConfirmationMode, LegacyConfirmQuit]);
 
-export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200));
+/**
+ * A user-chosen font family (a single name or a comma-separated list). Empty
+ * means "use the app default"; clients compose their own fallback stacks.
+ */
+export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200)).annotateKey({
+  supportValue: true,
+});
 export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 
 /**
@@ -620,6 +626,8 @@ declare module "effect/Schema" {
     interface Annotations {
       /** Store this credential separately and expose only whether it is configured to clients. */
       readonly settingsSecret?: boolean | undefined;
+      /** A constrained presentation value that read-only support may inspect. */
+      readonly supportValue?: boolean | undefined;
       readonly providerSettingsForm?: ProviderSettingsFormAnnotation | undefined;
       readonly providerSettingsFormSchema?: ProviderSettingsFormSchemaAnnotation | undefined;
     }

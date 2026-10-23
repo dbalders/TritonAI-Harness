@@ -6,6 +6,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import { EnvironmentId, ProviderInstanceId, ProviderSessionId, ThreadId } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -25,6 +26,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
+import * as CodexTextGeneration from "../../textGeneration/CodexTextGeneration.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
@@ -103,6 +105,33 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
+  it.effect.each(["", "   "])(
+    "resolves a blank config home to the environment's Codex home before Help setup: %j",
+    (homePath) =>
+      Effect.gen(function* () {
+        using generation = vi.spyOn(CodexTextGeneration, "makeCodexTextGeneration");
+        const config = yield* ServerConfig.ServerConfig;
+        const instance = yield* CodexDriver.create({
+          instanceId: ProviderInstanceId.make("blank-home-help"),
+          displayName: "Blank home Help",
+          enabled: false,
+          environment: [],
+          config: {
+            ...CodexDriver.defaultConfig(),
+            setupMode: "existing",
+            binaryPath: process.execPath,
+            homePath,
+          },
+        });
+        expect(generation).toHaveBeenCalledOnce();
+        expect(generation.mock.calls[0]?.[0].homePath).toBe(NodePath.join(config.baseDir, "codex"));
+        expect(instance.textGeneration.generateHelp).toBeDefined();
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        Effect.scoped,
+      ),
+  );
+
   it.effect.each([
     { id: "codex_frontier", managed: true, explicitModalities: false },
     { id: "codex", managed: true, explicitModalities: true },
@@ -379,6 +408,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
         > = [];
 
         let interruptedChecks = 0;
+        let spawnedProcesses = 0;
         let failAcquire = false;
         const startupChecksInterrupted = yield* Deferred.make<void>();
         const acquire = () =>
@@ -426,12 +456,18 @@ it.layer(layerTest)("CodexDriver", (it) => {
           Effect.provideService(
             ChildProcessSpawner.ChildProcessSpawner,
             ChildProcessSpawner.make(() =>
-              Effect.fail(
-                PlatformError.badArgument({
-                  module: "ChildProcessSpawner",
-                  method: "spawn",
-                  description: "The fixture app-server is unavailable",
-                }),
+              Effect.sync(() => {
+                spawnedProcesses += 1;
+              }).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    PlatformError.badArgument({
+                      module: "ChildProcessSpawner",
+                      method: "spawn",
+                      description: "The fixture app-server is unavailable",
+                    }),
+                  ),
+                ),
               ),
             ),
           ),
@@ -497,6 +533,36 @@ it.layer(layerTest)("CodexDriver", (it) => {
         expect(after.installed).toBe(true);
         expect(after.models).toEqual([]);
         expect(Option.isNone(yield* store.get)).toBe(true);
+        // Managed text generation must retain Help and recheck account access after sign-out.
+        const generateHelp = instance.textGeneration.generateHelp;
+        if (!generateHelp) return yield* Effect.die("Managed Codex lost its Help capability");
+        const beforeHelpProcesses = spawnedProcesses;
+        const helpError = yield* generateHelp({
+          cwd: serverConfig.stateDir,
+          modelSelection: { instanceId, model: "gpt-5.4" },
+          messages: [{ role: "user", content: "Where can I check provider settings?" }],
+          context: {
+            capturedAt: "2026-10-22T12:00:00.000Z",
+            environmentId: EnvironmentId.make("help-host"),
+            environmentName: "Host",
+            version: "test",
+            platform: "test",
+            mode: "desktop",
+            paths: [],
+            providers: [],
+            modelLabel: "Test model",
+            diagnostics: {
+              recordCount: 0,
+              failureCount: 0,
+              slowSpanCount: 0,
+              partial: true,
+              recentFailures: [],
+            },
+          },
+        }).pipe(Effect.flip);
+        expect(helpError._tag).toBe("TextGenerationError");
+        expect(spawnedProcesses).toBe(beforeHelpProcesses);
+        expect(helpError.detail).not.toContain("dummy-owned-access");
         // Signed out, there is no runtime to scan with, so the machine
         // snapshot's empty inventory stands instead of a failed scan.
         const signedOutScan = yield* instance.snapshotForCwd!(serverConfig.stateDir);

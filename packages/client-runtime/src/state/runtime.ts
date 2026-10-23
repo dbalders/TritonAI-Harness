@@ -7,6 +7,7 @@ import {
   type ClientGuardedRpcTag,
   EnvironmentId,
   type EnvironmentId as EnvironmentIdType,
+  WS_METHODS,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -28,7 +29,6 @@ import {
   type EnvironmentSubscriptionRpcTag,
   type EnvironmentUnaryRpcTag,
   EnvironmentRpcUnavailableError,
-  request,
   requestGuarded,
   RpcPermissionGuard,
   subscribe,
@@ -753,7 +753,10 @@ export function createEnvironmentCommand<R, ER, Input, A, E>(
 export function createEnvironmentRpcQueryAtomFamily<
   R,
   ER,
-  TTag extends Exclude<EnvironmentUnaryRpcTag, ClientGuardedRpcTag>,
+  // Opt protected reads in explicitly; protected writes still require a command.
+  TTag extends
+    | Exclude<EnvironmentUnaryRpcTag, ClientGuardedRpcTag>
+    | typeof WS_METHODS.helpGetContext,
 >(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
   options: {
@@ -778,6 +781,7 @@ export function createEnvironmentRpcQueryAtomFamily<
     readonly isFinal?: (value: EnvironmentRpcSuccess<TTag>) => boolean;
   },
 ) {
+  const permissions = createCommandPermissions(runtime, options.tag);
   return createEnvironmentQueryAtomFamily(runtime, {
     label: options.label,
     ...(options.persistence === undefined ? {} : { persistence: options.persistence }),
@@ -788,10 +792,20 @@ export function createEnvironmentRpcQueryAtomFamily<
       : { refreshIntervalMs: options.refreshIntervalMs }),
     ...(options.refreshTrigger === undefined ? {} : { refreshTrigger: options.refreshTrigger }),
     ...(options.isFinal === undefined ? {} : { isFinal: options.isFinal }),
-    execute: (
+    execute: Effect.fn("EnvironmentRpcQuery.execute")(function* (
       input: EnvironmentRpcInput<TTag>,
       emit: (value: EnvironmentRpcSuccess<TTag>) => Effect.Effect<void>,
-    ) => options.execute?.(input, emit) ?? request(options.tag, input),
+    ) {
+      const registry = yield* AtomRegistry.AtomRegistry;
+      const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+      yield* permissions.authorize(registry, supervisor.target.environmentId, input);
+      return yield* (options.execute?.(input, emit) ?? requestGuarded(options.tag, input)).pipe(
+        Effect.provideService(RpcPermissionGuard, {
+          authorize: (environmentId, method, payload) =>
+            createCommandPermissions(runtime, method).authorize(registry, environmentId, payload),
+        }),
+      );
+    }),
   });
 }
 

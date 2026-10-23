@@ -13,6 +13,11 @@ vp run dev
 Open the pairing URL printed by the dev runner. The bare origin does not authenticate
 a new browser.
 
+The standalone web server also needs an externally managed encryption keyring through
+`TRITONAI_SECRET_STORE_KEY_FILE`; see [headless and web server protection](./secret-storage.md#headless-and-web-server-protection).
+Keep development keys separate from installed-app keys and outside the repository and test evidence.
+The desktop app supplies its own protected keyring.
+
 Prefer a container? See [Dev container](../internals/devcontainer.md) for VS Code and Codespaces setup.
 
 ## Choosing a dev process

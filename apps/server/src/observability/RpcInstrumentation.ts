@@ -14,6 +14,8 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * even where they differ from the method prefix.
  */
 const RPC_AGGREGATES = {
+  [WS_METHODS.helpGetContext]: "help",
+  [WS_METHODS.helpAsk]: "help",
   [WS_METHODS.serverGetAccountStatus]: "server",
   [WS_METHODS.serverStartAccountLogin]: "server",
   [WS_METHODS.serverPollAccountLogin]: "server",

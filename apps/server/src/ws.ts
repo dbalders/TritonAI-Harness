@@ -94,6 +94,7 @@ import { transcribeVoice } from "./voiceTranscription.ts";
 import { fetchTritonAiUsage } from "./tritonAiUsage.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
 import * as Ideas from "./ideas/Ideas.ts";
+import * as Help from "./help/Help.ts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as DateTime from "effect/DateTime";
@@ -1289,7 +1290,8 @@ type WsRpcServices =
   | RelayClient.RelayClient
   | Account.AccountService
   | MemorySync.MemorySync
-  | Ideas.Ideas;
+  | Ideas.Ideas
+  | Help.Help;
 
 type WsRpcHandlerServices =
   | WsRpcServices
@@ -1316,6 +1318,8 @@ type WsRpcHandlers = {
 // Keep each registration group below TypeScript's instantiation limit. Both share
 // one handler context and register on the same WebSocket protocol.
 const wsRpcFirstHalfTags = [
+  WS_METHODS.helpGetContext,
+  WS_METHODS.helpAsk,
   WS_METHODS.projectBriefGet,
   WS_METHODS.projectBriefArchiveGet,
   WS_METHODS.projectBriefSubscribe,
@@ -2282,7 +2286,10 @@ export const layerWsRpc = (
       const memorySync = Context.get(requestServices, MemorySync.MemorySync);
       const ideas = Context.get(requestServices, Ideas.Ideas);
       const dailyMemory = Context.get(requestServices, DailyMemory.DailyMemory);
+      const help = Context.get(requestServices, Help.Help);
       const handlers: WsRpcHandlers = {
+        [WS_METHODS.helpGetContext]: () => help.getContext,
+        [WS_METHODS.helpAsk]: (input) => help.ask(input),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           Effect.annotateCurrentSpan({
             "orchestration_v2.command_id": command.commandId,
@@ -3687,6 +3694,8 @@ export const layerWsRpc = (
       };
       return Layer.merge(
         FirstWsRpcGroup.toLayer({
+          [WS_METHODS.helpGetContext]: handlers[WS_METHODS.helpGetContext],
+          [WS_METHODS.helpAsk]: handlers[WS_METHODS.helpAsk],
           [WS_METHODS.projectBriefGet]: handlers[WS_METHODS.projectBriefGet],
           [WS_METHODS.projectBriefArchiveGet]: handlers[WS_METHODS.projectBriefArchiveGet],
           [WS_METHODS.projectBriefSubscribe]: handlers[WS_METHODS.projectBriefSubscribe],

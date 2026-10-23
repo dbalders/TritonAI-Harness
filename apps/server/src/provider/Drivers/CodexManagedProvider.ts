@@ -261,7 +261,13 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
           }),
       ),
     );
+  const generateHelp = nativeGeneration.generateHelp;
   const textGeneration: ProviderInstance["textGeneration"] = {
+    ...(generateHelp
+      ? {
+          generateHelp: (value) => protect("generateHelp", generateHelp(value)),
+        }
+      : {}),
     generateCommitMessage: (value) =>
       protect("generateCommitMessage", nativeGeneration.generateCommitMessage(value)),
     generatePrContent: (value) =>

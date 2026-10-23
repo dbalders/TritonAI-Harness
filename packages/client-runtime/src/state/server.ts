@@ -970,6 +970,14 @@ export function createServerEnvironmentAtoms<R, E>(
 
   return {
     configValueAtom,
+    helpContext: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:help-context",
+      tag: WS_METHODS.helpGetContext,
+    }),
+    askHelp: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:ask-help",
+      tag: WS_METHODS.helpAsk,
+    }),
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",
       tag: WS_METHODS.serverRunStorageCleanup,

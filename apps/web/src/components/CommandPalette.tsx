@@ -66,6 +66,7 @@ import {
   CornerLeftUpIcon,
   FileSearchIcon,
   CircleDotIcon,
+  CircleHelpIcon,
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
@@ -199,6 +200,7 @@ import {
   filterPinnedBrowseEntries,
   getCommandPaletteInputPlaceholder,
   getCommandPaletteMode,
+  HELP_COMMAND_PALETTE_ACTION,
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
@@ -2076,6 +2078,15 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
+  actionItems.push({
+    ...HELP_COMMAND_PALETTE_ACTION,
+    icon: <CircleHelpIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/help" });
+    },
+  });
+
+  // Target the active thread or draft's project, falling back to the first sidebar group.
   const contextualProjectGroup =
     (contextualProjectRef
       ? projectGroupByTargetKey.get(

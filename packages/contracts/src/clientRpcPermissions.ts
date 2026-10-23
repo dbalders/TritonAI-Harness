@@ -3,6 +3,7 @@ import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./gi
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  AuthDiagnosticsReadScope,
   AuthPreviewOperateScope,
   AuthFilesystemReadScope,
   AuthSettingsWriteScope,
@@ -14,6 +15,8 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.helpGetContext]: AuthDiagnosticsReadScope,
+  [WS_METHODS.helpAsk]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   [WS_METHODS.projectOverviewEnsure]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectOverviewDismiss]: AuthOrchestrationOperateScope,
@@ -64,6 +67,12 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
+  if (method === WS_METHODS.helpAsk) {
+    return [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope, AuthOrchestrationReadScope];
+  }
+  if (method === WS_METHODS.helpGetContext) {
+    return [AuthDiagnosticsReadScope, AuthOrchestrationReadScope];
+  }
   // Project overview snapshots carry thread excerpts, so every mutation that returns one reads them.
   if (
     method === WS_METHODS.projectBriefExecute ||

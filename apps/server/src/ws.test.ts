@@ -6,6 +6,7 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as HttpClient from "effect/http/HttpClient";
 import * as Account from "./auth/AccountService.ts";
 import * as Ideas from "./ideas/Ideas.ts";
+import * as Help from "./help/Help.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -467,6 +468,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   ),
   Layer.mock(Account.AccountService)({}),
   Layer.mock(Ideas.Ideas)({}),
+  Layer.mock(Help.Help)({}),
   Layer.mock(MemorySync.MemorySync)({}),
   Layer.mock(ServerSecretStore.ServerSecretStore)({}),
   Layer.mock(WorkspacePaths.WorkspacePaths)({}),
