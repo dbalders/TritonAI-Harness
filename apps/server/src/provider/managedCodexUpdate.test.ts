@@ -10,6 +10,9 @@ import * as TestClock from "effect/testing/TestClock";
 import * as PlatformError from "effect/PlatformError";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
+import { acquireManagedCodexLease } from "./managedCodexLock.ts";
 import { ChildProcessSpawner } from "effect/process";
 
 import type { ProcessRunOutput, ProcessRunner } from "../processRunner.ts";
@@ -247,6 +250,129 @@ const fixtureLayer = Layer.merge(
 );
 
 it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
+  it.effect.each(["before backup", "after backup", "after activation", "verification", "rollback"])(
+    "keeps a usable engine after interruption during %s",
+    (phase) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const paused = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        const pause = Deferred.succeed(paused, undefined).pipe(
+          Effect.andThen(Deferred.await(resume)),
+        );
+        const runner = yield* makeFakeRunner({ failActivatedVerification: phase === "rollback" });
+        const fs = FileSystem.FileSystem.of({
+          ...fixture.fs,
+          rename: (source, destination) =>
+            Effect.gen(function* () {
+              if (phase === "before backup" && source === fixture.installRoot) yield* pause;
+              yield* fixture.fs.rename(source, destination);
+              if (
+                (phase === "after backup" && source === fixture.installRoot) ||
+                (phase === "after activation" &&
+                  source.includes(".tritonai-codex-stage.") &&
+                  destination === fixture.installRoot)
+              )
+                yield* pause;
+            }),
+          remove: (target, options) =>
+            Effect.gen(function* () {
+              if (phase === "rollback" && target === fixture.installRoot) yield* pause;
+              yield* fixture.fs.remove(target, options);
+            }),
+        });
+        const fiber = yield* updateTritonAiManagedCodex({
+          binaryPath: fixture.binaryPath,
+          run: (input) =>
+            Effect.gen(function* () {
+              if (
+                phase === "verification" &&
+                input.command === fixture.binaryPath &&
+                (yield* fixture.fs.readFileString(
+                  fixture.path.join(fixture.installRoot, "version.txt"),
+                )) === "0.151.0"
+              )
+                yield* pause;
+              return yield* runner(input);
+            }).pipe(Effect.orDie),
+        }).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.scoped, Effect.forkChild);
+        yield* Deferred.await(paused);
+        fiber.interruptUnsafe();
+        yield* Deferred.succeed(resume, undefined);
+        yield* Fiber.await(fiber);
+        expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
+        expect(["0.146.0", "0.151.0"]).toContain(
+          yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+        );
+      }).pipe(Effect.scoped),
+  );
+  it.effect("restores the launcher when shutdown interrupts activation after the backup move", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const paused = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const fs = FileSystem.FileSystem.of({
+        ...fixture.fs,
+        rename: (source, destination) =>
+          Effect.gen(function* () {
+            if (source.includes(".tritonai-codex-stage.") && destination === fixture.installRoot) {
+              yield* Deferred.succeed(paused, undefined);
+              yield* Deferred.await(resume);
+            }
+            return yield* fixture.fs.rename(source, destination);
+          }),
+      });
+      const fiber = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: yield* makeFakeRunner(),
+      }).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.scoped, Effect.forkChild);
+      yield* Deferred.await(paused);
+      fiber.interruptUnsafe();
+      yield* Deferred.succeed(resume, undefined);
+      yield* Fiber.await(fiber);
+      expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
+      expect(["0.146.0", "0.151.0"]).toContain(
+        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+      );
+    }).pipe(Effect.scoped),
+  );
+  it.effect("admits a session during staging and safely defers activation", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const staged = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const runner = yield* makeFakeRunner();
+      const fiber = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: (input) =>
+          runner(input).pipe(
+            Effect.tap(() =>
+              input.command === "npm"
+                ? Deferred.succeed(staged, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+                : Effect.void,
+            ),
+          ),
+      }).pipe(Effect.scoped, Effect.result, Effect.forkChild);
+      yield* Deferred.await(staged);
+      const session = yield* Scope.make();
+      yield* acquireManagedCodexLease(fixture.runtimeRoot).pipe(
+        Effect.provideService(Scope.Scope, session),
+      );
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(fiber);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(String(result.failure)).toContain("deferred");
+      expect(
+        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+      ).toBe("0.146.0");
+      yield* Scope.close(session, Exit.void);
+      expect(
+        yield* updateTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run: runner }).pipe(
+          Effect.scoped,
+        ),
+      ).toBe("0.151.0");
+    }).pipe(Effect.scoped),
+  );
   it.effect("stages, verifies, atomically activates, and retains the managed launcher", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();

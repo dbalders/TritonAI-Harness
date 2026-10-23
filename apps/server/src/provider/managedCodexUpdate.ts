@@ -11,6 +11,11 @@ import * as Schema from "effect/Schema";
 
 import type { ProcessRunInput, ProcessRunOutput, ProcessRunner } from "../processRunner.ts";
 import {
+  assertManagedCodexIdle,
+  assertManagedCodexLockOwnership,
+  withManagedCodexLock,
+} from "./managedCodexLock.ts";
+import {
   makeProviderMaintenanceCapabilities,
   normalizeCommandPath,
   type ProviderMaintenanceCapabilities,
@@ -249,6 +254,7 @@ export const updateTritonAiManagedCodex = Effect.fn(
 
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  yield* recoverTritonAiManagedCodex(input);
   if (!(yield* fs.exists(installation.binaryPath))) {
     return yield* updateError("The managed Codex launcher is missing.");
   }
@@ -394,60 +400,198 @@ export const updateTritonAiManagedCodex = Effect.fn(
   yield* fs.copyFile(installation.binaryPath, stagedBinaryPath);
   if (!installation.windows) yield* fs.chmod(stagedBinaryPath, 0o755);
 
-  const activate = Effect.gen(function* () {
-    yield* retryFileOperation(fs.rename(installation.installRoot, backupInstallRoot));
-    backedUp = true;
-    yield* retryFileOperation(fs.rename(stagedInstallRoot, installation.installRoot));
-    activated = true;
-    const activeVersionResult = yield* runCheckedCommand(
-      input.run,
-      {
-        command: installation.binaryPath,
-        args: ["--version"],
-        timeout: "30 seconds",
-        maxOutputBytes: 8 * 1024,
-        outputMode: "truncate",
-      },
-      "The activated Codex package failed verification.",
-    );
-    const activeVersion = parseCodexCliVersion(commandOutput(activeVersionResult));
-    if (activeVersion !== stagedVersion) {
-      return yield* updateError("The activated Codex package did not match the staged version.");
-    }
-    verified = true;
-    return activeVersion;
-  });
+  const activate = Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      yield* assertManagedCodexLockOwnership();
+      yield* retryFileOperation(fs.rename(installation.installRoot, backupInstallRoot));
+      backedUp = true;
+      yield* assertManagedCodexLockOwnership();
+      yield* retryFileOperation(fs.rename(stagedInstallRoot, installation.installRoot));
+      activated = true;
+      const activeVersionResult = yield* restore(
+        runCheckedCommand(
+          input.run,
+          {
+            command: installation.binaryPath,
+            args: ["--version"],
+            timeout: "30 seconds",
+            maxOutputBytes: 8 * 1024,
+            outputMode: "truncate",
+          },
+          "The activated Codex package failed verification.",
+        ),
+      );
+      const activeVersion = parseCodexCliVersion(commandOutput(activeVersionResult));
+      if (activeVersion !== stagedVersion) {
+        return yield* updateError("The activated Codex package did not match the staged version.");
+      }
+      yield* assertManagedCodexLockOwnership();
+      verified = true;
+      return activeVersion;
+    }),
+  );
 
-  return yield* activate.pipe(
-    Effect.catch((cause) =>
-      Effect.gen(function* () {
-        if (activated) {
-          yield* retryFileOperation(
-            fs.remove(installation.installRoot, { recursive: true, force: true }),
-          ).pipe(
-            Effect.mapError((rollbackCause) =>
-              updateError(
-                `Rollback failed. The previous engine is retained at ${backupInstallRoot}.`,
-                rollbackCause,
-              ),
-            ),
-          );
-        }
-        if (backedUp) {
-          yield* retryFileOperation(fs.rename(backupInstallRoot, installation.installRoot)).pipe(
-            Effect.mapError((rollbackCause) =>
-              updateError(
-                `Rollback failed. The previous engine is retained at ${backupInstallRoot}.`,
-                rollbackCause,
-              ),
-            ),
-          );
-          backedUp = false;
-        }
-        return yield* updateError("The managed Codex update was rolled back.", cause);
-      }),
-    ),
+  return yield* withManagedCodexLock(
+    runtimeRoot,
+    Effect.gen(function* () {
+      yield* assertManagedCodexIdle(runtimeRoot);
+      // A second updater may have finished while this package downloaded.
+      const current = yield* runCheckedCommand(
+        input.run,
+        {
+          command: installation.binaryPath,
+          args: ["--version"],
+          timeout: "30 seconds",
+          maxOutputBytes: 8 * 1024,
+          outputMode: "truncate",
+        },
+        "The installed Codex version could not be verified.",
+      );
+      const version = parseCodexCliVersion(commandOutput(current));
+      if (version && compareSemverVersions(version, approvedVersion) >= 0) return version;
+      return yield* activate.pipe(
+        Effect.mapError((cause) => updateError("The managed Codex update was rolled back.", cause)),
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            verified = false;
+            yield* assertManagedCodexLockOwnership();
+            if (activated) {
+              yield* retryFileOperation(
+                fs.remove(installation.installRoot, { recursive: true, force: true }),
+              ).pipe(
+                Effect.mapError((rollbackCause) =>
+                  updateError(
+                    `Rollback failed. The previous engine is retained at ${backupInstallRoot}.`,
+                    rollbackCause,
+                  ),
+                ),
+              );
+            }
+            if (backedUp) {
+              yield* assertManagedCodexLockOwnership();
+              yield* retryFileOperation(
+                fs.rename(backupInstallRoot, installation.installRoot),
+              ).pipe(
+                Effect.mapError((rollbackCause) =>
+                  updateError(
+                    `Rollback failed. The previous engine is retained at ${backupInstallRoot}.`,
+                    rollbackCause,
+                  ),
+                ),
+              );
+              backedUp = false;
+            }
+            return yield* Effect.failCause(cause);
+          }).pipe(Effect.uninterruptible),
+        ),
+      );
+    }),
   );
 });
+
+/** Recover a retained pre-update engine even when process termination skipped finalizers. */
+export const recoverManagedCodexUnderLock = Effect.fn("recoverManagedCodexUnderLock")(
+  function* (input: { readonly binaryPath: string; readonly run: ManagedCodexCommandRunner }) {
+    const installation = resolveTritonAiManagedCodexInstallation(input.binaryPath);
+    if (!installation) return;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const runtimeRoot = path.dirname(installation.installRoot);
+    if (!(yield* fs.exists(runtimeRoot))) return;
+    const backups = (yield* fs.readDirectory(runtimeRoot))
+      .filter((entry) => entry.startsWith(".tritonai-codex-backup."))
+      .sort();
+    if (backups.length === 0) return;
+    const working = (binaryPath: string) =>
+      input
+        .run({
+          command: binaryPath,
+          args: ["--version"],
+          timeout: "5 seconds",
+          maxOutputBytes: 8 * 1024,
+        })
+        .pipe(
+          Effect.map(
+            (result) =>
+              result.code === 0 &&
+              !result.timedOut &&
+              parseCodexCliVersion(commandOutput(result)) !== null,
+          ),
+          Effect.orElseSucceed(() => false),
+        );
+    if ((yield* fs.exists(installation.binaryPath)) && (yield* working(installation.binaryPath)))
+      return;
+    yield* assertManagedCodexIdle(runtimeRoot);
+    for (const backup of backups) {
+      const backupRoot = path.join(runtimeRoot, backup, path.basename(installation.installRoot));
+      const backupBinary = path.join(backupRoot, ...installation.binaryRelativeSegments);
+      if (!(yield* fs.exists(backupBinary))) continue;
+      const linked = yield* Effect.forEach(
+        [path.join(runtimeRoot, backup), backupRoot, backupBinary],
+        (target) =>
+          fs.readLink(target).pipe(
+            Effect.as(true),
+            Effect.orElseSucceed(() => false),
+          ),
+      );
+      if (linked.some(Boolean)) continue;
+      // Keep an incomplete active engine until the recovered launcher is verified.
+      const quarantine = yield* fs.makeTempDirectory({
+        directory: runtimeRoot,
+        prefix: ".tritonai-codex-stage.recovery.",
+      });
+      const displaced = path.join(quarantine, path.basename(installation.installRoot));
+      let moved = false;
+      let restored = false;
+      const recovered = yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          yield* assertManagedCodexLockOwnership();
+          if (yield* fs.exists(installation.installRoot)) {
+            yield* fs.rename(installation.installRoot, displaced);
+            moved = true;
+          }
+          yield* assertManagedCodexLockOwnership();
+          yield* fs.rename(backupRoot, installation.installRoot);
+          restored = true;
+          if (!(yield* restore(working(installation.binaryPath)))) {
+            return yield* updateError("The retained Codex engine failed recovery verification.");
+          }
+          yield* assertManagedCodexLockOwnership();
+        }),
+      ).pipe(
+        Effect.onError(() =>
+          Effect.gen(function* () {
+            yield* assertManagedCodexLockOwnership();
+            if (restored) yield* fs.rename(installation.installRoot, backupRoot);
+            yield* assertManagedCodexLockOwnership();
+            if (moved) yield* fs.rename(displaced, installation.installRoot);
+          }).pipe(Effect.orDie),
+        ),
+        Effect.result,
+      );
+      if (recovered._tag === "Success") {
+        yield* fs.remove(quarantine, { recursive: true, force: true });
+        yield* fs.remove(path.join(runtimeRoot, backup), { recursive: true, force: true });
+        return;
+      }
+      yield* fs.remove(quarantine, { recursive: true, force: true });
+    }
+    return yield* updateError(
+      "No retained Codex engine could be recovered. Run TritonAI Installer to repair it.",
+    );
+  },
+);
+
+export const recoverTritonAiManagedCodex = Effect.fn("recoverTritonAiManagedCodex")(
+  function* (input: { readonly binaryPath: string; readonly run: ManagedCodexCommandRunner }) {
+    const installation = resolveTritonAiManagedCodexInstallation(input.binaryPath);
+    if (!installation) return;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const runtimeRoot = path.dirname(installation.installRoot);
+    if (!(yield* fs.exists(runtimeRoot))) return;
+    yield* withManagedCodexLock(runtimeRoot, recoverManagedCodexUnderLock(input));
+  },
+);
 
 export const managedCodexUpdateCommandName = MANAGED_CODEX_UPDATE_COMMAND;

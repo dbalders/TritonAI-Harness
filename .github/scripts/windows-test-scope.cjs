@@ -11,7 +11,7 @@ const suites = [
     label: "server filesystem and processes",
     package: "apps/server",
     files:
-      "src/workspace/WorkspacePaths.test.ts src/workspace/WorkspaceFileSystem.test.ts src/processRunner.test.ts src/process/externalLauncher.test.ts src/terminal/NodePtyAdapter.test.ts",
+      "src/workspace/WorkspacePaths.test.ts src/workspace/WorkspaceFileSystem.test.ts src/processRunner.test.ts src/process/externalLauncher.test.ts src/terminal/NodePtyAdapter.test.ts src/provider/managedCodexUpdate.test.ts src/provider/managedCodexRuntime.test.ts src/provider/managedCodexLifecycle.test.ts src/provider/managedCodexLock.test.ts",
   },
   {
     label: "desktop Windows and WSL",

@@ -916,7 +916,10 @@ describe("CodexAdapterV2 process spawning", () => {
         assert.ok(args.includes("model_providers.ucsd.supports_websockets=false"));
         assert.ok(args.includes("features.enable_request_compression=false"));
       }
-    }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provide(NodeServices.layer),
+    ),
   );
 
   it.effect("expands ~ in the configured binary path before spawning", () =>

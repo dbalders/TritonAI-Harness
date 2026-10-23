@@ -1,3 +1,5 @@
+import { resolveCommandPath } from "@t3tools/shared/shell";
+import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -8,7 +10,10 @@ import type { ProcessRunner } from "../processRunner.ts";
 import {
   parseCodexCliVersion,
   resolveTritonAiManagedCodexInstallation,
+  recoverTritonAiManagedCodex,
+  recoverManagedCodexUnderLock,
 } from "./managedCodexUpdate.ts";
+import { acquireManagedCodexLease } from "./managedCodexLock.ts";
 
 const decodePackage = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
@@ -33,31 +38,65 @@ export const resolveManagedCodexBinary = Effect.fn("resolveManagedCodexBinary")(
   readonly environment: NodeJS.ProcessEnv;
   readonly run: ProcessRunner["Service"]["run"];
 }) {
-  const requested = input.binaryPath.trim() || "codex";
+  let requested = input.binaryPath.trim() || "codex";
+  const fs = yield* FileSystem.FileSystem;
+  {
+    const command = yield* resolveCommandPath(requested, { env: input.environment }).pipe(
+      Effect.provideService(HostProcessPlatform, input.platform),
+    );
+    if (command) {
+      const resolved = yield* fs.realPath(command).pipe(Effect.orElseSucceed(() => command));
+      if (resolveTritonAiManagedCodexInstallation(resolved)) requested = resolved;
+    }
+  }
   const configuredInstallation = resolveTritonAiManagedCodexInstallation(requested);
   // An explicit custom command is intentional, even when it is broken.
   if (requested !== "codex" && !configuredInstallation) return requested;
 
-  const workingVersion = (command: string) =>
-    input
-      .run({
+  const run: ProcessRunner["Service"]["run"] = (command) =>
+    input.run({ ...command, env: input.environment });
+  const workingVersion = Effect.fn("managedCodexRuntime.workingVersion")(
+    function* (command: string) {
+      yield* leaseManagedCodexRuntime(command, run);
+      const result = yield* run({
         command,
         args: ["--version"],
-        env: input.environment,
         timeout: "5 seconds",
         maxOutputBytes: 8 * 1024,
-      })
-      .pipe(
-        Effect.map((result) =>
-          result.code === 0 && !result.timedOut ? parseCodexCliVersion(result.stdout) : null,
-        ),
-        Effect.orElseSucceed(() => null),
-      );
+      });
+      return result.code === 0 && !result.timedOut ? parseCodexCliVersion(result.stdout) : null;
+    },
+    Effect.scoped,
+    Effect.orElseSucceed(() => null),
+  );
 
-  const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runtimeRoot = path.join(input.homeDirectory, ".agents", "ucsd", "runtime", "codex");
   if (yield* workingVersion(requested)) return requested;
+  if (!configuredInstallation) {
+    // A fresh profile has no configured path; retained backups still identify their installation.
+    const backups = yield* fs.readDirectory(runtimeRoot).pipe(Effect.orElseSucceed(() => []));
+    for (const entry of backups.filter((name) => name.startsWith(".tritonai-codex-backup."))) {
+      const roots = yield* fs
+        .readDirectory(path.join(runtimeRoot, entry))
+        .pipe(Effect.orElseSucceed(() => []));
+      for (const root of roots) {
+        const binaryPath = path.join(
+          runtimeRoot,
+          root,
+          ...(input.platform === "win32" ? ["codex.cmd"] : ["bin", "codex"]),
+        );
+        yield* recoverTritonAiManagedCodex({ binaryPath, run }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Skipped an unavailable retained Codex engine", {
+              binaryPath,
+              cause,
+            }),
+          ),
+        );
+      }
+    }
+  }
   const entries = yield* fs.readDirectory(runtimeRoot).pipe(Effect.orElseSucceed(() => []));
   const candidates: Array<{ binaryPath: string; version: string }> = [];
   for (const entry of entries) {
@@ -97,4 +136,18 @@ export const resolveManagedCodexBinary = Effect.fn("resolveManagedCodexBinary")(
     }
   }
   return yield* new ManagedCodexRuntimeError({ binaryPath: requested });
+});
+
+/** The caller's scope must outlive its Codex child process. */
+export const leaseManagedCodexRuntime = Effect.fn("leaseManagedCodexRuntime")(function* (
+  binaryPath: string,
+  run: ProcessRunner["Service"]["run"],
+) {
+  const installation = resolveTritonAiManagedCodexInstallation(binaryPath);
+  if (!installation) return;
+  const path = yield* Path.Path;
+  yield* acquireManagedCodexLease(
+    path.dirname(installation.installRoot),
+    recoverManagedCodexUnderLock({ binaryPath, run }),
+  );
 });
