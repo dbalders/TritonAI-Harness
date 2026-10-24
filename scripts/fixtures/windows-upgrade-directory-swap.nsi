@@ -12,6 +12,8 @@ InstallDir "${TEST_ROOT}"
 !define UNINSTALL_FILENAME "Uninstall.exe"
 !define VERSION "1.0.1"
 !define isUpdated '"1" == "1"'
+# This directory-swap fixture has no electron-builder shortcut context.
+!define DO_NOT_CREATE_START_MENU_SHORTCUT
 !include "${UPGRADE_INCLUDE}"
 Function .onInit
 !ifdef BUILD_UNINSTALLER
