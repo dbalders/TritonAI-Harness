@@ -2115,6 +2115,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<string, PendingCodexRuntimeRequest>(),
         );
         const dynamicToolInvocations = new Map<string, Set<AbortController>>();
+        const dynamicToolStopClaims = new Set<{
+          readonly roots: ReadonlySet<ActiveCodexTurnContext>;
+          readonly nativeGoalThreadId: string | undefined;
+        }>();
         const cancelDynamicToolInvocations = (nativeTurnId: string) => {
           for (const invocation of dynamicToolInvocations.get(nativeTurnId) ?? [])
             invocation.abort();
@@ -2180,6 +2184,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           const stopped = Effect.runSync(Ref.get(terminalizedNonCompletedNativeTurns));
           let caller: ActiveCodexTurnContext | undefined = context;
           while (caller !== undefined) {
+            for (const claim of dynamicToolStopClaims)
+              if (
+                claim.roots.has(caller) ||
+                (claim.nativeGoalThreadId !== undefined &&
+                  caller.providerThread.nativeThreadRef?.nativeId === claim.nativeGoalThreadId)
+              )
+                return false;
             if (
               interrupting.has(caller.nativeTurnId) ||
               completions.has(caller.nativeTurnId) ||
@@ -7404,6 +7415,31 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ),
         };
 
+        const claimDynamicToolStop = (input: ProviderAdapter.ProviderAdapterV2InterruptInput) => {
+          const turnId = latestGoalTurnId(input.providerTurnId);
+          const nativeThreadId = input.providerThread.nativeThreadRef?.nativeId;
+          const contexts = Array.from(Effect.runSync(Ref.get(activeTurns)).values());
+          const claim = {
+            roots: new Set([
+              ...contexts.filter(
+                (context) =>
+                  context.providerTurnId === turnId ||
+                  (input.requestRuntimeRestart === true &&
+                    context.providerThread.id === input.providerThread.id),
+              ),
+              ...(goalRuns.get(turnId) ?? []),
+            ]),
+            nativeGoalThreadId:
+              nativeThreadId != null && goalsByNativeThread.get(nativeThreadId)?.status === "active"
+                ? nativeThreadId
+                : undefined,
+          };
+          dynamicToolStopClaims.add(claim);
+          for (const context of contexts)
+            if (!nativeCallMayRun(context)) cancelDynamicToolInvocations(context.nativeTurnId);
+          return claim;
+        };
+
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,
           driver: CODEX_PROVIDER,
@@ -8323,7 +8359,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }).pipe(Effect.ensuring(cleanupInterruptState));
             },
             (effect, requestedInput) =>
-              effect.pipe(
+              // Revoke before goal pause can await the provider, through final Stop cleanup.
+              Effect.acquireUseRelease(
+                Effect.sync(() => claimDynamicToolStop(requestedInput)),
+                () => effect,
+                (claim) => Effect.sync(() => dynamicToolStopClaims.delete(claim)),
+              ).pipe(
                 Effect.mapError(
                   (cause) =>
                     new ProviderAdapter.ProviderAdapterInterruptError({

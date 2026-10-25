@@ -495,3 +495,29 @@ effectIt.effect("keeps an admitted write on its reviewed account until provider 
     expect(principal).toBe("synthetic-account-B");
   }).pipe(Effect.scoped),
 );
+
+it.each(["payload", "metadata"] as const)(
+  "refuses oversized %s before publishing an approval or invoking the provider",
+  async (scope) => {
+    await using state = await fixture(
+      scope === "metadata" ? { account: async () => "a".repeat(1024 * 1024 + 1) } : {},
+    );
+    const reviews: IntegrationWriteReview[] = [];
+    using _presenter = installIntegrationWriteGate(owner.providerInstanceId, (review) => {
+      reviews.push(review);
+      return Effect.succeed({ approved: true as const, isCurrent: () => true });
+    });
+    await expect(
+      state.registry.invokeTool(
+        "approval.fixture.write",
+        {
+          destination: "synthetic-one",
+          body: scope === "payload" ? "x".repeat(700 * 1024) : "Small change",
+        },
+        state.context,
+      ),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(reviews).toEqual([]);
+    expect(state.writes).toEqual([]);
+  },
+);

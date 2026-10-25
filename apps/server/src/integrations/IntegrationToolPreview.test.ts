@@ -1,6 +1,8 @@
 // @effect-diagnostics globalDate:off -- Date objects are intentional non-JSON rejection cases.
 import { describe, expect, it } from "@effect/vitest";
 import { describeToolCallForApproval } from "./IntegrationToolPreview.ts";
+import * as Effect from "effect/Effect";
+import { makeLiveStreamBudget } from "../orchestration-v2/LiveStreamBudget.ts";
 import { snapshotIntegrationInput } from "./IntegrationWriteApproval.ts";
 
 describe("plugin payload review", () => {
@@ -79,3 +81,17 @@ describe("plugin payload review", () => {
     expect(describeToolCallForApproval("tool", undefined)).toBe("tool");
   });
 });
+
+it.effect("delivers a deeply nested complete review within the real live-event budget", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let input: unknown = [...Array.from({ length: 89_999 }, () => 0), "LAST REVIEWABLE ELEMENT"];
+      for (let depth = 0; depth < 55; depth++) input = { nested: input };
+      const prompt = describeToolCallForApproval("fixture.write", input);
+      expect(JSON.parse(prompt.slice(prompt.indexOf("\n") + 1))).toEqual(input);
+      const budget = yield* makeLiveStreamBudget();
+      yield* budget.retain({ event: { type: "approval_request", prompt } });
+      expect((yield* budget.usage).retainedItems).toBe(1);
+    }),
+  ),
+);

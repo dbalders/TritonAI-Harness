@@ -14,6 +14,8 @@ type Json =
   | { readonly [key: string]: Json };
 
 const MAX_INPUT_BYTES = 4 * 1024 * 1024;
+const MAX_REVIEW_PAYLOAD_BYTES = 512 * 1024;
+const MAX_REVIEW_WIRE_BYTES = 1024 * 1024;
 const MAX_INPUT_DEPTH = 64;
 const MAX_INPUT_NODES = 100_000;
 const SECRET_FIELD = /secret|password|passphrase|token|api[-_]?key|credential|authorization/iu;
@@ -113,7 +115,14 @@ export function reviewIntegrationInput(input: Json): string {
       ]),
     );
   };
-  return JSON.stringify(redact(input), null, 2);
+  const redacted = redact(input);
+  const pretty = JSON.stringify(redacted, null, 2);
+  if (Buffer.byteLength(JSON.stringify(pretty)) <= MAX_REVIEW_PAYLOAD_BYTES) return pretty;
+  const compact = JSON.stringify(redacted);
+  if (Buffer.byteLength(JSON.stringify(compact)) <= MAX_REVIEW_PAYLOAD_BYTES) return compact;
+  throw new Error(
+    "This plugin write is too large for complete review. Split it into smaller changes.",
+  );
 }
 
 export interface IntegrationWriteInvocation {
@@ -153,6 +162,14 @@ export interface IntegrationWriteReview {
   readonly effectiveDigest: string;
   readonly payload: string;
   readonly expiresAt: number;
+}
+
+/** Leave room for host prompts and live-event envelopes without shortening any reviewed field. */
+export function assertIntegrationWriteReviewSize(review: IntegrationWriteReview): void {
+  if (Buffer.byteLength(JSON.stringify(review)) > MAX_REVIEW_WIRE_BYTES)
+    throw new Error(
+      "This plugin write's review metadata is too large. Split it into smaller changes.",
+    );
 }
 
 export type IntegrationWriteDecision =

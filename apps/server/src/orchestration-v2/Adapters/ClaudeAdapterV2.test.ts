@@ -1414,7 +1414,13 @@ describe("ClaudeAdapterV2 plugin tool approvals", () => {
           item?.type === "turn_item.updated" && item.turnItem.type === "approval_request",
         );
         if (item?.type !== "turn_item.updated" || item.turnItem.type !== "approval_request") return;
-        assert.equal(item.turnItem.prompt, "fixture.records.write\nRename record 7 to Archive");
+        const prompt = item.turnItem.prompt;
+        if (prompt === undefined) return assert.fail("missing complete approval payload");
+        assert.isTrue(prompt.startsWith("fixture.records.write\n"));
+        assert.deepEqual(JSON.parse(prompt.slice(prompt.indexOf("\n") + 1)), {
+          recordId: "7",
+          summary: "Rename record 7 to Archive",
+        });
         const request = events.find((event) => event.type === "runtime_request.updated");
         if (request?.type !== "runtime_request.updated") return assert.fail("no approval request");
         yield* runtime.respondToRuntimeRequest({

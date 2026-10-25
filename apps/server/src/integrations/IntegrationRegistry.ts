@@ -61,6 +61,7 @@ import {
   retainIntegrationWriteCredentials,
   requestIntegrationWriteApproval,
   reviewIntegrationInput,
+  assertIntegrationWriteReviewSize,
   snapshotIntegrationInput,
   type IntegrationApprovalOwner,
 } from "./IntegrationWriteApproval.ts";
@@ -3629,6 +3630,17 @@ export class RegistryRuntime {
               "operation_failed",
               "The plugin connection changed while preparing the review. Try a fresh call.",
             );
+          let payload: string;
+          try {
+            payload = reviewIntegrationInput(effective.value);
+          } catch (cause) {
+            throw operationError(
+              "invalid_input",
+              cause instanceof Error
+                ? cause.message
+                : "The complete plugin payload cannot be reviewed.",
+            );
+          }
           const expiresAt = Date.now() + 5 * 60_000;
           const review = Object.freeze({
             owner: approvalOwner!,
@@ -3640,9 +3652,19 @@ export class RegistryRuntime {
             toolName: name,
             submittedDigest: submitted.digest,
             effectiveDigest: effective.digest,
-            payload: reviewIntegrationInput(effective.value),
+            payload,
             expiresAt,
           });
+          try {
+            assertIntegrationWriteReviewSize(review);
+          } catch (cause) {
+            throw operationError(
+              "invalid_input",
+              cause instanceof Error
+                ? cause.message
+                : "The complete plugin review cannot be delivered.",
+            );
+          }
           const decision = await Effect.runPromise(requestIntegrationWriteApproval(review), {
             signal,
           });

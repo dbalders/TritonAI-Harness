@@ -2448,14 +2448,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     "nested-approved",
     "nested-stop-pending",
     "nested-stop-journal",
+    "goal-stop-pending",
+    "goal-stop-journal",
   ] as const)("enforces live V2 plugin dispatch at the %s boundary", (scenario) =>
     Effect.scoped(
       Effect.gen(function* () {
         const approved = scenario.startsWith("approved") || scenario === "nested-approved";
         const nested = scenario.startsWith("nested-");
         const stopping = scenario.startsWith("nested-stop-");
+        const goalStopping = scenario.startsWith("goal-stop-");
+        const goalPauseEntered = yield* Deferred.make<void>();
+        const releaseGoalPause = yield* Deferred.make<void>();
         const pausedJournal =
-          scenario === "nested-journal-cancelled" || scenario === "nested-stop-journal";
+          scenario === "nested-journal-cancelled" ||
+          scenario === "nested-stop-journal" ||
+          scenario === "goal-stop-journal";
         const root = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
         const journalEntered = Promise.withResolvers<void>();
         const stopEntered = yield* Deferred.make<void>();
@@ -2642,10 +2649,36 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           for (let depth = 0; depth < 65; depth += 1) toolArguments = { nested: toolArguments };
         } else if (scenario === "invalid-size")
           toolArguments = { code: "x".repeat(4 * 1024 * 1024) };
+        const goal = (status: "active" | "paused") => ({
+          threadId: nativeThreadId,
+          objective: "Synthetic goal",
+          status,
+          tokenBudget: null,
+          tokensUsed: 10,
+          timeUsedSeconds: 3,
+          createdAt: 1782622440,
+          updatedAt: 1782622450,
+        });
         const transcript = makeCodexReplayTranscript({
           scenario: name,
           entries: [
             ...preamble,
+            ...(goalStopping
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "goal-active-for-stop",
+                    frame: {
+                      method: "thread/goal/updated",
+                      params: {
+                        threadId: nativeThreadId,
+                        turnId: nativeTurnId,
+                        goal: goal("active"),
+                      },
+                    },
+                  },
+                ]
+              : []),
             ...(nested
               ? [
                   {
@@ -2730,7 +2763,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 },
               },
             },
-            ...(scenario === "nested-cancelled" || pausedJournal || stopping
+            ...(scenario === "nested-cancelled" || (nested && pausedJournal) || stopping
               ? [
                   {
                     type: "emit_inbound" as const,
@@ -2776,6 +2809,43 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   },
                 ]
               : []),
+            ...(goalStopping
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "fixture-result-consumed",
+                    frame: { method: "fixture/result-consumed", params: {} },
+                  },
+                  {
+                    type: "expect_outbound" as const,
+                    label: "pause-goal",
+                    frame: {
+                      id: 4,
+                      method: "thread/goal/set",
+                      params: { threadId: nativeThreadId, status: "paused" },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "paused-goal-result",
+                    frame: { id: 4, result: { goal: goal("paused") } },
+                  },
+                  {
+                    type: "expect_outbound" as const,
+                    label: "interrupt-goal-turn",
+                    frame: {
+                      id: 5,
+                      method: "turn/interrupt",
+                      params: { threadId: nativeThreadId, turnId: nativeTurnId },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "interrupted-goal-result",
+                    frame: { id: 5, result: {} },
+                  },
+                ]
+              : []),
             ...(scenario === "nested-approved"
               ? [
                   {
@@ -2798,7 +2868,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 method: "turn/completed",
                 params: {
                   threadId: nativeThreadId,
-                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                  turn: makeCodexReplayTurn({
+                    id: nativeTurnId,
+                    status: goalStopping ? "interrupted" : "completed",
+                  }),
                 },
               },
             },
@@ -2823,21 +2896,28 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 : Deferred.succeed(pending, event.runtimeRequest)
               : Effect.void,
           (method, params) =>
-            stopping && method === "turn/interrupt"
-              ? Deferred.succeed(stopEntered, undefined).pipe(Effect.andThen(Effect.never))
-              : stopping && method === "thread/backgroundTerminals/terminate"
-                ? Deferred.succeed(cleanupEntered, undefined).pipe(
-                    Effect.andThen(Deferred.await(releaseCleanup)),
-                  )
-                : Effect.sync(() => {
-                    // This fixture exercises dispatch, not the orchestration instruction text.
-                    if (method !== "turn/start") return;
-                    const expected = preamble.find(
-                      (entry) => entry.type === "expect_outbound" && entry.label === "turn/start",
-                    );
-                    if (expected?.type === "expect_outbound" && Predicate.isObject(expected.frame))
-                      Object.assign(expected.frame, { params });
-                  }),
+            goalStopping && method === "thread/goal/set"
+              ? Deferred.succeed(goalPauseEntered, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseGoalPause)),
+                )
+              : stopping && method === "turn/interrupt"
+                ? Deferred.succeed(stopEntered, undefined).pipe(Effect.andThen(Effect.never))
+                : stopping && method === "thread/backgroundTerminals/terminate"
+                  ? Deferred.succeed(cleanupEntered, undefined).pipe(
+                      Effect.andThen(Deferred.await(releaseCleanup)),
+                    )
+                  : Effect.sync(() => {
+                      // This fixture exercises dispatch, not the orchestration instruction text.
+                      if (method !== "turn/start") return;
+                      const expected = preamble.find(
+                        (entry) => entry.type === "expect_outbound" && entry.label === "turn/start",
+                      );
+                      if (
+                        expected?.type === "expect_outbound" &&
+                        Predicate.isObject(expected.frame)
+                      )
+                        Object.assign(expected.frame, { params });
+                    }),
           undefined,
           {},
           (result) =>
@@ -2913,8 +2993,25 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           yield* Deferred.await(childCancelled);
           yield* Deferred.await(cleanupEntered);
         });
+        const claimGoalStop = Effect.gen(function* () {
+          const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+            driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+            nativeTurnId,
+          });
+          stopFiber = yield* harness.runtime
+            .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
+            .pipe(Effect.orDie, Effect.forkScoped);
+          yield* Effect.addFinalizer(() =>
+            Deferred.succeed(releaseGoalPause, undefined).pipe(Effect.asVoid),
+          );
+          yield* Deferred.await(goalPauseEntered);
+        });
         if (scenario !== "undisclosed" && !scenario.startsWith("invalid")) {
           const request = yield* Deferred.await(pending);
+          if (scenario === "goal-stop-pending") {
+            yield* claimGoalStop;
+            yield* Deferred.await(reviewCancelled);
+          }
           if (scenario === "nested-stop-pending") {
             yield* claimStop;
             yield* Deferred.await(reviewCancelled);
@@ -2948,7 +3045,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             yield* sessions.set({ ...credential, expiresAt: yield* Clock.currentTimeMillis });
           if (scenario === "replaced")
             yield* sessions.set({ ...credential, providerSessionId: "different-session" });
-          if (scenario === "nested-cancelled" || scenario === "nested-stop-pending")
+          if (
+            scenario === "nested-cancelled" ||
+            scenario === "nested-stop-pending" ||
+            scenario === "goal-stop-pending"
+          )
             yield* harness.runtime
               .respondToRuntimeRequest({ requestId: request.id, decision: "accept" })
               .pipe(Effect.flip);
@@ -2961,14 +3062,17 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   : "accept",
             });
           if (pausedJournal) {
-            if (stopping) {
+            if (goalStopping) {
+              yield* Effect.promise(() => journalEntered.promise);
+              yield* claimGoalStop;
+            } else if (stopping) {
               yield* Effect.promise(() => journalEntered.promise);
               yield* claimStop;
             } else yield* Deferred.await(childCancelled);
             releaseJournal.resolve();
           }
         }
-        if (stopping) {
+        if (stopping || goalStopping) {
           yield* Deferred.await(toolDone);
           assert.equal(
             invocations,
@@ -2976,13 +3080,16 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "Stop must revoke admission before command cleanup completes",
           );
           yield* Deferred.await(toolFlushed);
-          yield* Deferred.succeed(releaseCleanup, undefined);
+          yield* Deferred.succeed(goalStopping ? releaseGoalPause : releaseCleanup, undefined);
           if (stopFiber) yield* Fiber.join(stopFiber);
         }
         yield* harness.firstTerminal;
         assert.equal(Predicate.isObject(toolResult) && toolResult.success, approved);
         assert.equal(invocations, approved ? 1 : 0);
-        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        assert.equal(
+          harness.terminalEvents()[0]?.status,
+          goalStopping ? "interrupted" : "completed",
+        );
       }),
     ).pipe(
       Effect.provide(
