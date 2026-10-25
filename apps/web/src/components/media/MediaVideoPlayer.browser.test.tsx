@@ -58,16 +58,17 @@ it("keeps paused position and playing position when the signed source renews", a
 });
 
 it("stops automatic renewal for an unplayable resource until the user retries", async () => {
-  const urls = [0, 1, 2, 3].map(() =>
+  const urls = [0, 1, 2, 3, 4, 5, 6].map(() =>
     URL.createObjectURL(new Blob(["synthetic invalid video"], { type: "video/webm" })),
   );
   using _urls = { [Symbol.dispose]: () => urls.forEach((url) => URL.revokeObjectURL(url)) };
   const renewed = vi.fn();
-  function BrokenVideo() {
+  function BrokenVideo(props: { readonly poll?: number; readonly revision?: string }) {
     const [index, setIndex] = useState(0);
     return (
       <MediaVideoPlayer
-        src={urls[index]!}
+        src={urls[index + (props.poll ?? 0)]!}
+        revision={props.revision}
         label="Broken clip"
         onRetry={async () => {
           renewed();
@@ -79,7 +80,17 @@ it("stops automatic renewal for an unplayable resource until the user retries", 
   await using screen = await render(<BrokenVideo />);
   await expect.element(screen.getByRole("alert")).toBeVisible();
   expect(renewed).toHaveBeenCalledTimes(1);
+  await screen.rerender(<BrokenVideo poll={1} />);
+  await expect.element(screen.getByRole("alert")).toBeVisible();
+  expect(screen.container.querySelector("video")).toBeNull();
+  await screen.rerender(<BrokenVideo poll={2} />);
+  await expect.element(screen.getByRole("alert")).toBeVisible();
+  expect(screen.container.querySelector("video")).toBeNull();
+  expect(renewed).toHaveBeenCalledTimes(1);
   await screen.getByRole("button", { name: "Retry video" }).click();
   await expect.element(screen.getByRole("alert")).toBeVisible();
   expect(renewed).toHaveBeenCalledTimes(2);
+  await screen.rerender(<BrokenVideo poll={2} revision="new-file-revision" />);
+  await expect.element(screen.getByRole("alert")).toBeVisible();
+  expect(renewed).toHaveBeenCalledTimes(3);
 });

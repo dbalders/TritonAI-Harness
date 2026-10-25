@@ -11,6 +11,7 @@ import { useMediaActions } from "../state/mediaActions";
 import type { MediaActionsSource } from "../lib/mediaActionsSource";
 import { useFullscreenVideoOpen, useMediaAudioSessionHold } from "../lib/videoAudioSession";
 import { MediaActionsMenu } from "./MediaActionsMenu";
+import { makeVideoSourceRenewal } from "../lib/videoSourceRenewal";
 
 function LoadedMediaVideo(props: {
   readonly uri: string;
@@ -24,6 +25,10 @@ function LoadedMediaVideo(props: {
   const active = useRef(focused && AppState.currentState === "active");
   const fullscreen = useRef(false);
   const [attempt, setAttempt] = useState(0);
+  const previousAttempt = useRef(-1);
+  const recoveryUsed = useRef(false);
+  const terminalFailure = useRef(false);
+  const renewal = useRef<ReturnType<typeof makeVideoSourceRenewal> | null>(null);
   // Expo's Android player also reports completed playback as idle.
   const [loadState, setLoadState] = useState<"pending" | "complete" | "error">("pending");
   const player = useVideoPlayer(null, (player) => {
@@ -33,14 +38,39 @@ function LoadedMediaVideo(props: {
   const { status } = useEvent(player, "statusChange", { status: player.status });
   const { isPlaying } = useEvent(player, "playingChange", { isPlaying: player.playing });
   useMediaAudioSessionHold(isPlaying);
-  const loadSource = useEffectEvent(async (signal: AbortSignal) => {
-    const uri = props.resolvePlaybackUri ? await props.resolvePlaybackUri() : props.uri;
-    if (signal.aborted) return;
-    if (uri === null) throw new Error("Video unavailable");
-    player.pause();
-    await player.replaceAsync({ uri, contentType: "progressive" });
-    if (!signal.aborted && props.playRequested && active.current) player.play();
+  const loadSource = useEffectEvent(
+    async (source: string, playInitially: boolean, signal: AbortSignal, refresh: boolean) => {
+      const loader = renewal.current;
+      const uri = refresh && props.resolvePlaybackUri ? await props.resolvePlaybackUri() : source;
+      if (signal.aborted || loader === null) return false;
+      if (uri === null) throw new Error("Video unavailable");
+      return loader.replace(uri, {
+        signal,
+        playInitially,
+        canPlay: () => active.current || (fullscreen.current && focused && !paused),
+      });
+    },
+  );
+  const recover = useEffectEvent(() => {
+    if (terminalFailure.current) return;
+    if (!recoveryUsed.current && props.resolvePlaybackUri) {
+      recoveryUsed.current = true;
+      setLoadState("pending");
+      setAttempt((value) => value + 1);
+    } else {
+      terminalFailure.current = true;
+      setLoadState("error");
+    }
   });
+
+  useEffect(() => {
+    const loader = makeVideoSourceRenewal(player);
+    renewal.current = loader;
+    return () => {
+      loader.dispose();
+      if (renewal.current === loader) renewal.current = null;
+    };
+  }, [player]);
 
   useEffect(() => {
     active.current = focused && !paused && AppState.currentState === "active";
@@ -55,19 +85,25 @@ function LoadedMediaVideo(props: {
   }, [focused, player, paused]);
 
   useEffect(() => {
+    if (terminalFailure.current) return;
     const controller = new AbortController();
+    const refresh = previousAttempt.current !== attempt;
+    previousAttempt.current = attempt;
     setLoadState("pending");
-    // A renewed signature is used on Retry, not as a reason to reset the native player.
-    void loadSource(controller.signal).then(
-      () => {
-        if (!controller.signal.aborted) setLoadState("complete");
+    void loadSource(props.uri, props.playRequested, controller.signal, refresh).then(
+      (loaded) => {
+        if (!controller.signal.aborted && loaded) setLoadState("complete");
       },
       () => {
-        if (!controller.signal.aborted) setLoadState("error");
+        if (!controller.signal.aborted) recover();
       },
     );
     return () => controller.abort();
-  }, [player, props.playRequested, attempt]);
+  }, [props.uri, props.playRequested, attempt]);
+
+  useEffect(() => {
+    if (loadState === "complete" && status === "error") recover();
+  }, [loadState, status]);
 
   return (
     <View collapsable={false} style={{ flex: 1 }}>
@@ -92,7 +128,11 @@ function LoadedMediaVideo(props: {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Retry video"
-            onPress={() => setAttempt((value) => value + 1)}
+            onPress={() => {
+              terminalFailure.current = false;
+              recoveryUsed.current = true;
+              setAttempt((value) => value + 1);
+            }}
             className="min-h-11 justify-center px-4"
           >
             <AppText className="text-sm text-white">Retry</AppText>

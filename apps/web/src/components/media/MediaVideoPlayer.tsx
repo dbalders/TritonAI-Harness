@@ -49,19 +49,25 @@ export function MediaVideoPlayer({
   const [playbackSource, setPlaybackSource] = useState<{
     src: string;
     revision: string | null;
+    resourceKey: string;
   } | null>(null);
   const [playingVideo, setPlayingVideo] = useState<HTMLVideoElement | null>(null);
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [failedResourceKey, setFailedResourceKey] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [preloadedSrc, setPreloadedSrc] = useState<string | null>(null);
   const [resume, setResume] = useState<{ time: number; playing: boolean; rate: number } | null>(
     null,
   );
-  const automaticRecovery = useRef({ revision, used: false });
+  const resourceKey = JSON.stringify([
+    actionsSource?.asset ?? actionsSource?.reference ?? originalUrl ?? label,
+    revision,
+  ]);
+  const automaticRecovery = useRef({ resourceKey, used: false });
   const src = playbackSource?.src ?? latestSrc;
   const sourceRevision = playbackSource === null ? revision : playbackSource.revision;
-  const failed = src !== null ? failedSrc === src : sourceFailed;
+  const sourceResourceKey = playbackSource?.resourceKey ?? resourceKey;
+  const failed = failedResourceKey === sourceResourceKey || (src === null && sourceFailed);
   const preloaded = preloadedSrc === src || typeof IntersectionObserver === "undefined";
 
   // Re-signing must not reset the playhead. Changed files refresh once playback pauses.
@@ -81,7 +87,7 @@ export function MediaVideoPlayer({
     playbackSource.src !== latestSrc
   ) {
     setResume({ time: video.currentTime, playing: !video.paused, rate: video.playbackRate });
-    setPlaybackSource({ src: latestSrc, revision });
+    setPlaybackSource({ src: latestSrc, revision, resourceKey });
   }
 
   useEffect(() => {
@@ -124,7 +130,7 @@ export function MediaVideoPlayer({
 
   const retry = async (manual = false) => {
     if (retrying) return;
-    if (manual) automaticRecovery.current = { revision, used: true };
+    if (manual) automaticRecovery.current = { resourceKey, used: true };
     setRetrying(true);
     if (video)
       setResume({
@@ -137,10 +143,10 @@ export function MediaVideoPlayer({
     });
     if (AsyncResult.isSuccess(result)) {
       setPlaybackSource(null);
-      setFailedSrc(null);
+      setFailedResourceKey(null);
       setLoadAttempt((current) => current + 1);
     } else {
-      setFailedSrc(src);
+      setFailedResourceKey(sourceResourceKey);
     }
     setRetrying(false);
   };
@@ -210,17 +216,17 @@ export function MediaVideoPlayer({
           }}
           onPlay={(event) => {
             setPlayingVideo(event.currentTarget);
-            setPlaybackSource({ src, revision: sourceRevision });
+            setPlaybackSource({ src, revision: sourceRevision, resourceKey: sourceResourceKey });
           }}
           onPause={() => setPlayingVideo(null)}
           onEnded={() => setPlayingVideo(null)}
           onError={() => {
-            if (automaticRecovery.current.revision !== sourceRevision) {
-              automaticRecovery.current = { revision: sourceRevision, used: false };
+            if (automaticRecovery.current.resourceKey !== sourceResourceKey) {
+              automaticRecovery.current = { resourceKey: sourceResourceKey, used: false };
             }
             if (automaticRecovery.current.used) {
               setPlayingVideo(null);
-              setFailedSrc(src);
+              setFailedResourceKey(sourceResourceKey);
               return;
             }
             automaticRecovery.current.used = true;
@@ -237,7 +243,7 @@ export function MediaVideoPlayer({
               void retry();
             } else {
               setPlayingVideo(null);
-              setFailedSrc(src);
+              setFailedResourceKey(sourceResourceKey);
             }
           }}
         />

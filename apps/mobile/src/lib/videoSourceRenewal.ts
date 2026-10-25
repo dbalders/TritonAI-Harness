@@ -1,0 +1,55 @@
+import type { VideoPlayer } from "expo-video";
+
+type Player = Pick<
+  VideoPlayer,
+  "currentTime" | "playbackRate" | "playing" | "pause" | "play" | "replaceAsync"
+>;
+
+/** Native replacements cannot be aborted; serialize them and restore only the latest request. */
+export function makeVideoSourceRenewal(player: Player) {
+  let generation = 0;
+  let disposed = false;
+  let loaded = false;
+  let queue = Promise.resolve();
+  let resume: { time: number; rate: number; playing: boolean } | null = null;
+  return {
+    replace(
+      uri: string,
+      options: {
+        readonly signal: AbortSignal;
+        readonly playInitially: boolean;
+        readonly canPlay: () => boolean;
+      },
+    ): Promise<boolean> {
+      if (disposed || options.signal.aborted) return Promise.resolve(false);
+      const request = ++generation;
+      if (loaded && resume === null)
+        resume = { time: player.currentTime, rate: player.playbackRate, playing: player.playing };
+      const current = () => !disposed && request === generation && !options.signal.aborted;
+      const replacing = queue.then(async () => {
+        if (!current()) return false;
+        player.pause();
+        await player.replaceAsync({ uri, contentType: "progressive" });
+        if (!current()) return false;
+        const playback = resume;
+        if (playback !== null) {
+          player.currentTime = Number.isFinite(playback.time) ? playback.time : 0;
+          player.playbackRate = playback.rate;
+        }
+        loaded = true;
+        resume = null;
+        if ((playback?.playing ?? options.playInitially) && options.canPlay()) player.play();
+        return true;
+      });
+      queue = replacing.then(
+        () => undefined,
+        () => undefined,
+      );
+      return replacing;
+    },
+    dispose() {
+      disposed = true;
+      generation += 1;
+    },
+  };
+}
