@@ -3670,10 +3670,11 @@ export const layerWsRpc = (
         [WS_METHODS.serverSetProviderSkillEnabled]: (input) =>
           CodexManagement.setCodexSkillEnabled(input),
         [WS_METHODS.serverSubmitProviderSkillToTritonAiCommons]: (input) =>
-          commonsApproval.run((approvalOwner) =>
+          commonsApproval.run(input.reviewId, (approvalOwner) =>
             submitInstalledProviderSkillToTritonAiCommons({ ...input, approvalOwner }),
           ),
-        [WS_METHODS.serverSubscribeCommonsApproval]: (_input) => commonsApproval.changes,
+        [WS_METHODS.serverSubscribeCommonsApproval]: (input) =>
+          commonsApproval.changes(input.reviewId),
         [WS_METHODS.serverRespondCommonsApproval]: (input) => commonsApproval.respond(input),
         [WS_METHODS.serverListPlugins]: (input) => CodexManagement.listCodexPlugins(input),
         [WS_METHODS.serverInstallPlugin]: (input) => CodexManagement.installCodexPlugin(input),

@@ -334,6 +334,7 @@ import {
   ServerSubmitProviderSkillToTritonAiCommonsInput,
   ServerSubmitProviderSkillToTritonAiCommonsResult,
   ServerCommonsApprovalState,
+  ServerSubscribeCommonsApprovalInput,
   ServerRespondCommonsApprovalInput,
   ServerTritonAiCommonsError,
   ServerUpsertKeybindingInput,
@@ -1179,7 +1180,7 @@ const WsServerSubmitProviderSkillToTritonAiCommonsRpc = Rpc.make(
 );
 
 const WsServerSubscribeCommonsApprovalRpc = Rpc.make(WS_METHODS.serverSubscribeCommonsApproval, {
-  payload: Schema.Struct({}),
+  payload: ServerSubscribeCommonsApprovalInput,
   success: Schema.NullOr(ServerCommonsApprovalState),
   error: EnvironmentAuthorizationError,
   stream: true,

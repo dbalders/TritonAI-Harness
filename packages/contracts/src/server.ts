@@ -189,6 +189,7 @@ export const ServerListProviderSkillCatalogResult = Schema.Struct({
 export type ServerListProviderSkillCatalogResult = typeof ServerListProviderSkillCatalogResult.Type;
 
 export const ServerSubmitProviderSkillToTritonAiCommonsInput = Schema.Struct({
+  reviewId: TrimmedNonEmptyString,
   instanceId: ProviderInstanceId,
   skillPath: TrimmedNonEmptyString,
   confirmedPublicShare: Schema.Literal(true),
@@ -219,10 +220,15 @@ export const ServerCommonsWriteReview = Schema.Struct({
 export type ServerCommonsWriteReview = typeof ServerCommonsWriteReview.Type;
 
 export const ServerCommonsApprovalState = Schema.Struct({
+  reviewId: TrimmedNonEmptyString,
   submissionId: TrimmedNonEmptyString,
   review: Schema.NullOr(ServerCommonsWriteReview),
 });
 export type ServerCommonsApprovalState = typeof ServerCommonsApprovalState.Type;
+
+export const ServerSubscribeCommonsApprovalInput = Schema.Struct({
+  reviewId: TrimmedNonEmptyString,
+});
 
 export const ServerRespondCommonsApprovalInput = Schema.Struct({
   submissionId: TrimmedNonEmptyString,

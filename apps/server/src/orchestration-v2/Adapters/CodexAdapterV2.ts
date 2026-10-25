@@ -2115,6 +2115,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<string, PendingCodexRuntimeRequest>(),
         );
         const dynamicToolInvocations = new Map<string, Set<AbortController>>();
+        const cancelDynamicToolInvocations = (nativeTurnId: string) => {
+          for (const invocation of dynamicToolInvocations.get(nativeTurnId) ?? [])
+            invocation.abort();
+        };
         /**
          * Codex's own acceptForSession only skips the exact command or patch it
          * answered, so every new command would ask again.
@@ -2168,6 +2172,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<string, CodexSchema.V2TurnCompletedNotification>(),
         );
         const terminalizedNonCompletedNativeTurns = yield* Ref.make(new Set<string>());
+        const nativeCallMayRun = (context: ActiveCodexTurnContext) => {
+          if (Effect.runSync(Ref.get(activeTurns)).get(context.nativeTurnId) !== context)
+            return false;
+          const interrupting = Effect.runSync(Ref.get(interruptingNativeTurns));
+          const completions = Effect.runSync(Ref.get(nativeInterruptCompletions));
+          const stopped = Effect.runSync(Ref.get(terminalizedNonCompletedNativeTurns));
+          let caller: ActiveCodexTurnContext | undefined = context;
+          while (caller !== undefined) {
+            if (
+              interrupting.has(caller.nativeTurnId) ||
+              completions.has(caller.nativeTurnId) ||
+              stopped.has(caller.nativeTurnId)
+            )
+              return false;
+            caller = caller.subagent?.parentContext;
+          }
+          return true;
+        };
         // Keep the run event stream open until descendant provider state is
         // terminal, otherwise the root terminal can strand child projections.
         const deferredRootTerminals = yield* Ref.make(new Map<string, DeferredCodexRootTerminal>());
@@ -5753,7 +5775,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerRequest("item/tool/call", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
-            if (!context)
+            if (!context || !nativeCallMayRun(context))
               return dynamicToolResponse(
                 false,
                 "This tool call no longer belongs to an active turn.",
@@ -5761,6 +5783,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             return yield* Effect.acquireUseRelease(
               Effect.sync(() => {
                 const controller = new AbortController();
+                if (!nativeCallMayRun(context)) controller.abort();
                 const controllers = dynamicToolInvocations.get(context.nativeTurnId) ?? new Set();
                 controllers.add(controller);
                 dynamicToolInvocations.set(context.nativeTurnId, controllers);
@@ -5809,10 +5832,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       approvalInvocation: {
                         id: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
                         signal: controller.signal,
-                        isCurrent: () =>
-                          !controller.signal.aborted &&
-                          Effect.runSync(Ref.get(activeTurns)).get(context.nativeTurnId) ===
-                            context,
+                        isCurrent: () => !controller.signal.aborted && nativeCallMayRun(context),
                       },
                       ...(gate.definition.requiresApproval ? { writeApproved: true } : {}),
                     },
@@ -6557,8 +6577,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           if (current !== input.context) {
             return false;
           }
-          for (const invocation of dynamicToolInvocations.get(input.nativeTurnId) ?? [])
-            invocation.abort();
+          cancelDynamicToolInvocations(input.nativeTurnId);
           yield* Ref.update(undeliveredStopNativeTurns, (current) => {
             const updated = new Set(current);
             updated.delete(input.nativeTurnId);
@@ -7792,6 +7811,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     yield* Ref.update(interruptingNativeTurns, (current) => {
                       const updated = new Set(current);
                       for (const target of interruptTargets) {
+                        cancelDynamicToolInvocations(target.context.nativeTurnId);
                         updated.add(target.context.nativeTurnId);
                       }
                       return updated;
@@ -8009,6 +8029,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         });
                         yield* Ref.update(interruptingNativeTurns, (current) => {
                           const updated = new Set(current);
+                          cancelDynamicToolInvocations(context.nativeTurnId);
                           updated.add(context.nativeTurnId);
                           return updated;
                         });
@@ -8132,6 +8153,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       });
                       yield* Ref.update(interruptingNativeTurns, (current) => {
                         const updated = new Set(current);
+                        cancelDynamicToolInvocations(context.nativeTurnId);
                         updated.add(context.nativeTurnId);
                         return updated;
                       });

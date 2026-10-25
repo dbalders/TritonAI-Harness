@@ -22,6 +22,8 @@ interface PendingReview {
   readonly resolve: (approved: boolean) => void;
 }
 interface Submission {
+  readonly reviewId: string;
+  readonly reviewLease: { count: number };
   readonly owner: IntegrationSettingsApprovalOwner;
   readonly controller: AbortController;
   live: boolean;
@@ -47,11 +49,12 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
   const connectionId = NodeCrypto.randomUUID();
   const state = yield* SubscriptionRef.make<ServerCommonsApprovalState | null>(null);
   let closed = false;
-  let reviewSubscribers = 0;
+  const reviewSubscriptions = new Map<string, { count: number }>();
   let current: Submission | null = null;
   const isCurrent = (entry: Submission) =>
     !closed &&
-    reviewSubscribers > 0 &&
+    entry.reviewLease.count > 0 &&
+    reviewSubscriptions.get(entry.reviewId) === entry.reviewLease &&
     current === entry &&
     entry.live &&
     !entry.controller.signal.aborted &&
@@ -78,6 +81,7 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
     entry.pending = pending;
     const expiresAt = Math.min(review.expiresAt, input.expiresAt ?? review.expiresAt);
     yield* SubscriptionRef.set(state, {
+      reviewId: entry.reviewId,
       submissionId: entry.owner.submissionId,
       review: {
         requestId: review.requestId,
@@ -98,6 +102,7 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
           if (entry.pending === pending) entry.pending = null;
           if (isCurrent(entry))
             yield* SubscriptionRef.set(state, {
+              reviewId: entry.reviewId,
               submissionId: entry.owner.submissionId,
               review: null,
             });
@@ -109,8 +114,9 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
       : ({ approved: false } as const);
   });
 
-  const start = Effect.fn("CommonsApproval.start")(function* () {
-    if (reviewSubscribers === 0)
+  const start = Effect.fn("CommonsApproval.start")(function* (reviewId: string) {
+    const reviewLease = reviewSubscriptions.get(reviewId);
+    if (reviewLease === undefined || reviewLease.count === 0)
       return yield* refusal(
         "Update this client to review each exact sharing write before submitting.",
       );
@@ -123,6 +129,8 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
         "This connection cannot start another sharing review. Finish or cancel its current submission.",
       );
     const entry: Submission = {
+      reviewId,
+      reviewLease,
       owner: Object.freeze({
         kind: "settings",
         sessionId: input.sessionId,
@@ -138,7 +146,11 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
     entry.presenter = installSettingsIntegrationWriteGate(entry.owner, (review) =>
       reviewWrite(entry, review),
     );
-    yield* SubscriptionRef.set(state, { submissionId: entry.owner.submissionId, review: null });
+    yield* SubscriptionRef.set(state, {
+      reviewId,
+      submissionId: entry.owner.submissionId,
+      review: null,
+    });
     return entry;
   });
 
@@ -151,26 +163,40 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
     });
 
   return {
-    changes: Stream.unwrap(
-      Effect.gen(function* () {
-        yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            reviewSubscribers += 1;
-          }),
-          () =>
-            Effect.gen(function* () {
-              reviewSubscribers -= 1;
-              if (reviewSubscribers === 0 && current !== null) yield* finish(current);
+    changes: (reviewId: string) =>
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const lease = yield* Effect.acquireRelease(
+            Effect.sync(() => {
+              const lease = reviewSubscriptions.get(reviewId) ?? { count: 0 };
+              lease.count += 1;
+              reviewSubscriptions.set(reviewId, lease);
+              return lease;
             }),
-        );
-        return SubscriptionRef.changes(state);
-      }),
-    ),
+            (lease) =>
+              Effect.gen(function* () {
+                lease.count -= 1;
+                if (lease.count !== 0) return;
+                if (reviewSubscriptions.get(reviewId) === lease)
+                  reviewSubscriptions.delete(reviewId);
+                if (current?.reviewLease === lease) yield* finish(current);
+              }),
+          );
+          return SubscriptionRef.changes(state).pipe(
+            Stream.map((value) =>
+              value?.reviewId === reviewId && reviewSubscriptions.get(reviewId) === lease
+                ? value
+                : null,
+            ),
+          );
+        }),
+      ),
     run: <A, E, R>(
+      reviewId: string,
       operation: (owner: IntegrationSettingsApprovalOwner) => Effect.Effect<A, E, R>,
     ) =>
       Effect.acquireUseRelease(
-        start(),
+        start(reviewId),
         (entry) => Effect.raceFirst(operation(entry.owner), awaitCancel(entry)),
         finish,
       ),

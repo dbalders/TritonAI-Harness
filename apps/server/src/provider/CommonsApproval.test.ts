@@ -21,9 +21,12 @@ import {
 } from "../integrations/IntegrationWriteApproval.ts";
 
 type Presenter = Effect.Success<ReturnType<typeof makeCommonsApproval>>;
-const mountReview = Effect.fn("CommonsApprovalTest.mountReview")(function* (presenter: Presenter) {
+const mountReview = Effect.fn("CommonsApprovalTest.mountReview")(function* (
+  presenter: Presenter,
+  reviewId = "test-view",
+) {
   const ready = yield* Deferred.make<void>();
-  const viewer = yield* presenter.changes.pipe(
+  const viewer = yield* presenter.changes(reviewId).pipe(
     Stream.runForEach(() => Deferred.succeed(ready, undefined)),
     Effect.forkScoped,
   );
@@ -31,7 +34,7 @@ const mountReview = Effect.fn("CommonsApprovalTest.mountReview")(function* (pres
   return viewer;
 });
 const nextReview = (presenter: Presenter, previous?: string) =>
-  presenter.changes.pipe(
+  presenter.changes("test-view").pipe(
     Stream.filter(
       (value): value is ServerCommonsApprovalState & { review: ServerCommonsWriteReview } =>
         value !== null && value.review !== null && value.review.requestId !== previous,
@@ -39,6 +42,33 @@ const nextReview = (presenter: Presenter, previous?: string) =>
     Stream.runHead,
     Effect.map(Option.getOrThrow),
   );
+
+it.effect("does not attach a cancelled queued submission to a later review view", () =>
+  Effect.gen(function* () {
+    const presenter = yield* makeCommonsApproval({
+      sessionId: AuthSessionId.make("synthetic-session"),
+    });
+    const oldView = yield* mountReview(presenter, "old-view");
+    const send = yield* Deferred.make<void>();
+    let started = false;
+    const queued = yield* Deferred.await(send).pipe(
+      Effect.andThen(
+        presenter.run("old-view", () =>
+          Effect.sync(() => {
+            started = true;
+          }),
+        ),
+      ),
+      Effect.forkScoped,
+    );
+    yield* Fiber.interrupt(oldView);
+    yield* mountReview(presenter, "new-view");
+    yield* Deferred.succeed(send, undefined);
+    expect((yield* Fiber.await(queued))._tag).toBe("Failure");
+    expect(started).toBe(false);
+    expect(yield* presenter.run("new-view", () => Effect.succeed("fresh view"))).toBe("fresh view");
+  }).pipe(Effect.scoped),
+);
 const sampleReview = (owner: IntegrationSettingsApprovalOwner, id: string, now: number) => ({
   owner,
   requestId: id,
@@ -60,7 +90,7 @@ it.effect("requires a review-capable client before any Settings submission start
     });
     let started = false;
     const result = yield* presenter
-      .run(() =>
+      .run("test-view", () =>
         Effect.sync(() => {
           started = true;
         }),
@@ -68,10 +98,10 @@ it.effect("requires a review-capable client before any Settings submission start
       .pipe(Effect.result);
     expect(Result.isFailure(result)).toBe(true);
     expect(started).toBe(false);
-    yield* presenter.changes.pipe(Stream.runHead);
-    expect(Result.isFailure(yield* presenter.run(() => Effect.void).pipe(Effect.result))).toBe(
-      true,
-    );
+    yield* presenter.changes("test-view").pipe(Stream.runHead);
+    expect(
+      Result.isFailure(yield* presenter.run("test-view", () => Effect.void).pipe(Effect.result)),
+    ).toBe(true);
   }),
 );
 
@@ -90,7 +120,7 @@ it.effect(
       const writes: string[] = [];
       let firstDecision: IntegrationWriteDecision | undefined;
       const running = yield* presenter
-        .run((owner) =>
+        .run("test-view", (owner) =>
           Effect.gen(function* () {
             for (const id of ["first", "second"]) {
               const decision = yield* requestIntegrationWriteApproval(sampleReview(owner, id, now));
@@ -140,7 +170,7 @@ it.effect.each(["cancel", "close", "expire", "decline"] as const)(
       const now = yield* Clock.currentTimeMillis;
       let writes = 0;
       const running = yield* presenter
-        .run((owner) =>
+        .run("test-view", (owner) =>
           requestIntegrationWriteApproval(sampleReview(owner, "pending", now)).pipe(
             Effect.flatMap((decision) =>
               decision.approved && decision.isCurrent()
@@ -192,8 +222,8 @@ it.effect("can cancel preparation before there is a write to review", () =>
       sessionId: AuthSessionId.make("synthetic-session"),
     });
     yield* mountReview(presenter);
-    const running = yield* presenter.run(() => Effect.never).pipe(Effect.forkScoped);
-    const pending = yield* presenter.changes.pipe(
+    const running = yield* presenter.run("test-view", () => Effect.never).pipe(Effect.forkScoped);
+    const pending = yield* presenter.changes("test-view").pipe(
       Stream.filter((value) => value !== null),
       Stream.runHead,
       Effect.map(Option.getOrThrow),
@@ -217,7 +247,7 @@ it.effect(
       let writes = 0;
       const now = yield* Clock.currentTimeMillis;
       const running = yield* presenter
-        .run((owner) =>
+        .run("test-view", (owner) =>
           Effect.gen(function* () {
             const decision = yield* requestIntegrationWriteApproval(
               sampleReview(owner, "pending", now),
@@ -250,7 +280,7 @@ it.effect(
         ),
       ).toBe(true);
       yield* mountReview(presenter);
-      expect(yield* presenter.run(() => Effect.succeed("fresh subscription"))).toBe(
+      expect(yield* presenter.run("test-view", () => Effect.succeed("fresh subscription"))).toBe(
         "fresh subscription",
       );
     }).pipe(Effect.scoped),
@@ -266,7 +296,9 @@ it.effect(
       const viewer = yield* mountReview(presenter);
       const started = yield* Deferred.make<void>();
       const running = yield* presenter
-        .run(() => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)))
+        .run("test-view", () =>
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        )
         .pipe(Effect.forkScoped);
       yield* Deferred.await(started);
       yield* Fiber.interrupt(viewer);

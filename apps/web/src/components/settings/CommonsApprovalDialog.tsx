@@ -16,11 +16,15 @@ import {
 
 export function CommonsApprovalDialog(props: {
   readonly environmentId: EnvironmentId;
+  readonly reviewId: string;
   readonly onReady?: () => void;
   readonly onUnavailable?: (error: Error) => void;
 }) {
   const approval = useEnvironmentQuery(
-    serverEnvironment.commonsApproval({ environmentId: props.environmentId, input: {} }),
+    serverEnvironment.commonsApproval({
+      environmentId: props.environmentId,
+      input: { reviewId: props.reviewId },
+    }),
   );
   const respond = useAtomCommand(serverEnvironment.respondCommonsApproval, {
     reportFailure: false,
@@ -38,12 +42,6 @@ export function CommonsApprovalDialog(props: {
     if (approval.error) notifyUnavailable(new Error(approval.error));
     else if (approval.isSuccess && !approval.isPending) notifyReady();
   }, [approval.error, approval.isSuccess, approval.isPending]);
-  useEffect(
-    () => () => {
-      notifyUnavailable(new Error("Sharing review was closed before it could start."));
-    },
-    [],
-  );
 
   const send = async (input: ServerRespondCommonsApprovalInput) => {
     setRespondingTo(input.action.type === "respond" ? input.action.requestId : input.submissionId);

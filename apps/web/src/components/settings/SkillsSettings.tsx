@@ -25,7 +25,7 @@ import {
   Trash2Icon,
   UsersIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   formatProviderSkillDisplayName,
   formatProviderSkillInstallSource,
@@ -39,6 +39,7 @@ import {
   type ProviderSkillRow as CodexSkillRow,
 } from "../../providerSkillGrouping";
 import { ensureLocalApi } from "../../localApi";
+import { randomUUID } from "../../lib/utils";
 import {
   findTritonAiCommonsFailure,
   GITHUB_COMMONS_SETUP_CONTINUATION,
@@ -58,6 +59,11 @@ import { RecordSkillButton } from "./RecordSkillButton";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
 const EMPTY_SKILL_ROWS: ReadonlyArray<CodexSkillRow> = [];
+
+interface CommonsSharingFlow {
+  readonly reviewId: string;
+  readonly cancel: (error: Error) => void;
+}
 
 function requireBundledGitHubPlugin(present: boolean): void {
   if (!present) {
@@ -530,9 +536,11 @@ export function SkillsSettingsPanel() {
   const [updatingSkillKey, setUpdatingSkillKey] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [submittingSkillKey, setSubmittingSkillKey] = useState<string | null>(null);
-  const sharing = useRef(false);
+  const sharing = useRef<CommonsSharingFlow | null>(null);
+  useEffect(() => () => sharing.current?.cancel(new Error("Sharing review was closed.")), []);
   const [commonsReviewReady, setCommonsReviewReady] = useState<{
     readonly key: string;
+    readonly reviewId: string;
     readonly resolve: () => void;
     readonly reject: (error: Error) => void;
   } | null>(null);
@@ -723,8 +731,6 @@ export function SkillsSettingsPanel() {
     if (!confirmed) return;
 
     if (sharing.current) return;
-    sharing.current = true;
-
     const key = `${providerInstanceId}:${skill.path || skill.name}`;
     let resolveReady = () => {};
     let rejectReady = (_error: Error) => {};
@@ -732,25 +738,52 @@ export function SkillsSettingsPanel() {
       resolveReady = resolve;
       rejectReady = reject;
     });
-    setCommonsReviewReady({ key, resolve: resolveReady, reject: rejectReady });
+    let cancelled = false;
+    let finishCancellation = () => {};
+    const cancellation = new Promise<void>((resolve) => {
+      finishCancellation = resolve;
+    });
+    const flow: CommonsSharingFlow = {
+      reviewId: randomUUID(),
+      cancel: (error) => {
+        cancelled = true;
+        rejectReady(error);
+        finishCancellation();
+        if (sharing.current !== flow) return;
+        sharing.current = null;
+        setCommonsReviewReady((current) => (current?.reviewId === flow.reviewId ? null : current));
+        setSubmittingSkillKey((current) => (current === key ? null : current));
+        setCommonsSubmissionErrors((current) => new Map(current).set(skill.path, error.message));
+      },
+    };
+    sharing.current = flow;
+    setCommonsReviewReady({
+      key,
+      reviewId: flow.reviewId,
+      resolve: resolveReady,
+      reject: flow.cancel,
+    });
     setSubmittingSkillKey(key);
     setCommonsSubmissionErrors((current) => {
       const next = new Map(current);
       next.delete(skill.path);
       return next;
     });
-    return await (async () => {
+    const operation = (async () => {
       try {
         // The mounted review's live subscription proves that this client and host support it.
         await ready;
+        if (cancelled) return;
         const commandResult = await submitSkillToCommonsCommand({
           environmentId: primaryEnvironmentId,
           input: {
+            reviewId: flow.reviewId,
             instanceId: providerInstanceId,
             skillPath: skill.path,
             confirmedPublicShare: true,
           },
         });
+        if (cancelled) return;
         if (commandResult._tag === "Failure") {
           const commonsFailure = findTritonAiCommonsFailure(commandResult);
           if (commonsFailure?.code === "github_setup_required") {
@@ -760,6 +793,7 @@ export function SkillsSettingsPanel() {
                 input: {},
               }),
             );
+            if (cancelled) return;
             let github = integrations.integrations.find(({ id }) => id === "github");
             if (!github) {
               requireBundledGitHubPlugin(false);
@@ -772,6 +806,7 @@ export function SkillsSettingsPanel() {
                   input: { id: "github" },
                 }),
               );
+              if (cancelled) return;
               github = integrations.integrations.find(({ id }) => id === "github");
             }
             if (github && !github.enabled) {
@@ -781,10 +816,12 @@ export function SkillsSettingsPanel() {
                   input: { id: "github", enabled: true },
                 }),
               );
+              if (cancelled) return;
             }
             const openSetup = await ensureLocalApi().dialogs.confirm(
               `${GITHUB_COMMONS_SETUP_CONTINUATION}\n\nOpen the GitHub plugin setup now?`,
             );
+            if (cancelled) return;
             setCommonsSubmissionErrors((current) =>
               new Map(current).set(skill.path, GITHUB_COMMONS_SETUP_CONTINUATION),
             );
@@ -807,10 +844,11 @@ export function SkillsSettingsPanel() {
         const openReview = await ensureLocalApi().dialogs.confirm(
           `${displayName} was shared with UCSD. Harness opened a public, ready-for-review pull request and will keep this skill marked as shared.\n\nOpen the pull request now to review it and participate in the submission?`,
         );
-        if (openReview) {
+        if (openReview && !cancelled) {
           void ensureLocalApi().shell.openExternal(result.reviewUrl);
         }
       } catch (error) {
+        if (cancelled) return;
         setCommonsSubmissionErrors((current) =>
           new Map(current).set(
             skill.path,
@@ -818,9 +856,11 @@ export function SkillsSettingsPanel() {
           ),
         );
       }
-    })().finally(async () => {
-      sharing.current = false;
-      setCommonsReviewReady((current) => (current?.key === key ? null : current));
+    })();
+    return await Promise.race([operation, cancellation]).finally(() => {
+      if (sharing.current !== flow) return;
+      sharing.current = null;
+      setCommonsReviewReady((current) => (current?.reviewId === flow.reviewId ? null : current));
       setSubmittingSkillKey((current) => (current === key ? null : current));
     });
   };
@@ -1011,9 +1051,12 @@ export function SkillsSettingsPanel() {
         )}
       </SettingsSection>
 
-      {submittingSkillKey !== null && primaryEnvironmentId !== null ? (
+      {submittingSkillKey !== null &&
+      primaryEnvironmentId !== null &&
+      commonsReviewReady !== null ? (
         <CommonsApprovalDialog
-          key={submittingSkillKey}
+          key={commonsReviewReady.reviewId}
+          reviewId={commonsReviewReady.reviewId}
           environmentId={primaryEnvironmentId}
           {...(commonsReviewReady?.key === submittingSkillKey
             ? { onReady: commonsReviewReady.resolve, onUnavailable: commonsReviewReady.reject }

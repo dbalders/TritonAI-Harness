@@ -38,10 +38,10 @@ const review = (id: string): ServerCommonsWriteReview => ({
   payload: `${"Synthetic source line\n".repeat(400)}${id}: LAST LINE MUST BE REVIEWABLE`,
   expiresAt: Date.now() + 300_000,
 });
-function setup(initial: ServerCommonsApprovalState) {
+function setup(initial: Omit<ServerCommonsApprovalState, "reviewId">) {
   state.respond.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
   state.approval = Atom.make<AsyncResult.AsyncResult<ServerCommonsApprovalState | null, Error>>(
-    AsyncResult.success(initial),
+    AsyncResult.success({ reviewId: "test-view", ...initial }),
   );
   state.permission = Atom.make(true);
   const registry = AtomRegistry.make();
@@ -49,11 +49,16 @@ function setup(initial: ServerCommonsApprovalState) {
     registry,
     ui: () => (
       <RegistryContext value={registry}>
-        <CommonsApprovalDialog environmentId={environmentId} />
+        <CommonsApprovalDialog reviewId="test-view" environmentId={environmentId} />
       </RegistryContext>
     ),
-    set: (value: ServerCommonsApprovalState | null) =>
-      act(() => registry.set(state.approval!, AsyncResult.success(value))),
+    set: (value: Omit<ServerCommonsApprovalState, "reviewId"> | null) =>
+      act(() =>
+        registry.set(
+          state.approval!,
+          AsyncResult.success(value === null ? null : { reviewId: "test-view", ...value }),
+        ),
+      ),
     [Symbol.dispose]: () => registry.dispose(),
   };
 }
@@ -67,6 +72,7 @@ describe("Commons sharing review", () => {
     await using screen = await render(
       <RegistryContext value={fixture.registry}>
         <CommonsApprovalDialog
+          reviewId="test-view"
           environmentId={environmentId}
           onReady={onReady}
           onUnavailable={onUnavailable}
@@ -80,7 +86,7 @@ describe("Commons sharing review", () => {
     expect(onUnavailable).toHaveBeenCalledTimes(1);
     expect(state.respond).not.toHaveBeenCalled();
     await screen.unmount();
-    expect(onUnavailable).toHaveBeenCalledTimes(2);
+    expect(onUnavailable).toHaveBeenCalledTimes(1);
   });
   it("keeps the complete payload scrollable and requires a new decision for the next write", async () => {
     using fixture = setup({ submissionId: "submission", review: review("first") });
