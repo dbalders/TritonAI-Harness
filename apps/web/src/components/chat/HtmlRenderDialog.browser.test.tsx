@@ -85,7 +85,7 @@ it("zooms the loaded page within bounds and resets without reloading it", async 
   expect(frame.parentElement!.style.getPropertyValue("zoom")).toBe("1");
   expect(document.querySelector("iframe")).toBe(frame);
   expect(frame.src).toBe(src);
-  expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-forms");
+  expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
 });
 
 it("closes with the close button or Escape", async () => {
@@ -153,7 +153,7 @@ it("opens full screen with a fresh URL when the inline one is near expiry", asyn
   );
 });
 
-it("routes links from the expanded page through its thread", async () => {
+it("does not let an expanded preview open external links through the host", async () => {
   setup();
   await using _screen = await renderInline();
   openChangeRequestLink.mockReturnValue(true);
@@ -169,12 +169,7 @@ it("routes links from the expanded page through its thread", async () => {
       }),
     );
   });
-  expect(openChangeRequestLink).toHaveBeenCalledWith(
-    expect.objectContaining({ metaKey: false, ctrlKey: false }),
-    url,
-    undefined,
-    EnvironmentId.make("environment"),
-  );
+  expect(openChangeRequestLink).not.toHaveBeenCalled();
   expect(openLink).not.toHaveBeenCalled();
 });
 
