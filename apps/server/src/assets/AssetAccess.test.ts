@@ -5,6 +5,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeFSP from "node:fs/promises";
 import {
   AssetAccessError,
+  AuthSessionId,
   AssetPreviewTypeValidationError,
   ThreadId,
   TurnItemId,
@@ -20,6 +21,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -29,6 +31,7 @@ import { HttpClient, HttpClientResponse, HttpRouter, HttpServerResponse } from "
 import { vi } from "vite-plus/test";
 import { base64UrlEncode, signPayload } from "../auth/utils.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
@@ -37,7 +40,7 @@ import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { assetFileResponse, layerAssetRoute } from "../http.ts";
 import {
   ASSET_ROUTE_PREFIX,
-  issueAssetUrl,
+  issueAssetUrl as issueBoundAssetUrl,
   readMcpAppHtml,
   resolveAsset,
   type ResolvedAsset,
@@ -54,6 +57,55 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeFSP>();
   return { ...actual, open: vi.fn(actual.open), realpath: vi.fn(actual.realpath) };
 });
+
+const sessionA = AuthSessionId.make("asset-client-a");
+const sessionB = AuthSessionId.make("asset-client-b");
+const assetSession = (sessionId: AuthSessionId): AuthSessions.AuthSessionRecord => ({
+  sessionId,
+  subject: sessionId,
+  scopes: ["orchestration:read"],
+  method: "bearer-access-token",
+  client: {
+    label: null,
+    ipAddress: null,
+    userAgent: null,
+    deviceType: "desktop",
+    os: null,
+    browser: null,
+  },
+  issuedAt: DateTime.makeUnsafe(0),
+  expiresAt: DateTime.makeUnsafe("2100-01-01T00:00:00Z"),
+  lastConnectedAt: null,
+  revokedAt: null,
+});
+class AssetTestSessions extends Context.Service<
+  AssetTestSessions,
+  Map<AuthSessionId, AuthSessions.AuthSessionRecord>
+>()("t3/assets/AssetAccess.test/AssetTestSessions") {}
+const layerAssetSessions = Layer.effect(
+  AssetTestSessions,
+  Effect.sync(
+    () =>
+      new Map([
+        [sessionA, assetSession(sessionA)],
+        [sessionB, assetSession(sessionB)],
+      ]),
+  ),
+);
+const layerSessionRepository = Layer.unwrap(
+  Effect.gen(function* () {
+    const sessions = yield* AssetTestSessions;
+    return Layer.mock(AuthSessions.AuthSessionRepository)({
+      getById: ({ sessionId }) =>
+        Effect.sync(() => Option.fromUndefinedOr(sessions.get(sessionId))),
+    });
+  }),
+).pipe(Layer.provideMerge(layerAssetSessions));
+const issueAssetUrl = (
+  input: Omit<Parameters<typeof issueBoundAssetUrl>[0], "sessionId"> & {
+    readonly sessionId?: AuthSessionId;
+  },
+) => issueBoundAssetUrl({ ...input, sessionId: input.sessionId ?? sessionA });
 
 const layerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-asset-access-test-",
@@ -111,6 +163,7 @@ const oversizedScreenshotItem = {
 
 const layerTest = Layer.mergeAll(
   HtmlPreviewTestkit.layer,
+  layerSessionRepository,
   NodeHttpPlatform.layer,
   Layer.mock(Orchestrator.OrchestratorV2)({
     getTurnItem: ({ itemId }) =>
@@ -133,6 +186,87 @@ const layerTest = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 describe("AssetAccess", () => {
+  it.effect(
+    "revokes copied sensitive URLs with their issuer without revoking another session",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-asset-revocation-" });
+        yield* fs.writeFileString(path.join(root, "report.html"), "<p>Synthetic report</p>");
+        const resource = { _tag: "draft-workspace-file" as const, cwd: root, path: "report.html" };
+        const a = yield* issueAssetUrl({ resource, workspaceRoot: root, sessionId: sessionA });
+        const b = yield* issueAssetUrl({ resource, workspaceRoot: root, sessionId: sessionB });
+        const resolve = (url: string) => {
+          const suffix = url.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+          const separator = suffix.indexOf("/");
+          return resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+        };
+        expect(yield* resolve(a.relativeUrl)).not.toBeNull();
+        expect(yield* resolve(b.relativeUrl)).not.toBeNull();
+        const sessions = yield* AssetTestSessions;
+        sessions.set(sessionA, { ...assetSession(sessionA), revokedAt: yield* DateTime.now });
+        expect(yield* resolve(a.relativeUrl)).toBeNull();
+        expect(yield* resolve(b.relativeUrl)).not.toBeNull();
+        const error = yield* issueAssetUrl({
+          resource,
+          workspaceRoot: root,
+          sessionId: sessionA,
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("AssetSessionUnavailableError");
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "expires sensitive URLs at two minutes and caps them at the issuing session expiry",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-asset-expiry-" });
+        yield* fs.writeFileString(path.join(root, "report.html"), "<p>Synthetic</p>");
+        const input = {
+          resource: { _tag: "draft-workspace-file" as const, cwd: root, path: "report.html" },
+          workspaceRoot: root,
+        };
+        yield* TestClock.setTime(1_000);
+        const result = yield* issueAssetUrl(input);
+        expect(result.expiresAt).toBe(121_000);
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const separator = suffix.indexOf("/");
+        const resolve = resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+        yield* TestClock.adjust("119999 millis");
+        expect(yield* resolve).not.toBeNull();
+        yield* TestClock.adjust("1 millis");
+        expect(yield* resolve).toBeNull();
+        const now = yield* Clock.currentTimeMillis;
+        const sessions = yield* AssetTestSessions;
+        sessions.set(sessionA, {
+          ...assetSession(sessionA),
+          expiresAt: DateTime.makeUnsafe(now + 30_000),
+        });
+        expect((yield* issueAssetUrl(input)).expiresAt).toBe(now + 30_000);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("refuses old sensitive bearer URLs that lack session binding", () =>
+    Effect.gen(function* () {
+      const store = yield* ServerSecretStore.ServerSecretStore;
+      const key = yield* store.getOrCreateRandom("asset-access-signing-key", 32);
+      const claims = base64UrlEncode(
+        JSON.stringify({
+          version: 1,
+          kind: "attachment",
+          attachmentId: "unused",
+          expiresAt: (yield* Clock.currentTimeMillis) + 60_000,
+        }),
+      );
+      expect(
+        yield* resolveAsset(`${claims}.${signPayload(claims, key)}`, "unused.html"),
+      ).toBeNull();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("serves downloads through the HTTP route without reopening the validated path", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1357,7 +1491,13 @@ describe("AssetAccess", () => {
       const expiresAt = (yield* Clock.currentTimeMillis) + 60_000;
       const legacyToken = (attachmentId: string) => {
         const encodedPayload = base64UrlEncode(
-          JSON.stringify({ version: 1, kind: "attachment", attachmentId, expiresAt }),
+          JSON.stringify({
+            version: 1,
+            kind: "attachment",
+            attachmentId,
+            expiresAt,
+            issuerSessionId: sessionA,
+          }),
         );
         return `${encodedPayload}.${signPayload(encodedPayload, signingSecret)}`;
       };
@@ -1383,7 +1523,7 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("signs the same HTML page URL within an expiry window", () =>
+  it.effect("gives HTML URLs a two-minute lifetime without expiry bucketing", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1405,9 +1545,9 @@ describe("AssetAccess", () => {
       yield* TestClock.adjust("10 minutes");
       const next = yield* issue;
 
-      expect(second.relativeUrl).toBe(first.relativeUrl);
-      expect(first.expiresAt).toBe(4 * bucketMs);
-      expect(next.expiresAt).toBe(5 * bucketMs);
+      expect(second.relativeUrl).not.toBe(first.relativeUrl);
+      expect(first.expiresAt).toBe(bucketMs + 1 + 120_000);
+      expect(next.expiresAt).toBe(2 * bucketMs + 1 + 120_000);
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -1601,7 +1741,7 @@ describe("AssetAccess", () => {
           faviconSuffix.slice(0, faviconSeparatorIndex),
           faviconSuffix.slice(faviconSeparatorIndex + 1),
         ),
-      ).toEqual({ kind: "file", path: canonicalFaviconPath });
+      ).toEqual({ kind: "file", path: canonicalFaviconPath, cacheable: true });
 
       yield* fileSystem.writeFileString(faviconPath, updatedFavicon);
       const updatedFaviconResult = yield* issueAssetUrl({
@@ -1677,12 +1817,12 @@ describe("AssetAccess", () => {
       expect(result.relativeUrl).toMatch(/\/v[0-9a-f]{64}-custom\.png$/);
       expect(
         yield* resolveAsset(suffix.slice(0, separatorIndex), suffix.slice(separatorIndex + 1)),
-      ).toEqual({ kind: "file", path: canonicalPath });
+      ).toEqual({ kind: "file", path: canonicalPath, cacheable: true });
       const tamperedSuffixResult = yield* resolveAsset(
         suffix.slice(0, separatorIndex),
         "sibling.png",
       );
-      expect(tamperedSuffixResult).toEqual({ kind: "file", path: canonicalPath });
+      expect(tamperedSuffixResult).toEqual({ kind: "file", path: canonicalPath, cacheable: true });
       expect(tamperedSuffixResult).not.toEqual({ kind: "file", path: canonicalSiblingPath });
     }).pipe(Effect.provide(layerTest)),
   );

@@ -92,6 +92,7 @@ export function downloadContentDisposition(fileName?: string): string {
 export function assetResponseHeaders(
   filePath: string,
   options?: {
+    readonly cacheable?: boolean;
     readonly download?: boolean;
     readonly fileName?: string;
     readonly mimeType?: string;
@@ -100,7 +101,8 @@ export function assetResponseHeaders(
   const lowerPath = filePath.toLowerCase();
   const inlineMimeType = options?.mimeType?.split(";", 1)[0]?.trim();
   return {
-    "Cache-Control": "private, max-age=3600",
+    "Cache-Control": options?.cacheable === true ? "private, max-age=3600" : "private, no-store",
+    "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
     ...(options?.download
       ? {
@@ -160,6 +162,7 @@ function assetByteRange(header: string, size: bigint) {
 export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   asset: {
     readonly path: string;
+    readonly cacheable?: boolean;
     readonly download?: boolean;
     readonly fileName?: string;
     readonly mimeType?: string;
@@ -444,7 +447,14 @@ export const layerAssetRoute = HttpRouter.add(
     if (asset.kind === "bytes") {
       return HttpServerResponse.uint8Array(asset.bytes, {
         contentType: asset.mimeType,
-        headers: { "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" },
+        headers: {
+          "cache-control":
+            "cacheable" in asset && asset.cacheable === true
+              ? "private, max-age=3600"
+              : "private, no-store",
+          "x-content-type-options": "nosniff",
+          "referrer-policy": "no-referrer",
+        },
       });
     }
     if (asset.kind === "github-media") {
@@ -466,6 +476,7 @@ export const layerAssetRoute = HttpRouter.add(
     return yield* assetFileResponse(
       {
         path: asset.path,
+        ...("cacheable" in asset && asset.cacheable === true ? { cacheable: true } : {}),
         ...(disposition === "attachment" ? { download: true } : {}),
         ...(downloadName !== undefined
           ? { fileName: downloadName }

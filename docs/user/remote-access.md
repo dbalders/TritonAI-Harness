@@ -375,3 +375,14 @@ history, and saved connections are kept, and you keep working through pairing, T
 
 Switch **Local environment** back on in the same place to restart with your previous local
 settings.
+
+### File preview links
+
+Links to attachments, generated HTML, and host files expire within two minutes
+and are tied to the session that requested them. Signing out or revoking that
+session invalidates subsequent requests immediately; another active session can
+request its own links. Reopen the file in Harness if a copied link has expired.
+Sensitive responses are not cached. An already loaded document or an admitted
+download cannot be recalled from the receiving device. Existing cached or saved
+copies also remain on that device. Project favicons retain their longer,
+deterministic links because they are non-sensitive display assets.

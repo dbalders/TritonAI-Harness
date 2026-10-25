@@ -1,6 +1,5 @@
 import * as Mime from "effect/http/Mime";
 import { githubMediaFileName } from "@t3tools/shared/githubMedia";
-import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
@@ -99,10 +98,9 @@ export const githubMediaResponse = Effect.fn("GitHubMediaFetch.githubMediaRespon
     if (value !== undefined) forwarded[name] = value;
   }
   const response = yield* fetchFollowingRedirects(asset.url, forwarded, token);
-  const remainingSeconds = Math.floor((asset.expiresAt - (yield* Clock.currentTimeMillis)) / 1000);
   const headers: Record<string, string> = {
-    "cache-control":
-      remainingSeconds > 0 ? `private, max-age=${remainingSeconds}` : "private, no-store",
+    "referrer-policy": "no-referrer",
+    "cache-control": "private, no-store",
     "x-content-type-options": "nosniff",
   };
   if (response === null) return HttpServerResponse.empty({ status: 502, headers });

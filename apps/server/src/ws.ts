@@ -264,6 +264,7 @@ import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
+import * as AuthSessions from "./persistence/AuthSessions.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import {
@@ -1283,6 +1284,7 @@ type WsRpcServices =
   | SourceControlRepositoryService.SourceControlRepositoryService
   | PairingGrantStore.PairingGrantStore
   | SessionStore.SessionStore
+  | AuthSessions.AuthSessionRepository
   | ProcessDiagnostics.ProcessDiagnostics
   | HostResources.HostResources
   | ProcessResourceMonitor.ProcessResourceMonitor
@@ -3218,10 +3220,14 @@ export const layerWsRpc = (
               input.resource._tag === "github-media" ||
               (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
             ) {
-              return yield* issueAssetUrl({ resource: input.resource });
+              return yield* issueAssetUrl({
+                sessionId: currentSessionId,
+                resource: input.resource,
+              });
             }
             if (input.resource._tag === "draft-workspace-file") {
               return yield* issueAssetUrl({
+                sessionId: currentSessionId,
                 resource: input.resource,
                 workspaceRoot: input.resource.cwd,
               });
@@ -3247,6 +3253,7 @@ export const layerWsRpc = (
               // when the clone lands (see createProjectFaviconUrlAtomFamily).
               const clone = yield* projectCloneTracker.get(project.value.projectId);
               return yield* issueAssetUrl({
+                sessionId: currentSessionId,
                 resource: input.resource,
                 ...(project.value.faviconPath
                   ? { projectFaviconPath: project.value.faviconPath }
@@ -3282,6 +3289,7 @@ export const layerWsRpc = (
               });
             }
             return yield* issueAssetUrl({
+              sessionId: currentSessionId,
               resource: input.resource,
               workspaceRoot: thread.thread.worktreePath ?? project.value.workspaceRoot,
             });
