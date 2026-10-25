@@ -211,7 +211,7 @@ patchedDependencies:
   expo-network@58.0.3: cd09b6d1744dde4efa081b5619ebcff38877d98f7502a51cab121629dece8237
   expo-notifications@58.1.5: 3f3e1503f294f63768fcaf9dc6f8e7f22a2ccb5fe583163b864fd7a9d5c0aecd
   expo-sharing@58.0.19: 61a9741dc6166fdbb5baa2e489275a65dd21aa11d2c915f490a1b337a4468e76
-  expo-video@58.0.11: bb8819a3b9b1d899063c0ee9efaf61ef6d40b1215c1c729a287921d47b94d358
+  expo-video@58.0.11: 2d915658157f5701bc9c4da36871e8ad263603ca0c3c103f5eaf58a2000a1f99
   expo-widgets@58.0.20: 8bf49067f93742855e15f29559ac75c8b50230b47069060993c9ea01dac11171
   mdast-util-math@3.0.0: afe6b2c89e1eaddfd3c90cf2723f12c9a17d513e65beff51653781486013251c
   micromark-extension-gfm-table@2.1.1: 9ad23a530e45d9f83cba1da8654fe16d5af8b59d5c73d5c7a7c91fd25b9be1d8
@@ -782,7 +782,7 @@ importers:
         version: 58.0.17(expo-dev-client@58.0.14(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(utf-8-validate@6.0.6)))(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(utf-8-validate@6.0.6))(react@19.3.0)
       expo-video:
         specifier: ~58.0.11
-        version: 58.0.11(patch_hash=bb8819a3b9b1d899063c0ee9efaf61ef6d40b1215c1c729a287921d47b94d358)(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(utf-8-validate@6.0.6))(react@19.3.0)
+        version: 58.0.11(patch_hash=2d915658157f5701bc9c4da36871e8ad263603ca0c3c103f5eaf58a2000a1f99)(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(utf-8-validate@6.0.6))(react@19.3.0)
       expo-web-browser:
         specifier: ~58.0.6
         version: 58.0.6(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(utf-8-validate@6.0.6))
@@ -20044,7 +20044,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  expo-video@58.0.11(patch_hash=bb8819a3b9b1d899063c0ee9efaf61ef6d40b1215c1c729a287921d47b94d358)(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(utf-8-validate@6.0.6))(react@19.3.0):
+  expo-video@58.0.11(patch_hash=2d915658157f5701bc9c4da36871e8ad263603ca0c3c103f5eaf58a2000a1f99)(expo@58.0.14)(react-native@0.88.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0(@babel/core@7.29.7)(bufferutil@4.1.0)(utf-8-validate@6.0.6))(@types/react@19.3.0)(bufferutil@4.1.0)(react@19.3.0)(utf-8-validate@6.0.6))(react@19.3.0):
     dependencies:
       expo: 58.0.14(1106b1d11fc0fad6d0556b6a93329d99)
       react: 19.3.0

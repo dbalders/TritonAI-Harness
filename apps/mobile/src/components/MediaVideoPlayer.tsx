@@ -57,8 +57,8 @@ function LoadedMediaVideo(props: {
         signal,
         playInitially,
         playingIntent: () => {
-          if (Platform.OS !== "android") return player.playing;
-          // ExoPlayer.isPlaying is false during buffering; playWhenReady keeps user intent.
+          if (Platform.OS !== "android" && Platform.OS !== "ios") return player.playing;
+          // Actual playback is false during buffering; the native bridge retains requested intent.
           if (player.playbackRequested === undefined)
             throw new Error("This native client needs the video playback update.");
           return player.playbackRequested;

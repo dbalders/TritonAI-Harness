@@ -22,7 +22,7 @@ diff --git a/src/VideoPlayer.types.ts b/src/VideoPlayer.types.ts
     */
    readonly playing: boolean;
 +
-+  /** Requested playback, including buffering. Available on Android in Harness builds. */
++  /** Requested playback, including buffering. Available in Harness native builds. */
 +  readonly playbackRequested?: boolean;
 -
 +
@@ -36,7 +36,7 @@ diff --git a/build/VideoPlayer.types.d.ts b/build/VideoPlayer.types.d.ts
       */
      readonly playing: boolean;
 +
-+    /** Requested playback, including buffering. Available on Android in Harness builds. */
++    /** Requested playback, including buffering. Available in Harness native builds. */
 +    readonly playbackRequested?: boolean;
      /**
       * Determines whether the player should automatically replay after reaching the end of the video.
@@ -68,3 +68,93 @@ diff --git a/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/an
 -
 +
      override fun onTracksChanged(tracks: Tracks) {
+diff --git a/ios/VideoPlayer.swift b/ios/VideoPlayer.swift
+--- a/ios/VideoPlayer.swift
++++ b/ios/VideoPlayer.swift
+@@ -24,6 +24,7 @@
+     }
+   }
+   private(set) var isPlaying = false
++  private(set) var playbackRequested = false
+   private(set) var status: PlayerStatus = .idle
+-
++
+   var playbackRate: Float = 1.0 {
+@@ -388,15 +389,31 @@
+     status = newStatus
+   }
+-
++
++  func setPlaybackRequested(_ requested: Bool) {
++    playbackRequested = requested
++    if requested {
++      ref.play()
++    } else {
++      ref.pause()
++    }
++  }
++
+   func onIsPlayingChanged(player: AVPlayer, oldIsPlaying: Bool?, newIsPlaying: Bool) {
+     let payload = IsPlayingEventPayload(isPlaying: newIsPlaying, oldIsPlaying: oldIsPlaying)
+     safeEmit(event: "playingChange", payload: payload)
+     isPlaying = newIsPlaying
++    if newIsPlaying { playbackRequested = true }
+-
++
+     VideoManager.shared.setAppropriateAudioSessionOrWarn()
+   }
+-
++
+   func onRateChanged(player: AVPlayer, oldRate: Float?, newRate: Float) {
++    // AVPlayer keeps the requested rate while buffering; failure can zero it without a user pause.
++    if newRate != 0 {
++      playbackRequested = true
++    } else if player.status != .failed && player.currentItem?.status != .failed && observer?.status != .error {
++      playbackRequested = false
++    }
+     if #available(iOS 16.0, tvOS 16.0, *) {
+       if player.defaultRate != playbackRate {
+         // User changed the playback speed in the native controls. Update the desiredRate variable
+diff --git a/ios/VideoModule.swift b/ios/VideoModule.swift
+--- a/ios/VideoModule.swift
++++ b/ios/VideoModule.swift
+@@ -157,6 +157,10 @@
+         return player.isPlaying
+       }
+-
++
++      Property("playbackRequested") { player -> Bool in
++        return player.playbackRequested
++      }
++
+       Property("muted") { player -> Bool in
+         return player.isMuted
+       }
+@@ -338,11 +342,11 @@
+       }
+-
++
+       Function("play") { player in
+-        player.ref.play()
++        player.setPlaybackRequested(true)
+       }
+-
++
+       Function("pause") { player in
+-        player.ref.pause()
++        player.setPlaybackRequested(false)
+       }
+-
++
+       Function("replace") { (player, source: Either<String, VideoSource>?) in
+@@ -363,7 +367,7 @@
+-
++
+       Function("replay") { player in
+         player.seeker.seek(to: CMTime.zero)
+-        player.ref.play()
++        player.setPlaybackRequested(true)
+       }
+-
++
+       AsyncFunction("generateThumbnailsAsync") { (player: VideoPlayer, times: [CMTime]?, options: VideoThumbnailOptions?) -> [VideoThumbnail] in
