@@ -2358,6 +2358,7 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
+  // regression: #9202 price new models without waiting a day for the rate table
   it.live("refetches a rate table inside its TTL only when the client asks", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;
@@ -2456,6 +2457,7 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
+  // regression: #21055 fall back to GitHub API for model prices
   it.live("tries the GitHub API after the primary pricing request times out", () =>
     Effect.gen(function* () {
       const { settings, home } = yield* setup;
@@ -2486,6 +2488,7 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
+  // regression: #21055 fall back to GitHub API for model prices
   it.live.each([false, true])(
     "throttles failed pricing loads from completion with cached rates: %s",
     (hasCachedRates) =>

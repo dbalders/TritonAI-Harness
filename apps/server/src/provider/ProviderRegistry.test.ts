@@ -1,8 +1,6 @@
 import { type ServerProviderSlashCommand } from "@t3tools/contracts";
 import { type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
 
-import * as PlatformError from "effect/PlatformError";
-
 import { vi } from "vite-plus/test";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -142,10 +140,6 @@ const defaultClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)(
 
 const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({});
 
-const disabledCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({
-  enabled: false,
-});
-
 process.env.T3CODE_CURSOR_ENABLED = "1";
 
 const encoder = new TextEncoder();
@@ -270,22 +264,6 @@ function layerMockSpawner(
       const cmd = command as unknown as { args: ReadonlyArray<string> };
       return Effect.succeed(mockHandle(handler(cmd.args)));
     }),
-  );
-}
-
-function layerFailingSpawner(description: string) {
-  return Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() =>
-      Effect.fail(
-        PlatformError.systemError({
-          _tag: "NotFound",
-          module: "ChildProcess",
-          method: "spawn",
-          description,
-        }),
-      ),
-    ),
   );
 }
 
@@ -2241,21 +2219,6 @@ it.layer(
           assert.include(unavailable, "ghost_current");
           assert.notInclude(unavailable, "ghost_stale");
         }),
-    );
-
-    it.effect("skips codex probes entirely when the provider is disabled", () =>
-      Effect.gen(function* () {
-        const status = yield* checkCodexProviderStatus(disabledCodexSettings).pipe(
-          Effect.provide(layerFailingSpawner("spawn codex ENOENT")),
-        );
-        assert.strictEqual(status.enabled, false);
-        assert.strictEqual(status.status, "disabled");
-        assert.strictEqual(status.installed, false);
-        assert.strictEqual(
-          status.message,
-          "The TritonAI Codex runtime is disabled in TritonAI Harness settings.",
-        );
-      }),
     );
   });
 

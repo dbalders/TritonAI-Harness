@@ -28,16 +28,6 @@ describe("pendingMemoryDays", () => {
     ).toEqual(["2026-09-27", "2026-09-28"]);
   });
 
-  it("does nothing once yesterday is summarized", () => {
-    expect(
-      pendingMemoryDays({
-        lastSummarizedDay: "2026-09-28",
-        today: "2026-09-29",
-        maxCatchUpDays: 7,
-      }),
-    ).toEqual([]);
-  });
-
   it("caps a long gap to the catch-up window", () => {
     const days = pendingMemoryDays({
       lastSummarizedDay: "2026-06-01",

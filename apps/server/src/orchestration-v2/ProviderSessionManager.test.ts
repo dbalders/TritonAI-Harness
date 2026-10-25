@@ -2063,6 +2063,7 @@ it.effect(
     }),
 );
 
+// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it.effect("ProviderSessionManagerV2 rotates a reused MCP credential that lacks plugin access", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);

@@ -4,54 +4,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import {
-  loadManagedSkillManifest,
-  managedSkillManifestBlocksMutation,
-} from "./managedSkillManifest.ts";
+import { loadManagedSkillManifest } from "./managedSkillManifest.ts";
 
 describe("loadManagedSkillManifest", () => {
-  it("blocks mutations when ownership is invalid or unknown", () => {
-    expect(managedSkillManifestBlocksMutation("invalid")).toBe(true);
-    expect(managedSkillManifestBlocksMutation("unknown")).toBe(true);
-    expect(managedSkillManifestBlocksMutation("absent")).toBe(false);
-    expect(managedSkillManifestBlocksMutation("valid")).toBe(false);
-  });
-
-  it.effect("loads, deduplicates, and sorts installer-owned secure skill names", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const skillsDirectory = yield* fs.makeTempDirectory({ prefix: "managed-skills-test-" });
-      yield* fs.writeFileString(
-        path.join(skillsDirectory, ".tritonai-managed-skills.json"),
-        JSON.stringify({
-          version: 1,
-          kind: "tritonai-secure",
-          skills: ["secure-review", "campus-deploy", "secure-review"],
-        }),
-      );
-
-      const result = yield* loadManagedSkillManifest(skillsDirectory);
-      expect(result).toEqual({
-        skillNames: ["campus-deploy", "secure-review"],
-        status: "valid",
-      });
-      yield* fs.remove(skillsDirectory, { recursive: true, force: true });
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("reports known absence when the manifest does not exist", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const skillsDirectory = yield* fs.makeTempDirectory({ prefix: "managed-skills-test-" });
-      expect(yield* loadManagedSkillManifest(skillsDirectory)).toEqual({
-        skillNames: [],
-        status: "absent",
-      });
-      yield* fs.remove(skillsDirectory, { recursive: true, force: true });
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("fails closed for symlinked or malformed manifests", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

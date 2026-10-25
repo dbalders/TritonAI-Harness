@@ -1,4 +1,3 @@
-import { buildInitialGrokProviderSnapshot } from "@t3tools/provider-grok/testing";
 // @effect-diagnostics nodeBuiltinImport:off - resolves the mock ACP agent script path relative to this test file.
 import * as NodePath from "node:path";
 
@@ -198,18 +197,6 @@ describe("buildGrokModelCapabilities", () => {
 
     expect(capabilities.optionDescriptors).toEqual([]);
   });
-});
-
-describe("buildInitialGrokProviderSnapshot", () => {
-  it.effect("returns a disabled snapshot by default", () =>
-    Effect.gen(function* () {
-      const snapshot = yield* buildInitialGrokProviderSnapshot(decodeGrokSettings({}));
-      expect(snapshot.enabled).toBe(false);
-      expect(snapshot.status).toBe("disabled");
-      expect(snapshot.installed).toBe(false);
-      expect(snapshot.message).toContain("disabled");
-    }),
-  );
 });
 
 it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {

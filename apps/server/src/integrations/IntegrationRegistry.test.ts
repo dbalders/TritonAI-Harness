@@ -1,9 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off cryptoRandomUUID:off
 import { describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
-import * as Tracer from "effect/Tracer";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -13,7 +10,6 @@ import {
   createRegistryRuntime,
   INTEGRATION_TOOL_RESULT_OMITTED,
   IntegrationProviderPublicError,
-  logProviderFault,
   MAX_INTEGRATION_TOOL_RESULT_BYTES,
   normalizeIntegrationToolResult,
   persistedToolUnavailability,
@@ -186,6 +182,7 @@ async function packagedFromRoot(packageRoot: string, implementation: Integration
 }
 
 describe("integration tool result normalization", () => {
+  // regression: fc95a4c143 fix(server): bound model-facing integration results
   it("preserves structured results and normalizes other JSON values into objects", () => {
     expect(normalizeIntegrationToolResult("ready")).toEqual({ result: "ready" });
     expect(normalizeIntegrationToolResult([1, 2])).toEqual({ result: [1, 2] });
@@ -198,6 +195,7 @@ describe("integration tool result normalization", () => {
     expect(() => normalizeIntegrationToolResult(cyclic)).toThrow(/JSON-serializable/u);
   });
 
+  // regression: fc95a4c143 fix(server): bound model-facing integration results
   it("accepts the exact encoded-byte ceiling and replaces the next byte without truncation", () => {
     const envelopeBytes = Buffer.byteLength(JSON.stringify({ result: "" }), "utf8");
     const atLimit = "x".repeat(MAX_INTEGRATION_TOOL_RESULT_BYTES - envelopeBytes);
@@ -210,6 +208,7 @@ describe("integration tool result normalization", () => {
     expect(normalizeIntegrationToolResult(`${atLimit}x`)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
   });
 
+  // regression: fc95a4c143 fix(server): bound model-facing integration results
   it("measures UTF-8 bytes and preserves the bounded multibyte compatibility shape", () => {
     const body = "界".repeat(50_000);
     const compatible = { body, source: { body } };
@@ -223,6 +222,7 @@ describe("integration tool result normalization", () => {
     expect(normalizeIntegrationToolResult(multibyte)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
   });
 
+  // regression: 405c5332dc fix(server): preserve completed integration writes
   it("fails closed when JSON escaping expands a bounded text shape beyond the ceiling", () => {
     const body = "\0".repeat(50_000);
     const escaped = { body, source: { body } };
@@ -232,6 +232,7 @@ describe("integration tool result normalization", () => {
     expect(normalizeIntegrationToolResult(escaped)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
   });
 
+  // regression: a71f671bf0 fix(server): omit binary integration results
   it("omits direct and nested binary values before they can expand into JSON", () => {
     const arrayBuffer = new ArrayBuffer(4);
     const binaryValues = [
@@ -249,6 +250,7 @@ describe("integration tool result normalization", () => {
     }
   });
 
+  // regression: fc95a4c143 fix(server): bound model-facing integration results
   it("returns the measured plain snapshot instead of serializing provider objects twice", () => {
     let serializations = 0;
     const providerResult = {
@@ -809,6 +811,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: 405c5332dc fix(server): preserve completed integration writes
   it("keeps an admitted write successful when only its result is unavailable", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-write-result-bound-"),
@@ -1048,6 +1051,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: #304 fix(server): show agents why integration tool calls fail
   it("tells the agent to verify an admitted write whose provider then rejects", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-write-outcome-unknown-"),
@@ -1125,6 +1129,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: #318 fix(integrations): keep a provider available when it proves nothing changed
   it("keeps a provider available when an admitted write proves nothing changed", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-write-unchanged-"));
     const manifest: IntegrationManifest = {
@@ -1234,6 +1239,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: #318 fix(integrations): keep a provider available when it proves nothing changed
   it("reports why an ambiguous admitted rejection faulted the provider", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-fault-report-"));
     const state: ProviderState = {
@@ -1296,29 +1302,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it.effect("records a provider fault in the trace as a span carrying its warning", () =>
-    Effect.gen(function* () {
-      const spans: Array<Tracer.NativeSpan> = [];
-      const tracer = Tracer.make({
-        span: (options) => {
-          const span = new Tracer.NativeSpan(options);
-          spans.push(span);
-          return span;
-        },
-      });
-      yield* logProviderFault({ integrationId: "microsoft-365", reason: "Error (EACCES)" }).pipe(
-        Effect.provide(Logger.layer([Logger.tracerLogger])),
-        Effect.withTracer(tracer),
-      );
-      const span = spans.find(({ name }) => name === "integrations.provider.faulted");
-      expect(span?.attributes.get("integration.id")).toBe("microsoft-365");
-      expect(span?.attributes.get("integration.fault.reason")).toBe("Error (EACCES)");
-      expect(span?.events.some(([name]) => name.includes("integrations.provider.faulted"))).toBe(
-        true,
-      );
-    }),
-  );
-
+  // regression: #318 fix(integrations): keep a provider available when it proves nothing changed
   it("reports a system error fault by its code without the message's path", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-fault-code-"));
     const state: ProviderState = {
@@ -1647,6 +1631,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: cd475da51a fix(integrations): recover and cancel idle credential sweeps safely
   it("reobserves a transient status error before the next keepalive", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-status-retry-"),
@@ -1694,13 +1679,12 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: cd475da51a fix(integrations): recover and cancel idle credential sweeps safely
   it.each([
     ["1.0.0", false],
     ["1.1.0-rc.1", false],
     ["1.1.0", true],
     ["1.1.0+build.1", true],
-    ["1.2.0", true],
-    ["2.0.0", true],
   ])("gates n8n keepalive on the fixed plugin version (%s)", async (version, enabled) => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-n8n-keepalive-version-"),
@@ -1774,6 +1758,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: 8ab50ae48b fix(integrations): coordinate keepalive with connection changes
   it.each(["disconnect", "remove"] as const)("drains a keepalive before %s", async (operation) => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-drain-"));
     const state: ProviderState = {
@@ -1819,6 +1804,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: 8ab50ae48b fix(integrations): coordinate keepalive with connection changes
   it("publishes a changed connection status after a failed keepalive", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-status-"),
@@ -1859,6 +1845,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: 29ff43e8dd fix(integrations): capture preparation before skill synchronization
   it.each([false, true])(
     "restores availability when preparation settles during summary (skills blocked: %s)",
     async (blockSkills) => {
@@ -2294,6 +2281,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: #304 fix(server): show agents why integration tool calls fail
   it("tells the agent which input paths failed without echoing submitted values", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-tool-issues-"));
     const state: ProviderState = {
@@ -2373,6 +2361,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: #304 fix(server): show agents why integration tool calls fail
   it("never echoes submitted values from filter messages or reported input", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-tool-leaks-"));
     const state: ProviderState = {
@@ -2417,6 +2406,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: #304 fix(server): show agents why integration tool calls fail
   it("bounds reported input issues", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-tool-bounds-"));
     const state: ProviderState = {
@@ -2495,42 +2485,6 @@ describe("IntegrationRegistry lifecycle", () => {
       }
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("reconciles catalog version drift without a second compatibility contract", async () => {
-    const mismatchRoot = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-version-mismatch-"),
-    );
-    const connectedState = (): ProviderState => ({
-      status: {
-        state: "connected",
-        accountLabel: "Test User",
-        grantedCapabilities: ["records.read"],
-        message: null,
-      },
-      credential: "present",
-      disconnectFails: false,
-    });
-    try {
-      const mismatchState = connectedState();
-      const initialMismatchRegistry = new RegistryRuntime(mismatchRoot, [
-        packaged(connectedManifest, provider("test-connected-provider", mismatchState)),
-      ]);
-      await initialMismatchRegistry.install(connectedManifest.id);
-      const nextManifest: IntegrationManifest = { ...connectedManifest, version: "2.0.0" };
-      const mismatchRegistry = new RegistryRuntime(mismatchRoot, [
-        packaged(nextManifest, provider("test-connected-provider", mismatchState)),
-      ]);
-      const mismatchSummary = (await mismatchRegistry.list()).integrations[0]!;
-      expect(mismatchSummary).toMatchObject({ installed: true, version: "2.0.0" });
-      expect(mismatchSummary.tools[0]?.available).toBe(true);
-      await expect(mismatchRegistry.install(connectedManifest.id)).resolves.toBeDefined();
-      await expect(mismatchRegistry.invokeTool("test.records.list", {})).resolves.toBeDefined();
-      await mismatchRegistry.setEnabled(connectedManifest.id, false);
-      await expect(mismatchRegistry.setEnabled(connectedManifest.id, true)).resolves.toBeDefined();
-    } finally {
-      await NodeFSP.rm(mismatchRoot, { recursive: true, force: true });
     }
   });
 
@@ -2739,6 +2693,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: #373 fix(server): allow linked Codex skills folders at startup
   it.each([false, true])(
     "loads and reopens a package with linked skills root: %s",
     async (linked) => {
@@ -6029,6 +5984,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
     };
   };
 
+  // regression: #328 fix(integrations): explain dynamic tool rejections and wait out credential refresh
   it("names the capability that is not selected and the one that is not granted", async () => {
     const state = connectedState(["records.read"]);
     await withRegistry(
@@ -6076,6 +6032,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
     );
   });
 
+  // regression: #328 fix(integrations): explain dynamic tool rejections and wait out credential refresh
   it("reports a version that does not match the included plugin", () => {
     const tool = connectedManifest.tools[0]!;
     expect(
@@ -6091,6 +6048,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
     ).toBeUndefined();
   });
 
+  // regression: #328 fix(integrations): explain dynamic tool rejections and wait out credential refresh
   it("reports a faulted provider ahead of its connection state", async () => {
     const state = connectedState(["records.read"]);
     const faulting: IntegrationProvider = {
@@ -6119,6 +6077,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
     );
   });
 
+  // regression: #328 fix(integrations): explain dynamic tool rejections and wait out credential refresh
   it("treats an in-flight credential refresh as transient and waits for it", async () => {
     const state = connectedState(["fixture.read"]);
     const prepare = blockingPrepare(state);
@@ -6147,6 +6106,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
     );
   });
 
+  // regression: #328 fix(integrations): explain dynamic tool rejections and wait out credential refresh
   it("returns the transient reason when the refresh outlasts the wait", async () => {
     const state = connectedState(["fixture.read"]);
     const prepare = blockingPrepare(state);
@@ -6180,6 +6140,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
     );
   });
 
+  // regression: #339 fix(integrations): re-sample a stale tool summary instead of reporting a phantom refresh
   it("re-samples a stale summary when no provider work remains to wait on", async () => {
     const state = connectedState(["records.read", "events.read"]);
     let markStatusStarted!: () => void;

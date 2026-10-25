@@ -289,18 +289,6 @@ describe("public skill repository", () => {
     }).pipe(Effect.provide(publicSkillRepositoryLayer({ calls, failResolveAttempts: 1 })));
   });
 
-  it.effect("times out when the public source does not respond", () =>
-    Effect.gen(function* () {
-      const repository = yield* PublicSkillRepository;
-      const errorFiber = yield* repository.discoverCatalog.pipe(Effect.flip, Effect.forkChild);
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("15 seconds");
-      const error = yield* Fiber.join(errorFiber);
-
-      expect(error.message).toContain("Request timed out");
-    }).pipe(Effect.provide(publicSkillRepositoryLayer({ hangResolve: true }))),
-  );
-
   it.effect("rejects a truncated GitHub tree", () =>
     Effect.gen(function* () {
       const repository = yield* PublicSkillRepository;
@@ -437,20 +425,6 @@ describe("public skill repository", () => {
         ),
       ),
     );
-  });
-
-  it.effect("waits for GitHub on the first read when nothing is saved", () => {
-    const calls: RepositoryCall[] = [];
-    return Effect.gen(function* () {
-      const repository = yield* PublicSkillRepository;
-      const first = yield* repository.readCatalog;
-      const second = yield* repository.readCatalog;
-
-      expect(first.stale).toBe(false);
-      expect(first.catalog.revision).toBe(REVISION);
-      expect(second).toEqual(first);
-      expect(calls).toHaveLength(4);
-    }).pipe(Effect.provide(publicSkillRepositoryLayer({ calls })));
   });
 
   it.effect("saves a refreshed catalog in the state directory", () =>

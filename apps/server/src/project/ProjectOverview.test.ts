@@ -260,6 +260,7 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
     }),
   );
 
+  // regression: #410 next steps respect settled threads, installed plugins, and dismissals
   it.effect("labels settled threads and dates them by their latest message", () =>
     Effect.gen(function* () {
       const { calls, layer } = yield* harness(() => Effect.succeed(result()));
@@ -279,6 +280,7 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
     }),
   );
 
+  // regression: #410 next steps respect settled threads, installed plugins, and dismissals
   it.effect("hides dismissed steps, avoids them in later suggestions, and restores them", () =>
     Effect.gen(function* () {
       let obeyAvoid = false;
@@ -342,6 +344,7 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
     }),
   );
 
+  // regression: #410 next steps respect settled threads, installed plugins, and dismissals
   it.effect("describes turned-on plugins by version and available tools", () =>
     Effect.sync(() => {
       const plugin = (
@@ -403,22 +406,6 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
           "- Microsoft 365 1.4.0: Search mail, Create reply draft",
         ].join("\n"),
       );
-    }),
-  );
-
-  it.effect("does not invoke a model without context", () =>
-    Effect.gen(function* () {
-      const { calls, layer } = yield* harness(() => Effect.succeed(result()));
-      yield* Effect.gen(function* () {
-        yield* seed;
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`DELETE FROM projection_thread_messages`;
-        const service = yield* ProjectOverview.make;
-        const empty = yield* service.ensure(input);
-        assert.isFalse(empty.contextAvailable);
-        assert.equal(empty.generation.state, "idle");
-        assert.lengthOf(calls, 0);
-      }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );
 

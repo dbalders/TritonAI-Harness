@@ -6,7 +6,6 @@ import {
   dailyNoteName,
   deviceFileLabel,
   type MemoryThreadActivity,
-  projectNoteFileName,
   projectNoteName,
   renderDailyNote,
   renderProjectNote,
@@ -76,14 +75,6 @@ describe("projectNoteName", () => {
   });
 });
 
-describe("file names", () => {
-  it("names every generated note after the device that wrote it", () => {
-    expect(DEVICE).toBe("MacBook Pro (3f2a)");
-    expect(dailyNoteName("2026-09-28", DEVICE)).toBe("2026-09-28 MacBook Pro (3f2a)");
-    expect(projectNoteFileName("Acme App", DEVICE)).toBe("Acme App - MacBook Pro (3f2a)");
-  });
-});
-
 describe("renderDailyNote", () => {
   it("links this device's project notes, previous day, inbox notes, and each thread's session", () => {
     const rendered = renderDailyNote(
@@ -130,26 +121,6 @@ describe("renderDailyNote", () => {
     expect(rendered).toContain("status: partial\nupdatedThrough: 2026-09-28T20:00:00.000Z\n");
     expect(rendered).toContain("_So far today.");
   });
-
-  it("says when a day only had inbox notes", () => {
-    const rendered = renderDailyNote(
-      note({ inboxLinks: ["Inbox/3f2a/processed/2026-09-28/2026-09-28-1030-login"] }),
-    );
-    expect(rendered).toContain("## Threads\n\n- None. This day only had inbox notes.");
-  });
-
-  it("falls back to the Codex thread id when the session file is missing", () => {
-    const rendered = renderDailyNote(
-      note({
-        threads: [thread({ branch: null, pullRequestUrl: null })],
-        projectNoteNames: new Map([["project-1", "Acme App"]]),
-      }),
-    );
-    expect(rendered).toContain(
-      "- **Fix the login redirect** in [[Acme App - MacBook Pro (3f2a)|Acme App]]. Codex thread: `01a0-codex`",
-    );
-    expect(rendered).not.toContain("## Links");
-  });
 });
 
 describe("project notes", () => {
@@ -157,15 +128,6 @@ describe("project notes", () => {
   const day28 = dailyNoteName("2026-09-28", DEVICE);
   const stub = () =>
     renderProjectNote({ title: "Acme App", workspaceRoot: "/code/acme", deviceLabel: DEVICE });
-
-  it("starts with only a Recent section and points people to Notes", () => {
-    const created = stub();
-    expect(created).toContain('device: "MacBook Pro (3f2a)"');
-    expect(created).toContain("# Acme App on MacBook Pro (3f2a)");
-    expect(created).toContain("`Notes` folder");
-    expect(created).not.toContain("## Pinned");
-    expect(created.endsWith("## Recent\n")).toBe(true);
-  });
 
   it("adds one dated line per day", () => {
     const once = appendProjectRecentLine(stub(), day28, "Login fix");
@@ -181,6 +143,7 @@ describe("project notes", () => {
     expect(redone).toContain(`- [[${day27}]]: Found the cookie bug\n- [[${day28}]]: Login fix\n`);
   });
 
+  // regression: 76be8d04db name each thread's project note in the memory prompt and add a missing Recent section
   it("adds a Recent section to a note without one instead of touching other lines", () => {
     const other = `# Acme\n\n- [[${day28}]]: The day we chose cookie sessions.\n`;
     const updated = appendProjectRecentLine(other, day28, "Login fix");

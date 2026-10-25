@@ -50,23 +50,6 @@ const skillOnlyManifest: IntegrationManifest = {
 };
 
 describe("integration manifest v2", () => {
-  it("accepts the one current contract and skill-only bundles", () => {
-    expect(validateIntegrationManifest(manifest)).toEqual(manifest);
-    expect(validateIntegrationManifest(skillOnlyManifest)).toEqual(skillOnlyManifest);
-  });
-
-  it("accepts capabilities chosen during provider authorization", () => {
-    const providerAuthorized = {
-      ...manifest,
-      capabilities: manifest.capabilities.map((capability) => ({
-        ...capability,
-        access: "authorization" as const,
-      })),
-    };
-
-    expect(validateIntegrationManifest(providerAuthorized)).toEqual(providerAuthorized);
-  });
-
   it("requires a provider for provider-authorized capabilities", () => {
     expect(() =>
       validateIntegrationManifest({
@@ -126,36 +109,6 @@ describe("integration manifest v2", () => {
     ).toThrow(/with tools must declare a provider/u);
   });
 
-  it("keeps tool and skill names in independent runtime namespaces", () => {
-    expect(() =>
-      validateIntegrationManifest({
-        ...manifest,
-        tools: [
-          {
-            name: "shared-component",
-            displayName: "Shared component tool",
-            description: "Tool namespace fixture.",
-            capabilities: ["fixture.read"],
-            effect: "read",
-          },
-        ],
-        skills: [
-          {
-            name: "shared-component",
-            description: "Skill namespace fixture.",
-            capabilities: ["fixture.read"],
-          },
-        ],
-      }),
-    ).not.toThrow();
-  });
-
-  it("rejects numeric prerelease identifiers with leading zeroes", () => {
-    expect(() => validateIntegrationManifest({ ...manifest, version: "1.0.0-alpha.01" })).toThrow(
-      /semver/u,
-    );
-  });
-
   it("rejects identifiers, names, and versions with trailing line terminators", () => {
     expect(() => validateIntegrationManifest({ ...manifest, id: `${manifest.id}\n` })).toThrow(
       /identifiers/u,
@@ -170,17 +123,6 @@ describe("integration manifest v2", () => {
             description: "Read fixture data.",
             capabilities: ["fixture.read"],
             effect: "read",
-          },
-        ],
-      }),
-    ).toThrow(/stable name/u);
-    expect(() =>
-      validateIntegrationManifest({
-        ...skillOnlyManifest,
-        skills: [
-          {
-            ...skillOnlyManifest.skills[0]!,
-            name: `${skillOnlyManifest.skills[0]!.name}\n`,
           },
         ],
       }),

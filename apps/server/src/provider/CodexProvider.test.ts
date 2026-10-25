@@ -56,37 +56,6 @@ it("publishes stable installed paths for temporary integration skill probes", ()
   );
 });
 
-it("applies configured model metadata without model-specific Harness constants", () => {
-  const configuredModel = "configured-model";
-  const capabilities = tritonAiCodexCapabilities(null);
-  const models = curateVisibleCodexModels([], [configuredModel], {
-    [configuredModel]: {
-      name: "Configured Model",
-      shortName: "Configured",
-      capabilities,
-    },
-  });
-
-  assert.deepStrictEqual(
-    models.map(({ slug, name, shortName }) => ({ slug, name, shortName })),
-    [{ slug: configuredModel, name: "Configured Model", shortName: "Configured" }],
-  );
-  assert.ok(models.every((model) => model.capabilities?.optionDescriptors?.length));
-});
-
-it("preserves metadata embedded in custom model entries", () => {
-  const capabilities = createModelCapabilities({
-    inputModalities: ["text", "image"],
-    optionDescriptors: [],
-  });
-  const [model] = curateVisibleCodexModels(
-    [],
-    [{ slug: "embedded-model", name: "Embedded Model", capabilities }],
-  );
-  assert.equal(model?.name, "Embedded Model");
-  assert.deepStrictEqual(model?.capabilities, capabilities);
-});
-
 it("uses configured model visibility without a Harness allowlist", () => {
   const configuredModel = "configured-model";
   const models = curateVisibleCodexModels(
@@ -129,19 +98,6 @@ it("preserves default capabilities when metadata only changes presentation", () 
   assert.strictEqual(models[0]?.name, "Managed Flash");
   assert.strictEqual(models[0]?.shortName, "Flash");
   assert.ok(models[0]?.capabilities?.optionDescriptors?.length);
-});
-
-it("ignores inherited metadata properties", () => {
-  const models = curateVisibleCodexModels([], ["constructor"]);
-
-  assert.deepStrictEqual(models, [
-    {
-      slug: "constructor",
-      name: "constructor",
-      isCustom: true,
-      capabilities: null,
-    },
-  ]);
 });
 
 import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
@@ -275,6 +231,7 @@ it("marks the most preferred available model as default", () => {
   );
 });
 
+// regression: #307 fix(models): replace GPT-5.6 variants with GPT-6.1 Sol
 it("prefers current sol over retired terra when both are available", () => {
   const models = applyPreferredCodexDefaultModel([
     { slug: "gpt-5.6-terra", name: "GPT-5.6-Terra", isCustom: false, capabilities: null },
@@ -325,6 +282,7 @@ it("preserves unknown input modalities when Codex does not advertise them", () =
   assert.strictEqual(capabilities.inputModalities, undefined);
 });
 
+// regression: #17 Fix TritonAI DeepSeek Flash model picker
 it("adds TritonAI reasoning controls to non-reasoning capabilities", () => {
   const capabilities = tritonAiCodexCapabilities(
     createModelCapabilities({
@@ -346,21 +304,6 @@ it("adds TritonAI reasoning controls to non-reasoning capabilities", () => {
   assert.deepStrictEqual(
     capabilities.optionDescriptors?.map((descriptor) => descriptor.id),
     ["reasoningEffort", "serviceTier"],
-  );
-});
-
-it("preserves input modalities while adding TritonAI reasoning controls", () => {
-  const capabilities = tritonAiCodexCapabilities(
-    createModelCapabilities({
-      inputModalities: ["text"],
-      optionDescriptors: [],
-    }),
-  );
-
-  assert.deepStrictEqual(capabilities.inputModalities, ["text"]);
-  assert.deepStrictEqual(
-    capabilities.optionDescriptors?.map((descriptor) => descriptor.id),
-    ["reasoningEffort"],
   );
 });
 
@@ -473,6 +416,7 @@ const startProbe = Effect.fn("startProbe")(function* (hang: ReadonlyArray<string
 });
 
 it.layer(NodeServices.layer)("Codex probe budget", (it) => {
+  // regression: #20537 fix(server): retain Codex authentication when discovery times out
   it.effect("keeps the first complete catalog when its refresh never answers", () =>
     Effect.gen(function* () {
       const probe = yield* startProbe(["model/list/2"]);

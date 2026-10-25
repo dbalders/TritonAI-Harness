@@ -124,7 +124,7 @@ function toPublicPlausibleProperty(
 }
 
 /** Equal-jitter delay keeps successful clients spread out and backs off outages. */
-export function telemetryFlushDelayMs(consecutiveFailures: number, randomUnit: number): number {
+function telemetryFlushDelayMs(consecutiveFailures: number, randomUnit: number): number {
   const boundedFailures = Math.max(0, Math.floor(consecutiveFailures));
   const retryExponent = Math.min(Math.max(0, boundedFailures - 1), 20);
   const ceiling =

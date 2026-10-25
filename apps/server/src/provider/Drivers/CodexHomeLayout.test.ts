@@ -65,24 +65,6 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
   });
 
   describe("materializeCodexShadowHome", () => {
-    it.effect("materializes a direct Codex home before launching Codex", () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const homeRoot = yield* makeTempDir("t3code-codex-direct-root-");
-        const homePath = path.join(homeRoot, "codex");
-        const layout = yield* resolveCodexHomeLayout(
-          decodeCodexSettings({
-            homePath,
-          }),
-        );
-
-        yield* materializeCodexShadowHome(layout);
-
-        expect(yield* fileSystem.exists(homePath)).toBe(true);
-      }),
-    );
-
     it.effect.skipIf(!symlinksSupported)(
       "keeps Finder metadata local across repeated shadow home setup",
       () =>

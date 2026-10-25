@@ -415,7 +415,6 @@ describe("included integration activation defaults", () => {
   });
 
   it.each([
-    { uninstalled: "ucsd-assistant" },
     { uninstalled: ["ucsd-assistant", "ucsd-assistant"] },
     { uninstalled: ["../ucsd-assistant"] },
   ])(

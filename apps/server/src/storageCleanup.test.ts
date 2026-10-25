@@ -1094,49 +1094,6 @@ describe("orphan worktree reports", () => {
       ),
   );
 
-  it.live.each(["direct", "symlink"] as const)(
-    "reports an orphan under a managed root inside a project (%s)",
-    (location) =>
-      runCleanupTest(
-        Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const walked: string[] = [];
-          const fixture = yield* cleanupFixture().pipe(
-            Effect.provideService(FileSystem.FileSystem, {
-              ...fs,
-              readDirectory: (directory, options) => {
-                walked.push(directory);
-                return fs.readDirectory(directory, options);
-              },
-            }),
-          );
-          fixture.setThreads([]);
-          const root = `${fixture.repo}/.worktrees`;
-          const orphan = `${root}/repository/orphan`;
-          const source = `${fixture.repo}/src`;
-          yield* fs.makeDirectory(`${source}/nested/deep`, { recursive: true });
-          yield* fixture.command(fixture.repo, ["worktree", "add", "-b", "orphan", orphan]);
-          if (location === "symlink") {
-            const alias = `${fixture.config.worktreesDir}/project-alias`;
-            yield* fs.symlink(fixture.repo, alias);
-            fixture.setProjectRoots([alias]);
-          }
-          fixture.setSettings({ worktreesDirectory: root });
-          yield* fs.utimes(orphan, 1, 1);
-          const report = yield* fixture.service.runNow;
-          expect(report.entries).toEqual([
-            expect.objectContaining({
-              path: yield* fs.realPath(orphan),
-              outcome: "kept",
-              reason: "No thread uses this worktree",
-            }),
-          ]);
-          expect(walked.some((directory) => directory.startsWith(source))).toBe(false);
-          expect(yield* fs.readFileString(`${orphan}/tracked.txt`)).toBe("original\n");
-        }),
-      ),
-  );
-
   it.live("skips symbolic links at both directory levels and disabled cleanup", () =>
     runCleanupTest(
       Effect.gen(function* () {

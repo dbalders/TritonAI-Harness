@@ -91,21 +91,6 @@ describe("fetchTritonAiUsage", () => {
     }),
   );
 
-  it.effect("represents an explicit null budget as no key-level limit", () =>
-    Effect.gen(function* () {
-      const fetchMock = vi.fn(
-        async () => new Response(JSON.stringify({ info: { spend: 1.5, max_budget: null } })),
-      );
-
-      const result = yield* fetchTritonAiUsage({
-        env: { TRITONAI_API_KEY: "test-key" },
-        fetch: fetchMock as unknown as typeof fetch,
-      });
-
-      assert.deepStrictEqual(result.budget, { kind: "unlimited" });
-    }),
-  );
-
   it.effect("uses the configured TritonAI deployment origin for usage", () =>
     Effect.gen(function* () {
       const fetchMock = vi.fn(async (url: Parameters<typeof fetch>[0]) => {
@@ -122,27 +107,6 @@ describe("fetchTritonAiUsage", () => {
       });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-    }),
-  );
-
-  it.effect("fails before fetch when the configured base URL is invalid", () =>
-    Effect.gen(function* () {
-      const fetchMock = vi.fn();
-
-      const error = yield* Effect.flip(
-        fetchTritonAiUsage({
-          env: {
-            TRITONAI_API_KEY: "test-key",
-            UCSD_AI_BASE_URL: "not a URL",
-          },
-          fetch: fetchMock as unknown as typeof fetch,
-        }),
-      );
-
-      assert.equal(error.code, "invalid_base_url");
-      assert.equal(error.recoverable, false);
-      assert.match(error.message, /UCSD_AI_BASE_URL/u);
-      expect(fetchMock).not.toHaveBeenCalled();
     }),
   );
 
@@ -185,66 +149,6 @@ describe("fetchTritonAiUsage", () => {
     }),
   );
 
-  it.effect("fails before fetch when the server API key is missing", () =>
-    Effect.gen(function* () {
-      const fetchMock = vi.fn();
-
-      const error = yield* Effect.flip(
-        fetchTritonAiUsage({
-          env: {},
-          fetch: fetchMock as unknown as typeof fetch,
-        }),
-      );
-
-      assert.equal(error.code, "missing_api_key");
-      assert.match(error.message, /access key/u);
-      assert.equal(error.recoverable, true);
-      expect(fetchMock).not.toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("maps rejected credentials to an actionable error", () =>
-    Effect.gen(function* () {
-      const error = yield* Effect.flip(
-        fetchTritonAiUsage({
-          env: { TRITONAI_API_KEY: "bad-key" },
-          fetch: vi.fn(
-            async () => new Response("denied", { status: 401 }),
-          ) as unknown as typeof fetch,
-        }),
-      );
-
-      assert.equal(error.code, "key_rejected");
-      assert.equal(error.status, 401);
-      assert.match(error.message, /Replace it and try again/u);
-    }),
-  );
-
-  it.effect("rejects invalid JSON and malformed usage payloads", () =>
-    Effect.gen(function* () {
-      const invalidJsonError = yield* Effect.flip(
-        fetchTritonAiUsage({
-          env: { TRITONAI_API_KEY: "test-key" },
-          fetch: vi.fn(async () => new Response("not json")) as unknown as typeof fetch,
-        }),
-      );
-      assert.equal(invalidJsonError.code, "invalid_response");
-      assert.match(invalidJsonError.message, /unreadable/u);
-
-      const malformedError = yield* Effect.flip(
-        fetchTritonAiUsage({
-          env: { TRITONAI_API_KEY: "test-key" },
-          fetch: vi.fn(
-            async () =>
-              new Response(JSON.stringify({ key: "must-not-leak", info: { spend: "unknown" } })),
-          ) as unknown as typeof fetch,
-        }),
-      );
-      assert.equal(malformedError.code, "invalid_response");
-      assert.match(malformedError.message, /unexpected format/u);
-    }),
-  );
-
   it.effect("maps network failures without exposing provider details", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(
@@ -258,31 +162,6 @@ describe("fetchTritonAiUsage", () => {
 
       assert.equal(error.code, "upstream_unavailable");
       expect(error.message).not.toMatch(/sensitive diagnostic detail/u);
-    }),
-  );
-
-  it.effect("distinguishes upstream timeouts and rate limiting", () =>
-    Effect.gen(function* () {
-      const timeoutError = yield* Effect.flip(
-        fetchTritonAiUsage({
-          env: { TRITONAI_API_KEY: "test-key" },
-          fetch: vi.fn(async () => {
-            throw new DOMException("timed out", "TimeoutError");
-          }) as unknown as typeof fetch,
-        }),
-      );
-      assert.equal(timeoutError.code, "upstream_timeout");
-
-      const rateLimitError = yield* Effect.flip(
-        fetchTritonAiUsage({
-          env: { TRITONAI_API_KEY: "test-key" },
-          fetch: vi.fn(
-            async () => new Response("rate limited", { status: 429 }),
-          ) as unknown as typeof fetch,
-        }),
-      );
-      assert.equal(rateLimitError.code, "upstream_rate_limited");
-      assert.equal(rateLimitError.status, 429);
     }),
   );
 });

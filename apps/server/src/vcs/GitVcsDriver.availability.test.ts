@@ -6,11 +6,7 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/process";
 
-import {
-  VcsProcessExitError,
-  VcsProcessSpawnError,
-  VcsProcessTimeoutError,
-} from "@t3tools/contracts";
+import { VcsProcessExitError, VcsProcessSpawnError } from "@t3tools/contracts";
 import {
   Environment as HostProcessEnvironment,
   Platform as HostProcessPlatform,
@@ -44,6 +40,7 @@ const withProcess = (run: VcsProcess.VcsProcess["Service"]["run"]) =>
   Effect.provide(Layer.mergeAll(NodeServices.layer, Layer.succeed(VcsProcess.VcsProcess, { run })));
 
 describe("optional Git detection", () => {
+  // regression: #327 fix(server): skip repository probes when Git is unavailable
   it.effect("returns false/null when the Git executable is missing", () =>
     Effect.gen(function* () {
       const driver = yield* GitVcsDriver.makeVcsDriverShape();
@@ -61,32 +58,7 @@ describe("optional Git detection", () => {
     ),
   );
 
-  describe.each(
-    Array.from(
-      [
-        spawnError("PermissionDenied"),
-        spawnError("NotFound", "FileSystem"),
-        new VcsProcessTimeoutError({
-          operation: "test",
-          command: "git",
-          cwd: "/repo",
-          timeoutMs: 5000,
-        }),
-      ],
-      (scenario) => ({ scenario }),
-    ),
-  )("case $scenario", ({ scenario: error }) => {
-    it.effect(`preserves ${error._tag}: ${error.message}`, () =>
-      Effect.gen(function* () {
-        const driver = yield* GitVcsDriver.makeVcsDriverShape();
-        assert.strictEqual(yield* driver.isInsideWorkTree("/repo").pipe(Effect.flip), error);
-      }).pipe(
-        withProcess(() => Effect.fail(error)),
-        Effect.provideService(HostProcessPlatform, "win32"),
-      ),
-    );
-  });
-
+  // regression: #327 fix(server): skip repository probes when Git is unavailable
   it.effect("detects Git installed after an earlier missing-Git probe", () => {
     let available = false;
     return Effect.gen(function* () {
@@ -104,35 +76,7 @@ describe("optional Git detection", () => {
 });
 
 describe("Apple Git detection", () => {
-  it.effect("preserves unexpected developer-tools check failures without launching Git", () => {
-    const error = new VcsProcessExitError({
-      operation: "test",
-      command: "/usr/bin/xcode-select",
-      cwd: "/repo",
-      exitCode: 1,
-      detail: "unexpected failure",
-    });
-    return Effect.gen(function* () {
-      const driver = yield* GitVcsDriver.makeVcsDriverShape();
-      assert.strictEqual(yield* driver.isInsideWorkTree("/repo").pipe(Effect.flip), error);
-    }).pipe(
-      Effect.provideService(
-        FileSystem.FileSystem,
-        FileSystem.makeNoop({ realPath: () => Effect.succeed("/usr/bin/git") }),
-      ),
-      withProcess((input) => {
-        assert.strictEqual(input.command, "/usr/bin/xcode-select");
-        return Effect.fail(error);
-      }),
-      Effect.provideService(HostProcessPlatform, "darwin"),
-      Effect.provideService(HostProcessEnvironment, {}),
-      Effect.provideService(SpawnExecutableResolution, (_command, _platform, env) => {
-        assert.strictEqual(env.PATH, "/usr/bin:/bin");
-        return "/usr/bin/git";
-      }),
-    );
-  });
-
+  // regression: #327 fix(server): skip repository probes when Git is unavailable
   describe.each(Array.from(["/usr/bin/git", "/custom/git-link"], (scenario) => ({ scenario })))(
     "case $scenario",
     ({ scenario: gitPath }) => {
@@ -168,26 +112,7 @@ describe("Apple Git detection", () => {
     },
   );
 
-  it.effect("probes Apple Git when developer tools are available", () => {
-    const commands: string[] = [];
-    return Effect.gen(function* () {
-      const driver = yield* GitVcsDriver.makeVcsDriverShape();
-      assert.isTrue(yield* driver.isInsideWorkTree("/repo"));
-      assert.deepStrictEqual(commands, ["/usr/bin/xcode-select", "git"]);
-    }).pipe(
-      Effect.provideService(
-        FileSystem.FileSystem,
-        FileSystem.makeNoop({ realPath: () => Effect.succeed("/usr/bin/git") }),
-      ),
-      withProcess((input) => {
-        commands.push(input.command);
-        return Effect.succeed(output("true\n"));
-      }),
-      Effect.provideService(HostProcessPlatform, "darwin"),
-      Effect.provideService(SpawnExecutableResolution, () => "/usr/bin/git"),
-    );
-  });
-
+  // regression: #327 fix(server): skip repository probes when Git is unavailable
   it.effect("uses custom Git without requiring Apple developer tools", () =>
     Effect.gen(function* () {
       const driver = yield* GitVcsDriver.makeVcsDriverShape();

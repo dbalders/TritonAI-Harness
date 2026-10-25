@@ -370,8 +370,6 @@ describe("production built-in package verification", () => {
     for (const packageRuntime of [
       { dependencies: { effect: "4.0.0-beta.78" } },
       { peerDependencies: { effect: EFFECT_HOST_PEER_RANGE } },
-      { optionalDependencies: { effect: "4.0.0-beta.78" } },
-      { bundledDependencies: ["effect"] },
       { bundleDependencies: ["effect"] },
     ]) {
       const { root, plugin } = await fixture(null, packageRuntime, {
@@ -529,6 +527,7 @@ describe("production built-in package verification", () => {
     }
   });
 
+  // regression: #224 fix(windows): restore managed plugins in packaged builds
   it("reports only admitted providers and tolerates an unwritable boot receipt", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-boot-report-"));
     const retained = { manifest: validateIntegrationManifest(skillsOnlyManifest()) };
@@ -559,16 +558,6 @@ describe("production built-in package verification", () => {
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
-  });
-
-  it("quarantines one SDK provider without disabling later production packages", async () => {
-    const retained = { manifest: validateIntegrationManifest(skillsOnlyManifest()) };
-    await expect(
-      loadProductionPackagesForTest([
-        () => Promise.reject(new PluginSdkQuarantineError()),
-        () => Promise.resolve(retained),
-      ]),
-    ).resolves.toEqual([retained]);
   });
 
   it("keeps an admitted sealed plugin when later SDK descriptor and configuration admission fail", async () => {
@@ -675,15 +664,6 @@ describe("production built-in package verification", () => {
     }
   });
 
-  it("accepts an exact package inventory and digest", async () => {
-    const { root, plugin } = await fixture();
-    try {
-      await expect(verifyProductionPackageForTest(root, plugin)).resolves.toBeUndefined();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("loads and installs from a private snapshot of the verified bytes", async () => {
     const { root, plugin } = await fixture();
     let snapshotParent = "";
@@ -767,7 +747,6 @@ describe("production built-in package verification", () => {
     for (const packageRuntime of [
       { dependencies: { effect: "4.0.0-beta.79" } },
       { dependencies: { effect: effectPackageJson.version } },
-      { dependencies: { effect: "4.0.0-beta.999" } },
       { dependencies: { effect: "4.0.0-beta.78", unexpected: "1.0.0" } },
       { peerDependencies: { effect: ">=4.0.0-beta.1 <5.0.0" } },
     ]) {

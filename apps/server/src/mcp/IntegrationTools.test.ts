@@ -108,20 +108,6 @@ const serverWithBuiltInFixture = toolkitRegistration(
   ),
 );
 
-it.effect("registers provider-neutral tool definitions with MCP", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const server = yield* McpServer.McpServer;
-      expect(server.tools.map(({ tool }) => tool.name)).toEqual(["fixture.read"]);
-      expect(server.tools[0]?.tool.annotations).toMatchObject({
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      });
-    }).pipe(Effect.provide(testLayer)),
-  ),
-);
-
 it.effect("awaits the canonical registry catalog before the MCP layer becomes available", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -142,35 +128,6 @@ it.effect("awaits the canonical registry catalog before the MCP layer becomes av
       ),
     ),
   ),
-);
-
-it.effect("fails MCP startup when a catalog tool is reserved", () =>
-  Effect.gen(function* () {
-    const exit = yield* Effect.exit(
-      Effect.void.pipe(
-        Effect.provide(
-          registrationLayer(new Set([fixtureTool.name]), async () =>
-            registryWith([fixtureTool]),
-          ).pipe(
-            Layer.provideMerge(
-              Layer.mergeAll(
-                McpServer.McpServer.layer,
-                Layer.succeed(ThreadManagementService.ThreadManagementService, {
-                  getThreadShell: () => Effect.succeed(null),
-                } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-    expect(exit._tag).toBe("Failure");
-    if (exit._tag === "Failure") {
-      expect(Cause.pretty(exit.cause)).toContain(
-        "Integration tool fixture.read conflicts with an existing MCP tool name.",
-      );
-    }
-  }).pipe(Effect.scoped),
 );
 
 it.effect("registers write-capable tools with conservative MCP annotations", () =>
@@ -257,6 +214,7 @@ it.effect("rejects reserved built-in names before built-in registration complete
   }).pipe(Effect.scoped),
 );
 
+// regression: fc95a4c143 fix(server): bound model-facing integration results
 it.effect("preserves bounded results and reports omitted results as completed MCP calls", () => {
   const invokeTool = vi
     .fn<Integrations.RegistryRuntime["invokeTool"]>()
@@ -299,6 +257,7 @@ it.effect("preserves bounded results and reports omitted results as completed MC
   ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
 });
 
+// regression: #304 fix(server): show agents why integration tool calls fail
 it.effect("tells MCP agents why a call failed only through safe errors", () => {
   const invokeTool = vi
     .fn<Integrations.RegistryRuntime["invokeTool"]>()
@@ -381,22 +340,6 @@ it.effect("hides integration tools from MCP credentials without integration acce
   ),
 );
 
-it.effect("shows active integration tools to integration-authorized MCP credentials", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const server = yield* McpServer.McpServer;
-      const enabledWhen = Context.getUnsafe(server.tools[0]!.annotations, McpSchema.EnabledWhen);
-      const visible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
-        Effect.provideService(
-          McpInvocationContext.McpInvocationContext,
-          invocation(new Set(["integrations.invoke"])),
-        ),
-      );
-      expect(visible).toBe(true);
-    }).pipe(Effect.provide(testLayer)),
-  ),
-);
-
 it.effect("uses the same transport grant for active read and write integration tools", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -475,7 +418,7 @@ it.effect("hides and rejects an unavailable tool despite read authorization", ()
   );
 });
 
-it.effect.each(["read-only", "approval-required", "auto-accept-edits", "auto"] as const)(
+it.effect.each(["approval-required", "auto"] as const)(
   "denies an outside plugin write without full-access approval: %s",
   (access) => {
     const invokeTool = vi

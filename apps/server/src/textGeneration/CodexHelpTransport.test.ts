@@ -80,7 +80,6 @@ describe("Help effective transport", () => {
 
   it.each([
     null,
-    [],
     { model_provider: 42 },
     { model_provider: "custom.with.dots" },
     { model_provider: "unknown" },

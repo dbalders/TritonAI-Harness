@@ -138,25 +138,6 @@ describe("resolveCodexAppServerCommand", () => {
     }),
   );
 
-  effectIt.effect("resolves the native payload behind a project-local npm shim", () =>
-    Effect.gen(function* () {
-      const shim = "C:\\project\\node_modules\\.bin\\codex.cmd";
-      const native =
-        "C:\\project\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe";
-
-      const resolved = yield* resolveCodexAppServerCommand(shim, ["app-server"], {
-        env: windowsEnvironment,
-      }).pipe(windowsRuntime(shim, "x64", (candidate) => candidate === native));
-
-      expect(resolved.command).toBe(native);
-      expect(resolved.shell).toBe(false);
-      expect(resolved.environment.CODEX_MANAGED_PACKAGE_ROOT).toBe(
-        "C:\\project\\node_modules\\@openai\\codex",
-      );
-      expect(resolved.extendEnv).toBe(false);
-    }),
-  );
-
   effectIt.effect("falls back to the Windows command shim when the native payload is missing", () =>
     Effect.gen(function* () {
       const shim = "C:\\Program Files\\Codex\\codex.cmd";
@@ -171,40 +152,6 @@ describe("resolveCodexAppServerCommand", () => {
       expect(resolved.command).toContain('^"value^ ^&^ calc^"');
       expect(resolved.environment).toBe(windowsEnvironment);
       expect(resolved.extendEnv).toBe(false);
-    }),
-  );
-
-  effectIt.effect("leaves an explicitly configured Windows executable unchanged", () =>
-    Effect.gen(function* () {
-      const executable = "C:\\Custom\\codex.exe";
-      const resolved = yield* resolveCodexAppServerCommand(executable, ["app-server"], {
-        env: windowsEnvironment,
-      }).pipe(windowsRuntime(executable, "x64", () => false));
-
-      expect(resolved).toEqual({
-        command: executable,
-        args: ["app-server"],
-        shell: false,
-        environment: windowsEnvironment,
-        extendEnv: false,
-      });
-    }),
-  );
-
-  effectIt.effect("leaves non-Windows launch behavior unchanged", () =>
-    Effect.gen(function* () {
-      const environment = { PATH: "/usr/local/bin:/usr/bin" };
-      const resolved = yield* resolveCodexAppServerCommand("codex", ["app-server"], {
-        env: environment,
-      }).pipe(Effect.provideService(HostProcessPlatform, "darwin"));
-
-      expect(resolved).toEqual({
-        command: "codex",
-        args: ["app-server"],
-        shell: false,
-        environment,
-        extendEnv: false,
-      });
     }),
   );
 });

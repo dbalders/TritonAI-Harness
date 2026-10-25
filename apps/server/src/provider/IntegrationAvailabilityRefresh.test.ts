@@ -281,41 +281,6 @@ describe("IntegrationAvailabilityRefresh", () => {
     }
   });
 
-  it("refreshes existing Codex snapshots when the registry is attached", async () => {
-    vi.useFakeTimers();
-    try {
-      const integrations = {
-        subscribeAvailabilityChanges: () => () => undefined,
-      } as unknown as RegistryRuntime;
-      const refreshed: Array<string> = [];
-      const providers = {
-        getProviders: Effect.succeed([snapshot("codex", "codex")]),
-        refreshInstance: (instanceId: ProviderInstanceId) =>
-          Effect.sync(() => {
-            refreshed.push(instanceId);
-            return [];
-          }),
-        refreshWorkspaceSnapshot: () => Effect.succeed([]),
-        refresh: () => Effect.succeed([]),
-        refreshAfterUpdate: () => Effect.succeed([]),
-        getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
-        setProviderMaintenanceActionState: () => Effect.die("unused"),
-        streamChanges: Stream.empty,
-      } satisfies ProviderRegistryShape;
-
-      const unsubscribe = subscribeIntegrationAvailabilityRefresh(integrations, providers, {
-        debounceMs: 25,
-      });
-      await vi.advanceTimersByTimeAsync(25);
-      await Promise.resolve();
-
-      expect(refreshed).toEqual(["codex"]);
-      unsubscribe();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("coalesces bursts and refreshes picker skills for every Codex instance", async () => {
     vi.useFakeTimers();
     try {

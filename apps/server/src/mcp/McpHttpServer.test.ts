@@ -390,6 +390,7 @@ it.effect("refuses preview tools to a client outside a thread before they run", 
   }).pipe(Effect.provide(layerTest)),
 );
 
+// regression: #417 fix(server): bound attachment text extraction and browser navigation approval
 it.effect("asks the provider's browser navigation gate before an MCP call loads a page", () =>
   Effect.scoped(
     Effect.gen(function* () {

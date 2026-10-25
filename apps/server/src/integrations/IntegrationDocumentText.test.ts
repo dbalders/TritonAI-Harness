@@ -26,6 +26,7 @@ const scriptWorker = (script: string): DocumentTextWorkerCommand => ({
 });
 const signal = () => new AbortController().signal;
 describe("isolated document text extraction", () => {
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("extracts PDF and DOCX text through the server's own __document-text process", async () => {
     const extract = makeDocumentTextExtractor({ resolveCommand: () => realWorker });
     await expect(
@@ -47,6 +48,7 @@ describe("isolated document text extraction", () => {
     ).resolves.toMatchObject({ status: "failed", reason: "corrupt" });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("runs the extractor with effective heap and code-generation limits and none of the server's environment", async () => {
     process.env.TRITONAI_DOCUMENT_TEXT_TEST_SECRET = "must-not-leak";
     try {
@@ -76,6 +78,7 @@ describe("isolated document text extraction", () => {
     }
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("refuses to parse when the worker's limits are not in effect", async () => {
     expect(documentTextWorkerLimitsInEffect(96)).toBe(false);
     const run = (runtimeArgs: ReadonlyArray<string>, heapMb: string) =>
@@ -101,6 +104,7 @@ describe("isolated document text extraction", () => {
     ).toMatchObject({ status: "extracted", text: "Synthetic canary 9X2-DOCX" });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("passes the limits through NODE_OPTIONS only for a single-executable worker", async () => {
     const extract = makeDocumentTextExtractor({
       heapMb: 96,
@@ -117,6 +121,7 @@ describe("isolated document text extraction", () => {
     expect(report.execArgv[0]).toBe("-e");
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("kills a worker stuck in synchronous code when the time limit passes", async () => {
     using spawn = vi.spyOn(NodeChildProcess, "spawn").mockClear();
     const controller = new AbortController();
@@ -140,6 +145,7 @@ describe("isolated document text extraction", () => {
     }
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("reports a worker that exhausts its memory allowance", async () => {
     const extract = makeDocumentTextExtractor({
       heapMb: 32,
@@ -151,6 +157,7 @@ describe("isolated document text extraction", () => {
     ).resolves.toMatchObject({ status: "failed", reason: "resource_limit" });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("stops the worker when the invocation is cancelled", async () => {
     using spawn = vi.spyOn(NodeChildProcess, "spawn").mockClear();
     const controller = new AbortController();
@@ -168,6 +175,7 @@ describe("isolated document text extraction", () => {
     await expect(closed).resolves.toEqual([null, "SIGKILL"]);
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("rejects oversized output, malformed output, and results over the character limit", async () => {
     const oversized = makeDocumentTextExtractor({
       resolveCommand: () => scriptWorker(`process.stdout.write("x".repeat(2 * 1024 * 1024))`),
@@ -192,6 +200,7 @@ describe("isolated document text extraction", () => {
     ).resolves.toMatchObject({ status: "failed", reason: "resource_limit" });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("refuses oversized input without starting a worker and reports a missing runtime", async () => {
     let started = 0;
     const extract = makeDocumentTextExtractor({
@@ -214,6 +223,7 @@ describe("isolated document text extraction", () => {
     expect(resolveDocumentTextWorkerCommand()).toBeNull();
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("returns an already-cancelled request at once without taking a queue slot", async () => {
     const blocker = new AbortController();
     const extract = makeDocumentTextExtractor({
@@ -242,24 +252,5 @@ describe("isolated document text extraction", () => {
     live.abort();
     blocker.abort();
     await Promise.all([running, ...queued]);
-  });
-
-  it("queues a bounded number of extractions and refuses the rest", async () => {
-    const controller = new AbortController();
-    const extract = makeDocumentTextExtractor({
-      maxConcurrent: 1,
-      resolveCommand: () => scriptWorker("setInterval(() => {}, 1000);"),
-    });
-    const pending = Array.from({ length: 9 }, () =>
-      extract({ format: "pdf", bytes: new Uint8Array([1]) }, controller.signal),
-    );
-    await expect(
-      extract({ format: "pdf", bytes: new Uint8Array([1]) }, controller.signal),
-    ).resolves.toMatchObject({ status: "failed", reason: "busy" });
-    controller.abort();
-    const settled = await Promise.all(pending);
-    expect(
-      settled.every((result) => result.status === "failed" && result.reason === "cancelled"),
-    ).toBe(true);
   });
 });

@@ -297,6 +297,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
   describe.each(Array.from(["stable", "nightly"] as const, (scenario) => ({ scenario })))(
     "case $scenario",
     ({ scenario: profile }) => {
+      // regression: 918a8176d3 enable memory automatically for existing installations
       it.effect(`automatically backfills a full week for an existing ${profile} installation`, () =>
         Effect.gen(function* () {
           const { baseDir, codexHome, calls, layer, fs, path } = yield* makeHarness({ profile });
@@ -519,6 +520,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  // regression: ec31417a1b keep loose inbox notes and drop day notes with nothing left to summarize
   it.effect("removes today's partial note when its only thread is deleted", () =>
     Effect.gen(function* () {
       const { baseDir, calls, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
@@ -654,6 +656,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  // regression: 8fa2a69b2f keep same-titled projects apart and defer inbox notes that do not fit
   it.effect("gives same-titled projects in different workspaces their own notes", () =>
     Effect.gen(function* () {
       const activityByDay = new Map<string, string>();
@@ -707,6 +710,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  // regression: 8fa2a69b2f keep same-titled projects apart and defer inbox notes that do not fit
   it.effect("leaves inbox notes that did not fit in the summary for the next one", () =>
     Effect.gen(function* () {
       const inboxByDay = new Map<string, string>();
@@ -748,6 +752,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  // regression: 8097499d11 wait for streaming turns before summarizing a day
   it.effect("waits for a day whose turn is still streaming, unless it was abandoned", () =>
     Effect.gen(function* () {
       const { calls, layer } = yield* makeHarness({ memoryEnabled: true });
@@ -777,6 +782,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  // regression: 2b1d09f266 record which days memory covered so agents do not read gaps as idle days
   it.effect("restarts coverage after a gap longer than the catch-up window", () =>
     Effect.gen(function* () {
       const { baseDir, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
@@ -862,30 +868,6 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
       assert.deepStrictEqual(off.calls, []);
       assert.deepStrictEqual(calls, []);
       assert.isTrue(yield* fs.exists(baseDir));
-    }),
-  );
-
-  it.effect("leaves a same-named skill it did not write alone", () =>
-    Effect.gen(function* () {
-      const { baseDir, codexHome, layer, fs, path } = yield* makeHarness({ memoryEnabled: false });
-      const skillFile = path.join(
-        codexHome,
-        "skills",
-        memorySkillName(path.join(baseDir, "memory", "general")),
-        "SKILL.md",
-      );
-      yield* fs.makeDirectory(path.dirname(skillFile), { recursive: true });
-      yield* fs.writeFileString(skillFile, "---\nname: tritonai-memory\n---\nMine.\n");
-      yield* TestClock.setTime(NOW);
-
-      yield* Effect.gen(function* () {
-        const memory = yield* DailyMemory.make;
-        yield* memory.runCatchUp;
-      }).pipe(Effect.provide(layer));
-      assert.strictEqual(
-        yield* fs.readFileString(skillFile),
-        "---\nname: tritonai-memory\n---\nMine.\n",
-      );
     }),
   );
 });

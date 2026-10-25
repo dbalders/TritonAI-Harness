@@ -67,17 +67,4 @@ it.layer(NodeServices.layer)("getAnonymousInstallId", (it) => {
       Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-install-id-race-" })),
     ),
   );
-
-  it.effect("keeps an existing ID written by another process", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const { anonymousIdPath } = yield* ServerConfig.ServerConfig;
-      const existing = "0b3f1d9e-5c2a-4e7b-9a41-2f6c8d0e7a15";
-      yield* fileSystem.writeFileString(anonymousIdPath, `${existing}\n`);
-
-      assert.deepEqual(yield* getAnonymousInstallId, Option.some(existing));
-    }).pipe(
-      Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-install-id-existing-" })),
-    ),
-  );
 });

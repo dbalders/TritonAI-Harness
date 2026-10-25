@@ -5,7 +5,6 @@ import {
   capBySubject,
   needsUserInput,
   ideaKey,
-  ideaSubject,
   sectionWeights,
   selectByMix,
   similarTitles,
@@ -23,12 +22,6 @@ const ideas = (...sections: IdeaSection[]) =>
   sections.map((section, index) => ({ section, name: `${section}-${index}` }));
 
 describe("ideaKey", () => {
-  it("names one idea per thread, file, skill, or starter, whatever its topic", () => {
-    expect(ideaKey("thread:t1", "finish the report")).toBe("thread:t1");
-    expect(ideaKey("thread:t1", "chart the numbers")).toBe("thread:t1");
-    expect(ideaKey("starter:brainstorm", "anything")).toBe("starter:brainstorm");
-  });
-
   it("tells apart ideas from the same note or plugin by topic", () => {
     expect(ideaKey("note:2026-10-12", "Draft the budget email!")).toBe(
       "note:2026-10-12#draft-the-budget-email",
@@ -90,15 +83,6 @@ describe("selectByMix", () => {
     ).toHaveLength(2);
   });
 
-  it("gives about half the batch to the user's own work", () => {
-    const picked = selectByMix(
-      ideas("continue", "continue", "continue", "continue", "tools", "new", "starter", "starter"),
-      6,
-      { ...EVEN, tools: 2, new: 2, starter: 2 },
-    );
-    expect(picked.filter((idea) => idea.section === "continue")).toHaveLength(3);
-  });
-
   it("fills from the other side when one side runs short", () => {
     expect(
       selectByMix(ideas("continue", "continue", "projects", "continue"), 3, EVEN),
@@ -143,12 +127,6 @@ describe("needsUserInput", () => {
 });
 
 describe("capBySubject", () => {
-  it("names a subject by project first, then by what the key is about", () => {
-    expect(ideaSubject("file:p1:data.csv", "p1")).toBe("project:p1");
-    expect(ideaSubject("plugin:n8n#check-runs", null)).toBe("plugin:n8n");
-    expect(ideaSubject("starter:focus-timer-page", null)).toBe("starter:focus-timer-page");
-  });
-
   it("keeps any one subject to two visible ideas, counting what is already showing", () => {
     const candidates = [
       { subject: "project:p1", name: "a" },

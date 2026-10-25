@@ -317,6 +317,7 @@ describe("CodexAdapterV2 thread MCP configuration", () => {
 });
 
 describe("CodexAdapterV2 process spawning", () => {
+  // regression: #426 recover interrupted Codex updates and coordinate sessions
   it.effect.each(["", "codex", "~"])(
     "leases the same managed executable it spawns for setting '%s'",
     (configured) =>
@@ -1649,6 +1650,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   // A long, email-style destination: the approval must show all of it, not a 120-character cut.
   const EXTERNAL_DESTINATION = `https://ic6do.example.test/Ysh5Fd_urgent_update.cmd?${"q=1&".repeat(40)}end=1`;
 
+  // regression: #417 bound attachment text extraction and browser navigation approval
   it.live.each([
     {
       scenario: "supervised-session",
@@ -1890,6 +1892,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   // dynamic-tool approval, and in Auto Codex's own reviewer approves it. The adapter's gate must
   // apply the same runtime mode, prompt and session grant there. A standard (non-custom) model has
   // no direct browser tools at all, so the MCP route is its only one.
+  // regression: #417 bound attachment text extraction and browser navigation approval
   it.live.each([
     {
       scenario: "supervised-session",
@@ -2392,49 +2395,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("identifies sessions to Codex with the same client info as main", () =>
-    Effect.gen(function* () {
-      const transcript = makeCodexReplayTranscript({
-        scenario: "initialize-client-info",
-        entries: codexReplayPreamble({
-          nativeThreadId: "client-info-thread",
-          nativeTurnId: "unused",
-          prompt: "unused",
-        }).slice(0, 5),
-      });
-      const initializeParams: Array<unknown> = [];
-      yield* makeCodexReplayHarness(
-        transcript,
-        () => Effect.void,
-        (method, params) =>
-          Effect.sync(() => {
-            if (method === "initialize") initializeParams.push(params);
-          }),
-      );
-      assert.deepEqual(initializeParams, [
-        {
-          clientInfo: {
-            name: "tritonai_harness_desktop",
-            title: "TritonAI Harness Desktop",
-            version: packageJson.version,
-          },
-          capabilities: {
-            experimentalApi: true,
-            optOutNotificationMethods: ["turn/diff/updated"],
-            extensions: {
-              "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] },
-            },
-          },
-        },
-      ]);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-      ),
-    ),
-  );
-
   it.effect("waits for native start before interrupting an acknowledged queued turn", () =>
     Effect.gen(function* () {
       const nativeThreadId = "early-stop-thread";
@@ -2534,6 +2494,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect("reports failed Stop without discarding a queued native turn that never starts", () =>
     Effect.gen(function* () {
       const nativeThreadId = "early-stop-thread";
@@ -2601,6 +2562,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect("keeps a queued turn after undelivered Stop and accepts its later completion", () =>
     Effect.gen(function* () {
       const nativeThreadId = "early-stop-thread";
@@ -2697,6 +2659,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect(
     "preserves native completion when Stop is canceled while waiting for a queued turn",
     () =>
@@ -5288,6 +5251,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect("retains descendant ownership when an interrupt request fails", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -5512,6 +5476,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect("attempts every terminal and retains tracking when termination fails", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -5569,6 +5534,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect.each(["owner", "drain"] as const)(
     "preserves structured Codex failure info through buffered Stop %s finalization",
     (route) =>

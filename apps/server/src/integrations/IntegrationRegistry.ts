@@ -230,7 +230,7 @@ export interface IntegrationProviderFault {
  * Records a provider fault in the server trace. Server logs reach the trace file only as events on
  * an active span, and a fault is reported from outside any span, so the warning gets its own.
  */
-export const logProviderFault = (fault: IntegrationProviderFault) =>
+const logProviderFault = (fault: IntegrationProviderFault) =>
   Effect.logWarning("integrations.provider.faulted", fault).pipe(
     Effect.withSpan("integrations.provider.faulted", {
       attributes: {

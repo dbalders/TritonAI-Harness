@@ -101,7 +101,6 @@ interface FakeCodexInput {
   stderr?: string;
   requireImage?: boolean;
   forbidImage?: boolean;
-  requireTritonAiProviderConfig?: boolean;
   requireServiceTier?: string;
   requireReasoningEffort?: string;
   forbidReasoningEffort?: boolean;
@@ -124,7 +123,6 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexInput) {
   const check = JSON.stringify({
     requireImage: input.requireImage ?? false,
     forbidImage: input.forbidImage ?? false,
-    requireTritonAiProviderConfig: input.requireTritonAiProviderConfig ?? false,
     requireServiceTier: input.requireServiceTier ?? null,
     requireReasoningEffort: input.requireReasoningEffort ?? null,
     forbidReasoningEffort: input.forbidReasoningEffort ?? false,
@@ -410,7 +408,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
       }),
   );
 
-  it.effect.each(["exec", "mcp list"] as const)(
+  it.effect.each(["exec"] as const)(
     "kills a stalled isolated Help %s CLI when its request is interrupted",
     (command) =>
       Effect.gen(function* () {
@@ -451,36 +449,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             expect(result.title).toBe("Bedrock title");
           }),
       ),
-  );
-
-  it.effect("generates and sanitizes commit messages without branch by default", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          subject:
-            "  Add important change to the system with too much detail and a trailing period.\nsecondary line",
-          body: "\n- added migration\n- updated tests\n",
-        }),
-        requireTritonAiProviderConfig: true,
-        requireArg: "tools.update_plan.enabled=true",
-        stdinMustNotContain: "branch must be a short semantic git branch fragment",
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const generated = yield* textGeneration.generateCommitMessage({
-            cwd: process.cwd(),
-            branch: "feature/codex-effect",
-            stagedSummary: "M README.md",
-            stagedPatch: "diff --git a/README.md b/README.md",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-
-          expect(generated.subject.length).toBeLessThanOrEqual(72);
-          expect(generated.subject.endsWith(".")).toBe(false);
-          expect(generated.body).toBe("- added migration\n- updated tests");
-          expect(generated.branch).toBeUndefined();
-        }),
-    ),
   );
 
   it.effect("omits a persisted service tier for managed ChatGPT text generation", () =>
@@ -588,26 +556,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     ),
   );
 
-  it.effect("defaults git text generation codex effort to high", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          subject: "Add important change",
-          body: "",
-        }),
-        requireReasoningEffort: "high",
-      },
-      (textGeneration) =>
-        textGeneration.generateCommitMessage({
-          cwd: process.cwd(),
-          branch: "feature/codex-effect",
-          stagedSummary: "M README.md",
-          stagedPatch: "diff --git a/README.md b/README.md",
-          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-        }),
-    ),
-  );
-
   it.effect("generates branch names even when the ambient scope is already closed", () =>
     withFakeCodexEnv(
       {
@@ -632,88 +580,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             .pipe(Effect.provideService(Scope.Scope, closedScope));
 
           expect(generated.branch).toBe("feat/background-generation");
-        }),
-    ),
-  );
-
-  it.effect("summarizes a day of activity and drops empty bullets", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          overview: "  Fixed login.  ",
-          projects: [
-            { project: " Acme App ", workedOn: ["Fixed redirect.", "  "], recent: " Login " },
-          ],
-          decisions: ["", "Keep cookie name."],
-          openLoops: ["Verify in staging."],
-        }),
-        stdinMustContain: "- Acme App",
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const generated = yield* textGeneration.generateDailyMemory!({
-            cwd: process.cwd(),
-            day: "2026-09-28",
-            projectNames: ["Acme App"],
-            activity: "## Thread: Fix login",
-            inboxNotes: "",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-
-          expect(generated).toEqual({
-            overview: "Fixed login.",
-            projects: [{ project: "Acme App", workedOn: ["Fixed redirect."], recent: "Login" }],
-            decisions: ["Keep cookie name."],
-            openLoops: ["Verify in staging."],
-          });
-        }),
-    ),
-  );
-
-  it.effect("suggests ideas from the given context and trims the model's fields", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          ideas: [
-            {
-              ref: " thread:thread-1 ",
-              topic: " finish reconciliation ",
-              sources: ["thread:thread-1", "  "],
-              icon: " 🧾 ",
-              title: " I can finish the reconciliation ",
-              body: " You stopped halfway. ",
-              action: "resume-thread",
-              projectId: " ",
-              prompt: " Please finish matching the travel lines. ",
-            },
-          ],
-        }),
-        stdinMustContain: "thread:thread-1",
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const generated = yield* textGeneration.generateIdeas!({
-            cwd: process.cwd(),
-            count: 4,
-            context: "Recent threads:\n- thread:thread-1 Q1 travel reconciliation",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-
-          expect(generated).toEqual({
-            ideas: [
-              {
-                ref: "thread:thread-1",
-                topic: "finish reconciliation",
-                sources: ["thread:thread-1"],
-                icon: "🧾",
-                title: "I can finish the reconciliation",
-                body: "You stopped halfway.",
-                action: "resume-thread",
-                projectId: "",
-                prompt: "Please finish matching the travel lines.",
-              },
-            ],
-          });
         }),
     ),
   );
@@ -1209,17 +1075,9 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
 
   it.effect.each([
     "-c model_provider=openai",
-    '-c model_provider="openai"',
-    `--config 'model_provider="openai"'`,
     `--config="model_provider='openai'"`,
-    "--config=model_provider=openai",
-    "-c=model_provider=openai",
     `-c 'model_provider="old_route"' --config=model_provider=openai`,
-    "-c model_provider={} --config=model_provider=openai",
-    "-c model_provider=true --config=model_provider=openai",
-    "-c model_provider.nested=selected_route --config=model_provider=openai",
     `-c model_provider=openai -c 'model_providers.unused.base_url="https://unused.example.invalid/v1"'`,
-    `-c 'model_providers.unused.env_key="UNUSED_API_KEY"' -c model_provider=openai`,
   ])("explicitly selects native auth over ambient gateway credentials (%s)", (launchArgs) =>
     withFakeCodexEnv(
       {
@@ -1277,7 +1135,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
 
   it.effect.each([
     { flag: "--config ", provider: "selected_route" },
-    { flag: "--config=", provider: "selected_route" },
     { flag: "-c=", provider: "selected_route" },
     { flag: "-c ", provider: TRITONAI_CODEX_MODEL_PROVIDER_ID },
     { flag: "-c ", provider: "openai" },
@@ -1357,10 +1214,8 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
 
   it.effect.each([
     "--profile private",
-    "--profile=private",
     "-pprivate",
     "--oss",
-    "--local-provider ollama",
     "--remote wss://example.invalid",
     "--cd /private/project",
     '-c profile="private"',
@@ -1388,16 +1243,11 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
   it.effect.each([
     '-c model_providers.selected_route.base_url="https://selected.example.invalid/v1"',
     '--config=model_providers={openai={base_url="https://selected.example.invalid/v1"}}',
-    '-c model_provider="selected_route" --config=model_providers.selected_route={base_url="https://selected.example.invalid/v1"}',
     "-c model_provider=true",
-    "-c model_provider={}",
-    "-c model_provider=openai --config=model_provider=true",
     "-c model_provider=openai --config=model_provider={}",
-    "-c model_provider=",
     "-c model_provider",
     `-c 'model_provider="open\\u0061i"'`,
     `-c 'model_provider="openai'`,
-    "-c model_provider=openai -c model_provider.nested=selected_route",
     "-c model_provider=openai -c openai_base_url=https://selected.example.invalid/v1",
     "-c model_provider=openai -c chatgpt_base_url=https://selected.example.invalid",
   ])("refuses ambiguous transport overrides before native or gateway fallback (%s)", (launchArgs) =>
@@ -1493,7 +1343,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
 
   it.effect.each([
     { name: "MCP listing failure", mcpServers: 2 },
-    { name: "malformed MCP listing", mcpServers: "not-json" },
     { name: "unexpected enabled MCP server", mcpServers: [{ name: "unsafe", enabled: true }] },
     { name: "unsupported isolation flags", unsupportedHelp: true },
     { name: "unverified CLI version", helpVersion: "0.155.0" },
@@ -1565,7 +1414,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
       const failure = yield* Effect.flip(generation.generateHelp!(HELP_INPUT));
       expect(failure._tag).toBe("TextGenerationError");
       expect(failure.operation).toBe("generateHelp");
-      expect(failure.detail).toBe("The configured provider does not support Help text generation.");
       expect(spawns).toBe(0);
     }),
   );

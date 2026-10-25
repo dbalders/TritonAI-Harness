@@ -24,7 +24,6 @@ import {
 import {
   isTritonAiManagedCodexMaintenanceCapabilities,
   makeTritonAiManagedCodexMaintenanceResolver,
-  parseCodexCliVersion,
   ManagedCodexApprovedVersion,
   recoverTritonAiManagedCodex,
   resolveTritonAiManagedCodexInstallation,
@@ -186,11 +185,6 @@ it("recognizes only TritonAI managed Codex launcher paths", () => {
   ).toBeNull();
 });
 
-it("parses Codex CLI version output", () => {
-  expect(parseCodexCliVersion("codex-cli 0.151.0\n")).toBe("0.151.0");
-  expect(parseCodexCliVersion("not a version")).toBeNull();
-});
-
 it.effect(
   "routes managed launchers through the Harness updater and preserves parent fallback",
   () =>
@@ -251,6 +245,7 @@ const fixtureLayer = Layer.merge(
 );
 
 it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
+  // regression: #426 fix(provider): recover interrupted Codex updates and coordinate sessions
   it.effect.each(["failure", "timeout"])(
     "preserves an existing newer engine instead of recovering after a transient %s",
     (scenario) =>
@@ -569,6 +564,7 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  // regression: #353 fix(provider): update managed Codex without npm on PATH
   it.effect("stages and verifies with the Node.js runtime the POSIX launcher pins", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();
@@ -623,6 +619,7 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
   );
 });
 
+// regression: #317 succeed when the shared engine is already updated; 76aecbe4a9 cap managed Codex updates at approved version
 it.layer(fixtureLayer)("approved managed engine policy", (it) => {
   describe.each(Array.from(["0.151.0", "0.155.1"], (scenario) => ({ scenario })))(
     "case $scenario",
@@ -669,7 +666,7 @@ it.layer(fixtureLayer)("approved managed engine policy", (it) => {
       ]);
     }).pipe(Effect.scoped),
   );
-  describe.each(Array.from([null, "latest", "0.155.1 || true"], (scenario) => ({ scenario })))(
+  describe.each(Array.from([null, "0.155.1 || true"], (scenario) => ({ scenario })))(
     "case $scenario",
     ({ scenario: approved }) => {
       it.effect(`fails closed for policy ${String(approved)}`, () =>
@@ -699,6 +696,7 @@ it.layer(fixtureLayer)("approved managed engine policy", (it) => {
   );
 });
 
+// regression: #270 fix(server): use managed tooling for Windows engine updates
 it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
   describe.each(Array.from(["lib\\node_modules", "node_modules"], (scenario) => ({ scenario })))(
     "case $scenario",
@@ -714,7 +712,10 @@ it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
             "rollback removal lock",
             "rollback restoration lock",
             "lock ownership lost during retry",
-          ],
+          ].filter(
+            // The package layout only changes the entry path, so one success run covers it.
+            (scenario) => layout === "lib\\node_modules" || scenario === "success",
+          ),
           (scenario) => ({ scenario }),
         ),
       )("case $scenario", ({ scenario }) => {

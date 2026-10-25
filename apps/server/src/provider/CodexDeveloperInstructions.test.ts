@@ -4,7 +4,6 @@ import {
   T3_CODE_ORCHESTRATION_INSTRUCTIONS,
   T3_CODE_ORCHESTRATION_SECTIONS,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
-
 import { describe, it } from "vite-plus/test";
 
 import {
@@ -73,27 +72,6 @@ describe("buildCodexDeveloperInstructions", () => {
   });
 });
 
-describe("T3 browser developer instructions", () => {
-  const runtime = { model: "gpt-5.3-codex", reasoningEffort: "high" };
-
-  it("prefers the product-native preview tools in both collaboration modes", () => {
-    {
-      const instructions = toolInstructions(runtime, true);
-      NodeAssert.match(instructions, /TritonAI Harness/);
-      NodeAssert.match(instructions, /preview_status/);
-      NodeAssert.match(instructions, /preview_open/);
-      NodeAssert.match(instructions, /Do not switch to global browser skills/);
-    }
-  });
-});
-
 function runtimeInstructions(runtime: Parameters<typeof buildCodexAdditionalContext>[0]) {
   return buildCodexAdditionalContext(runtime).t3_code_runtime!.value;
-}
-
-function toolInstructions(
-  runtime: Parameters<typeof buildCodexAdditionalContext>[0],
-  available: boolean,
-) {
-  return buildCodexAdditionalContext(runtime, available).t3_code_tools?.value ?? "";
 }

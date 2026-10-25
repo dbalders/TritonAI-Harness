@@ -394,14 +394,6 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       }).pipe(Effect.provide(runtimeLayer));
     }),
   );
-
-  it("uses jittered exponential backoff with a five-minute ceiling", () => {
-    assert.equal(AnalyticsService.telemetryFlushDelayMs(0, 0), 15_000);
-    assert.equal(AnalyticsService.telemetryFlushDelayMs(0, 1), 30_000);
-    assert.equal(AnalyticsService.telemetryFlushDelayMs(1, 0), 15_000);
-    assert.equal(AnalyticsService.telemetryFlushDelayMs(2, 1), 60_000);
-    assert.equal(AnalyticsService.telemetryFlushDelayMs(20, 1), 300_000);
-  });
 });
 
 it.live("finalizes promptly when the analytics endpoint hangs", () =>

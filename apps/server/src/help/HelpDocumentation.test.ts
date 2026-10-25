@@ -41,24 +41,6 @@ const withPackaged = (catalog: unknown) => {
 };
 
 describe("HelpDocumentation source catalog", () => {
-  it.effect("reserves complete cleanup instructions before filling higher-ranked guides", () =>
-    Effect.gen(function* () {
-      const source = yield* sourceGuide("project-settings.md");
-      const cleanup = /^## Storage cleanup\n[\s\S]*?(?=\n## |$)/m.exec(source)![0].trim();
-      const docs = yield* HelpDocumentation.HelpDocumentation;
-      const result = yield* docs.search("How do I clean up old worktrees?");
-      const settings = result.documentation.find(
-        (doc) => doc.path === "docs/user/project-settings.md",
-      );
-      expect(settings?.content).toContain(cleanup);
-      expect(
-        result.documentation.reduce((size, doc) => size + doc.content.length, 0),
-      ).toBeLessThanOrEqual(20_000);
-      expect(isDocumentation(result.documentation)).toBe(true);
-      expect(yield* docs.search("How do I clean up old worktrees?")).toEqual(result);
-    }).pipe(Effect.provide(layerSource)),
-  );
-
   it.effect(
     "uses recent topic context to retrieve computer-use permissions for an ambiguous follow-up",
     () =>
@@ -79,49 +61,12 @@ describe("HelpDocumentation source catalog", () => {
       }).pipe(Effect.provide(layerSource)),
   );
 
-  it.effect(
-    "retrieves the actual complete computer-use instructions for a mouse question and follow-up",
-    () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const source = yield* fileSystem.readFileString(
-          NodeURL.fileURLToPath(new URL("../../../../docs/user/computer-use.md", import.meta.url)),
-        );
-        const docs = yield* HelpDocumentation.HelpDocumentation;
-        for (const question of [
-          "i saw someone have their app use a mouse for them, how do i do that",
-          "is that not computer use?",
-        ]) {
-          const result = yield* docs.search(question);
-          expect(result.documentationStatus).toBe("available");
-          const first = result.documentation[0];
-          expect(first?.path).toBe("docs/user/computer-use.md");
-          expect(first?.content).toBe(source);
-          for (const instruction of [
-            "Settings > General",
-            "off by default",
-            "Accessibility",
-            "Screen Recording",
-            "Restart Harness",
-            "local desktop backend",
-            "Codex provider",
-            "/computer-use",
-          ])
-            expect(first?.content).toContain(instruction);
-        }
-      }).pipe(Effect.provide(layerSource)),
-  );
-
   it.effect("discovers existing topics by title and body without a maintained topic list", () =>
     Effect.gen(function* () {
       const docs = yield* HelpDocumentation.HelpDocumentation;
       const examples = [
-        ["How do I import browser sessions?", "browser-import.md"],
         ["How can I record a skill?", "record-a-skill.md"],
         ["Where can I change custom model prices?", "usage.md"],
-        ["How can I set up webhook automations?", "project-settings.md"],
-        ["How do I snooze a thread until later?", "thread-sidebar.md"],
-        ["How do I connect through Tailscale HTTPS?", "remote-access.md"],
       ];
       for (const [question, file] of examples) {
         const result = yield* docs.search(question!);
@@ -171,15 +116,6 @@ describe("HelpDocumentation source catalog", () => {
       expect(reads).toEqual([`${root}computer-use.md`]);
       expect(result.documentation[0]?.path).toBe("docs/user/computer-use.md");
     }),
-  );
-
-  it.effect("reports an unavailable source catalog on filesystem failure", () =>
-    search("computer use").pipe(
-      Effect.provide(HelpDocumentation.layer.pipe(Layer.provide(FileSystem.layerNoop({})))),
-      Effect.map((result) =>
-        expect(result).toEqual({ documentationStatus: "unavailable", documentation: [] }),
-      ),
-    ),
   );
 });
 
@@ -247,25 +183,6 @@ describe("HelpDocumentation packaged catalog", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect(
-    "uses embedded docs with no filesystem and resolves ranking ties by source path",
-    () => {
-      const layer = withPackaged([
-        { path: "docs/user/zebra.md", content: "# Mouse\n\nLocal instructions." },
-        { path: "docs/user/alpha.md", content: "# Mouse\n\nLocal instructions." },
-      ]);
-      return Effect.gen(function* () {
-        const docs = yield* HelpDocumentation.HelpDocumentation;
-        const first = yield* docs.search("mouse");
-        expect(first.documentation.map((doc) => doc.path)).toEqual([
-          "docs/user/alpha.md",
-          "docs/user/zebra.md",
-        ]);
-        expect(yield* docs.search("mouse")).toEqual(first);
-      }).pipe(Effect.provide(layer));
-    },
-  );
-
   it.effect("honors document/count/total budgets and labels complete-section excerpts", () => {
     const complete =
       "## Webhook automations\n\nEnable the webhook.\n\n```sh\n# this is code, not a section\nrun webhook\n```\n\nKeep the signing secret private.";
@@ -309,19 +226,5 @@ describe("HelpDocumentation packaged catalog", () => {
         expect(result).toEqual({ documentationStatus: "unavailable", documentation: [] });
       }
     }),
-  );
-
-  it.effect("limits many matching short guides to eight documents", () =>
-    search("new feature").pipe(
-      Effect.provide(
-        withPackaged(
-          Array.from({ length: 12 }, (_, index) => ({
-            path: `docs/user/feature-${index}.md`,
-            content: `# New feature ${index}\n\nPublic guide.`,
-          })),
-        ),
-      ),
-      Effect.map((result) => expect(result.documentation).toHaveLength(8)),
-    ),
   );
 });

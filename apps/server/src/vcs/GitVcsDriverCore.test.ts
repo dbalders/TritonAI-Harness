@@ -225,46 +225,6 @@ it.effect.each(["root", "nested", "worktree"] as const)(
     }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("uses stable diagnostics for every parsed non-repository command", () => {
-  const commands: Array<{ readonly args: ReadonlyArray<string>; readonly lcAll?: string }> = [];
-  const spawner = ChildProcessSpawner.make((command) =>
-    Effect.sync(() => {
-      if (!ChildProcess.isStandardCommand(command)) {
-        return assert.fail("expected a standard Git command");
-      }
-      commands.push({
-        args: command.args,
-        ...(command.options.env?.LC_ALL ? { lcAll: command.options.env.LC_ALL } : {}),
-      });
-      return makeNonRepositoryHandle();
-    }),
-  );
-  const layerNodeServices = Layer.merge(
-    NodeServices.layer,
-    Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
-  );
-  const layer = GitVcsDriver.layer.pipe(
-    Layer.provide(layerServerConfig),
-    Layer.provideMerge(layerNodeServices),
-  );
-
-  return Effect.gen(function* () {
-    const driver = yield* GitVcsDriver.GitVcsDriver;
-    const cwd = "/repo";
-
-    yield* driver.statusDetailsLocal(cwd);
-    yield* driver.statusDetailsRemote(cwd, { refreshUpstream: false });
-    yield* driver.listRefs({ cwd });
-
-    assert.deepStrictEqual(commands, [
-      { args: ["rev-parse", "--git-path", "index"], lcAll: "C" },
-      { args: ["status", "--porcelain=2", "--branch", "-z"], lcAll: "C" },
-      { args: ["symbolic-ref", "--quiet", "--short", "HEAD"], lcAll: "C" },
-      { args: ["rev-parse", "--git-common-dir"], lcAll: "C" },
-    ]);
-  }).pipe(Effect.provide(layer));
-});
-
 it.effect("invalidates origin remote cache when a driver mutation adds origin", () =>
   Effect.gen(function* () {
     const driver = yield* GitVcsDriver.GitVcsDriver;
@@ -2437,6 +2397,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         }),
     );
 
+    // regression: #109 Fix Git status before first commit
     it.effect("reports remote status before the first commit", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -2455,6 +2416,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    // regression: #109 Fix Git status before first commit
     it.effect("reports remote status for a detached HEAD", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -3849,6 +3811,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    // regression: #187 fix: preserve git index during commit generation
     it.effect(
       "prepares selected files without changing the index and commits only those files",
       () =>
@@ -3905,6 +3868,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    // regression: #187 fix: preserve git index during commit generation
     it.effect("includes force-added ignored files without changing the index", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

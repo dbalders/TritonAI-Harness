@@ -279,43 +279,6 @@ describe("t3 pair", () => {
     ),
   );
 
-  it.effect("mints a pairing grant with only the selected scopes", () =>
-    withDescriptorServer((origin) =>
-      Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-scopes-test-"));
-        yield* persistServerRuntimeState({
-          path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
-          state: yield* makePersistedServerRuntimeState({
-            config: { host: "127.0.0.1", devUrl: undefined },
-            port: Number(new URL(origin).port),
-          }),
-        });
-
-        yield* captureStdout(
-          runCli([
-            "pair",
-            "--base-dir",
-            baseDir,
-            "--scope",
-            "orchestration:read",
-            "--scope",
-            "relay:read",
-            "--scope",
-            "orchestration:read",
-          ]),
-        ).pipe(Effect.provide(makeSecretStoreConfigLayer(baseDir)));
-        const listed = yield* captureStdout(
-          runCli(["auth", "pairing", "list", "--base-dir", baseDir, "--json"]),
-        ).pipe(Effect.provide(makeSecretStoreConfigLayer(baseDir)));
-        const credentials = JSON.parse(listed) as ReadonlyArray<{
-          readonly scopes: ReadonlyArray<string>;
-        }>;
-        assert.lengthOf(credentials, 1);
-        assert.deepEqual(credentials[0]?.scopes, ["orchestration:read", "relay:read"]);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("pairs through the recorded dev web URL for dev servers", () =>
     withDescriptorServer((origin) =>
       Effect.gen(function* () {

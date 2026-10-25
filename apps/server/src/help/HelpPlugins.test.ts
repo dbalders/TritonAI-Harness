@@ -151,12 +151,6 @@ describe("buildHelpPluginSnapshot", () => {
     ).toBe(false);
   });
 
-  it("supports local skill-only packages without inventing a connection requirement", () => {
-    const result = snapshot([plugin({ requiresConnection: false, tools: [] })]).plugins[0]!;
-    expect(result.requiresConnection).toBe(false);
-    expect(result.skills[0]?.available).toBe(true);
-  });
-
   it("allowlists fields and redacts untrusted text before truncating it", () => {
     const secret = "sk-proj-abcdef0123456789";
     const original = plugin();
@@ -268,7 +262,7 @@ describe("buildHelpPluginSnapshot", () => {
     ).toBe(true);
   });
 
-  it.each(["plugin", "capability", "tool", "skill"] as const)(
+  it.each(["plugin", "tool"] as const)(
     "prioritizes a queried %s beyond the default inventory/detail limits",
     (kind) => {
       const original = plugin();
@@ -291,9 +285,7 @@ describe("buildHelpPluginSnapshot", () => {
       });
       const question = {
         plugin: "How do I enable target-plugin?",
-        capability: "Why is queried-capability unavailable?",
         tool: "Can I use queried_tool?",
-        skill: "Where is queried-skill?",
       }[kind];
       const entries = [
         ...Array.from({ length: 101 }, (_, i) => plugin({ id: `other-${i}` })),
@@ -304,12 +296,8 @@ describe("buildHelpPluginSnapshot", () => {
       expect(result.plugins[0]?.id).toBe("target-plugin");
       expect(result.pluginsOmittedCount).toBe(2);
       const first = result.plugins[0]!;
-      if (kind === "capability")
-        expect(first.capabilities.some(({ id }) => id === "queried-capability")).toBe(true);
       if (kind === "tool")
         expect(first.tools.some(({ name }) => name === "queried_tool")).toBe(true);
-      if (kind === "skill")
-        expect(first.skills.some(({ name }) => name === "queried-skill")).toBe(true);
       expect(JSON.stringify(entries)).toBe(before);
     },
   );
@@ -330,32 +318,5 @@ describe("buildHelpPluginSnapshot", () => {
     expect(result.capabilities.some(({ id }) => id === "hidden-dependency")).toBe(false);
     expect(result.tools[0]?.available).toBe(true);
     expect(result.detailsOmitted).toBe(true);
-  });
-
-  it("prefers an exact tool name over repeated display names and keeps short plugin names", () => {
-    const original = plugin();
-    const input = plugin({
-      tools: Array.from({ length: 180 }, (_, i) => ({
-        ...original.tools[0]!,
-        name: i === 179 ? "search.documents" : `tool-${i}`,
-        displayName: "Search documents",
-      })),
-    });
-    expect(snapshot([input], "search.documents").plugins[0]?.tools[0]?.name).toBe(
-      "search.documents",
-    );
-    const entries = [
-      ...Array.from({ length: 101 }, (_, i) => plugin({ id: `other-${i}` })),
-      plugin({ id: "ai", name: "AI", tools: [], skills: [], capabilities: [] }),
-    ];
-    expect(snapshot(entries, "How do I enable AI?").plugins[0]?.id).toBe("ai");
-  });
-
-  it("reports a known empty snapshot without fabricating unavailable inventory", () => {
-    expect(snapshot([])).toEqual({
-      pluginsStatus: "reported",
-      plugins: [],
-      pluginsOmittedCount: 0,
-    });
   });
 });

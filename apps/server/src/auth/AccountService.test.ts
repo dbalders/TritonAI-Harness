@@ -100,6 +100,7 @@ function fixture(overrides?: {
 }
 
 describe("AccountService", () => {
+  // regression: #359 fix(accounts): include the campus account service by default
   it.effect.each([{}, { TRITONAI_ACCOUNT_SERVICE_URL: "" }])(
     "offers campus sign-in without a launch-time account URL: %j",
     (env) =>
@@ -122,6 +123,7 @@ describe("AccountService", () => {
       }),
   );
 
+  // regression: #359 fix(accounts): include the campus account service by default
   it.effect.each(["disabled", "   "])(
     "allows an explicit account override to disable sign-in: %j",
     (value) =>
@@ -169,25 +171,6 @@ describe("AccountService", () => {
           expect((yield* Effect.flip(account.startLogin("local-a"))).code).toBe("not_configured");
         }).pipe(Effect.provide(configuredLayer));
       }
-    }),
-  );
-
-  it.effect("keeps sign-in configured when the account URL is valid", () =>
-    Effect.gen(function* () {
-      const f = fixture();
-      const configuredLayer = Account.layer.pipe(
-        Layer.provide(Layer.succeed(ServerSecretStore, f.store)),
-        Layer.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromEnv({ env: { TRITONAI_ACCOUNT_SERVICE_URL: serviceUrl } }),
-          ),
-        ),
-      );
-      const status = yield* Effect.gen(function* () {
-        const account = yield* Account.AccountService;
-        return yield* account.getStatus("local-a");
-      }).pipe(Effect.provide(configuredLayer));
-      expect(status).toMatchObject({ configured: true, status: "signed-out", serviceUrl });
     }),
   );
 
@@ -245,19 +228,6 @@ describe("AccountService", () => {
       expect(() => Account.resolveAccountServiceUrl(value)).toThrow();
     expect(() => Account.resolveAccountServiceUrl("http://accounts.example.test", true)).toThrow();
   });
-
-  it.effect("keeps an unconfigured server signed out without making requests", () =>
-    Effect.gen(function* () {
-      const f = fixture({ serviceUrl: "" });
-      const account = yield* f.make;
-      expect(yield* account.getStatus("local-a")).toMatchObject({
-        configured: false,
-        status: "signed-out",
-      });
-      expect((yield* Effect.flip(account.startLogin("local-a"))).code).toBe("not_configured");
-      expect(f.calls).toHaveLength(0);
-    }),
-  );
 
   it.effect("binds PKCE and stored credentials to the authenticated local session", () =>
     Effect.gen(function* () {

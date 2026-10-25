@@ -253,6 +253,7 @@ describe("usage pricing", () => {
     expect(lookupRate(table, "example-model")).toBeNull();
   });
 
+  // regression: 663a67370e consolidate TritonAI reporting
   it("prices the TritonAI GLM-5.2 alias from Z.AI's published rates", () => {
     const parsed = parseRateTable({});
     const rates = withTritonAiRates(parsed);
@@ -280,6 +281,7 @@ describe("usage pricing", () => {
     expect(cacheSavingsUsd(rates, glm52Record)).toBeCloseTo(0.29982, 9);
   });
 
+  // regression: 663a67370e consolidate TritonAI reporting
   it("prefers LiteLLM's first-party GLM-5.2 row when it becomes available", () => {
     const rates = withTritonAiRates(
       parseRateTable({

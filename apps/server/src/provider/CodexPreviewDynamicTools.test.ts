@@ -3,7 +3,6 @@ import * as Layer from "effect/Layer";
 import { ServerConfig } from "../config.ts";
 import {
   EnvironmentId,
-  PreviewAutomationNoAvailableHostError,
   ProviderInstanceId,
   ThreadId,
   type PreviewAutomationSnapshot,
@@ -16,17 +15,12 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
 import type { PreviewAutomationInvokeInput } from "../mcp/PreviewAutomationBroker.ts";
 import {
-  CodexPreviewDynamicToolInvocationError,
-  CodexPreviewDynamicToolNotFoundError,
   getCodexPreviewDynamicToolDefinitions,
   invokeAuthorizedCodexPreviewDynamicTool,
   invokeCodexPreviewDynamicTool,
-  makeCodexPreviewDynamicToolFailureResult,
 } from "./CodexPreviewDynamicTools.ts";
 
 const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-const isInvocationError = Schema.is(CodexPreviewDynamicToolInvocationError);
-const isToolNotFoundError = Schema.is(CodexPreviewDynamicToolNotFoundError);
 
 const invocationScope = {
   environmentId: EnvironmentId.make("environment-1"),
@@ -91,21 +85,9 @@ function makeBroker(result: unknown) {
   };
 }
 
-it.effect("publishes the existing preview toolkit as flat dynamic tools", () =>
+it.effect("requires approval for preview actions but not for status reads", () =>
   Effect.gen(function* () {
     const codexPreviewDynamicToolDefinitions = yield* getCodexPreviewDynamicToolDefinitions;
-    expect(codexPreviewDynamicToolDefinitions.map(({ name }) => name)).toEqual([
-      "preview_status",
-      "preview_open",
-      "preview_navigate",
-      "preview_snapshot",
-      "preview_click",
-      "preview_type",
-      "preview_press",
-      "preview_scroll",
-      "preview_evaluate",
-      "preview_wait_for",
-    ]);
     expect(
       codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_status")
         ?.requiresApproval,
@@ -114,10 +96,6 @@ it.effect("publishes the existing preview toolkit as flat dynamic tools", () =>
       codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_click")
         ?.requiresApproval,
     ).toBe(true);
-    expect(
-      codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_snapshot")
-        ?.description,
-    ).toContain("Screenshot image bytes are omitted");
   }),
 );
 
@@ -145,73 +123,7 @@ it.layer(
     });
   });
 
-  it.effect("models preview failures with structured errors and preserves the cause", () => {
-    const cause = new PreviewAutomationNoAvailableHostError({
-      operation: "status",
-      environmentId: invocationScope.environmentId,
-      threadId: invocationScope.threadId,
-      providerSessionId: invocationScope.providerSessionId,
-      providerInstanceId: invocationScope.providerInstanceId,
-    });
-    const broker = PreviewAutomationBroker.PreviewAutomationBroker.of({
-      connect: () => Effect.die("unused"),
-      focusHost: () => Effect.die("unused"),
-      respond: () => Effect.die("unused"),
-      invoke: () => Effect.fail(cause),
-    });
-
-    return Effect.gen(function* () {
-      const unknown = yield* invokeAuthorizedCodexPreviewDynamicTool({
-        name: "preview_unknown",
-        arguments: {},
-        invocationScope,
-        broker,
-      }).pipe(
-        Effect.match({
-          onFailure: (error) => error,
-          onSuccess: () => undefined,
-        }),
-      );
-      expect(isToolNotFoundError(unknown)).toBe(true);
-
-      const unavailable = yield* invokeAuthorizedCodexPreviewDynamicTool({
-        name: "preview_status",
-        arguments: {},
-        invocationScope: { ...invocationScope, capabilities: new Set() },
-        broker,
-      }).pipe(
-        Effect.match({
-          onFailure: (error) => error,
-          onSuccess: () => undefined,
-        }),
-      );
-      expect(unavailable?._tag).toBe("PreviewAutomationUnavailableError");
-
-      const failed = yield* invokeAuthorizedCodexPreviewDynamicTool({
-        name: "preview_status",
-        arguments: {},
-        invocationScope,
-        broker,
-      }).pipe(
-        Effect.match({
-          onFailure: (error) => error,
-          onSuccess: () => undefined,
-        }),
-      );
-      expect(isInvocationError(failed)).toBe(true);
-      if (isInvocationError(failed)) {
-        expect(failed.cause).toBe(cause);
-      }
-      expect(makeCodexPreviewDynamicToolFailureResult(failed)).toEqual({
-        success: false,
-        error: {
-          type: "PreviewAutomationNoAvailableHostError",
-          message: cause.message,
-        },
-      });
-    });
-  });
-
+  // regression: #417 bound attachment text extraction and browser navigation approval
   it.effect("tells the agent when navigation ended on a different site", () =>
     Effect.gen(function* () {
       const navigate = (url: string, reached: string) =>

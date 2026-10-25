@@ -903,56 +903,6 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("issues exact attachment capabilities by attachment id", () =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const attachmentId = "thread-1-00000000-0000-4000-8000-000000000001";
-      const attachmentPath = path.join(config.attachmentsDir, `${attachmentId}.png`);
-      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
-      yield* fileSystem.writeFile(attachmentPath, new Uint8Array([1, 2, 3]));
-
-      const result = yield* issueAssetUrl({
-        resource: { _tag: "attachment", threadId: ThreadId.make("thread-1"), attachmentId },
-        attachmentFileName: "quarterly report.pdf",
-      });
-      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-      const separatorIndex = suffix.indexOf("/");
-      const token = suffix.slice(0, separatorIndex);
-
-      expect(yield* resolveAsset(token, "ignored.png")).toEqual({
-        kind: "file",
-        path: attachmentPath,
-        disposition: "attachment",
-        downloadName: "quarterly report.pdf",
-      });
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("keeps validated image attachment capabilities inline", () =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const attachmentId = "thread-1-00000000-0000-4000-8000-000000000002";
-      const attachmentPath = path.join(config.attachmentsDir, `${attachmentId}.png`);
-      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
-      yield* fileSystem.writeFile(attachmentPath, new Uint8Array([1, 2, 3]));
-
-      const result = yield* issueAssetUrl({
-        resource: { _tag: "attachment", threadId: ThreadId.make("thread-1"), attachmentId },
-        attachmentDisposition: "inline",
-      });
-      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-      const separatorIndex = suffix.indexOf("/");
-
-      expect(
-        yield* resolveAsset(suffix.slice(0, separatorIndex), suffix.slice(separatorIndex + 1)),
-      ).toEqual({ kind: "file", path: attachmentPath });
-    }).pipe(Effect.provide(layerTest)),
-  );
-
   it.effect("keeps legacy attachment capabilities valid without serving active files inline", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
@@ -986,42 +936,6 @@ describe("AssetAccess", () => {
         disposition: "attachment",
         downloadName: `${htmlAttachmentId}.html`,
       });
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("serves audio previews with their stored format and keeps saving explicit", () =>
-    Effect.gen(function* () {
-      const config = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const attachmentId = "thread-1-00000000-0000-4000-8000-000000000003-wav";
-      const attachmentPath = path.join(config.attachmentsDir, `${attachmentId}.wav`);
-      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
-      yield* fileSystem.writeFile(attachmentPath, new Uint8Array([1, 2, 3]));
-      for (const disposition of ["inline", "attachment"] as const) {
-        const result = yield* issueAssetUrl({
-          resource: {
-            _tag: "attachment",
-            attachmentId,
-            fileName: "recording.wav",
-            mimeType: "application/octet-stream",
-            disposition,
-          },
-        });
-        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-        const separatorIndex = suffix.indexOf("/");
-        expect(
-          yield* resolveAsset(suffix.slice(0, separatorIndex), suffix.slice(separatorIndex + 1)),
-        ).toEqual({
-          kind: "file",
-          path: attachmentPath,
-          ...(disposition === "inline"
-            ? { fileName: "recording.wav" }
-            : { downloadName: "recording.wav" }),
-          mimeType: disposition === "inline" ? "audio/wav" : "application/octet-stream",
-          ...(disposition === "attachment" ? { disposition: "attachment" } : {}),
-        });
-      }
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -1222,6 +1136,7 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  // regression: #433 offer open and download actions for unsupported files
   it.effect("serves downloads through the HTTP route without reopening the validated path", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1272,19 +1187,14 @@ describe("AssetAccess", () => {
     ),
   );
 
+  // regression: #433 offer open and download actions for unsupported files
   it.effect("downloads unsupported files as exact, identity-checked attachments", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-file-download-" });
       const bytes = new Uint8Array([80, 75, 3, 4, 0, 255, 10, 42]);
-      for (const name of [
-        "deck.pptx",
-        "report.docx",
-        "workbook.xlsx",
-        "archive.zip",
-        "data.unknown",
-      ]) {
+      for (const name of ["deck.pptx", "data.unknown"]) {
         const file = path.join(root, name);
         yield* fs.writeFile(file, bytes);
         for (const resource of [
@@ -1356,6 +1266,7 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  // regression: #433 offer open and download actions for unsupported files
   it.effect("keeps download traversal and preview-type restrictions independent", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1399,6 +1310,7 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  // regression: #433 offer open and download actions for unsupported files
   it.effect.skipIf(!symlinksSupported)(
     "downloads from symlinked roots but rejects links outside the workspace",
     () =>

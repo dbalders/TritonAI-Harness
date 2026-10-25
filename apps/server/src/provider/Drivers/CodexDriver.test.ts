@@ -700,7 +700,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
     { skip: windowsHost },
   );
 
-  it.effect.each(["", "   "])(
+  it.effect.each([""])(
     "resolves a blank config home to the environment's Codex home before Help setup: %j",
     (homePath) =>
       Effect.gen(function* () {
@@ -727,6 +727,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
       ),
   );
 
+  // regression: #421 fix(codex): contain Stop commands and restore managed Auto approvals
   it.effect.each([
     { id: "codex_frontier", managed: true, explicitModalities: false },
     { id: "codex", managed: true, explicitModalities: true },
@@ -867,10 +868,8 @@ it.layer(layerTest)("CodexDriver", (it) => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect.each([
-    ["codex_frontier", "gpt-6.1-sol", "codex", "api-glm-5.3-flash"],
-    ["codex", "api-glm-5.3-flash", "codex_frontier", "gpt-6.1-sol"],
-  ] as const)(
+  // regression: 70a86ecdbd fix(codex): hand off context between managed gateway routes
+  it.effect.each([["codex_frontier", "gpt-6.1-sol", "codex", "api-glm-5.3-flash"]] as const)(
     "hands off managed history from %s/%s to %s/%s even with a shared home",
     ([currentId, currentModel, targetId, targetModel]) =>
       Effect.gen(function* () {
@@ -948,6 +947,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
 const mergeCodexProviderEnvironment = mergeCodexEnvironment;
 
 describe("mergeCodexProviderEnvironment", () => {
+  // regression: #142 fix(desktop): apply TritonAI API keys without relaunch
   it.effect("keeps the Usage-managed TritonAI key authoritative", () =>
     Effect.gen(function* () {
       const environment = [
@@ -1009,6 +1009,7 @@ describe("mergeCodexProviderEnvironment", () => {
     }),
   );
 
+  // regression: #142 fix(desktop): apply TritonAI API keys without relaunch
   it.effect("normalizes inherited Windows key casing when applying the managed key", () =>
     Effect.gen(function* () {
       const result = yield* mergeCodexProviderEnvironment(

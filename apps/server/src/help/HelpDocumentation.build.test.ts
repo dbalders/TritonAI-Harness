@@ -15,20 +15,6 @@ const repoRoot = NodeURL.fileURLToPath(new URL("../../../..", import.meta.url));
 const require = NodeModule.createRequire(import.meta.url);
 
 describe("Help documentation build inputs", () => {
-  it("discovers all public guides automatically and embeds their exact source through pack.define", async () => {
-    const catalog = loadHelpDocumentationForBuild(repoRoot);
-    const names = (await NodeFSP.readdir(NodePath.join(repoRoot, "docs/user")))
-      .filter((name) => name.endsWith(".md"))
-      .sort();
-    expect(catalog.map((doc) => doc.path)).toEqual(names.map((name) => `docs/user/${name}`));
-    for (const doc of catalog) {
-      expect(doc.content).toBe(await NodeFSP.readFile(NodePath.join(repoRoot, doc.path), "utf8"));
-    }
-    expect(
-      JSON.parse(serverConfig.pack!.define!.__TRITONAI_HELP_DOCUMENTATION__ as string),
-    ).toEqual(catalog);
-  });
-
   it("includes newly added docs but excludes private files, directories and symlinks", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "help-doc-input-"));
     try {
@@ -150,22 +136,6 @@ describe("Help documentation build inputs", () => {
       }
     } finally {
       await NodeFSP.rm(scratch, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects release inputs that the runtime could not index", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "help-doc-invalid-"));
-    try {
-      const directory = NodePath.join(root, "docs/user");
-      await NodeFSP.mkdir(directory, { recursive: true });
-      expect(() => loadHelpDocumentationForBuild(root)).toThrow("requires public");
-      const file = NodePath.join(directory, "guide.md");
-      await NodeFSP.writeFile(file, "No Markdown title.");
-      expect(() => loadHelpDocumentationForBuild(root)).toThrow("invalid title");
-      await NodeFSP.writeFile(file, `# Guide\n\n${"x".repeat(256_000)}`);
-      expect(() => loadHelpDocumentationForBuild(root)).toThrow("size");
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
 });

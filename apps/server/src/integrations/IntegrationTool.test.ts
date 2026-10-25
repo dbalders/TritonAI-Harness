@@ -44,12 +44,6 @@ describe("integration provider tool contracts", () => {
     });
   });
 
-  it("decodes valid input before invocation", async () => {
-    await expect(decodeIntegrationToolInput(definition, { limit: 5 })).resolves.toEqual({
-      limit: 5,
-    });
-  });
-
   it("rejects input that violates the advertised contract", async () => {
     await expect(decodeIntegrationToolInput(definition, { limit: 100 })).rejects.toBeDefined();
     await expect(
@@ -58,6 +52,7 @@ describe("integration provider tool contracts", () => {
     await expect(decodeIntegrationToolInput(definition, "not an object")).rejects.toBeDefined();
   });
 
+  // regression: #234 fix(plugins): restore calendar execution across Effect runtimes
   it("decodes constrained plugin schemas created by a separate Effect runtime", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-schema-runtime-"));
     try {

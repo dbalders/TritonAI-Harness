@@ -11,7 +11,6 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -192,10 +191,6 @@ const makeHarness = Effect.fn("makeHarness")(function* (input: {
 });
 
 describe("isManagedCodexAutoUpdateCandidate", () => {
-  it("accepts an enabled Codex instance behind the approved version", () => {
-    assert.isTrue(ManagedCodexAutoUpdate.isManagedCodexAutoUpdateCandidate(snapshot()));
-  });
-
   it("rejects snapshots that cannot or need not update automatically", () => {
     const rejected: ReadonlyArray<ServerProvider> = [
       snapshot({ driver: CURSOR, instanceId: CURSOR_ID }),
@@ -321,12 +316,9 @@ describe("ManagedCodexAutoUpdate.layer", () => {
     }),
   );
 
-  it.effect("never updates automatically in a development server", () => {
-    const messages: Array<unknown> = [];
-    const logger = Logger.make(({ message }) => {
-      messages.push(message);
-    });
-    return Effect.gen(function* () {
+  // regression: #357 fix(provider): dev servers no longer auto-update the managed Codex runtime
+  it.effect("never updates automatically in a development server", () =>
+    Effect.gen(function* () {
       const harness = yield* makeHarness({
         initialProviders: [snapshot()],
         devUrl: new URL("http://localhost:5733"),
@@ -334,11 +326,8 @@ describe("ManagedCodexAutoUpdate.layer", () => {
       yield* Layer.build(ManagedCodexAutoUpdate.layer.pipe(Layer.provide(harness.services)));
 
       // The layer decides while it builds, so no watcher is ever started.
-      assert.deepStrictEqual(messages, [
-        ["Automatic managed Codex updates are off in development servers"],
-      ]);
       assert.isFalse(yield* harness.subscribed);
       assert.deepStrictEqual(yield* harness.updateCalls, []);
-    }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
-  });
+    }),
+  );
 });

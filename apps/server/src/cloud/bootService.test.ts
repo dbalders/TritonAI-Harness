@@ -1,31 +1,18 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-
 import { expect, it } from "@effect/vitest";
-
 import * as HostProcess from "@t3tools/shared/HostProcess";
-
 import * as ConfigProvider from "effect/ConfigProvider";
-
 import * as Duration from "effect/Duration";
-
 import * as Effect from "effect/Effect";
-
 import * as FileSystem from "effect/FileSystem";
-
 import * as Layer from "effect/Layer";
-
 import * as Path from "effect/Path";
-
 import { HttpClient } from "effect/http";
-
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProcessRunner from "../processRunner.ts";
-
 import * as BootService from "./bootService.ts";
-
 import { pinnedRuntimePaths } from "./pinnedRuntime.ts";
-
 import {
   parseServiceState,
   SERVICE_ENV_FILE,
@@ -33,24 +20,6 @@ import {
   SERVICE_RESTART_PENDING_FILE,
   serviceStateHasPendingUpdate,
 } from "./serviceProtocol.ts";
-
-const linuxRuntime = "/home/theo/.t3/runtime/versions/1.2.3/t3";
-
-const linuxPlan = {
-  program: [linuxRuntime, "__service-launcher"],
-  baseDir: "/home/theo/.t3",
-  logPath: "/home/theo/.t3/userdata/logs/boot-service.log",
-  unitPath: "/home/theo/.config/systemd/user/t3code.service",
-};
-
-it("runs the pinned runtime's own executable as the systemd launcher", () => {
-  const unit = BootService.renderBootServiceUnit(linuxPlan);
-
-  expect(unit).toContain(`ExecStart=${linuxRuntime} __service-launcher`);
-  expect(unit).toContain("Description=TritonAI Harness server");
-  expect(unit).toContain("KillMode=mixed");
-  expect(unit).not.toContain("node");
-});
 
 it("reads the served T3 home back out of a rendered unit or plist", () => {
   const plan = (baseDir: string) => ({

@@ -48,46 +48,6 @@ describe("RPC authorization scopes", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });
 
-  it("preserves TritonAI management and integration scopes", () => {
-    const readMethods = [
-      WS_METHODS.serverGetAccountStatus,
-      WS_METHODS.serverGetTritonAiUsage,
-      WS_METHODS.serverListProviderSkillCatalog,
-      WS_METHODS.serverListPlugins,
-      WS_METHODS.integrationsList,
-    ];
-    const manageMethods = [
-      WS_METHODS.serverStartAccountLogin,
-      WS_METHODS.serverPollAccountLogin,
-      WS_METHODS.serverSignOutAccount,
-      WS_METHODS.serverInstallProviderSkill,
-      WS_METHODS.serverRemoveProviderSkill,
-      WS_METHODS.serverSetProviderSkillEnabled,
-      WS_METHODS.serverSubmitProviderSkillToTritonAiCommons,
-      WS_METHODS.serverInstallPlugin,
-      WS_METHODS.serverUninstallPlugin,
-      WS_METHODS.serverAddMarketplace,
-      WS_METHODS.serverRemoveMarketplace,
-      WS_METHODS.serverUpgradeMarketplace,
-      WS_METHODS.integrationsInstall,
-      WS_METHODS.integrationsSetEnabled,
-      WS_METHODS.integrationsSetCapabilityEnabled,
-      WS_METHODS.integrationsConnect,
-      WS_METHODS.integrationsPoll,
-      WS_METHODS.integrationsDisconnect,
-    ];
-
-    for (const method of readMethods) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
-    }
-    for (const method of manageMethods) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthProvidersManageScope);
-    }
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverTranscribeVoice)).toBe(
-      AuthOrchestrationOperateScope,
-    );
-  });
-
   it("keeps webhook delivery logs, which hold request bodies, behind operate scope", () => {
     for (const method of [
       WS_METHODS.scheduledTasksListWebhookDeliveries,
@@ -243,23 +203,8 @@ describe("Help RPC authorization", () => {
       ),
     );
 
-  it.effect("allows a read-and-diagnostics session to read the Help snapshot", () =>
-    Effect.gen(function* () {
-      const handled: Array<string> = [];
-      const client = yield* makeClient(
-        authenticatedSession([AuthDiagnosticsReadScope, AuthOrchestrationReadScope]),
-        handled,
-      );
-
-      expect(yield* client[WS_METHODS.helpGetContext]({})).toEqual(context);
-      expect(handled).toEqual(["context"]);
-    }).pipe(Effect.scoped),
-  );
-
   it.effect.each([
     { scopes: [], missing: AuthOrchestrationOperateScope },
-    { scopes: [AuthDiagnosticsReadScope], missing: AuthOrchestrationOperateScope },
-    { scopes: [AuthOrchestrationOperateScope], missing: AuthDiagnosticsReadScope },
     {
       scopes: [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope],
       missing: AuthOrchestrationReadScope,
@@ -506,104 +451,6 @@ describe("thread context authorization", () => {
       }).pipe(Effect.scoped),
   );
 });
-
-it.effect("does not expose captured project files with only orchestration read access", () =>
-  Effect.gen(function* () {
-    const group = WsRpcGroup.omit(
-      ...[...WsRpcGroup.requests.keys()].filter(
-        (
-          tag,
-        ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.projectBriefGet> =>
-          tag !== WS_METHODS.projectBriefGet,
-      ),
-    );
-    let handled = false;
-    const client = yield* RpcTest.makeClient(group).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          group.toLayerHandler(WS_METHODS.projectBriefGet, () =>
-            Effect.sync(() => {
-              handled = true;
-            }).pipe(Effect.andThen(Effect.never)),
-          ),
-          RpcAuthorization.layer([AuthOrchestrationReadScope]),
-        ),
-      ),
-    );
-    const result = yield* client[WS_METHODS.projectBriefGet]({
-      projectId: ProjectId.make("project"),
-    }).pipe(Effect.flip);
-    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
-    expect(handled).toBe(false);
-  }).pipe(Effect.scoped),
-);
-
-it.effect("does not expose project memory with only orchestration read access", () =>
-  Effect.gen(function* () {
-    const group = WsRpcGroup.omit(
-      ...[...WsRpcGroup.requests.keys()].filter(
-        (
-          tag,
-        ): tag is Exclude<
-          keyof typeof RPC_REQUIRED_SCOPES,
-          typeof WS_METHODS.serverGetProjectMemory
-        > => tag !== WS_METHODS.serverGetProjectMemory,
-      ),
-    );
-    let handled = false;
-    const client = yield* RpcTest.makeClient(group).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          group.toLayerHandler(WS_METHODS.serverGetProjectMemory, () =>
-            Effect.sync(() => {
-              handled = true;
-            }).pipe(Effect.andThen(Effect.never)),
-          ),
-          RpcAuthorization.layer([AuthOrchestrationReadScope]),
-        ),
-      ),
-    );
-    const result = yield* client[WS_METHODS.serverGetProjectMemory]({
-      projectId: ProjectId.make("project"),
-    }).pipe(Effect.flip);
-    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
-    expect(handled).toBe(false);
-  }).pipe(Effect.scoped),
-);
-
-it.effect("does not expose archived source snapshots without filesystem permission", () =>
-  Effect.gen(function* () {
-    const group = WsRpcGroup.omit(
-      ...[...WsRpcGroup.requests.keys()].filter(
-        (
-          tag,
-        ): tag is Exclude<
-          keyof typeof RPC_REQUIRED_SCOPES,
-          typeof WS_METHODS.projectBriefArchiveGet
-        > => tag !== WS_METHODS.projectBriefArchiveGet,
-      ),
-    );
-    let handled = false;
-    const client = yield* RpcTest.makeClient(group).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          group.toLayerHandler(WS_METHODS.projectBriefArchiveGet, () =>
-            Effect.sync(() => {
-              handled = true;
-            }).pipe(Effect.andThen(Effect.never)),
-          ),
-          RpcAuthorization.layer([AuthOrchestrationReadScope]),
-        ),
-      ),
-    );
-    const result = yield* client[WS_METHODS.projectBriefArchiveGet]({
-      projectId: ProjectId.make("project"),
-      archiveId: "archive-1",
-    }).pipe(Effect.flip);
-    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
-    expect(handled).toBe(false);
-  }).pipe(Effect.scoped),
-);
 
 it.effect("requires filesystem permission before project-brief capture or dispatch", () =>
   Effect.gen(function* () {

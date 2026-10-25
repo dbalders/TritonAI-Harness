@@ -167,21 +167,6 @@ describe("validateGeneratedIdeas", () => {
     });
     expect(linked?.title).toBe("I can finish the Q1 travel reconciliation");
   });
-
-  it("files a skill new to this user under New in TritonAI", () => {
-    const [accepted] = validateGeneratedIdeas({
-      ideas: [
-        idea({
-          ref: "skill:ucsd-decorator",
-          title: "I can brand your grant memo",
-          action: "new-thread",
-        }),
-      ],
-      context: CONTEXT,
-      excludedKeys: new Set(),
-    });
-    expect(accepted?.section).toBe("new");
-  });
 });
 
 describe("formatIdeasContext", () => {

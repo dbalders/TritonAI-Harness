@@ -21,6 +21,7 @@ const invokeFailing = (error: unknown) =>
 const responseText = (response: { readonly contentItems: ReadonlyArray<unknown> }) =>
   (response.contentItems[0] as { readonly text: string }).text;
 
+// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it.effect("tells the agent why a plugin tool was unavailable at invoke time", () =>
   Effect.gen(function* () {
     const response = yield* invokeFailing(
@@ -35,6 +36,7 @@ it.effect("tells the agent why a plugin tool was unavailable at invoke time", ()
   }),
 );
 
+// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it.effect("passes host-authored operation errors through to the agent", () =>
   Effect.gen(function* () {
     const response = yield* invokeFailing(
@@ -48,6 +50,7 @@ it.effect("passes host-authored operation errors through to the agent", () =>
   }),
 );
 
+// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it.effect("keeps raw provider errors generic", () =>
   Effect.gen(function* () {
     const response = yield* invokeFailing(new Error("HTTP 500 body with private data"));
@@ -56,6 +59,7 @@ it.effect("keeps raw provider errors generic", () =>
   }),
 );
 
+// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it.effect("returns a successful result as JSON", () =>
   Effect.gen(function* () {
     let received: { readonly writeApproved?: boolean } | undefined;
@@ -75,6 +79,7 @@ it.effect("returns a successful result as JSON", () =>
   }),
 );
 
+// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it("shows the change a plugin write will make in its approval prompt", () => {
   assert.equal(
     dynamicToolApprovalPrompt({

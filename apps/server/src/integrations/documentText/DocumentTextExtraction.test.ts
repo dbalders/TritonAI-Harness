@@ -7,6 +7,7 @@ import {
 import { makeDocx, makePdf, makeZip, wordDocumentXml } from "./DocumentTextFixtures.testkit.ts";
 
 describe("PDF text extraction", () => {
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("reads every page's text from a valid PDF", async () => {
     const result = await extractDocumentTextInProcess({
       format: "pdf",
@@ -24,6 +25,7 @@ describe("PDF text extraction", () => {
     expect(result.status === "extracted" && result.truncated).toBe(false);
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("stops at the page limit and reports truncation", async () => {
     const pages = Array.from(
       { length: DOCUMENT_TEXT_MAX_PDF_PAGES + 3 },
@@ -41,6 +43,7 @@ describe("PDF text extraction", () => {
     );
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("bounds the characters it returns", async () => {
     const result = await extractDocumentTextInProcess({
       format: "pdf",
@@ -51,6 +54,7 @@ describe("PDF text extraction", () => {
     expect(result.status === "extracted" && result.text.length).toBe(40);
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("fails clearly on damaged or mislabeled input", async () => {
     await expect(
       extractDocumentTextInProcess({
@@ -70,6 +74,7 @@ describe("PDF text extraction", () => {
     });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("reports a PDF without text instead of returning nothing", async () => {
     await expect(
       extractDocumentTextInProcess({ format: "pdf", bytes: makePdf([""]) }),
@@ -78,6 +83,7 @@ describe("PDF text extraction", () => {
 });
 
 describe("DOCX text extraction", () => {
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("reads paragraphs, tabs, and escaped characters from the document body", async () => {
     const result = await extractDocumentTextInProcess({
       format: "docx",
@@ -92,6 +98,7 @@ describe("DOCX text extraction", () => {
     });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("flags a macro-enabled package", async () => {
     await expect(
       extractDocumentTextInProcess({
@@ -101,6 +108,7 @@ describe("DOCX text extraction", () => {
     ).resolves.toMatchObject({ status: "extracted", containsMacros: true });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("refuses document type declarations instead of expanding entities", async () => {
     const xml = wordDocumentXml(["&lol;"]).replace(
       "<w:document",
@@ -111,6 +119,7 @@ describe("DOCX text extraction", () => {
     ).resolves.toMatchObject({ status: "failed", reason: "corrupt" });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("reports truncation honestly at an exact character boundary", async () => {
     await expect(
       extractDocumentTextInProcess({
@@ -149,6 +158,7 @@ describe("DOCX text extraction", () => {
     ).resolves.toMatchObject({ status: "extracted", text: "Hello\nW", truncated: true });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("reads UTF-16 document bodies with or without a byte order mark", async () => {
     const xml = wordDocumentXml(["Résumé ✓", "Second"]).replace(
       'encoding="UTF-8"',
@@ -188,6 +198,7 @@ describe("DOCX text extraction", () => {
     ).resolves.toMatchObject({ status: "extracted", text: "Plain" });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("refuses unsupported, mismatched, or malformed body encodings", async () => {
     const docx = (body: Uint8Array) =>
       extractDocumentTextInProcess({
@@ -257,6 +268,7 @@ describe("DOCX text extraction", () => {
       ...(maxCharacters === undefined ? {} : { maxCharacters }),
     });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("recognizes WordprocessingML by namespace, not by a literal w: prefix", async () => {
     await expect(
       docxBody(
@@ -280,6 +292,7 @@ describe("DOCX text extraction", () => {
     ).resolves.toMatchObject({ status: "extracted", text: "Strict" });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("does not count an unrelated namespace bound to w as WordprocessingML", async () => {
     await expect(
       docxBody(
@@ -298,6 +311,7 @@ describe("DOCX text extraction", () => {
     ).resolves.toMatchObject({ status: "extracted", text: "Word" });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("accepts only the canonical binding for the reserved xml prefix", async () => {
     const XML_NS = "http://www.w3.org/XML/1998/namespace";
     await expect(
@@ -328,6 +342,7 @@ describe("DOCX text extraction", () => {
     }
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("emits run tabs but not paragraph tab-stop definitions", async () => {
     const tabStops = (prefix: string) =>
       `<${prefix}:pPr><${prefix}:tabs><${prefix}:tab ${prefix}:val="left" ${prefix}:pos="720"/><${prefix}:tab ${prefix}:val="right" ${prefix}:pos="9360"/></${prefix}:tabs></${prefix}:pPr>`;
@@ -354,6 +369,7 @@ describe("DOCX text extraction", () => {
     });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("reads CDATA as literal text and ignores tag-like text in markup", async () => {
     const wrap = (inner: string) =>
       `<w:document xmlns:w="${WORD_MAIN}"><w:body><w:p><w:r>${inner}</w:r></w:p></w:body></w:document>`;
@@ -383,6 +399,7 @@ describe("DOCX text extraction", () => {
     });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("refuses malformed markup instead of returning plausible text", async () => {
     const wrap = (inner: string) =>
       `<w:document xmlns:w="${WORD_MAIN}"><w:body><w:p><w:r>${inner}</w:r></w:p></w:body></w:document>`;
@@ -401,6 +418,7 @@ describe("DOCX text extraction", () => {
     }
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("refuses a body that expands far beyond its stored size", async () => {
     const bomb = makeZip([
       {
@@ -418,6 +436,7 @@ describe("DOCX text extraction", () => {
     });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("refuses a body whose declared size is a lie", async () => {
     const lying = makeZip([
       {
@@ -431,6 +450,7 @@ describe("DOCX text extraction", () => {
     expect(result.status).toBe("failed");
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("refuses an oversized body and archives with too many parts", async () => {
     const huge = makeZip([
       {
@@ -457,6 +477,7 @@ describe("DOCX text extraction", () => {
     });
   });
 
+  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("fails clearly for non-Word ZIPs, damaged ZIPs, and other bytes", async () => {
     await expect(
       extractDocumentTextInProcess({

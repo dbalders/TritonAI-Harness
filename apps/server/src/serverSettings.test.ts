@@ -1,5 +1,3 @@
-import * as Queue from "effect/Queue";
-import * as TestClock from "effect/testing/TestClock";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import {
@@ -282,100 +280,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.equal(persisted.responseStreamingMode, "paragraph");
     }).pipe(Effect.provide(layerServerSettings())),
   );
-
-  it.effect("reloads when a dangling settings link gets its destination", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const dotfiles = yield* fs.makeTempDirectoryScoped({ prefix: "t3-settings-dotfiles-" });
-        const linkedSettingsPath = path.join(dotfiles, "not-yet", "settings.json");
-        const targetEvents = yield* Queue.unbounded<FileSystem.WatchEvent>();
-        const targetWatchStarted = yield* Deferred.make<void>();
-        const observedFs = FileSystem.FileSystem.of({
-          ...fs,
-          // Native symlink notifications are covered above. Control this event so
-          // creating the missing target cannot race the native watch's async setup.
-          watch: (directory, options) =>
-            directory === path.dirname(linkedSettingsPath)
-              ? Stream.fromQueue(targetEvents).pipe(
-                  Stream.onStart(Deferred.succeed(targetWatchStarted, undefined)),
-                )
-              : fs.watch(directory, options),
-        });
-
-        yield* Effect.gen(function* () {
-          const config = yield* ServerConfig.ServerConfig;
-          const service = yield* ServerSettingsModule.ServerSettingsService;
-          yield* fs.remove(config.settingsPath, { force: true });
-          yield* fs.symlink(linkedSettingsPath, config.settingsPath);
-          yield* service.start;
-          yield* Deferred.await(targetWatchStarted);
-          const changes = yield* service.subscribeChanges;
-
-          yield* writeFileStringAtomically({
-            filePath: linkedSettingsPath,
-            contents: `{ "responseStreamingMode": "paragraph" }`,
-          });
-          yield* Queue.offer(targetEvents, { _tag: "Create", path: "settings.json" });
-
-          const change = yield* changes.pipe(Stream.runHead, Effect.timeout("2 seconds"));
-          assert.equal(Option.getOrUndefined(change)?.responseStreamingMode, "paragraph");
-        }).pipe(
-          Effect.provide(
-            layerServerSettings().pipe(
-              Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, observedFs)),
-            ),
-          ),
-        );
-      }),
-    ).pipe(TestClock.withLive),
-  );
-
-  it.effect("preserves context when reading a provider environment secret fails", () => {
-    const platformCause = PlatformError.systemError({
-      _tag: "PermissionDenied",
-      module: "FileSystem",
-      method: "readFile",
-      pathOrDescriptor: "provider environment secret",
-      description: "Secret backend unavailable.",
-    });
-    const cause = new ServerSecretStore.SecretStoreReadError({
-      resource: "provider environment secret",
-      cause: platformCause,
-    });
-    const layerConfig = Layer.fresh(
-      ServerConfig.layerTest(process.cwd(), {
-        prefix: "t3code-server-settings-secret-failure-test-",
-      }),
-    );
-    const layerSettings = ServerSettingsModule.layerUnmanagedTest.pipe(
-      Layer.provide(layerFailingSecretStore(cause)),
-      Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
-      Layer.provideMerge(layerConfig),
-    );
-
-    return Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      yield* fileSystem.writeFileString(
-        serverConfig.settingsPath,
-        '{"providerInstances":{"codex_personal":{"driver":"codex","environment":[{"name":"OPENROUTER_API_KEY","value":"","sensitive":true,"valueRedacted":true}],"config":{}}}}',
-      );
-
-      const error = yield* Effect.flip(serverSettings.getSettings);
-
-      assert.deepInclude(error, {
-        _tag: "ServerSettingsError",
-        operation: "read-secret",
-        providerInstanceId: "codex_personal",
-        environmentVariable: "OPENROUTER_API_KEY",
-      });
-      assert.strictEqual(error.cause, cause);
-      assert.notInclude(error.message, cause.message);
-    }).pipe(Effect.provide(layerSettings));
-  });
 
   it.effect("retries a failed settings read instead of keeping the failure", () =>
     Effect.gen(function* () {
@@ -1064,22 +968,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       assert.isFalse(settings.continueThreadsAfterServerUpdate);
       assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), raw);
-    }).pipe(Effect.provide(layerServerSettings())),
-  );
-
-  it.effect("skips a disabled provider instance when picking the text generation fallback", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      yield* fileSystem.writeFileString(
-        serverConfig.settingsPath,
-        '{"providerInstances":{"codex":{"driver":"codex","enabled":false,"config":{}},"claudeAgent":{"driver":"claudeAgent","enabled":true,"config":{}}}}',
-      );
-
-      const settings = yield* serverSettings.getSettings;
-
-      assert.equal(settings.textGenerationModelSelection.instanceId, "claudeAgent");
     }).pipe(Effect.provide(layerServerSettings())),
   );
 

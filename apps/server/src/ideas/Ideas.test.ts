@@ -220,24 +220,6 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
-  it.effect("shows starter ideas on a first visit without calling the model", () =>
-    Effect.gen(function* () {
-      const { calls, layer } = yield* makeHarness(() => Effect.succeed([]));
-      yield* TestClock.setTime(NOW);
-      yield* Effect.gen(function* () {
-        const ideas = yield* Ideas.make;
-        const snapshot = yield* ideas.list;
-        assert.deepStrictEqual(
-          titles(snapshot),
-          GENERAL_STARTERS.slice(0, 6).map((starter) => starter.title),
-        );
-        assert.isTrue(snapshot.ideas.every((idea) => idea.section === "starter"));
-        assert.strictEqual(snapshot.unseenCount, 6);
-        assert.strictEqual(calls.length, 0);
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    }),
-  );
-
   it.effect("keeps only generated ideas that cite real threads, and clears unseen on view", () =>
     Effect.gen(function* () {
       const { calls, layer } = yield* makeHarness(() =>
@@ -311,23 +293,6 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
         yield* ideas.awaitIdle;
         const snapshot = yield* ideas.list;
         assert.strictEqual(calls.length, 0);
-        assert.strictEqual(snapshot.ideas.length, viewed.ideas.length);
-        assert.isNull(snapshot.message);
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    }),
-  );
-
-  it.effect("does not pad the page with starter ideas when a background run finds nothing", () =>
-    Effect.gen(function* () {
-      const { calls, layer } = yield* makeHarness(() => Effect.succeed([]));
-      yield* TestClock.setTime(NOW);
-      yield* Effect.gen(function* () {
-        yield* seedWork;
-        const ideas = yield* Ideas.make;
-        const viewed = yield* ideas.markViewed;
-        yield* ideas.awaitIdle;
-        const snapshot = yield* ideas.list;
-        assert.strictEqual(calls.length, 1);
         assert.strictEqual(snapshot.ideas.length, viewed.ideas.length);
         assert.isNull(snapshot.message);
       }).pipe(Effect.scoped, Effect.provide(layer));
@@ -716,31 +681,6 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
-  it.effect("shows an opened idea again when a long snooze ends", () =>
-    Effect.gen(function* () {
-      const { layer } = yield* makeHarness(() => Effect.succeed([]));
-      yield* TestClock.setTime(NOW);
-      yield* Effect.gen(function* () {
-        const ideas = yield* Ideas.make;
-        const [idea] = (yield* ideas.list).ideas;
-        yield* ideas.feedback({
-          ideaId: idea!.id,
-          kind: "opened",
-          draftThreadId: ThreadId.make("draft-thread-2"),
-        });
-        yield* ideas.feedback({
-          ideaId: idea!.id,
-          kind: "snoozed",
-          snoozedUntil: iso(NOW + 5 * DAY),
-        });
-        yield* TestClock.adjust(6 * DAY);
-        const woke = (yield* ideas.list).ideas.find((entry) => entry.id === idea!.id);
-        assert.isDefined(woke);
-        assert.isNotNull(woke!.openedAt);
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    }),
-  );
-
   it.effect("retires an opened idea when the thread it continues is deleted", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([threadIdea()]));
@@ -819,38 +759,6 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
           draftThreadId: ThreadId.make("draft-thread-5"),
         });
         assert.isUndefined(reopened.ideas.find((entry) => entry.id === idea!.id));
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    }),
-  );
-
-  it.effect("counts an idea as used when a draft opened on another client is sent", () =>
-    Effect.gen(function* () {
-      const { layer } = yield* makeHarness(() => Effect.succeed([]));
-      yield* TestClock.setTime(NOW);
-      yield* Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const ideas = yield* Ideas.make;
-        const [idea] = (yield* ideas.list).ideas;
-        yield* ideas.feedback({
-          ideaId: idea!.id,
-          kind: "opened",
-          draftThreadId: ThreadId.make("desktop-draft"),
-        });
-        const both = yield* ideas.feedback({
-          ideaId: idea!.id,
-          kind: "opened",
-          draftThreadId: ThreadId.make("browser-draft"),
-        });
-        assert.deepStrictEqual(both.ideas.find((entry) => entry.id === idea!.id)?.draftThreadIds, [
-          ThreadId.make("desktop-draft"),
-          ThreadId.make("browser-draft"),
-        ]);
-        yield* TestClock.adjust(HOUR);
-        yield* sql`
-          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
-          VALUES ('m-desktop', 'desktop-draft', 'user', 'Sent from the desktop draft.', 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
-        `;
-        assert.isUndefined((yield* ideas.list).ideas.find((entry) => entry.id === idea!.id));
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );

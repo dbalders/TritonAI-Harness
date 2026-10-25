@@ -17,6 +17,7 @@ import * as DateTime from "effect/DateTime";
 import * as AnalyticsReactor from "./AnalyticsReactor.ts";
 import { AnalyticsService } from "./AnalyticsService.ts";
 
+// regression: e4f5214b2d count each turn once and send client usage events to Plausible
 it.effect("records canonical thread creation without identifiers", () =>
   Effect.gen(function* () {
     const recorded: Array<{

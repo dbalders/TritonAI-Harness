@@ -223,6 +223,7 @@ const compileNative = Effect.fn("test.compileNative")(function* (
   expect(yield* compiler.exitCode).toBe(0);
 }, Effect.scoped);
 
+// regression: #19154 fix(server): skip local Codex binaries missing codex-code-mode-host
 it.effect.each([
   { withHost: false, marker: null },
   { withHost: true, marker: null },

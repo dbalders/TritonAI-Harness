@@ -18,6 +18,7 @@ import {
   IntegrationCredentialKeepaliveLive,
 } from "./IntegrationCredentialKeepalive.ts";
 
+// regression: cd475da51a fix(integrations): recover and cancel idle credential sweeps safely
 it.effect("cancels the running credential sweep when its owning scope closes", () =>
   Effect.gen(function* () {
     let release!: () => void;
@@ -51,6 +52,7 @@ it.effect("cancels the running credential sweep when its owning scope closes", (
   }),
 );
 
+// regression: #321 fix(integrations): record provider faults and credential sweeps in the trace
 it.effect("records each credential sweep and its refreshes in the trace", () =>
   Effect.gen(function* () {
     const spans: Array<Tracer.NativeSpan> = [];

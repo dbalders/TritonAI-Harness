@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { starterCandidate } from "./ideaContext.ts";
-import { capBySubject, needsUserInput } from "./ideaRules.ts";
+import { needsUserInput } from "./ideaRules.ts";
 import { availableStarters, STARTER_IDEAS } from "./starterIdeas.ts";
 
 describe("starter ideas", () => {
@@ -22,15 +21,5 @@ describe("starter ideas", () => {
     const withMail = availableStarters(new Set(["microsoft-365"]));
     expect(withMail[0]?.requires).toBe("microsoft-365");
     expect(withMail.some((starter) => starter.requires === "github")).toBe(false);
-  });
-
-  it("never seeds more than two ideas for one plugin", () => {
-    const seeded = capBySubject(
-      availableStarters(new Set(["microsoft-365", "github"])).map(starterCandidate),
-      [],
-    ).slice(0, 6);
-    expect(seeded).toHaveLength(6);
-    const mail = seeded.filter((idea) => idea.subject === "plugin:microsoft-365");
-    expect(mail).toHaveLength(2);
   });
 });

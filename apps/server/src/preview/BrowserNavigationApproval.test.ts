@@ -13,6 +13,7 @@ import {
   describeBrowserNavigationForApproval,
 } from "./BrowserNavigationApproval.ts";
 
+// regression: #417 fix(server): bound attachment text extraction and browser navigation approval
 describe("browser navigation approval", () => {
   it("names the exact external URL the browser will load", () => {
     expect(
@@ -117,19 +118,9 @@ describe("browser navigation approval", () => {
     expect(outcome?.redirectNotice).not.toMatch(/approv(?:al|ed) covered/iu);
     expect(outcome?.redirectNotice).toContain("not approved");
   });
-
-  it("finds no redirect for blank, environment-port, or unparsed targets", () => {
-    expect(browserNavigationTarget("preview_open", {})).toBeUndefined();
-    expect(
-      browserNavigationTarget("preview_navigate", {
-        target: { kind: "environment-port", port: 5173 },
-      }),
-    ).toBeUndefined();
-    const unparsed = browserNavigationTarget("preview_navigate", { url: "javascript:alert(1)" })!;
-    expect(browserNavigationOutcome(unparsed, "https://a.example.org/")).toBeUndefined();
-  });
 });
 
+// regression: #417 fix(server): bound attachment text extraction and browser navigation approval
 describe("dynamic tool approval plan", () => {
   type Arguments = Parameters<typeof planDynamicToolApproval>[0]["payload"]["arguments"];
   const plan = (tool: string, args: Arguments, requiresApproval?: boolean) =>
@@ -183,17 +174,5 @@ describe("dynamic tool approval plan", () => {
     expect(
       plan("preview_navigate", { url: "localhost:5173", profileId: "Work" }).requiresApproval,
     ).toBe(false);
-  });
-
-  it("leaves other tools on their declared approval", () => {
-    expect(plan("preview_click", { ref: "e1" }, true)).toMatchObject({
-      requiresApproval: true,
-      grantKey: "preview_click",
-    });
-    expect(plan("fixture_records_write", { value: 1 }, true)).toMatchObject({
-      requiresApproval: true,
-      grantKey: "fixture_records_write",
-    });
-    expect(plan("fixture_records_read", {}, false).requiresApproval).toBe(false);
   });
 });

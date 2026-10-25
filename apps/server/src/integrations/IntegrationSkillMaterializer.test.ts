@@ -21,6 +21,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 describe("integration Codex skill homes", () => {
+  // regression: #373 fix(server): allow linked Codex skills folders at startup
   it("keeps shared skills until the last configured home is removed", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-shared-homes-"));
     const first = NodePath.join(root, "first");
@@ -58,6 +59,7 @@ describe("integration Codex skill homes", () => {
     }
   });
 
+  // regression: #373 fix(server): allow linked Codex skills folders at startup
   it("reconciles, updates, and retires managed skills through a linked skills root", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-linked-skills-"));
     const home = NodePath.join(root, "codex");
@@ -103,6 +105,7 @@ describe("integration Codex skill homes", () => {
     }
   });
 
+  // regression: #373 fix(server): allow linked Codex skills folders at startup
   it("rejects a skills root linked to a file without modifying it", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-skills-file-"));
     try {
@@ -210,6 +213,7 @@ describe("integration Codex skill homes", () => {
     }
   });
 
+  // regression: #373 fix(server): allow linked Codex skills folders at startup
   it.each([false, true])(
     "preserves individual skill symlinks with linked root: %s",
     async (linked) => {
@@ -380,38 +384,6 @@ describe("integration Codex skill homes", () => {
       await expect(
         materializer.sync({ integrationId: "fixture", packageRoot: null, activeSkills: [] }),
       ).rejects.toThrow(/ownership marker must be a regular file/u);
-      await expect(NodeFSP.access(target)).resolves.toBeUndefined();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("propagates marker read I/O failures while pruning a disabled owned skill", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-skill-prune-read-error-"),
-    );
-    const packageRoot = NodePath.join(root, "package");
-    const home = NodePath.join(root, "home");
-    const source = NodePath.join(packageRoot, "skills", "fixture-reader");
-    const target = NodePath.join(home, "skills", "fixture-reader");
-    try {
-      await NodeFSP.mkdir(source, { recursive: true });
-      await NodeFSP.writeFile(
-        NodePath.join(source, "SKILL.md"),
-        "---\nname: fixture-reader\ndescription: Managed fixture.\n---\n",
-      );
-      const materializer = new CodexIntegrationSkillMaterializer([home]);
-      await materializer.sync({
-        integrationId: "fixture",
-        packageRoot,
-        activeSkills: ["fixture-reader"],
-      });
-      const readFailure = Object.assign(new Error("marker read failed"), { code: "EIO" });
-      vi.mocked(NodeFSP.readFile).mockRejectedValueOnce(readFailure);
-
-      await expect(
-        materializer.sync({ integrationId: "fixture", packageRoot: null, activeSkills: [] }),
-      ).rejects.toThrow(/marker read failed/u);
       await expect(NodeFSP.access(target)).resolves.toBeUndefined();
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });

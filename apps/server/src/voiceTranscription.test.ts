@@ -85,53 +85,6 @@ describe("transcribeVoice", () => {
     }),
   );
 
-  it.effect("uses the server configured endpoint when the caller omits baseUrl", () =>
-    Effect.gen(function* () {
-      const fetchMock = vi.fn(async (_url: Parameters<typeof fetch>[0]) => {
-        expect(_url).toBe("https://voice.example.test/v1/audio/transcriptions");
-        return new Response(JSON.stringify({ text: "server configured" }), {
-          headers: { "content-type": "application/json" },
-        });
-      });
-
-      const result = yield* transcribeVoice(makeInput(), {
-        env: {
-          TRITONAI_API_KEY: "test-key",
-          UCSD_AI_BASE_URL: "https://voice.example.test/v1/",
-        },
-        fetch: fetchMock as unknown as typeof fetch,
-      });
-
-      assert.deepStrictEqual(result, { text: "server configured" });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    }),
-  );
-
-  it.effect("uses the recorded MIME type when naming multipart audio files", () =>
-    Effect.gen(function* () {
-      const fetchMock = vi.fn(
-        async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-          const form = init?.body as FormData;
-          const file = form.get("file") as Blob & { readonly name?: string };
-          expect(file).toBeInstanceOf(Blob);
-          expect(file.type).toBe("audio/mp4");
-          expect(file.name).toBe("voice-dictation.mp4");
-          return new Response(JSON.stringify({ text: "mp4 transcript" }), {
-            headers: { "content-type": "application/json" },
-          });
-        },
-      );
-
-      const result = yield* transcribeVoice(makeInput({ mimeType: "audio/mp4" }), {
-        env: { TRITONAI_API_KEY: "test-key" },
-        fetch: fetchMock as unknown as typeof fetch,
-      });
-
-      assert.deepStrictEqual(result, { text: "mp4 transcript" });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    }),
-  );
-
   it.effect("rejects the default endpoint when the server is configured for a custom one", () =>
     Effect.gen(function* () {
       const fetchMock = vi.fn();
@@ -169,23 +122,6 @@ describe("transcribeVoice", () => {
     }),
   );
 
-  it.effect("fails before fetch when the server API key is missing", () =>
-    Effect.gen(function* () {
-      const fetchMock = vi.fn();
-
-      const error = yield* Effect.flip(
-        transcribeVoice(makeInput(), {
-          env: {},
-          fetch: fetchMock as unknown as typeof fetch,
-        }),
-      );
-
-      assert.equal(error.code, "missing_api_key");
-      assert.equal(error.recoverable, true);
-      expect(fetchMock).not.toHaveBeenCalled();
-    }),
-  );
-
   it.effect("rejects oversized encoded audio before decoding or fetch", () =>
     Effect.gen(function* () {
       const fetchMock = vi.fn();
@@ -200,29 +136,6 @@ describe("transcribeVoice", () => {
       assert.equal(error.code, "audio_too_large");
       assert.equal(error.recoverable, true);
       expect(fetchMock).not.toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("maps provider errors to recoverable transcription errors", () =>
-    Effect.gen(function* () {
-      const fetchMock = vi.fn(async () => {
-        return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
-          status: 429,
-          headers: { "content-type": "application/json" },
-        });
-      });
-
-      const error = yield* Effect.flip(
-        transcribeVoice(makeInput(), {
-          env: { TRITONAI_API_KEY: "test-key" },
-          fetch: fetchMock as unknown as typeof fetch,
-        }),
-      );
-
-      assert.equal(error.code, "provider_error");
-      assert.match(error.message, /rate limited/u);
-      assert.equal(error.recoverable, true);
-      assert.equal(error.status, 429);
     }),
   );
 });

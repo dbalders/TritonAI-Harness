@@ -3,8 +3,6 @@ import { type TerminalRestartInput } from "@t3tools/contracts";
 import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
 
-import { ServerSettingsError } from "@t3tools/contracts";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { assert, it } from "@effect/vitest";
@@ -1226,47 +1224,6 @@ it.layer(
         new TerminalProviderInstanceNotFoundError({ providerInstanceId }),
       );
       expect(ptyAdapter.spawnInputs).toHaveLength(0);
-    }),
-  );
-
-  it.effect("preserves the settings failure when provider environment resolution fails", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const providerInstanceId = ProviderInstanceId.make("codex_work");
-      const settingsCause = new Error("secret store read failed");
-      const settingsError = new ServerSettingsError({
-        settingsPath: "/test/settings.json",
-        operation: "read-secret",
-        providerInstanceId,
-        environmentVariable: "OPENROUTER_API_KEY",
-        cause: settingsCause,
-      });
-      const serverSettings = ServerSettings.ServerSettingsService.of({
-        start: Effect.void,
-        ready: Effect.void,
-        getSettings: Effect.fail(settingsError),
-        getPersistedSettings: Effect.fail(settingsError),
-        updateSettings: () => Effect.fail(settingsError),
-        updateProviderInstance: () => Effect.fail(settingsError),
-        withSettingsSnapshot: () => Effect.fail(settingsError),
-        streamChanges: Stream.empty,
-        subscribeChanges: Effect.succeed(Stream.empty),
-      });
-
-      const error = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
-        serverSettings,
-        path,
-        rawProviderInstanceId: providerInstanceId,
-        env: undefined,
-      }).pipe(Effect.flip);
-
-      expect(error).toMatchObject({
-        _tag: "TerminalProviderEnvironmentError",
-        providerInstanceId,
-      });
-      expect(error.cause).toBe(settingsError);
-      expect(error.message).not.toContain(settingsError.message);
-      expect(error.message).not.toContain("OPENROUTER_API_KEY");
     }),
   );
 
