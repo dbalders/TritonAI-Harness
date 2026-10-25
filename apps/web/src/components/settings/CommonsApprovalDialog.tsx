@@ -15,7 +15,11 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 
-export function CommonsApprovalDialog(props: { readonly environmentId: EnvironmentId }) {
+export function CommonsApprovalDialog(props: {
+  readonly environmentId: EnvironmentId;
+  readonly onReady?: () => void;
+  readonly onUnavailable?: (error: Error) => void;
+}) {
   const approval = useEnvironmentQuery(
     serverEnvironment.commonsApproval({ environmentId: props.environmentId, input: {} }),
   );
@@ -29,6 +33,18 @@ export function CommonsApprovalDialog(props: { readonly environmentId: Environme
   const [error, setError] = useState<string | null>(null);
   const submissionId = approval.data?.submissionId;
   const review = approval.data?.review;
+  const notifyReady = useEffectEvent(() => props.onReady?.());
+  const notifyUnavailable = useEffectEvent((cause: Error) => props.onUnavailable?.(cause));
+  useEffect(() => {
+    if (approval.error) notifyUnavailable(new Error(approval.error));
+    else if (approval.isSuccess && !approval.isPending) notifyReady();
+  }, [approval.error, approval.isSuccess, approval.isPending]);
+  useEffect(
+    () => () => {
+      notifyUnavailable(new Error("Sharing review was closed before it could start."));
+    },
+    [],
+  );
 
   const send = async (input: ServerRespondCommonsApprovalInput) => {
     setRespondingTo(input.action.type === "respond" ? input.action.requestId : input.submissionId);
@@ -57,6 +73,7 @@ export function CommonsApprovalDialog(props: { readonly environmentId: Environme
 
   const cancel = () => {
     if (submissionId !== undefined) void send({ submissionId, action: { type: "cancel" } });
+    else notifyUnavailable(new Error("Sharing review was cancelled before it could start."));
   };
   const decision = (value: "accept" | "decline") => {
     if (submissionId !== undefined && review)
@@ -103,7 +120,7 @@ export function CommonsApprovalDialog(props: { readonly environmentId: Environme
         <DialogFooter>
           <Button
             variant="outline"
-            disabled={!canRespond || submissionId === undefined || respondingTo !== null}
+            disabled={!canRespond || respondingTo !== null}
             onClick={cancel}
           >
             Cancel sharing

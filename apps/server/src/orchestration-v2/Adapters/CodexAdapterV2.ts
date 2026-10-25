@@ -2114,6 +2114,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const pendingRuntimeRequests = yield* Ref.make(
           new Map<string, PendingCodexRuntimeRequest>(),
         );
+        const dynamicToolInvocations = new Map<string, Set<AbortController>>();
         /**
          * Codex's own acceptForSession only skips the exact command or patch it
          * answered, so every new command would ask again.
@@ -5630,6 +5631,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           Effect.gen(function* () {
             const caller = review.owner;
             if (caller.kind === "settings") return undefined;
+            const invocation = caller.invocation;
+            // MCP credentials identify a thread, but cannot identify a cancelled native child call.
+            // Plugin writes use the native dynamic-tool path with its host-owned invocation.
+            if (invocation === undefined) return { approved: false } as const;
             let owner: ActiveCodexTurnContext | undefined;
             for (const context of (yield* Ref.get(activeTurns)).values()) {
               const candidate = approvalOwnerCodexTurn(context).owner;
@@ -5643,6 +5648,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               try {
                 const credential = Effect.runSync(mcpSessions.read(caller.threadId));
                 return (
+                  !invocation.signal.aborted &&
+                  invocation.isCurrent() &&
                   credential?.providerSessionId === caller.providerSessionId &&
                   (credential.expiresAt === undefined ||
                     approvalClock.currentTimeMillisUnsafe() < credential.expiresAt) &&
@@ -5659,6 +5666,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
             };
             if (!isCurrent()) return { approved: false } as const;
+            const ended = Effect.callback<"cancel">((resume) => {
+              const abort = () => resume(Effect.succeed("cancel" as const));
+              if (invocation.signal.aborted) abort();
+              else invocation.signal.addEventListener("abort", abort, { once: true });
+              return Effect.sync(() => invocation.signal.removeEventListener("abort", abort));
+            });
             const decision = yield* decideToolApproval({
               context: owner,
               grantThreadId: caller.threadId,
@@ -5680,7 +5693,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   review.payload,
                 ].join("\n"),
               },
-            });
+            }).pipe(Effect.raceFirst(ended));
             return decision === "accept" && isCurrent()
               ? ({ approved: true, isCurrent } as const)
               : ({ approved: false } as const);
@@ -5745,47 +5758,74 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 false,
                 "This tool call no longer belongs to an active turn.",
               );
-            const { owner } = approvalOwnerCodexTurn(context);
-            const ownerNativeId = owner.providerThread.nativeThreadRef?.nativeId;
-            const catalog =
-              flatCatalogs.get(payload.threadId) ??
-              (ownerNativeId ? flatCatalogs.get(ownerNativeId) : undefined);
-            if (!catalog || !(yield* catalog.activeSession))
-              return dynamicToolResponse(
-                false,
-                "This thread's tool credential is no longer active.",
-              );
-            const gate = yield* gateDynamicToolCall({ options: catalog.options, payload });
-            if (!gate.allowed) return gate.response;
-            const planned = yield* Effect.try(() =>
-              planDynamicToolApproval({
-                requiresApproval: gate.definition.requiresApproval,
-                payload,
+            return yield* Effect.acquireUseRelease(
+              Effect.sync(() => {
+                const controller = new AbortController();
+                const controllers = dynamicToolInvocations.get(context.nativeTurnId) ?? new Set();
+                controllers.add(controller);
+                dynamicToolInvocations.set(context.nativeTurnId, controllers);
+                return controller;
               }),
-            ).pipe(Effect.option);
-            if (Option.isNone(planned))
-              return dynamicToolResponse(
-                false,
-                "The tool arguments exceed the review limits or are not finite JSON.",
-              );
-            const approval = planned.value;
-            const decision = yield* decideToolApproval({
-              context,
-              grantThreadId: payload.threadId,
-              runtimeMode: owner.input.runtimePolicy.runtimeMode,
-              approval,
-              nativeItemId: payload.callId,
-            });
-            if (!dynamicToolInvocationAllowed(approval.requiresApproval, decision))
-              return dynamicToolResponse(false, "The user declined this tool call.");
-            return yield* invokeAdmittedDynamicTool({
-              options: catalog.options,
-              invocation: {
-                name: payload.tool,
-                arguments: payload.arguments,
-                ...(gate.definition.requiresApproval ? { writeApproved: true } : {}),
-              },
-            });
+              (controller) =>
+                Effect.gen(function* () {
+                  const { owner } = approvalOwnerCodexTurn(context);
+                  const ownerNativeId = owner.providerThread.nativeThreadRef?.nativeId;
+                  const catalog =
+                    flatCatalogs.get(payload.threadId) ??
+                    (ownerNativeId ? flatCatalogs.get(ownerNativeId) : undefined);
+                  if (!catalog || !(yield* catalog.activeSession))
+                    return dynamicToolResponse(
+                      false,
+                      "This thread's tool credential is no longer active.",
+                    );
+                  const gate = yield* gateDynamicToolCall({ options: catalog.options, payload });
+                  if (!gate.allowed) return gate.response;
+                  const planned = yield* Effect.try(() =>
+                    planDynamicToolApproval({
+                      requiresApproval: gate.definition.requiresApproval,
+                      payload,
+                    }),
+                  ).pipe(Effect.option);
+                  if (Option.isNone(planned))
+                    return dynamicToolResponse(
+                      false,
+                      "The tool arguments exceed the review limits or are not finite JSON.",
+                    );
+                  const approval = planned.value;
+                  const decision = yield* decideToolApproval({
+                    context,
+                    grantThreadId: payload.threadId,
+                    runtimeMode: owner.input.runtimePolicy.runtimeMode,
+                    approval,
+                    nativeItemId: payload.callId,
+                  });
+                  if (!dynamicToolInvocationAllowed(approval.requiresApproval, decision))
+                    return dynamicToolResponse(false, "The user declined this tool call.");
+                  return yield* invokeAdmittedDynamicTool({
+                    options: catalog.options,
+                    invocation: {
+                      name: payload.tool,
+                      arguments: payload.arguments,
+                      approvalInvocation: {
+                        id: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+                        signal: controller.signal,
+                        isCurrent: () =>
+                          !controller.signal.aborted &&
+                          Effect.runSync(Ref.get(activeTurns)).get(context.nativeTurnId) ===
+                            context,
+                      },
+                      ...(gate.definition.requiresApproval ? { writeApproved: true } : {}),
+                    },
+                  });
+                }),
+              (controller) =>
+                Effect.sync(() => {
+                  controller.abort();
+                  const controllers = dynamicToolInvocations.get(context.nativeTurnId);
+                  controllers?.delete(controller);
+                  if (controllers?.size === 0) dynamicToolInvocations.delete(context.nativeTurnId);
+                }),
+            );
           }).pipe(Effect.orDie),
         );
 
@@ -6517,6 +6557,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           if (current !== input.context) {
             return false;
           }
+          for (const invocation of dynamicToolInvocations.get(input.nativeTurnId) ?? [])
+            invocation.abort();
           yield* Ref.update(undeliveredStopNativeTurns, (current) => {
             const updated = new Set(current);
             updated.delete(input.nativeTurnId);

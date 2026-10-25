@@ -41,9 +41,14 @@ lifecycle; stateless and skills-only packages cannot declare them.
 Every tool also declares `effect: "read" | "write"`, which must agree with the provider's executable
 metadata. A declared write requires one explicit host decision for each invocation, including in
 Full access and Auto. Tool-name grants and native runtime permission decisions do not authorize it.
-Presenters belong to an active managed Codex turn or the initiating Settings sharing connection;
+Presenters belong to an identified native managed Codex call or the initiating Settings sharing connection;
 other adapters and outside MCP clients fail closed for writes when no presenter is available.
 Read tools retain their access rules.
+
+Managed MCP credentials identify a thread but cannot prove which native child called a tool.
+Plugin writes therefore use Codex's direct dynamic tools, which bind the actual calling turn and
+are cancelled when that caller ends. A live root or sibling cannot keep a cancelled child's write
+authority alive. MCP plugin access remains read-only.
 
 The registry detaches JSON before awaiting readiness, decodes that snapshot, and presents the
 complete effective payload with recursively redacted credential fields. A `summary` is an ordinary

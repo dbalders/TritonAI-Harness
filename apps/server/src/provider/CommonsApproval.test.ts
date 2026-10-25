@@ -6,6 +6,7 @@ import {
   type ServerCommonsWriteReview,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
@@ -20,6 +21,15 @@ import {
 } from "../integrations/IntegrationWriteApproval.ts";
 
 type Presenter = Effect.Success<ReturnType<typeof makeCommonsApproval>>;
+const mountReview = Effect.fn("CommonsApprovalTest.mountReview")(function* (presenter: Presenter) {
+  const ready = yield* Deferred.make<void>();
+  const viewer = yield* presenter.changes.pipe(
+    Stream.runForEach(() => Deferred.succeed(ready, undefined)),
+    Effect.forkScoped,
+  );
+  yield* Deferred.await(ready);
+  return viewer;
+});
 const nextReview = (presenter: Presenter, previous?: string) =>
   presenter.changes.pipe(
     Stream.filter(
@@ -58,6 +68,10 @@ it.effect("requires a review-capable client before any Settings submission start
       .pipe(Effect.result);
     expect(Result.isFailure(result)).toBe(true);
     expect(started).toBe(false);
+    yield* presenter.changes.pipe(Stream.runHead);
+    expect(Result.isFailure(yield* presenter.run(() => Effect.void).pipe(Effect.result))).toBe(
+      true,
+    );
   }),
 );
 
@@ -71,7 +85,7 @@ it.effect(
       const other = yield* makeCommonsApproval({
         sessionId: AuthSessionId.make("synthetic-session"),
       });
-      yield* presenter.changes.pipe(Stream.runHead);
+      yield* mountReview(presenter);
       const now = yield* Clock.currentTimeMillis;
       const writes: string[] = [];
       let firstDecision: IntegrationWriteDecision | undefined;
@@ -122,7 +136,7 @@ it.effect.each(["cancel", "close", "expire", "decline"] as const)(
       const presenter = yield* makeCommonsApproval({
         sessionId: AuthSessionId.make("synthetic-session"),
       });
-      yield* presenter.changes.pipe(Stream.runHead);
+      yield* mountReview(presenter);
       const now = yield* Clock.currentTimeMillis;
       let writes = 0;
       const running = yield* presenter
@@ -177,7 +191,7 @@ it.effect("can cancel preparation before there is a write to review", () =>
     const presenter = yield* makeCommonsApproval({
       sessionId: AuthSessionId.make("synthetic-session"),
     });
-    yield* presenter.changes.pipe(Stream.runHead);
+    yield* mountReview(presenter);
     const running = yield* presenter.run(() => Effect.never).pipe(Effect.forkScoped);
     const pending = yield* presenter.changes.pipe(
       Stream.filter((value) => value !== null),
@@ -188,4 +202,74 @@ it.effect("can cancel preparation before there is a write to review", () =>
     yield* presenter.respond({ submissionId: pending.submissionId, action: { type: "cancel" } });
     expect((yield* Fiber.await(running))._tag).toBe("Failure");
   }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "revokes an accepted decision when its last review consumer leaves before admission",
+  () =>
+    Effect.gen(function* () {
+      const presenter = yield* makeCommonsApproval({
+        sessionId: AuthSessionId.make("synthetic-session"),
+      });
+      const viewer = yield* mountReview(presenter);
+      const accepted = yield* Deferred.make<IntegrationWriteDecision>();
+      const release = yield* Deferred.make<void>();
+      let writes = 0;
+      const now = yield* Clock.currentTimeMillis;
+      const running = yield* presenter
+        .run((owner) =>
+          Effect.gen(function* () {
+            const decision = yield* requestIntegrationWriteApproval(
+              sampleReview(owner, "pending", now),
+            );
+            yield* Deferred.succeed(accepted, decision);
+            yield* Deferred.await(release);
+            if (decision.approved && decision.isCurrent()) writes++;
+          }),
+        )
+        .pipe(Effect.forkScoped);
+      const pending = yield* nextReview(presenter);
+      yield* presenter.respond({
+        submissionId: pending.submissionId,
+        action: { type: "respond", requestId: "pending", decision: "accept" },
+      });
+      const decision = yield* Deferred.await(accepted);
+      expect(decision.approved && decision.isCurrent()).toBe(true);
+      yield* Fiber.interrupt(viewer);
+      expect(decision.approved && decision.isCurrent()).toBe(false);
+      expect((yield* Fiber.await(running))._tag).toBe("Failure");
+      expect(writes).toBe(0);
+      expect(
+        Result.isFailure(
+          yield* presenter
+            .respond({
+              submissionId: pending.submissionId,
+              action: { type: "respond", requestId: "pending", decision: "accept" },
+            })
+            .pipe(Effect.result),
+        ),
+      ).toBe(true);
+      yield* mountReview(presenter);
+      expect(yield* presenter.run(() => Effect.succeed("fresh subscription"))).toBe(
+        "fresh subscription",
+      );
+    }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "cancels preparation when its last review consumer disappears before a request exists",
+  () =>
+    Effect.gen(function* () {
+      const presenter = yield* makeCommonsApproval({
+        sessionId: AuthSessionId.make("synthetic-session"),
+      });
+      const viewer = yield* mountReview(presenter);
+      const started = yield* Deferred.make<void>();
+      const running = yield* presenter
+        .run(() => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)))
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(viewer);
+      expect((yield* Fiber.await(running))._tag).toBe("Failure");
+    }).pipe(Effect.scoped),
 );

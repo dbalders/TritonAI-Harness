@@ -153,7 +153,10 @@ describe("built-in integration packages", () => {
       expect(connected.kind).toBe("connected");
       expect((await registry.list()).integrations[1]).toMatchObject({
         connectionState: "connected",
-        tools: [{ name: "fixture.api-key.read", available: true }],
+        tools: [
+          { name: "fixture.api-key.read", available: true },
+          { name: "fixture.api-key.write", available: true },
+        ],
         skills: [{ name: "authenticated-mcp-fixture", available: true }],
       });
       expect(await registry.invokeTool("fixture.api-key.read", {})).toMatchObject({

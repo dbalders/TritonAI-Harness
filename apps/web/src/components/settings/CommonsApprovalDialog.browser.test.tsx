@@ -59,6 +59,29 @@ function setup(initial: ServerCommonsApprovalState) {
 }
 
 describe("Commons sharing review", () => {
+  it("waits for the live subscription and cancels an early close before a submission id exists", async () => {
+    using fixture = setup({ submissionId: "old", review: null });
+    fixture.registry.set(state.approval!, AsyncResult.waiting(AsyncResult.success(null)));
+    const onReady = vi.fn();
+    const onUnavailable = vi.fn();
+    await using screen = await render(
+      <RegistryContext value={fixture.registry}>
+        <CommonsApprovalDialog
+          environmentId={environmentId}
+          onReady={onReady}
+          onUnavailable={onUnavailable}
+        />
+      </RegistryContext>,
+    );
+    expect(onReady).not.toHaveBeenCalled();
+    await fixture.set(null);
+    expect(onReady).toHaveBeenCalledTimes(1);
+    await userEvent.click(page.getByRole("button", { name: "Cancel sharing" }));
+    expect(onUnavailable).toHaveBeenCalledTimes(1);
+    expect(state.respond).not.toHaveBeenCalled();
+    await screen.unmount();
+    expect(onUnavailable).toHaveBeenCalledTimes(2);
+  });
   it("keeps the complete payload scrollable and requires a new decision for the next write", async () => {
     using fixture = setup({ submissionId: "submission", review: review("first") });
     await using screen = await render(fixture.ui());

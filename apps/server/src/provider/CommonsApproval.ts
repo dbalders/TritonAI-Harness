@@ -47,10 +47,11 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
   const connectionId = NodeCrypto.randomUUID();
   const state = yield* SubscriptionRef.make<ServerCommonsApprovalState | null>(null);
   let closed = false;
-  let reviewCapable = false;
+  let reviewSubscribers = 0;
   let current: Submission | null = null;
   const isCurrent = (entry: Submission) =>
     !closed &&
+    reviewSubscribers > 0 &&
     current === entry &&
     entry.live &&
     !entry.controller.signal.aborted &&
@@ -109,7 +110,7 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
   });
 
   const start = Effect.fn("CommonsApproval.start")(function* () {
-    if (!reviewCapable)
+    if (reviewSubscribers === 0)
       return yield* refusal(
         "Update this client to review each exact sharing write before submitting.",
       );
@@ -150,12 +151,20 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
     });
 
   return {
-    changes: SubscriptionRef.changes(state).pipe(
-      Stream.tap(() =>
-        Effect.sync(() => {
-          reviewCapable = true;
-        }),
-      ),
+    changes: Stream.unwrap(
+      Effect.gen(function* () {
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            reviewSubscribers += 1;
+          }),
+          () =>
+            Effect.gen(function* () {
+              reviewSubscribers -= 1;
+              if (reviewSubscribers === 0 && current !== null) yield* finish(current);
+            }),
+        );
+        return SubscriptionRef.changes(state);
+      }),
     ),
     run: <A, E, R>(
       operation: (owner: IntegrationSettingsApprovalOwner) => Effect.Effect<A, E, R>,

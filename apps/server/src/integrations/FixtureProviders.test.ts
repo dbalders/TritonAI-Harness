@@ -21,6 +21,36 @@ function memorySecrets() {
 }
 
 describe("fixture integration providers", () => {
+  it("records synthetic writes only after host commit admission and a valid fixed destination", async () => {
+    const secrets = memorySecrets();
+    const provider = new ApiKeyMcpFixtureProvider(secrets.service);
+    const flow = await provider.connect(["fixture.read"]);
+    await provider.connect(["fixture.read"], undefined, {
+      kind: "api_key",
+      flowId: flow.flowId,
+      value: "fixture-only-key",
+    });
+    const input = { destination: "synthetic-draft", content: "Synthetic final line" };
+    await expect(provider.invoke("fixture.api-key.write", input)).rejects.toThrow("host approval");
+    const controller = new AbortController();
+    const context = {
+      signal: controller.signal,
+      writeApproved: true,
+      beginCommit: async () => controller.signal,
+    };
+    await expect(
+      provider.invoke("fixture.api-key.write", { ...input, destination: "external" }, context),
+    ).rejects.toBeDefined();
+    expect(await provider.invoke("fixture.api-key.write", input, context)).toMatchObject({
+      approvedWrites: 1,
+    });
+    expect((await provider.status()).message).toContain("Synthetic approved writes: 1");
+    controller.abort();
+    await expect(provider.invoke("fixture.api-key.write", input, context)).rejects.toThrow(
+      "cancelled",
+    );
+    expect((await provider.status()).message).toContain("Synthetic approved writes: 1");
+  });
   it("accepts an API key into server-side storage while exposing a sanitized result", async () => {
     const secrets = memorySecrets();
     const provider = new ApiKeyMcpFixtureProvider(secrets.service);

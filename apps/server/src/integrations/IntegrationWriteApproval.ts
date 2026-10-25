@@ -116,11 +116,18 @@ export function reviewIntegrationInput(input: Json): string {
   return JSON.stringify(redact(input), null, 2);
 }
 
+export interface IntegrationWriteInvocation {
+  readonly id: string;
+  readonly signal: AbortSignal;
+  readonly isCurrent: () => boolean;
+}
+
 interface IntegrationThreadApprovalOwner {
   readonly kind?: "thread";
   readonly threadId: ThreadId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
+  readonly invocation?: IntegrationWriteInvocation;
 }
 
 export interface IntegrationSettingsApprovalOwner {

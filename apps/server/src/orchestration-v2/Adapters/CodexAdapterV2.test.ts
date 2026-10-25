@@ -67,6 +67,25 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import packageJson from "../../../package.json" with { type: "json" };
+
+const pluginJournalGate = vi.hoisted(() => ({
+  path: "",
+  entered: () => {},
+  wait: Promise.resolve(),
+}));
+vi.mock("node:fs/promises", async (original) => {
+  const fs = await original<typeof import("node:fs/promises")>();
+  return {
+    ...fs,
+    rename: async (...args: Parameters<typeof fs.rename>) => {
+      await fs.rename(...args);
+      if (String(args[1]) === pluginJournalGate.path) {
+        pluginJournalGate.entered();
+        await pluginJournalGate.wait;
+      }
+    },
+  };
+});
 import * as ServerConfig from "../../config.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
@@ -2260,6 +2279,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       Pick<CodexAdapterV2.CodexAdapterV2Options, "allowedModels" | "settings">
     > = {},
     onToolResponse: (result: unknown) => Effect.Effect<void> = () => Effect.void,
+    replayHooks: {
+      readonly beforeEmitInbound?: NonNullable<
+        CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"]
+      >;
+      readonly afterNotification?: (method: string, payload: unknown) => Effect.Effect<void>;
+    } = {},
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2269,7 +2294,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         [];
       const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
         open: (openInput) =>
-          Layer.build(CodexReplay.layerReplay(transcript)).pipe(
+          CodexReplay.makeReplayDriver(transcript, replayHooks).pipe(
+            Effect.flatMap((driver) => Layer.build(CodexReplay.layerReplayWithDriver(driver))),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -2287,6 +2313,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   (client) =>
                     ({
                       ...client,
+                      handleServerNotification: (method, handler) =>
+                        client.handleServerNotification(method, (payload) =>
+                          handler(payload).pipe(
+                            Effect.andThen(
+                              () => replayHooks.afterNotification?.(method, payload) ?? Effect.void,
+                            ),
+                          ),
+                        ),
                       handleServerRequest: (method, handler) =>
                         client.handleServerRequest(method, (payload) =>
                           handler(payload).pipe(
@@ -2399,11 +2433,23 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     "invalid-depth",
     "invalid-size",
     "invalid-commons-depth",
+    "nested-cancelled",
+    "nested-journal-cancelled",
+    "nested-approved",
   ] as const)("enforces live V2 plugin dispatch at the %s boundary", (scenario) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const approved = scenario.startsWith("approved");
+        const approved = scenario.startsWith("approved") || scenario === "nested-approved";
+        const nested = scenario.startsWith("nested-");
         const root = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+        const journalEntered = Promise.withResolvers<void>();
+        const releaseJournal = Promise.withResolvers<void>();
+        using _journal = {
+          [Symbol.dispose]() {
+            pluginJournalGate.path = "";
+            releaseJournal.resolve();
+          },
+        };
         const toolName = "fixture.records.write";
         const dynamicName = IntegrationRegistry.codexDynamicIntegrationToolName(toolName);
         const manifest: IntegrationManifest = {
@@ -2434,6 +2480,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           ],
           skills: [],
         };
+        if (scenario === "nested-journal-cancelled") {
+          pluginJournalGate.path = (yield* Path.Path).join(
+            root,
+            "commit-journal",
+            `${manifest.id}.json`,
+          );
+          pluginJournalGate.entered = journalEntered.resolve;
+          pluginJournalGate.wait = releaseJournal.promise;
+        }
         let invocations = 0;
         const registry = yield* Effect.acquireRelease(
           Effect.sync(
@@ -2570,6 +2625,43 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           scenario: name,
           entries: [
             ...preamble,
+            ...(nested
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "child-start",
+                    frame: {
+                      method: "item/completed",
+                      params: {
+                        threadId: nativeThreadId,
+                        turnId: nativeTurnId,
+                        completedAtMs: 1782622441000,
+                        item: {
+                          type: "subAgentActivity",
+                          id: "plugin-child",
+                          kind: "started",
+                          agentThreadId: "plugin-child-thread",
+                          agentPath: "/root/plugin-child",
+                        },
+                      },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "child-turn",
+                    frame: {
+                      method: "turn/started",
+                      params: {
+                        threadId: "plugin-child-thread",
+                        turn: makeCodexReplayTurn({
+                          id: "plugin-child-turn",
+                          status: "inProgress",
+                        }),
+                      },
+                    },
+                  },
+                ]
+              : []),
             {
               type: "emit_inbound",
               label: "fixture-tool",
@@ -2577,8 +2669,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 id: 100,
                 method: "item/tool/call",
                 params: {
-                  threadId: nativeThreadId,
-                  turnId: nativeTurnId,
+                  threadId: nested ? "plugin-child-thread" : nativeThreadId,
+                  turnId: nested ? "plugin-child-turn" : nativeTurnId,
                   callId: "fixture-call",
                   tool:
                     scenario === "invalid-commons-depth"
@@ -2588,11 +2680,44 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 },
               },
             },
+            ...(scenario === "nested-cancelled" || scenario === "nested-journal-cancelled"
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "child-cancelled",
+                    frame: {
+                      method: "turn/completed",
+                      params: {
+                        threadId: "plugin-child-thread",
+                        turn: makeCodexReplayTurn({
+                          id: "plugin-child-turn",
+                          status: "interrupted",
+                        }),
+                      },
+                    },
+                  },
+                ]
+              : []),
             {
               type: "expect_outbound",
               label: "fixture-result",
               frame: { id: 100, result: { success: approved } },
             },
+            ...(scenario === "nested-approved"
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "child-finished",
+                    frame: {
+                      method: "turn/completed",
+                      params: {
+                        threadId: "plugin-child-thread",
+                        turn: makeCodexReplayTurn({ id: "plugin-child-turn", status: "completed" }),
+                      },
+                    },
+                  },
+                ]
+              : []),
             {
               type: "emit_inbound",
               label: "complete",
@@ -2614,11 +2739,15 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             >["runtimeRequest"]
           >();
         let toolResult: unknown;
+        const childCancelled = yield* Deferred.make<void>();
+        const reviewCancelled = yield* Deferred.make<void>();
         const harness = yield* makeCodexReplayHarness(
           transcript,
           (event) =>
             event.type === "runtime_request.updated"
-              ? Deferred.succeed(pending, event.runtimeRequest)
+              ? event.runtimeRequest.status === "cancelled"
+                ? Deferred.succeed(reviewCancelled, undefined)
+                : Deferred.succeed(pending, event.runtimeRequest)
               : Effect.void,
           (method, params) =>
             Effect.sync(() => {
@@ -2641,6 +2770,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               if (response?.type === "expect_outbound" && Predicate.isObject(response.frame))
                 Object.assign(response.frame, { result });
             }),
+          {
+            beforeEmitInbound: (entry) =>
+              entry.label === "child-cancelled"
+                ? scenario === "nested-journal-cancelled"
+                  ? Effect.promise(() => journalEntered.promise)
+                  : Deferred.await(pending).pipe(Effect.asVoid)
+                : Effect.void,
+            afterNotification: (method, payload) =>
+              method === "turn/completed" &&
+              Predicate.isObject(payload) &&
+              Predicate.isObject(payload.turn) &&
+              payload.turn.id === "plugin-child-turn"
+                ? Deferred.succeed(childCancelled, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+          },
         );
         assert.equal(
           harness.providerThread.dynamicToolNames?.includes(dynamicName),
@@ -2670,6 +2814,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         });
         if (scenario !== "undisclosed" && !scenario.startsWith("invalid")) {
           const request = yield* Deferred.await(pending);
+          if (scenario === "nested-cancelled") {
+            yield* Deferred.await(childCancelled);
+            yield* Deferred.await(reviewCancelled);
+          }
           assert.equal(invocations, 0, "every plugin write must wait for user consent");
           const displayed = harness.events
             .flatMap((event) =>
@@ -2695,7 +2843,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             yield* sessions.set({ ...credential, expiresAt: yield* Clock.currentTimeMillis });
           if (scenario === "replaced")
             yield* sessions.set({ ...credential, providerSessionId: "different-session" });
-          if (scenario !== "revoked")
+          if (scenario === "nested-cancelled")
+            yield* harness.runtime
+              .respondToRuntimeRequest({ requestId: request.id, decision: "accept" })
+              .pipe(Effect.flip);
+          else if (scenario !== "revoked")
             yield* harness.runtime.respondToRuntimeRequest({
               requestId: request.id,
               decision:
@@ -2703,6 +2855,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   ? "decline"
                   : "accept",
             });
+          if (scenario === "nested-journal-cancelled") {
+            yield* Deferred.await(childCancelled);
+            releaseJournal.resolve();
+          }
         }
         yield* harness.firstTerminal;
         assert.equal(Predicate.isObject(toolResult) && toolResult.success, approved);

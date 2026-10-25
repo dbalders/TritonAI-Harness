@@ -25,7 +25,7 @@ import {
   Trash2Icon,
   UsersIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   formatProviderSkillDisplayName,
   formatProviderSkillInstallSource,
@@ -48,7 +48,6 @@ import { usePrimaryEnvironmentId } from "../../state/environments";
 import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { CommonsApprovalDialog } from "./CommonsApprovalDialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -479,9 +478,6 @@ export function SkillsSettingsPanel() {
     label: "skill enabled",
     reportFailure: false,
   });
-  const confirmCommonsReviewSupport = useAtomQueryRunner(serverEnvironment.commonsApproval, {
-    reportFailure: false,
-  });
   const submitSkillToCommonsCommand = useAtomCommand(
     serverEnvironment.submitProviderSkillToTritonAiCommons,
     { label: "skill submit to commons", reportFailure: false },
@@ -534,6 +530,12 @@ export function SkillsSettingsPanel() {
   const [updatingSkillKey, setUpdatingSkillKey] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [submittingSkillKey, setSubmittingSkillKey] = useState<string | null>(null);
+  const sharing = useRef(false);
+  const [commonsReviewReady, setCommonsReviewReady] = useState<{
+    readonly key: string;
+    readonly resolve: () => void;
+    readonly reject: (error: Error) => void;
+  } | null>(null);
   const [commonsSubmissionErrors, setCommonsSubmissionErrors] = useState<
     ReadonlyMap<string, string>
   >(new Map());
@@ -713,13 +715,24 @@ export function SkillsSettingsPanel() {
     skill: ServerProviderSkill,
   ) => {
     if (!primaryEnvironmentId) return;
+    if (sharing.current) return;
     const displayName = formatProviderSkillDisplayName(skill);
     const confirmed = await ensureLocalApi().dialogs.confirm(
       tritonAiCommonsPublicShareConfirmation({ displayName, skillPath: skill.path }),
     );
     if (!confirmed) return;
 
+    if (sharing.current) return;
+    sharing.current = true;
+
     const key = `${providerInstanceId}:${skill.path || skill.name}`;
+    let resolveReady = () => {};
+    let rejectReady = (_error: Error) => {};
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    });
+    setCommonsReviewReady({ key, resolve: resolveReady, reject: rejectReady });
     setSubmittingSkillKey(key);
     setCommonsSubmissionErrors((current) => {
       const next = new Map(current);
@@ -728,9 +741,8 @@ export function SkillsSettingsPanel() {
     });
     return await (async () => {
       try {
-        unwrapAtomCommandResult(
-          await confirmCommonsReviewSupport({ environmentId: primaryEnvironmentId, input: {} }),
-        );
+        // The mounted review's live subscription proves that this client and host support it.
+        await ready;
         const commandResult = await submitSkillToCommonsCommand({
           environmentId: primaryEnvironmentId,
           input: {
@@ -807,6 +819,8 @@ export function SkillsSettingsPanel() {
         );
       }
     })().finally(async () => {
+      sharing.current = false;
+      setCommonsReviewReady((current) => (current?.key === key ? null : current));
       setSubmittingSkillKey((current) => (current === key ? null : current));
     });
   };
@@ -998,7 +1012,13 @@ export function SkillsSettingsPanel() {
       </SettingsSection>
 
       {submittingSkillKey !== null && primaryEnvironmentId !== null ? (
-        <CommonsApprovalDialog environmentId={primaryEnvironmentId} />
+        <CommonsApprovalDialog
+          key={submittingSkillKey}
+          environmentId={primaryEnvironmentId}
+          {...(commonsReviewReady?.key === submittingSkillKey
+            ? { onReady: commonsReviewReady.resolve, onUnavailable: commonsReviewReady.reject }
+            : {})}
+        />
       ) : null}
 
       {managedManifestWarning ? (
