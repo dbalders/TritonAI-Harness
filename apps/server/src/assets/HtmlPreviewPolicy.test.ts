@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { parse, serialize } from "parse5";
 import { offlineHtmlPreview } from "./HtmlPreviewPolicy.ts";
+import { htmlRenderThemeMessage, injectHtmlRenderBootstrap } from "@t3tools/shared/htmlRender";
 
 describe("offline HTML preview", () => {
   it("preserves offline controls and raster data while removing executable and navigation routes", () => {
@@ -79,7 +80,8 @@ it("keeps a real browser offline while details and inputs still work", async (ct
   const address = receiver.address();
   if (address === null || typeof address === "string") throw new Error("Missing canary port");
   const canary = `http://127.0.0.1:${address.port}`;
-  const preview = offlineHtmlPreview(`
+  const preview = offlineHtmlPreview(
+    injectHtmlRenderBootstrap(`
     <details><summary>Report details</summary><p>Offline content</p></details>
     <label>Notes <input id="notes"></label><a href="${canary}/link">External link</a>
     <form action="${canary}/form"><button>Submit</button></form>
@@ -92,7 +94,8 @@ it("keeps a real browser offline while details and inputs still work", async (ct
     const p=new RTCPeerConnection({iceServers:[{urls:'stun:127.0.0.1:${udp.address().port}'}]});
     p.createDataChannel('x');p.createOffer().then(o=>p.setLocalDescription(o));
     location.href='${canary}/navigate';</script>
-  `);
+  `),
+  );
   const documentServer = NodeHttp.createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "text/html", ...preview.headers });
     res.end(preview.html);
@@ -105,6 +108,22 @@ it("keeps a real browser offline while details and inputs still work", async (ct
       throw new Error("Missing document port");
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${documentAddress.port}/`);
+    expect(await page.locator("style#t3-theme").count()).toBe(1);
+    const message = htmlRenderThemeMessage({
+      appearance: "light",
+      variables: { "--background": "rgb(1, 2, 3)", "--font-sans": "monospace" },
+    });
+    // This program runs in Chromium; the server test intentionally has no DOM library.
+    const theme = await page.evaluate<{ background: string; font: string }>(`
+      new Promise(resolve => {
+        window.addEventListener("message", () => requestAnimationFrame(() => {
+          const style = getComputedStyle(document.documentElement);
+          resolve({ background: style.backgroundColor, font: style.fontFamily });
+        }), { once: true });
+        window.postMessage(${JSON.stringify(message)}, "*");
+      })
+    `);
+    expect(theme).toEqual({ background: "rgb(1, 2, 3)", font: "monospace" });
     await page.getByText("Report details", { exact: true }).click();
     await page.getByText("Offline content", { exact: true }).waitFor({ state: "visible" });
     await page.getByLabel("Notes").fill("Local notes");

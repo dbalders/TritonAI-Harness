@@ -27,7 +27,12 @@ function sanitize(parent: Parent, depth = 0): void {
   parent.childNodes = parent.childNodes.filter((node: Node) => {
     if (!("tagName" in node)) return node.nodeName === "#text" || node.nodeName === "#documentType";
     if (node.namespaceURI !== HTML_NAMESPACE || !ELEMENTS.has(node.tagName)) return false;
+    // Published renders already have a bootstrap stylesheet; only the new trusted one may own it.
+    const themeId = (attribute: { name: string; value: string }) =>
+      attribute.name === "id" && attribute.value === "t3-theme";
+    if (node.tagName === "style" && node.attrs.some(themeId)) return false;
     node.attrs = node.attrs.filter(({ name, value, namespace }) => {
+      if (name === "id" && value === "t3-theme") return false;
       if (namespace !== undefined) return false;
       if (name === "href") return node.tagName === "a" && /^#[^\s]*$/.test(value);
       if (name === "src") return node.tagName === "img" && RASTER_IMAGE.test(value);
