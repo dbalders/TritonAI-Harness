@@ -38,6 +38,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverRemoveProviderSkill]: "server",
   [WS_METHODS.serverSetProviderSkillEnabled]: "server",
   [WS_METHODS.serverSubmitProviderSkillToTritonAiCommons]: "server",
+  [WS_METHODS.serverSubscribeCommonsApproval]: "server",
+  [WS_METHODS.serverRespondCommonsApproval]: "server",
   [WS_METHODS.serverListPlugins]: "server",
   [WS_METHODS.serverInstallPlugin]: "server",
   [WS_METHODS.serverUninstallPlugin]: "server",

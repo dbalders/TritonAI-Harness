@@ -83,6 +83,7 @@ function registryFixture(options?: {
         name,
         input,
         hasApprovalOwner:
+          context.approvalOwner?.kind !== "settings" &&
           context.approvalOwner?.providerSessionId === integrationWriteTestOwner.providerSessionId,
         hasSignal: context.signal instanceof AbortSignal,
       });

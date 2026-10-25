@@ -4430,6 +4430,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly prompt?: string | null;
           readonly appName?: string;
           readonly options?: ReadonlyArray<ProviderApprovalOption>;
+          readonly expiresAt?: number;
         }) {
           const createdAt = yield* DateTime.now;
           const { owner, subagent } = approvalOwnerCodexTurn(input.context);
@@ -4489,6 +4490,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             },
             createdAt,
             resolvedAt: null,
+            ...(input.expiresAt === undefined
+              ? {}
+              : { expiresAt: DateTime.makeUnsafe(input.expiresAt) }),
+            ...(input.options === undefined
+              ? {}
+              : { allowedDecisions: input.options.map((option) => option.decision) }),
           };
           const turnItem: OrchestrationV2TurnItem = {
             id: idAllocator.derive.approvalTurnItem({ requestId }),
@@ -5500,6 +5507,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             readonly approval: DynamicToolApprovalPlan;
             readonly nativeItemId: string;
             readonly onceOnly?: boolean;
+            readonly expiresAt?: number;
           }) {
             const { approval, runtimeMode } = input;
             let approvals = flatToolApprovals.get(input.grantThreadId);
@@ -5519,6 +5527,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeRequestId: input.nativeItemId,
               requestKind: "permission",
               prompt: approval.prompt,
+              ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
               ...(input.onceOnly
                 ? {
                     options: [
@@ -5555,12 +5564,59 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
             });
-            const decision = yield* Deferred.await(deferred).pipe(
+            const clock = yield* Clock.Clock;
+            const awaited = Deferred.await(deferred);
+            const decision = yield* (
+              input.expiresAt === undefined
+                ? awaited
+                : awaited.pipe(
+                    Effect.timeoutOption(
+                      Math.max(0, input.expiresAt - clock.currentTimeMillisUnsafe()),
+                    ),
+                    Effect.map(Option.getOrUndefined),
+                  )
+            ).pipe(
               Effect.ensuring(
-                Ref.update(pendingRuntimeRequests, (current) => {
-                  const next = new Map(current);
-                  next.delete(String(artifacts.request.id));
-                  return next;
+                Effect.gen(function* () {
+                  yield* Ref.update(pendingRuntimeRequests, (current) => {
+                    const next = new Map(current);
+                    next.delete(String(artifacts.request.id));
+                    return next;
+                  });
+                  if (input.expiresAt === undefined || (yield* Deferred.isDone(deferred))) return;
+                  const resolvedAt = yield* DateTime.now;
+                  const expired = clock.currentTimeMillisUnsafe() >= input.expiresAt;
+                  yield* emitProviderEvent({
+                    type: "runtime_request.updated",
+                    driver: CODEX_PROVIDER,
+                    threadId: artifacts.node.threadId,
+                    runtimeRequest: {
+                      ...artifacts.request,
+                      status: expired ? "expired" : "cancelled",
+                      responseCapability: {
+                        type: "not_resumable",
+                        reason: expired
+                          ? "The write approval expired."
+                          : "The write was cancelled.",
+                      },
+                      resolvedAt,
+                    },
+                  });
+                  yield* emitProviderEvent({
+                    type: "node.updated",
+                    driver: CODEX_PROVIDER,
+                    node: { ...artifacts.node, status: "cancelled", completedAt: resolvedAt },
+                  });
+                  yield* emitProviderEvent({
+                    type: "turn_item.updated",
+                    driver: CODEX_PROVIDER,
+                    turnItem: {
+                      ...artifacts.turnItem,
+                      status: "cancelled",
+                      completedAt: resolvedAt,
+                      updatedAt: resolvedAt,
+                    },
+                  });
                 }),
               ),
             );
@@ -5572,10 +5628,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* registerIntegrationWriteGate(adapterOptions.instanceId, (review) =>
           Effect.gen(function* () {
+            const caller = review.owner;
+            if (caller.kind === "settings") return undefined;
             let owner: ActiveCodexTurnContext | undefined;
             for (const context of (yield* Ref.get(activeTurns)).values()) {
               const candidate = approvalOwnerCodexTurn(context).owner;
-              if (candidate.projectionThreadId === review.owner.threadId) owner = candidate;
+              if (candidate.projectionThreadId === caller.threadId) owner = candidate;
             }
             if (owner === undefined) return undefined;
             const expectedTurn = owner.providerTurnId;
@@ -5583,15 +5641,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // These stores are Ref-backed; a synchronous check closes the journal-I/O race.
             const isCurrent = () => {
               try {
-                const credential = Effect.runSync(mcpSessions.read(review.owner.threadId));
+                const credential = Effect.runSync(mcpSessions.read(caller.threadId));
                 return (
-                  credential?.providerSessionId === review.owner.providerSessionId &&
+                  credential?.providerSessionId === caller.providerSessionId &&
                   (credential.expiresAt === undefined ||
                     approvalClock.currentTimeMillisUnsafe() < credential.expiresAt) &&
                   [...Effect.runSync(Ref.get(activeTurns)).values()].some((context) => {
                     const candidate = approvalOwnerCodexTurn(context).owner;
                     return (
-                      candidate.projectionThreadId === review.owner.threadId &&
+                      candidate.projectionThreadId === caller.threadId &&
                       candidate.providerTurnId === expectedTurn
                     );
                   })
@@ -5603,9 +5661,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (!isCurrent()) return { approved: false } as const;
             const decision = yield* decideToolApproval({
               context: owner,
-              grantThreadId: review.owner.threadId,
+              grantThreadId: caller.threadId,
               runtimeMode: owner.input.runtimePolicy.runtimeMode,
               onceOnly: true,
+              expiresAt: review.expiresAt,
               nativeItemId: `plugin-write:${review.requestId}`,
               approval: {
                 requiresApproval: true,
@@ -5650,11 +5709,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 admitted: false,
                 reason: "This thread's browser credential is no longer active.",
               } as const;
-            const approval = planDynamicToolApproval({
-              requiresApproval: false,
-              // MCP tool input is decoded JSON.
-              payload: { tool: request.toolName, arguments: request.arguments as Schema.Json },
-            });
+            const approval = yield* Effect.try(() =>
+              planDynamicToolApproval({
+                requiresApproval: false,
+                // MCP tool input is decoded JSON.
+                payload: { tool: request.toolName, arguments: request.arguments as Schema.Json },
+              }),
+            );
             const decision = yield* decideToolApproval({
               context: owner,
               grantThreadId:
@@ -5696,10 +5757,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               );
             const gate = yield* gateDynamicToolCall({ options: catalog.options, payload });
             if (!gate.allowed) return gate.response;
-            const approval = planDynamicToolApproval({
-              requiresApproval: gate.definition.requiresApproval,
-              payload,
-            });
+            const planned = yield* Effect.try(() =>
+              planDynamicToolApproval({
+                requiresApproval: gate.definition.requiresApproval,
+                payload,
+              }),
+            ).pipe(Effect.option);
+            if (Option.isNone(planned))
+              return dynamicToolResponse(
+                false,
+                "The tool arguments exceed the review limits or are not finite JSON.",
+              );
+            const approval = planned.value;
             const decision = yield* decideToolApproval({
               context,
               grantThreadId: payload.threadId,

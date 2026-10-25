@@ -57,6 +57,8 @@ import {
 } from "./IntegrationDocumentText.ts";
 import {
   integrationCredentialGeneration,
+  integrationCredentialMutationPending,
+  retainIntegrationWriteCredentials,
   requestIntegrationWriteApproval,
   reviewIntegrationInput,
   snapshotIntegrationInput,
@@ -1852,6 +1854,7 @@ export class RegistryRuntime {
       readonly allowFaulted?: boolean;
       readonly signal?: AbortSignal;
       readonly validateAdmission?: () => void;
+      readonly onCommitAdmission?: () => () => void;
     } = {},
   ): Promise<A> {
     if (this.#closing) {
@@ -1886,6 +1889,7 @@ export class RegistryRuntime {
     let rejectOperation: (error: Error) => void = () => undefined;
     let commitAdmission: Promise<AbortSignal> | null = null;
     let preAdmissionCancelled = false;
+    let releaseCommitCredentials: (() => void) | undefined;
     const operationDeadline = Date.now() + this.#providerOperationTimeoutMs;
     let timeout = setTimeout(
       () => {
@@ -1927,7 +1931,15 @@ export class RegistryRuntime {
             return Promise.reject(new Error("The integration provider operation was cancelled."));
           }
           commitAdmission = (async () => {
-            options.validateAdmission?.();
+            const validateUnadmittedAuthority = () => {
+              try {
+                options.validateAdmission?.();
+              } catch (error) {
+                preAdmissionCancelled = true;
+                throw error;
+              }
+            };
+            validateUnadmittedAuthority();
             const preserveJournal = await this.#providerCommitJournalExists(
               integration.manifest.id,
             );
@@ -1935,7 +1947,7 @@ export class RegistryRuntime {
               preAdmissionCancelled = true;
               throw new Error("The integration provider operation was cancelled.");
             }
-            options.validateAdmission?.();
+            validateUnadmittedAuthority();
             try {
               await this.#writeProviderCommitJournal(integration.manifest.id, provider.id);
             } catch (error) {
@@ -1972,6 +1984,7 @@ export class RegistryRuntime {
               if (authorityError !== undefined) throw authorityError;
               throw new Error("The integration provider operation was cancelled.");
             }
+            releaseCommitCredentials = options.onCommitAdmission?.();
             commitStarted = true;
             clearTimeout(timeout);
             this.#committingLifecycleControllers.add(controller);
@@ -2034,6 +2047,7 @@ export class RegistryRuntime {
       this.#invalidateProviderStatus(provider);
     };
     const workSettled = (): void => {
+      releaseCommitCredentials?.();
       providerWorkSettled = true;
       finishWork();
     };
@@ -3541,6 +3555,20 @@ export class RegistryRuntime {
             `${manifest.name} is unavailable while its connection is changing.`,
           );
         }
+        const generation = this.#authorizationGenerations.get(manifest.id) ?? 0;
+        const credentialGeneration = integrationCredentialGeneration(manifest.id);
+        const stableAuthority = () =>
+          (this.#authorizationGenerations.get(manifest.id) ?? 0) === generation &&
+          integrationCredentialGeneration(manifest.id) === credentialGeneration &&
+          !integrationCredentialMutationPending(manifest.id);
+        if (tool.effect === "write") {
+          if (!stableAuthority())
+            throw operationError(
+              "operation_failed",
+              "The plugin connection is changing. Review a fresh call after it settles.",
+            );
+          this.#invalidateProviderStatus(provider);
+        }
         const status = await this.#providerStatus(provider, signal);
         this.#activeInvocationGrantedCapabilities.set(
           controller,
@@ -3586,10 +3614,21 @@ export class RegistryRuntime {
         }
         let validateAdmission: (() => void) | undefined;
         if (tool.effect === "write") {
-          const effective = snapshotIntegrationInput(decodedInput);
+          let effective;
+          try {
+            effective = snapshotIntegrationInput(decodedInput);
+          } catch {
+            throw operationError(
+              "invalid_input",
+              "The decoded plugin input must remain bounded finite JSON.",
+            );
+          }
           decodedInput = effective.value;
-          const generation = this.#authorizationGenerations.get(manifest.id) ?? 0;
-          const credentialGeneration = integrationCredentialGeneration(manifest.id);
+          if (!stableAuthority())
+            throw operationError(
+              "operation_failed",
+              "The plugin connection changed while preparing the review. Try a fresh call.",
+            );
           const expiresAt = Date.now() + 5 * 60_000;
           const review = Object.freeze({
             owner: approvalOwner!,
@@ -3619,8 +3658,7 @@ export class RegistryRuntime {
               this.#closing ||
               Date.now() >= expiresAt ||
               !decision.isCurrent() ||
-              (this.#authorizationGenerations.get(manifest.id) ?? 0) !== generation ||
-              integrationCredentialGeneration(manifest.id) !== credentialGeneration ||
+              !stableAuthority() ||
               this.#catalog.get(manifest.id)?.provider !== provider ||
               !selected?.enabled ||
               selected.version !== installed.version ||
@@ -3669,6 +3707,7 @@ export class RegistryRuntime {
             ? this.#providerOperation(provider, invokeProvider, {
                 signal,
                 ...(validateAdmission ? { validateAdmission } : {}),
+                onCommitAdmission: () => retainIntegrationWriteCredentials(manifest.id),
               })
             : invokeProvider(),
         );

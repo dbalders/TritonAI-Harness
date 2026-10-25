@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Canonical bytes are hashed synchronously before any approval wait.
-import type { ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import type { AuthSessionId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import * as NodeCrypto from "node:crypto";
@@ -116,11 +116,23 @@ export function reviewIntegrationInput(input: Json): string {
   return JSON.stringify(redact(input), null, 2);
 }
 
-export interface IntegrationApprovalOwner {
+interface IntegrationThreadApprovalOwner {
+  readonly kind?: "thread";
   readonly threadId: ThreadId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
 }
+
+export interface IntegrationSettingsApprovalOwner {
+  readonly kind: "settings";
+  readonly sessionId: AuthSessionId;
+  readonly connectionId: string;
+  readonly submissionId: string;
+}
+
+export type IntegrationApprovalOwner =
+  | IntegrationThreadApprovalOwner
+  | IntegrationSettingsApprovalOwner;
 
 export interface IntegrationWriteReview {
   readonly owner: IntegrationApprovalOwner;
@@ -143,11 +155,14 @@ export type IntegrationWriteDecision =
 type ApprovalGate = (
   review: IntegrationWriteReview,
 ) => Effect.Effect<IntegrationWriteDecision | undefined>;
-const gates = new Map<ProviderInstanceId, Set<ApprovalGate>>();
+const gates = new Map<string, Set<ApprovalGate>>();
+
+const settingsGateKey = (owner: IntegrationSettingsApprovalOwner) =>
+  `settings:${owner.sessionId}:${owner.connectionId}:${owner.submissionId}`;
 
 /** Registers a host presenter; disposing it invalidates every outstanding decision it issued. */
-export function installIntegrationWriteGate(instanceId: ProviderInstanceId, gate: ApprovalGate) {
-  const registered = gates.get(instanceId) ?? new Set();
+function installGate(key: string, gate: ApprovalGate) {
+  const registered = gates.get(key) ?? new Set();
   let active = true;
   const scoped: ApprovalGate = (review) =>
     gate(review).pipe(
@@ -161,14 +176,25 @@ export function installIntegrationWriteGate(instanceId: ProviderInstanceId, gate
       ),
     );
   registered.add(scoped);
-  gates.set(instanceId, registered);
+  gates.set(key, registered);
   return {
     [Symbol.dispose]() {
       active = false;
       registered.delete(scoped);
-      if (registered.size === 0) gates.delete(instanceId);
+      if (registered.size === 0) gates.delete(key);
     },
   };
+}
+
+export function installIntegrationWriteGate(instanceId: ProviderInstanceId, gate: ApprovalGate) {
+  return installGate(`provider:${instanceId}`, gate);
+}
+
+export function installSettingsIntegrationWriteGate(
+  owner: IntegrationSettingsApprovalOwner,
+  gate: ApprovalGate,
+) {
+  return installGate(settingsGateKey(owner), gate);
 }
 
 export const registerIntegrationWriteGate = (
@@ -182,7 +208,11 @@ export const registerIntegrationWriteGate = (
 
 export const requestIntegrationWriteApproval = Effect.fn("requestIntegrationWriteApproval")(
   function* (review: IntegrationWriteReview) {
-    for (const gate of gates.get(review.owner.providerInstanceId) ?? []) {
+    const key =
+      review.owner.kind === "settings"
+        ? settingsGateKey(review.owner)
+        : `provider:${review.owner.providerInstanceId}`;
+    for (const gate of gates.get(key) ?? []) {
       const decision = yield* gate(review);
       if (decision !== undefined) return decision;
     }
@@ -192,6 +222,8 @@ export const requestIntegrationWriteApproval = Effect.fn("requestIntegrationWrit
 );
 
 const credentialGenerations = new Map<string, number>();
+const pendingCredentialMutations = new Map<string, number>();
+const admittedCredentialReaders = new Map<string, number>();
 
 export function integrationCredentialGeneration(integrationId: string): number {
   return credentialGenerations.get(integrationId) ?? 0;
@@ -199,4 +231,43 @@ export function integrationCredentialGeneration(integrationId: string): number {
 
 export function invalidateIntegrationCredentials(integrationId: string): void {
   credentialGenerations.set(integrationId, integrationCredentialGeneration(integrationId) + 1);
+}
+
+export function integrationCredentialMutationPending(integrationId: string): boolean {
+  return (pendingCredentialMutations.get(integrationId) ?? 0) > 0;
+}
+
+export function beginIntegrationCredentialMutation(integrationId: string): () => void {
+  if ((admittedCredentialReaders.get(integrationId) ?? 0) > 0)
+    throw new Error("Credentials cannot change while an approved plugin write is still settling.");
+  invalidateIntegrationCredentials(integrationId);
+  pendingCredentialMutations.set(
+    integrationId,
+    (pendingCredentialMutations.get(integrationId) ?? 0) + 1,
+  );
+  let settled = false;
+  return () => {
+    if (settled) return;
+    settled = true;
+    invalidateIntegrationCredentials(integrationId);
+    const remaining = (pendingCredentialMutations.get(integrationId) ?? 1) - 1;
+    if (remaining === 0) pendingCredentialMutations.delete(integrationId);
+    else pendingCredentialMutations.set(integrationId, remaining);
+  };
+}
+
+/** Keep an admitted write on the reviewed account until its actual provider work settles. */
+export function retainIntegrationWriteCredentials(integrationId: string): () => void {
+  admittedCredentialReaders.set(
+    integrationId,
+    (admittedCredentialReaders.get(integrationId) ?? 0) + 1,
+  );
+  let active = true;
+  return () => {
+    if (!active) return;
+    active = false;
+    const remaining = (admittedCredentialReaders.get(integrationId) ?? 1) - 1;
+    if (remaining === 0) admittedCredentialReaders.delete(integrationId);
+    else admittedCredentialReaders.set(integrationId, remaining);
+  };
 }

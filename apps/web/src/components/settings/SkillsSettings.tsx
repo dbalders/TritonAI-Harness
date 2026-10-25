@@ -48,6 +48,8 @@ import { usePrimaryEnvironmentId } from "../../state/environments";
 import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
+import { CommonsApprovalDialog } from "./CommonsApprovalDialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
@@ -477,6 +479,9 @@ export function SkillsSettingsPanel() {
     label: "skill enabled",
     reportFailure: false,
   });
+  const confirmCommonsReviewSupport = useAtomQueryRunner(serverEnvironment.commonsApproval, {
+    reportFailure: false,
+  });
   const submitSkillToCommonsCommand = useAtomCommand(
     serverEnvironment.submitProviderSkillToTritonAiCommons,
     { label: "skill submit to commons", reportFailure: false },
@@ -723,6 +728,9 @@ export function SkillsSettingsPanel() {
     });
     return await (async () => {
       try {
+        unwrapAtomCommandResult(
+          await confirmCommonsReviewSupport({ environmentId: primaryEnvironmentId, input: {} }),
+        );
         const commandResult = await submitSkillToCommonsCommand({
           environmentId: primaryEnvironmentId,
           input: {
@@ -988,6 +996,10 @@ export function SkillsSettingsPanel() {
           })
         )}
       </SettingsSection>
+
+      {submittingSkillKey !== null && primaryEnvironmentId !== null ? (
+        <CommonsApprovalDialog environmentId={primaryEnvironmentId} />
+      ) : null}
 
       {managedManifestWarning ? (
         <SettingsSection title="Managed Skills">

@@ -2396,6 +2396,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     "expired",
     "replaced",
     "undisclosed",
+    "invalid-depth",
+    "invalid-size",
+    "invalid-commons-depth",
   ] as const)("enforces live V2 plugin dispatch at the %s boundary", (scenario) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -2558,6 +2561,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             },
           };
         });
+        let toolArguments: Schema.Json = {};
+        if (scenario === "invalid-depth" || scenario === "invalid-commons-depth") {
+          for (let depth = 0; depth < 65; depth += 1) toolArguments = { nested: toolArguments };
+        } else if (scenario === "invalid-size")
+          toolArguments = { code: "x".repeat(4 * 1024 * 1024) };
         const transcript = makeCodexReplayTranscript({
           scenario: name,
           entries: [
@@ -2572,8 +2580,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   threadId: nativeThreadId,
                   turnId: nativeTurnId,
                   callId: "fixture-call",
-                  tool: dynamicName,
-                  arguments: {},
+                  tool:
+                    scenario === "invalid-commons-depth"
+                      ? tritonAiCommonsDynamicToolDefinition.name
+                      : dynamicName,
+                  arguments: toolArguments,
                 },
               },
             },
@@ -2657,7 +2668,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   : "approval-required",
           },
         });
-        if (scenario !== "undisclosed") {
+        if (scenario !== "undisclosed" && !scenario.startsWith("invalid")) {
           const request = yield* Deferred.await(pending);
           assert.equal(invocations, 0, "every plugin write must wait for user consent");
           const displayed = harness.events

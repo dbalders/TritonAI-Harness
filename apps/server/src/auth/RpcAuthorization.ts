@@ -128,6 +128,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverRemoveProviderSkill]: AuthProvidersManageScope,
   [WS_METHODS.serverSetProviderSkillEnabled]: AuthProvidersManageScope,
   [WS_METHODS.serverSubmitProviderSkillToTritonAiCommons]: AuthProvidersManageScope,
+  [WS_METHODS.serverSubscribeCommonsApproval]: AuthProvidersManageScope,
+  [WS_METHODS.serverRespondCommonsApproval]: AuthProvidersManageScope,
   [WS_METHODS.serverListPlugins]: AuthOrchestrationReadScope,
   [WS_METHODS.serverInstallPlugin]: AuthProvidersManageScope,
   [WS_METHODS.serverUninstallPlugin]: AuthProvidersManageScope,

@@ -7,6 +7,7 @@ import {
   AuthPreviewOperateScope,
   AuthFilesystemReadScope,
   AuthSettingsWriteScope,
+  AuthProvidersManageScope,
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
 } from "./auth.ts";
@@ -15,6 +16,8 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.serverSubmitProviderSkillToTritonAiCommons]: AuthProvidersManageScope,
+  [WS_METHODS.serverRespondCommonsApproval]: AuthProvidersManageScope,
   [WS_METHODS.helpGetContext]: AuthDiagnosticsReadScope,
   [WS_METHODS.helpAsk]: AuthOrchestrationOperateScope,
   [WS_METHODS.shellOpenInEditor]: AuthOrchestrationOperateScope,

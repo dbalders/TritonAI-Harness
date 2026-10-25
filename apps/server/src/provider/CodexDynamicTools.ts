@@ -331,7 +331,10 @@ export function planDynamicToolApproval(input: {
   return {
     requiresApproval: input.requiresApproval === true,
     grantKey: input.payload.tool,
-    prompt: dynamicToolApprovalPrompt(input.payload),
+    prompt:
+      input.requiresApproval === true
+        ? dynamicToolApprovalPrompt(input.payload)
+        : input.payload.tool,
   };
 }
 

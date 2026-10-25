@@ -11,7 +11,8 @@ export const integrationWriteTestOwner = {
 export function installApprovedIntegrationWriteFixture() {
   return installIntegrationWriteGate(integrationWriteTestOwner.providerInstanceId, (review) =>
     Effect.succeed(
-      review.owner.providerSessionId === integrationWriteTestOwner.providerSessionId
+      review.owner.kind !== "settings" &&
+        review.owner.providerSessionId === integrationWriteTestOwner.providerSessionId
         ? { approved: true as const, isCurrent: () => true }
         : { approved: false as const },
     ),

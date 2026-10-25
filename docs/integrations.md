@@ -41,17 +41,22 @@ lifecycle; stateless and skills-only packages cannot declare them.
 Every tool also declares `effect: "read" | "write"`, which must agree with the provider's executable
 metadata. A declared write requires one explicit host decision for each invocation, including in
 Full access and Auto. Tool-name grants and native runtime permission decisions do not authorize it.
-The current presenter belongs to an active managed Codex turn; other adapters and outside MCP
-clients fail closed for writes when no presenter is available. Read tools retain their access rules.
+Presenters belong to an active managed Codex turn or the initiating Settings sharing connection;
+other adapters and outside MCP clients fail closed for writes when no presenter is available.
+Read tools retain their access rules.
 
 The registry detaches JSON before awaiting readiness, decodes that snapshot, and presents the
 complete effective payload with recursively redacted credential fields. A `summary` is an ordinary
-argument and cannot replace the remaining payload. Encoded JSON larger than 4 MiB, excessive nesting,
+argument and cannot replace the remaining payload. Settings sharing uses its initiating authenticated
+connection to present each write; the initial public-sharing confirmation only starts that flow.
+Encoded JSON larger than 4 MiB, excessive nesting,
 accessors and non-JSON values are rejected rather than shown as a shortened review. The decision
-binds the original and effective SHA-256 digests, tool, thread/session/turn, registry incarnation,
+binds the original and effective SHA-256 digests, tool, caller lifetime, registry incarnation,
 connection authorization generation and five-minute expiry. It cannot be transferred to another call.
 Connection changes, credential mutations, presenter disposal and owner-session replacement invalidate
-pending authority, including while the commit journal is being written.
+pending authority, including while the commit journal is being written. Expiry ends the review wait.
+Scoped credential changes are refused while admitted provider work is still settling, keeping that
+write on its reviewed account; refresh credentials before requesting a fresh approval.
 
 Provider prepare/apply flows must still validate their plan identifiers, hashes and exact summaries;
 host approval does not replace those checks. An opaque provider plan is not an independently verified

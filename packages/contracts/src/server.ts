@@ -205,6 +205,38 @@ export const ServerSubmitProviderSkillToTritonAiCommonsResult = Schema.Struct({
 export type ServerSubmitProviderSkillToTritonAiCommonsResult =
   typeof ServerSubmitProviderSkillToTritonAiCommonsResult.Type;
 
+export const ServerCommonsWriteReview = Schema.Struct({
+  requestId: TrimmedNonEmptyString,
+  integrationName: TrimmedNonEmptyString,
+  toolName: TrimmedNonEmptyString,
+  accountLabel: Schema.NullOr(Schema.String),
+  connection: TrimmedNonEmptyString,
+  submittedDigest: TrimmedNonEmptyString,
+  effectiveDigest: TrimmedNonEmptyString,
+  payload: Schema.String,
+  expiresAt: NonNegativeInt,
+});
+export type ServerCommonsWriteReview = typeof ServerCommonsWriteReview.Type;
+
+export const ServerCommonsApprovalState = Schema.Struct({
+  submissionId: TrimmedNonEmptyString,
+  review: Schema.NullOr(ServerCommonsWriteReview),
+});
+export type ServerCommonsApprovalState = typeof ServerCommonsApprovalState.Type;
+
+export const ServerRespondCommonsApprovalInput = Schema.Struct({
+  submissionId: TrimmedNonEmptyString,
+  action: Schema.Union([
+    Schema.Struct({
+      type: Schema.Literal("respond"),
+      requestId: TrimmedNonEmptyString,
+      decision: Schema.Literals(["accept", "decline"]),
+    }),
+    Schema.Struct({ type: Schema.Literal("cancel") }),
+  ]),
+});
+export type ServerRespondCommonsApprovalInput = typeof ServerRespondCommonsApprovalInput.Type;
+
 export const ServerProviderSkillBundleFile = Schema.Struct({
   path: TrimmedNonEmptyString,
   content: Schema.String,
@@ -287,6 +319,7 @@ export class ServerTritonAiCommonsError extends Schema.TaggedError<ServerTritonA
   "ServerTritonAiCommonsError",
   {
     code: Schema.Literals([
+      "approval_required",
       "invalid_skill",
       "github_setup_required",
       "already_exists",

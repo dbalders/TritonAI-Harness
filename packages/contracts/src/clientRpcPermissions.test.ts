@@ -4,9 +4,17 @@ import {
   AuthDiagnosticsReadScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  AuthProvidersManageScope,
 } from "./auth.ts";
 import { CLIENT_GUARDED_RPC_SCOPES, clientRpcRequiredScopes } from "./clientRpcPermissions.ts";
 import { WS_METHODS } from "./rpc.ts";
+
+it.each([
+  WS_METHODS.serverSubmitProviderSkillToTritonAiCommons,
+  WS_METHODS.serverRespondCommonsApproval,
+])("requires provider management for public sharing mutation %s", (tag) => {
+  expect(clientRpcRequiredScopes(tag, undefined)).toEqual([AuthProvidersManageScope]);
+});
 
 describe("Help RPC permissions", () => {
   it("guards Help snapshots with diagnostics and settings/plugin read access", () => {

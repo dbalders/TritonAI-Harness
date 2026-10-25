@@ -1044,6 +1044,8 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   resolvedAt: Schema.NullOr(Schema.DateTimeUtc),
   decision: Schema.optional(ProviderApprovalDecision),
+  allowedDecisions: Schema.optional(Schema.Array(ProviderApprovalDecision)),
+  expiresAt: Schema.optional(Schema.DateTimeUtc),
   answers: Schema.optional(ProviderUserInputAnswers),
 });
 export type OrchestrationV2RuntimeRequest = typeof OrchestrationV2RuntimeRequest.Type;
@@ -2079,6 +2081,7 @@ export const OrchestrationV2RuntimeRequestJson = OrchestrationV2RuntimeRequest.m
     ...fields,
     createdAt: Schema.DateTimeUtcFromString,
     resolvedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+    expiresAt: Schema.optional(Schema.DateTimeUtcFromString),
   }),
 );
 export type OrchestrationV2RuntimeRequestJson = typeof OrchestrationV2RuntimeRequestJson.Type;
