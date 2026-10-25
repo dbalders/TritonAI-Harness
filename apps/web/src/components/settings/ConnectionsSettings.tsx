@@ -33,6 +33,7 @@ import {
   AuthStandardClientScopes,
   AuthReadOnlyClientScopes,
   AuthTerminalReadScope,
+  AuthTerminalOperateScope,
   type AuthClientSession,
   type AuthEnvironmentScope,
   type AuthGrantScope,
@@ -1037,8 +1038,10 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     ...AuthReadOnlyClientScopes,
   ]);
   const [deviceControlConfirmed, setDeviceControlConfirmed] = useState(false);
-  const deviceControlSelected = pairingScopes.includes(AuthOrchestrationOperateScope);
   const selectedScopes = pairingScopes.filter((scope) => delegatableScopes.includes(scope));
+  const deviceControlSelected =
+    selectedScopes.includes(AuthOrchestrationOperateScope) ||
+    selectedScopes.includes(AuthTerminalOperateScope);
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
 
   const handleCreatePairingLink = async () => {
@@ -1154,6 +1157,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                           AuthFilesystemReadScope,
                           AuthDiagnosticsReadScope,
                           AuthTerminalReadScope,
+                          AuthTerminalOperateScope,
                         ].filter((scope) => delegatableScopes.includes(scope)),
                       )
                     }

@@ -425,7 +425,7 @@ export class SessionStore extends Context.Service<
 
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
-const DEVICE_CONTROL_SESSION_TTL = Duration.hours(8);
+export const DEVICE_CONTROL_SESSION_TTL = Duration.hours(8);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
 
 const SessionClaims = Schema.Struct({

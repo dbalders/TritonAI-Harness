@@ -289,8 +289,11 @@ grant access before pairing a device that will run agents. Agent control require
 every permission, including when the agent asks for approvals; removing any one
 blocks launching, continuing, and approving tasks. Runtime modes control how an
 agent asks for permission, rather than limiting what a paired device can access.
-New sessions that can operate tasks or terminals expire within eight hours. Create a
-fresh pairing link when access expires.
+New sessions that can operate tasks or terminals expire within eight hours, even
+when a longer lifetime is requested. This includes full-control MCP and local
+bootstrap sessions; read-only MCP access lasts up to 30 days. A local desktop can
+bootstrap again, and a paired client needs a fresh pairing link when access expires.
+The reusable development credential keeps its separate development lifetime.
 
 To change an existing client's permissions, create a fresh pairing link with the
 scopes it needs. In a browser opened directly on the environment, open that link

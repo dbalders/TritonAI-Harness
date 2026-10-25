@@ -52,7 +52,9 @@ const runWithEnvironmentAuth = Effect.fn("auth.runWithEnvironmentAuth")(function
 
 const ttlFlag = Flag.String("ttl").pipe(
   Flag.withSchema(DurationFromString),
-  Flag.withDescription("TTL, for example `5m`, `1h`, `30d`, or `15 minutes`."),
+  Flag.withDescription(
+    "TTL, for example `5m`, `1h`, or `30d`; task/terminal authority is capped at 8h.",
+  ),
   Flag.optional,
 );
 

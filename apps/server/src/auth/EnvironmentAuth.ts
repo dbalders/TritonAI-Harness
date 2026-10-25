@@ -1,7 +1,6 @@
 import {
   AuthAccessTokenType,
   AuthAccessWriteScope,
-  AuthOrchestrationReadScope,
   AuthStandardClientScopes,
   AuthReadOnlyClientScopes,
   type AuthAccessTokenResult,
@@ -73,7 +72,7 @@ export interface IssuedBearerSession {
  * cannot reach the full RPC surface around that cap.
  */
 const MCP_CLIENT_SUBJECT = "mcp-client";
-const MCP_CLIENT_SESSION_TTL = Duration.days(30);
+const MCP_READ_ONLY_SESSION_TTL = Duration.days(30);
 
 export const mcpClientScopes = (
   access: AuthMcpClientAccess,
@@ -1276,7 +1275,10 @@ export const make = Effect.gen(function* () {
         subject: MCP_CLIENT_SUBJECT,
         method: "bearer-access-token",
         scopes: mcpClientScopes(input.access),
-        ttl: MCP_CLIENT_SESSION_TTL,
+        ttl:
+          input.access === "read-only"
+            ? MCP_READ_ONLY_SESSION_TTL
+            : SessionStore.DEVICE_CONTROL_SESSION_TTL,
         ...(input.access === "read-only" ? {} : { runtimeModeCeiling: input.access }),
         client: { ...input.client, label: input.label, deviceType: "bot" },
       })
