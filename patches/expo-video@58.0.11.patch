@@ -109,7 +109,7 @@ diff --git a/ios/VideoPlayer.swift b/ios/VideoPlayer.swift
 +    // AVPlayer keeps the requested rate while buffering; failure can zero it without a user pause.
 +    if newRate != 0 {
 +      playbackRequested = true
-+    } else if player.status != .failed && player.currentItem?.status != .failed && observer?.status != .error {
++    } else if player.status != .failed && player.currentItem?.status != .failed && status != .error {
 +      playbackRequested = false
 +    }
      if #available(iOS 16.0, tvOS 16.0, *) {
