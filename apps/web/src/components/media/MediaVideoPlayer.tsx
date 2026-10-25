@@ -95,7 +95,10 @@ export function MediaVideoPlayer({
     playbackSource.revision === revision &&
     playbackSource.src !== latestSrc
   ) {
-    setResume({ time: video.currentTime, playing: !video.paused, rate: video.playbackRate });
+    setResume(
+      (current) =>
+        current ?? { time: video.currentTime, playing: !video.paused, rate: video.playbackRate },
+    );
     setPlaybackSource({ src: latestSrc, revision, resourceKey });
   }
 

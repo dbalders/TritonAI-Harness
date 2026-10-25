@@ -11,7 +11,7 @@ import { useMediaActions } from "../state/mediaActions";
 import type { MediaActionsSource } from "../lib/mediaActionsSource";
 import { useFullscreenVideoOpen, useMediaAudioSessionHold } from "../lib/videoAudioSession";
 import { MediaActionsMenu } from "./MediaActionsMenu";
-import { makeVideoSourceRenewal } from "../lib/videoSourceRenewal";
+import { makeVideoSourceRenewal, mayResumeVideoPlayback } from "../lib/videoSourceRenewal";
 
 function LoadedMediaVideo(props: {
   readonly uri: string;
@@ -38,6 +38,15 @@ function LoadedMediaVideo(props: {
   const { status } = useEvent(player, "statusChange", { status: player.status });
   const { isPlaying } = useEvent(player, "playingChange", { isPlaying: player.playing });
   useMediaAudioSessionHold(isPlaying);
+  const canResumePlayback = useEffectEvent(() =>
+    mayResumeVideoPlayback({
+      platform: Platform.OS,
+      appState: AppState.currentState ?? null,
+      focused,
+      paused,
+      fullscreen: fullscreen.current,
+    }),
+  );
   const loadSource = useEffectEvent(
     async (source: string, playInitially: boolean, signal: AbortSignal, refresh: boolean) => {
       const loader = renewal.current;
@@ -54,7 +63,7 @@ function LoadedMediaVideo(props: {
             throw new Error("This native client needs the video playback update.");
           return player.playbackRequested;
         },
-        canPlay: () => active.current || (fullscreen.current && focused && !paused),
+        canPlay: () => canResumePlayback(),
       });
     },
   );

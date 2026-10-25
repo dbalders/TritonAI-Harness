@@ -5,6 +5,21 @@ type Player = Pick<
   "currentTime" | "playbackRate" | "playing" | "pause" | "play" | "replaceAsync"
 >;
 
+export function mayResumeVideoPlayback(state: {
+  readonly platform: string;
+  readonly appState: string | null;
+  readonly focused: boolean;
+  readonly paused: boolean;
+  readonly fullscreen: boolean;
+}): boolean {
+  return (
+    state.focused &&
+    !state.paused &&
+    (state.appState === "active" ||
+      (state.platform === "android" && state.fullscreen && state.appState === "background"))
+  );
+}
+
 /** Native replacements cannot be aborted; serialize them and restore only the latest request. */
 export function makeVideoSourceRenewal(player: Player) {
   let generation = 0;

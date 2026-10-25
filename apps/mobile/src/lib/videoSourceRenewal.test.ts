@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vite-plus/test";
 import type { VideoSource } from "expo-video";
-import { makeVideoSourceRenewal } from "./videoSourceRenewal";
+import { makeVideoSourceRenewal, mayResumeVideoPlayback } from "./videoSourceRenewal";
 
 function fixture() {
   const sources: VideoSource[] = [];
@@ -132,3 +132,37 @@ it.each([false, true])(
     expect(player.playing).toBe(requested);
   },
 );
+
+it.each([
+  { platform: "android", appState: "inactive", focused: true, paused: false, expected: false },
+  { platform: "android", appState: "background", focused: false, paused: false, expected: false },
+  { platform: "android", appState: "background", focused: true, paused: true, expected: false },
+  { platform: "ios", appState: "background", focused: true, paused: false, expected: false },
+  { platform: "android", appState: "background", focused: true, paused: false, expected: true },
+])("honors current lifecycle eligibility during fullscreen renewal: %j", async (transition) => {
+  const { player, loader, options } = fixture();
+  let state = {
+    platform: transition.platform,
+    appState: "active",
+    focused: true,
+    paused: false,
+    fullscreen: true,
+  };
+  const currentOptions = { ...options, canPlay: () => mayResumeVideoPlayback(state) };
+  await loader.replace("signed:first", currentOptions);
+  player.currentTime = 73;
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  player.replaceAsync.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  const pending = loader.replace("signed:renewed", currentOptions);
+  await entered.promise;
+  state = { ...state, ...transition };
+  player.pause();
+  release.resolve();
+  expect(await pending).toBe(true);
+  expect(player.currentTime).toBe(73);
+  expect(player.playing).toBe(transition.expected);
+});

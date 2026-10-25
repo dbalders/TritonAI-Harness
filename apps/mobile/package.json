@@ -181,6 +181,7 @@
         "react-native-reanimated",
         "@react-native-menu/menu",
         "expo-audio",
+        "expo-video",
         "expo-network"
       ]
     }

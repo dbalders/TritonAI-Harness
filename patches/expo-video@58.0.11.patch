@@ -1,66 +1,36 @@
 diff --git a/android/src/main/java/expo/modules/video/VideoModule.kt b/android/src/main/java/expo/modules/video/VideoModule.kt
 --- a/android/src/main/java/expo/modules/video/VideoModule.kt
 +++ b/android/src/main/java/expo/modules/video/VideoModule.kt
-@@ -87,6 +87,11 @@
-           ref.playing
-         }
- 
+@@ -89,0 +90,5 @@
 +      Property("playbackRequested")
 +        .get { ref: VideoPlayer ->
 +          ref.playbackRequested
 +        }
 +
-       Property("muted")
-         .get { ref: VideoPlayer ->
-           ref.muted
 diff --git a/src/VideoPlayer.types.ts b/src/VideoPlayer.types.ts
 --- a/src/VideoPlayer.types.ts
 +++ b/src/VideoPlayer.types.ts
-@@ -12,6 +12,9 @@
-    * > Use `play` and `pause` methods to control the playback.
-    */
-   readonly playing: boolean;
+@@ -14,0 +15,3 @@
 +
 +  /** Requested playback, including buffering. Available on Android in Harness builds. */
 +  readonly playbackRequested?: boolean;
- 
-   /**
-    * Determines whether the player should automatically replay after reaching the end of the video.
 diff --git a/build/VideoPlayer.types.d.ts b/build/VideoPlayer.types.d.ts
 --- a/build/VideoPlayer.types.d.ts
 +++ b/build/VideoPlayer.types.d.ts
-@@ -10,6 +10,9 @@
-      * > Use `play` and `pause` methods to control the playback.
-      */
-     readonly playing: boolean;
+@@ -12,0 +13,3 @@
 +
 +    /** Requested playback, including buffering. Available on Android in Harness builds. */
 +    readonly playbackRequested?: boolean;
-     /**
-      * Determines whether the player should automatically replay after reaching the end of the video.
-      * @default false
 diff --git a/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 --- a/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
 +++ b/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
-@@ -101,6 +101,10 @@
-     sendEvent(PlayerEvent.IsPlayingChanged(new, old))
-   }
- 
+@@ -103,0 +104,4 @@
 +  @Volatile
 +  var playbackRequested = false
 +    private set
 +
-   var uncommittedSource: VideoSource? = source
-   private var commitedSource by IgnoreSameSet<VideoSource?>(null) { new, old ->
-     sendEvent(PlayerEvent.SourceChanged(new, old))
-@@ -267,6 +271,10 @@
-   private val playerListener = object : Player.Listener {
-     override fun onIsPlayingChanged(isPlaying: Boolean) {
-       this@VideoPlayer.playing = isPlaying
+@@ -269,0 +274,4 @@
 +    }
 +
 +    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
 +      this@VideoPlayer.playbackRequested = playWhenReady
-     }
- 
-     override fun onTracksChanged(tracks: Tracks) {

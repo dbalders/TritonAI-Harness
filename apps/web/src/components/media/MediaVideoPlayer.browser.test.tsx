@@ -125,3 +125,45 @@ it("stays paused when the page becomes hidden while a renewed source loads", asy
   expect(document.hidden).toBe(true);
   expect(video.paused).toBe(true);
 });
+
+it("retains the original playhead while a second renewal replaces a loading source", async () => {
+  const bytes = Uint8Array.from(atob(renewalVideoBase64), (value) => value.charCodeAt(0));
+  const waiting = new MediaSource();
+  const urls = [
+    URL.createObjectURL(new Blob([bytes], { type: "video/webm" })),
+    URL.createObjectURL(waiting),
+    URL.createObjectURL(new Blob([bytes], { type: "video/webm" })),
+  ];
+  using _urls = { [Symbol.dispose]: () => urls.forEach((url) => URL.revokeObjectURL(url)) };
+  const player = (src: string) => <MediaVideoPlayer src={src} label="Overlapping renewal clip" />;
+  await using screen = await render(player(urls[0]!));
+  const video = screen.container.querySelector("video")!;
+  await metadataReady(video);
+  await screen.getByLabelText("Overlapping renewal clip").click();
+  video.currentTime = 7;
+  await seekFinished(video);
+  video.playbackRate = 1.25;
+  await video.play();
+  const position = video.currentTime;
+  const sourceOpened = new Promise<void>((resolve) =>
+    waiting.addEventListener("sourceopen", () => resolve(), { once: true }),
+  );
+  await screen.rerender(player(urls[1]!));
+  await sourceOpened;
+  expect(video.readyState).toBe(0);
+  expect(video.currentTime).toBe(0);
+  expect(video.paused).toBe(true);
+  const metadata = new Promise<void>((resolve) =>
+    video.addEventListener("loadedmetadata", () => resolve(), { once: true }),
+  );
+  await screen.rerender(player(urls[2]!));
+  await metadata;
+  await seekFinished(video);
+  if (video.paused)
+    await new Promise<void>((resolve) =>
+      video.addEventListener("playing", () => resolve(), { once: true }),
+    );
+  expect(video.currentTime).toBeGreaterThanOrEqual(position - 0.25);
+  expect(video.playbackRate).toBe(1.25);
+  expect(video.paused).toBe(false);
+});
