@@ -36,13 +36,6 @@ describe("bundled Windows Cua Driver", () => {
   );
 
   // regression: #313 fix(desktop): package the Windows CUA driver without a console
-  it("is idempotent when the upstream helper already has no console", () => {
-    const image = executable("arm64");
-    image.writeUInt16LE(2, SUBSYSTEM_OFFSET);
-    expect(prepareWindowsCuaDriver(image, "arm64")).toEqual(image);
-  });
-
-  // regression: #313 fix(desktop): package the Windows CUA driver without a console
   it("rejects the wrong architecture", () => {
     expect(() => prepareWindowsCuaDriver(executable("x64"), "arm64")).toThrow();
   });

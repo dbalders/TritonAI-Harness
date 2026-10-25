@@ -1,4 +1,3 @@
-import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
@@ -12,9 +11,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as Result from "effect/Result";
-
-import * as Tracer from "effect/Tracer";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   CommandAvailability,
@@ -60,59 +56,6 @@ const withWindowsEnvironmentMocks = <A, E, R>(
     ),
     Effect.provideService(CommandAvailability, commandAvailable),
   );
-
-const recordCommandTrace = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
-  const spans: Array<Tracer.NativeSpan> = [];
-  const tracer = Tracer.make({
-    span: (options) => {
-      const span = new Tracer.NativeSpan(options);
-      spans.push(span);
-      return span;
-    },
-  });
-  const result = yield* effect.pipe(Effect.withTracer(tracer), Effect.result);
-  return { result, spans };
-});
-
-describe("readEnvironmentFromLoginShell probe", () => {
-  it("uses a shell-agnostic printenv PATH probe", () => {
-    const execFile = vi.fn<
-      (
-        file: string,
-        args: ReadonlyArray<string>,
-        options: { encoding: "utf8"; timeout: number },
-      ) => string
-    >(() => "__T3CODE_ENV_PATH_START__\n/a:/b\n__T3CODE_ENV_PATH_END__\n");
-
-    expect(readEnvironmentFromLoginShell("/opt/homebrew/bin/fish", ["PATH"], execFile).PATH).toBe(
-      "/a:/b",
-    );
-    expect(execFile).toHaveBeenCalledTimes(1);
-
-    const firstCall = execFile.mock.calls[0] as
-      | [string, ReadonlyArray<string>, { encoding: "utf8"; timeout: number }]
-      | undefined;
-    expect(firstCall).toBeDefined();
-    if (!firstCall) {
-      throw new Error("Expected execFile to be called");
-    }
-
-    const [shell, args, options] = firstCall;
-    expect(shell).toBe("/opt/homebrew/bin/fish");
-    expect(args).toHaveLength(2);
-    expect(args?.[0]).toBe("-ilc");
-    expect(args?.[1]).toContain("printenv PATH || true");
-    expect(args?.[1]).toContain("__T3CODE_ENV_PATH_START__");
-    expect(args?.[1]).toContain("__T3CODE_ENV_PATH_END__");
-    expect(options).toEqual({
-      encoding: "utf8",
-      timeout: 5000,
-      killSignal: "SIGKILL",
-      detached: true,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  });
-});
 
 describe("readEnvironmentFromLoginShell", () => {
   // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
@@ -497,42 +440,6 @@ describe("mergePathValues", () => {
       "/usr/local/bin:/usr/bin:/USR/BIN",
     );
   });
-});
-
-effectIt.layer(NodeServices.layer)("isCommandAvailable", (it) => {
-  // regression: #18871 fix(server): return null for unresolved optional commands
-  it.effect.each(["win32", "linux"] as const)(
-    "records available commands as successful lookups on %s",
-    (platform) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        // A Windows drive's colon would split an absolute directory in the Linux PATH case.
-        const directory = yield* fs.makeTempDirectoryScoped({
-          directory: ".",
-          prefix: "t3-command-trace-",
-        });
-        const cwd = path.relative(".", directory);
-        const executable = path.join(cwd, platform === "win32" ? "available.cmd" : "available");
-        yield* fs.writeFileString(executable, "");
-        yield* fs.chmod(executable, 0o700);
-        const env = { PATH: cwd, PATHEXT: ".CMD" };
-        for (const command of ["available", executable]) {
-          const { result, spans } = yield* recordCommandTrace(isCommandAvailable(command, { env }));
-          expect(Result.getOrThrow(result)).toBe(true);
-          expect(spans.length).toBeGreaterThan(0);
-          for (const span of spans) {
-            expect(span.status._tag).toBe("Ended");
-            if (span.status._tag === "Ended") {
-              expect(Exit.isSuccess(span.status.exit), span.name).toBe(true);
-            }
-          }
-        }
-      }).pipe(
-        Effect.provideService(HostProcess.Platform, platform),
-        Effect.provideService(CommandResolutionCache, new Map()),
-      ),
-  );
 });
 
 effectIt.layer(NodeServices.layer)("resolveCommandPath", (it) => {

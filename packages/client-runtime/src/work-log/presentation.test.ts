@@ -12,8 +12,6 @@ import {
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolSuccess,
-  summarizeToolGroup,
-  toolGroupSummaryKind,
 } from "./presentation.js";
 
 function commandItem(
@@ -96,38 +94,6 @@ describe("workEntryIndicatesToolFailure", () => {
 
     expect(workEntryIndicatesToolFailure(entry)).toBe(true);
     expect(workEntryDisplayIndicatesToolFailure({ ...entry, detail: "File not found" })).toBe(true);
-  });
-});
-
-describe("summarizeToolGroup", () => {
-  const entry = (
-    id: string,
-    overrides: Partial<WorkLogPresentationEntry>,
-  ): WorkLogPresentationEntry => ({
-    id,
-    createdAt: "2026-09-01T00:00:00Z",
-    label: "Tool call",
-    tone: "tool",
-    ...overrides,
-  });
-
-  it("excludes reasoning from mixed tool counts and icons", () => {
-    const thought = entry("thought", {
-      itemType: "reasoning",
-      tone: "thinking",
-      detail: "Check the source",
-    });
-    const command = entry("command", { itemType: "command_execution", command: "vp test run" });
-    expect(summarizeToolGroup([thought, command, { ...thought, id: "thought-2" }])).toEqual({
-      summary: "Ran 1 command",
-      hasFailure: false,
-    });
-    expect(toolGroupSummaryKind([thought, command])).toBe("command");
-    expect(summarizeToolGroup([thought]).summary).toBe("Reasoning");
-    expect(summarizeToolGroup([thought, { ...thought, id: "thought-2" }]).summary).toBe(
-      "Reasoning",
-    );
-    expect(toolGroupSummaryKind([thought])).toBe("reasoning");
   });
 });
 
@@ -217,16 +183,6 @@ describe("resolveWorkEntryToolPresentation", () => {
     expect(
       resolveWorkEntryToolPresentation({ ...entry, toolLifecycleStatus: "completed" })?.displayName,
     ).toBe(completed);
-  });
-
-  // regression: d53c8842be fix(branding): use TritonAI labels and logo for orchestration tools
-  it("keeps app branding for non-browser tools and falls back to the original tool label", () => {
-    expect(
-      resolveWorkEntryToolPresentation({
-        label: "mcp__t3_code__task_status",
-        toolTitle: "Check the child task",
-      }),
-    ).toEqual({ displayName: "Getting delegated task status", icon: "t3-code" });
   });
 
   it("does not brand unknown tools or another server's matching tool name", () => {

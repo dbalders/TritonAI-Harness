@@ -114,7 +114,7 @@ export function SidebarUpdateArchitectureWarning() {
   return isElectron ? <SidebarUpdateArchitectureWarningContent /> : null;
 }
 
-export function SidebarUpdateArchitectureWarningContent() {
+function SidebarUpdateArchitectureWarningContent() {
   const state = useDesktopUpdateState();
   const visible = shouldShowArm64IntelBuildWarning(state);
   const description = state && visible ? getArm64IntelBuildWarningDescription(state) : null;
@@ -189,7 +189,7 @@ export function SidebarUpdatePill() {
   return <SidebarUpdateControl />;
 }
 
-export function SidebarUpdateControl() {
+function SidebarUpdateControl() {
   const state = useDesktopUpdateState();
   const [isActionPending, setIsActionPending] = useState(false);
   const [isConfirmingEverything, setIsConfirmingEverything] = useState(false);

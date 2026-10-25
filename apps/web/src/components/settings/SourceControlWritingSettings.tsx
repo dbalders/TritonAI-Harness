@@ -65,7 +65,7 @@ const MODE_OPTIONS: Record<SourceControlWritingStyleMode, { label: string; descr
     },
   };
 
-export function filterSupportedSourceControlWriterProviders(
+function filterSupportedSourceControlWriterProviders(
   providers: ReadonlyArray<ServerProvider>,
 ): ServerProvider[] {
   return providers.filter((provider) => getDriverOption(provider.driver) !== undefined);

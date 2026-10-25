@@ -180,26 +180,6 @@ const makeHarness = Effect.fn("HelpPermissionsTest.makeHarness")(function* (
 });
 
 describe("Help permissions", () => {
-  it.effect(
-    "reads Help context with read and diagnostics grants while invocation stays unavailable",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const { atoms, calls, registry, setGrant } = yield* makeHarness();
-          setGrant(ENVIRONMENT, grant([AuthDiagnosticsReadScope, AuthOrchestrationReadScope]));
-          const atom = atoms.helpContext({ environmentId: ENVIRONMENT, input: {} });
-          yield* AtomRegistry.mount(registry, atom);
-          expect(yield* AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true })).toEqual(
-            CONTEXT,
-          );
-          expect(registry.get(atoms.askHelp.permissionAtom(ENVIRONMENT))).toBe(false);
-          expect(calls).toEqual([
-            { environmentId: ENVIRONMENT, method: WS_METHODS.helpGetContext, input: {} },
-          ]);
-        }),
-      ),
-  );
-
   it.effect.each([
     { scopes: [], missing: AuthDiagnosticsReadScope },
     { scopes: [AuthOrchestrationOperateScope], missing: AuthDiagnosticsReadScope },

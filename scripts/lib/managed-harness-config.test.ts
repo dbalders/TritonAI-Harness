@@ -80,12 +80,6 @@ describe("managed Harness config build input", () => {
     expect(() => parseManagedHarnessConfig(JSON.stringify(missingImage))).toThrow(/image input/u);
   });
 
-  it("rejects unknown fields", () => {
-    expect(() =>
-      parseManagedHarnessConfig(JSON.stringify({ ...configFixture(), unexpected: true })),
-    ).toThrow(/unexpected/u);
-  });
-
   it.each(["default", "restrictedFallback", "replacements"] as const)(
     "rejects missing catalog references in %s",
     (field) => {

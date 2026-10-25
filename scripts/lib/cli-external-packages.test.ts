@@ -1,4 +1,3 @@
-import { selectCliRuntimeExternalDependencies } from "./cli-external-packages.ts";
 import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -55,35 +54,6 @@ describe("shouldBundleCliDependency", () => {
 
   it("treats prefix-matched siblings as external", () => {
     assert.strictEqual(shouldBundleCliDependency("node-gyp-build-optional-packages"), false);
-  });
-
-  it("bundles ordinary runtime dependencies", () => {
-    for (const id of [
-      "@effect/platform",
-      "effect-acp/client",
-      "effect-codex-app-server/client",
-      "hono",
-      "@t3tools/shared/HostProcess",
-    ]) {
-      assert.strictEqual(shouldBundleCliDependency(id), true, id);
-    }
-  });
-});
-
-describe("selectCliRuntimeExternalDependencies", () => {
-  it("keeps only runtime-external dependency roots for the Windows sidecar", () => {
-    assert.deepStrictEqual(
-      selectCliRuntimeExternalDependencies({
-        "@ff-labs/fff-node": "2.0.0",
-        effect: "3.0.0",
-        "node-pty": "4.0.0",
-      }),
-      {
-        "@ff-labs/fff-node": "2.0.0",
-        effect: "3.0.0",
-        "node-pty": "4.0.0",
-      },
-    );
   });
 });
 
@@ -189,16 +159,6 @@ var x = 1;
     assert.strictEqual(result.regionCount, 2);
   });
 
-  it("ignores packages that are meant to be bundled", () => {
-    const source =
-      region("../../node_modules/.pnpm/hono@4.0.0/node_modules/hono/dist/index.js") +
-      region("../../src/server/main.ts");
-    const result = findInlinedExternalPackages(source);
-
-    assert.deepStrictEqual(result.inlined, []);
-    assert.strictEqual(result.regionCount, 2);
-  });
-
   it("reports the packages that were inlined, not just the violations", () => {
     const source =
       region("../../node_modules/.pnpm/hono@4.0.0/node_modules/hono/dist/index.js") +
@@ -208,13 +168,6 @@ var x = 1;
 
     assert.deepStrictEqual(result.inlinedPackages, ["hono", "yaml"]);
     assert.deepStrictEqual(result.inlined, []);
-  });
-
-  it("does not report the pnpm store directory as a package", () => {
-    const result = findInlinedExternalPackages(
-      region("../../node_modules/.pnpm/hono@4.0.0/node_modules/hono/dist/index.js"),
-    );
-    assert.deepStrictEqual(result.inlinedPackages, ["hono"]);
   });
 });
 

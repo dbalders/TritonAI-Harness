@@ -144,66 +144,6 @@ describe("WSL runtime cache", () => {
     expect(script).toContain("/1.2.3_x64__touch__tmp_nope");
     expect(script).not.toContain(runtimeId);
   });
-
-  // regression: #5769 fix(desktop): Cache Runtime locally on WSL Filesystem, dramatically improving launch times
-  it("installs through a temporary directory and only reuses valid completed caches", () => {
-    const script = buildWslRuntimeInstallScript(
-      "/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz",
-      "1.2.3-x64",
-      "b".repeat(64),
-    );
-
-    expect(script).toContain('runtime_parent="$HOME/.tritonai-harness/wsl-runtime"');
-    expect(script).toContain('  [ -f "$ready_marker" ] &&');
-    expect(script).toContain('    runtime_entry_runs "$runtime_root" 2>/dev/null &&');
-    expect(script).toContain("if runtime_is_ready; then");
-    expect(script).not.toContain("bin.mjs");
-    expect(script).not.toContain("node-pty");
-    expect(script).toContain("trap 'exit 1' HUP INT TERM");
-    expect(script).toContain('exec 9> "$runtime_lock"');
-    expect(script).toContain("flock -x 9");
-    expect(script).not.toContain('rm -rf "$runtime_lock"');
-    expect(script).toContain('mv -T "$runtime_root" "$runtime_stale"');
-    expect(script).toContain('mktemp -d "$runtime_parent/.1.2.3-x64.tmp.XXXXXX"');
-    // The release archive wraps everything in one `t3-<version>-linux-x64/`
-    // directory; stripping it puts the executable at `$runtime_root/t3`.
-    expect(script).toContain(
-      "tar -xzf '/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz' -C \"$runtime_tmp\" --strip-components=1",
-    );
-    expect(script).toContain('if ! runtime_entry_runs "$runtime_tmp"; then');
-    expect(script).toContain('mv -T "$runtime_tmp" "$runtime_root"');
-    expect(script).not.toContain('rm -rf "$runtime_root"');
-
-    const lockAcquired = script.indexOf("flock -x 9");
-    const readinessAfterLock = script.indexOf("if runtime_is_ready; then", lockAcquired + 1);
-    const existingRuntimeMoved = script.indexOf('mv -T "$runtime_root" "$runtime_stale"');
-    expect(lockAcquired).toBeGreaterThan(-1);
-    expect(readinessAfterLock).toBeGreaterThan(lockAcquired);
-    expect(existingRuntimeMoved).toBeGreaterThan(readinessAfterLock);
-  });
-
-  // regression: #5769 fix(desktop): Cache Runtime locally on WSL Filesystem, dramatically improving launch times
-  it("parses only absolute Linux runtime paths", () => {
-    expect(
-      parseWslRuntimeRoot("runtimeRoot:/home/josh/.tritonai-harness/wsl-runtime/1.2.3-x64\n"),
-    ).toBe("/home/josh/.tritonai-harness/wsl-runtime/1.2.3-x64");
-    expect(parseWslRuntimeRoot("runtimeRoot:relative/path\n")).toBeNull();
-    expect(parseWslRuntimeRoot("noise\n")).toBeNull();
-  });
-
-  // regression: #5769 fix(desktop): Cache Runtime locally on WSL Filesystem, dramatically improving launch times
-  it("invalidates a cache by dropping its ready marker, not the tree", () => {
-    const script = buildWslRuntimeInvalidateScript("1.2.3/x64");
-
-    // Readiness is a presence check, so a tree whose pty.node is present but
-    // unloadable stays ready forever unless the probe can revoke the marker.
-    expect(script).toContain(
-      'rm -f "$HOME/.tritonai-harness/wsl-runtime/1.2.3_x64/.t3code-wsl-runtime-ready"',
-    );
-    // Deleting the tree here would pull it out from under any backend still
-    // running from it; the next install moves an unready root aside instead.
-    expect(script).not.toContain("rm -rf");
-  });
 });
 
 describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed)", () => {

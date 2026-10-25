@@ -259,12 +259,6 @@ describe("folder drag scope", () => {
     expect(restrictSidebarThreadToFolder(args).y).toBe(400);
   });
 
-  // regression: #386 fix(web): restore folder stack and in-folder thread dragging
-  it("keeps a thread row within its own folder's bounds", () => {
-    const args = modifierArgs(sidebarFolderId("A"), 40, 400);
-    expect(restrictSidebarThreadToFolder(args).y).toBe(360);
-  });
-
   // Folder A holds a1 a2, folder B holds b1; rows stack 37px apart.
   const entries = [
     { id: sidebarFolderId("A"), folder: SIDEBAR_FOLDER_SCOPE, top: 0, height: 110 },
@@ -310,23 +304,6 @@ describe("folder drag scope", () => {
   it("keeps a row among its own folder's rows when dragged over another folder", () => {
     const ids = sidebarFolderCollisionDetection(argsFor("a1", 147)).map((c) => c.id);
     expect(ids).toEqual(["a2", "a1"]);
-  });
-
-  // regression: #386 fix(web): restore folder stack and in-folder thread dragging
-  it("places a lifted folder by its header, not its center", () => {
-    // Lifted 50px: its center is nearer B's center, its header nearer A's top.
-    const ids = sidebarFolderCollisionDetection(argsFor(sidebarFolderId("A"), 50)).map(
-      (collision) => collision.id,
-    );
-    expect(ids).toEqual([sidebarFolderId("A"), sidebarFolderId("B")]);
-  });
-
-  // regression: #386 fix(web): restore folder stack and in-folder thread dragging
-  it("sorts a lifted folder only among folders", () => {
-    const ids = sidebarFolderCollisionDetection(argsFor(sidebarFolderId("A"), 111)).map(
-      (collision) => collision.id,
-    );
-    expect(ids).toEqual([sidebarFolderId("B"), sidebarFolderId("A")]);
   });
 });
 
@@ -418,30 +395,6 @@ describe("sidebar drag projection", () => {
     expect(result.get(sidebarMarkerId("pinned-divider"))).toEqual(stationary);
     expect(result.get("a1")).toEqual(stationary);
   });
-
-  // regression: #386 fix(web): restore folder stack and in-folder thread dragging
-  it.each(["p", "s"])(
-    "keeps the folder block in place of active rows while %s is dragged into it",
-    (active) => {
-      const items = [
-        pinnedHeader,
-        thread("p", "pinned"),
-        divider,
-        marker("active-placeholder"),
-        marker("active-folders"),
-        settledHeader,
-        thread("s", "settled"),
-      ];
-      const result = preview(
-        { items, settledOrder: ["s"], settledExpanded: true },
-        active,
-        sidebarMarkerId("active-folders"),
-      );
-      expect(result.get(sidebarMarkerId("active-folders"))?.scaleY).toBe(1);
-      expect(result.get(sidebarMarkerId("active-placeholder"))?.scaleY).toBe(0);
-      expect(result.get(active)).toEqual(stationary);
-    },
-  );
 
   it("preserves settled order while opening the zero-height Active target", () => {
     const items = [

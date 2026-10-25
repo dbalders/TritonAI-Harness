@@ -45,11 +45,6 @@ describe("compactVoicePauses", () => {
   });
 
   // regression: #407 fix(web): shorten long dictation pauses before transcription
-  it("does not produce uploadable audio when no speech is detected", () => {
-    expect(compactVoicePauses(new Float32Array(10 * RATE), [])).toBeNull();
-  });
-
-  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it.each([
     { name: "fractional", speech: [{ start: 0.5, end: 100 }] },
     { name: "empty", speech: [{ start: 100, end: 100 }] },

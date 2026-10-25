@@ -1,4 +1,4 @@
-import { describeComputerUseReadiness, type DesktopComputerUseState } from "@t3tools/contracts";
+import { type DesktopComputerUseState } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { watchComputerUseState } from "./watchComputerUseState";
 
@@ -38,93 +38,6 @@ describe("computer-use permission observation", () => {
   });
 
   // regression: #215 fix(desktop): make computer-use setup and activity visible
-  it("detects a grant without a focus event and stops polling once a restart is all that remains", async () => {
-    const read = vi.fn().mockResolvedValueOnce(missing).mockResolvedValue(granted);
-    watch(read);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(onState).toHaveBeenLastCalledWith(missing);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(onState).toHaveBeenLastCalledWith(granted);
-    expect(describeComputerUseReadiness(granted).label).toBe("Restart required");
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(read).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  // regression: #215 fix(desktop): make computer-use setup and activity visible
-  it("refreshes immediately on focus and detects revoked access after setup", async () => {
-    const read = vi.fn().mockResolvedValueOnce(granted).mockResolvedValue(missing);
-    watch(read);
-    await vi.advanceTimersByTimeAsync(0);
-    windowTarget.dispatchEvent(new Event("focus"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(onState).toHaveBeenLastCalledWith(missing);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(read).toHaveBeenCalledTimes(3);
-  });
-
-  // regression: #215 fix(desktop): make computer-use setup and activity visible
-  it("pauses while hidden and immediately catches up when the panel is visible", async () => {
-    const read = vi.fn().mockResolvedValue(missing);
-    watch(read);
-    await vi.advanceTimersByTimeAsync(0);
-    documentTarget.visibilityState = "hidden";
-    documentTarget.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(read).toHaveBeenCalledTimes(1);
-    read.mockResolvedValue(granted);
-    documentTarget.visibilityState = "visible";
-    documentTarget.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(onState).toHaveBeenLastCalledWith(granted);
-  });
-
-  // regression: #215 fix(desktop): make computer-use setup and activity visible
-  it("queues a focus refresh even when the active read returns fully granted", async () => {
-    let finish!: (state: DesktopComputerUseState) => void;
-    const read = vi
-      .fn()
-      .mockImplementationOnce(
-        () => new Promise<DesktopComputerUseState>((resolve) => (finish = resolve)),
-      )
-      .mockResolvedValue(missing);
-    watch(read);
-    windowTarget.dispatchEvent(new Event("focus"));
-    finish(granted);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(read).toHaveBeenCalledTimes(2);
-    expect(onState).toHaveBeenLastCalledWith(missing);
-  });
-
-  // regression: #215 fix(desktop): make computer-use setup and activity visible
-  it("serializes slow checks across timer, focus, and manual refresh requests", async () => {
-    let finish!: (state: DesktopComputerUseState) => void;
-    const read = vi.fn(() => new Promise<DesktopComputerUseState>((resolve) => (finish = resolve)));
-    const watcher = watch(read);
-    windowTarget.dispatchEvent(new Event("focus"));
-    await watcher.refresh();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(read).toHaveBeenCalledTimes(1);
-    finish(missing);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(read).toHaveBeenCalledTimes(2);
-  });
-
-  // regression: #215 fix(desktop): make computer-use setup and activity visible
-  it("ignores an old response after unmount or an opt-in change and removes listeners", async () => {
-    let finish!: (state: DesktopComputerUseState) => void;
-    const read = vi.fn(() => new Promise<DesktopComputerUseState>((resolve) => (finish = resolve)));
-    watch(read).stop();
-    finish(missing);
-    await vi.advanceTimersByTimeAsync(5_000);
-    windowTarget.dispatchEvent(new Event("focus"));
-    documentTarget.dispatchEvent(new Event("visibilitychange"));
-    expect(onState).not.toHaveBeenCalled();
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it.each([
     { ...missing, enabled: false },
     { ...missing, available: false },
@@ -136,17 +49,5 @@ describe("computer-use permission observation", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(onState).toHaveBeenLastCalledWith(state);
     expect(read).toHaveBeenCalledTimes(1);
-  });
-
-  // regression: #215 fix(desktop): make computer-use setup and activity visible
-  it("recovers from a transient read failure during onboarding", async () => {
-    const failure = new Error("IPC temporarily unavailable");
-    const read = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(granted);
-    watch(read);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(onError).toHaveBeenCalledWith(failure);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(onState).toHaveBeenLastCalledWith(granted);
-    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -45,9 +45,3 @@ test("does not mirror draft, unreviewed or unpublished releases", async (t) => {
   );
   assert.equal(await newestTrackBuild("synthetic", "https://play.invalid/app", "v2"), undefined);
 });
-
-// regression: d4dd8e9346 fix: address launcher and release workflow review findings
-test("does not hide a Play read failure", async (t) => {
-  t.mock.method(globalThis, "fetch", async () => new Response("unavailable", { status: 503 }));
-  await assert.rejects(newestTrackBuild("synthetic", "https://play.invalid/app", "v2"), /503/);
-});

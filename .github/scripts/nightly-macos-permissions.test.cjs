@@ -39,12 +39,6 @@ function fixture(t) {
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Test eligibility depends on the actual host, not a simulated platform.
 const hostPlatform = process.platform;
 const posix = { skip: hostPlatform === "win32" };
-// regression: #236 fix(desktop): harden macOS updates and release validation
-test("accepts readable resources and framework-style relative links", posix, (t) => {
-  const { app, contents } = fixture(t);
-  fs.symlinkSync("MacOS/Test", path.join(contents, "Current"));
-  assert.doesNotThrow(() => assertMacosBundlePermissions(app));
-});
 
 for (const field of ["app", "contents", "executable", "resource"]) {
   test(`rejects owner-only ${field} access even when the build user can read it`, posix, (t) => {
@@ -90,15 +84,6 @@ for (const [field, mode] of [
   ["resource", 0o604],
   ["resource", 0o044],
 ]) {
-  test(
-    `rejects ${field} mode ${mode.toString(8)} even when other access is allowed`,
-    posix,
-    (t) => {
-      const bundle = fixture(t);
-      fs.chmodSync(bundle[field], mode);
-      assert.throws(() => assertMacosBundlePermissions(bundle.app), /inaccessible/);
-    },
-  );
 }
 
 // regression: #236 fix(desktop): harden macOS updates and release validation

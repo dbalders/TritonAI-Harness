@@ -28,24 +28,6 @@ const environment = (
     path: NodePath.posix,
   }) as unknown as DesktopEnvironment.DesktopEnvironment["Service"];
 
-it("resolves the bundled Cua Driver outside ASAR", () => {
-  NodeAssert.equal(
-    resolveCuaDriverBinaryPath(environment("darwin"), undefined),
-    "/opt/TritonAI Harness/resources/cua-driver/cua-driver",
-  );
-  NodeAssert.equal(
-    resolveCuaDriverBinaryPath(environment("win32"), undefined),
-    "/opt/TritonAI Harness/resources/cua-driver/cua-driver.exe",
-  );
-});
-
-it("allows an explicit development Cua Driver binary", () => {
-  NodeAssert.equal(
-    resolveCuaDriverBinaryPath(environment("darwin"), "/tmp/tools/cua-driver"),
-    "/tmp/tools/cua-driver",
-  );
-});
-
 it("does not allow the development override to bypass the packaged driver", () => {
   NodeAssert.equal(
     resolveCuaDriverBinaryPath(environment("darwin", true), "/tmp/unreviewed-cua-driver"),

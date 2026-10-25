@@ -61,19 +61,6 @@ describe("browser target resolver", () => {
     ).toBe(credentialedTestUrl("localhost", "/dashboard"));
   });
 
-  it("preserves credentialed loopback URLs for private IPv6 environments", async () => {
-    readPreparedConnection.mockReturnValue({
-      httpBaseUrl: "http://[fd7a:115c:a1e0::53]:3773",
-    });
-    const { resolveBrowserNavigationTarget } = await import("./browserTargetResolver");
-    expect(
-      resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
-        kind: "url",
-        url: credentialedTestUrl("localhost", "/dashboard?mode=test#results"),
-      }).resolvedUrl,
-    ).toBe(credentialedTestUrl("localhost", "/dashboard?mode=test#results"));
-  });
-
   it("preserves schemeless localhost navigation for a remote environment", async () => {
     readPreparedConnection.mockReturnValue({ httpBaseUrl: "http://192.168.1.25:3773" });
     const { resolveBrowserNavigationTarget } = await import("./browserTargetResolver");

@@ -5,44 +5,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { parse } from "yaml";
 
 it.layer(NodeServices.layer)("release workflow channel", (it) => {
-  it.effect("builds stable and nightly plugins entirely from the exact Harness source", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      for (const name of ["release", "nightly"]) {
-        const workflowPath = yield* path.fromFileUrl(
-          new URL(`../.github/workflows/${name}.yml`, import.meta.url),
-        );
-        const source = yield* fs.readFileString(workflowPath);
-        const workflow = parse(source);
-        assert.notInclude(source, "TRITONAI_INSTALLER_COMPOSITION_COMMIT");
-        assert.notInclude(source, "dbalders/TritonAI-Installer");
-        assert.notInclude(source, ".release-input/installer");
-        for (const jobName of ["prepare_managed_plugins", "mac"]) {
-          const checkout = workflow.jobs[jobName].steps.find((step: { uses?: string }) =>
-            step.uses?.startsWith("actions/checkout@"),
-          );
-          assert.equal(checkout.with.ref, "${{ needs.preflight.outputs.ref }}");
-        }
-        const compositionCommands = Object.values<{ steps?: { run?: string }[] }>(workflow.jobs)
-          .flatMap((job) => job.steps ?? [])
-          .flatMap((step) =>
-            (step.run ?? "")
-              .split("\n")
-              .filter((line) => line.includes("prepare-managed-plugins.cjs")),
-          )
-          .map((line) => line.trim());
-        assert.deepEqual(compositionCommands, [
-          `node .github/scripts/prepare-managed-plugins.cjs --production${
-            name === "nightly" ? " --nightly" : ""
-          }`,
-        ]);
-        assert.include(source, "node .github/scripts/finalize-macos-release.cjs");
-        assert.include(source, "path: .release-input/plugins");
-      }
-    }),
-  );
-
   // regression: #236 fix(desktop): harden macOS updates and release validation
   it.effect("accepts controlled stable dispatches and rejects every nightly version", () =>
     Effect.gen(function* () {

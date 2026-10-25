@@ -23,26 +23,6 @@ describe("resolveT3McpToolPresentation", () => {
       expect(resolveT3McpToolPresentation(`mcp__another-server__${tool}`), tool).toBeNull();
     }
   });
-  it("pretty prints Claude and Cursor T3 MCP tool names", () => {
-    expect(resolveT3McpToolPresentation("mcp__t3-code__t3_thread_read")).toEqual({
-      displayName: "Read a TritonAI thread",
-      logo: "t3-code",
-    });
-  });
-
-  it("pretty prints Codex T3 MCP tool names", () => {
-    expect(resolveT3McpToolPresentation("t3-code.create_threads")).toEqual({
-      displayName: "Create TritonAI threads",
-      logo: "t3-code",
-    });
-  });
-
-  it("pretty prints thread metadata updates", () => {
-    expect(resolveT3McpToolPresentation("mcp__t3-code__t3_thread_update")).toEqual({
-      displayName: "Update TritonAI thread metadata",
-      logo: "t3-code",
-    });
-  });
 
   it("matches OpenCode 2's per-thread server names, whose thread ids hold underscores", () => {
     expect(

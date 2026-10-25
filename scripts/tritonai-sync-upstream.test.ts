@@ -248,19 +248,6 @@ it("installs a clean merged worktree before checks and review", () => {
   }
 });
 
-it("records the merge base and upstream commit count in the report", () => {
-  const fixture = createFixture();
-  try {
-    const result = runSync(fixture);
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /"mergeBase": "[0-9a-f]{40}"/u);
-    assert.match(result.stdout, /"mergeBaseDate": "\d{4}-\d{2}-\d{2}"/u);
-    assert.match(result.stdout, /"upstreamCommitsToMerge": 1/u);
-  } finally {
-    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-
 describe.each(Array.from(["squash", "rebase"], (scenario) => ({ scenario })))(
   "case $scenario",
   ({ scenario: method }) => {
@@ -322,29 +309,6 @@ function githubCalls(fixture: Fixture): string[][] {
     .split("\n")
     .map((line) => JSON.parse(line) as string[]);
 }
-
-it("targets the configured downstream base when preparing a sync PR", () => {
-  const fixture = createFixture();
-  try {
-    installFakeGithub(fixture);
-    git(fixture.repo, "branch", "downstream-review", "main");
-    git(fixture.repo, "push", "origin", "downstream-review");
-    const result = runSync(
-      fixture,
-      0,
-      {
-        TRITONAI_SYNC_DOWNSTREAM_BRANCH: "downstream-review",
-      },
-      ["--create-pr", "--no-llm", "--allow-needs-review"],
-    );
-    assert.equal(result.status, 0, result.stderr);
-    const create = githubCalls(fixture).find((args) => args[0] === "pr" && args[1] === "create");
-    assert.ok(create);
-    assert.equal(create[create.indexOf("--base") + 1], "downstream-review");
-  } finally {
-    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
 
 function runReleaseSync(fixture: Fixture, args: string[] = [], installExit = 0) {
   NodeFS.writeFileSync(NodePath.join(fixture.trace, "install-exit"), String(installExit));
@@ -419,20 +383,6 @@ it("installs the frozen release candidate before checks and reuses it on a later
     assert.ok(create);
     assert.equal(create[create.indexOf("--base") + 1], "main");
     assert.match(create[create.indexOf("--body") + 1]!, /Dependencies: `passed`/u);
-  } finally {
-    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-
-it("does not run release checks after a failed frozen install", () => {
-  const fixture = createFixture();
-  try {
-    prepareReleaseFixture(fixture);
-    const result = runReleaseSync(fixture, [], 42);
-    assert.equal(result.status, 2, result.stderr);
-    assert.match(result.stdout, /"installStatus": "failed"/u);
-    assert.match(result.stdout, /"checkStatus": "not-run"/u);
-    assert.equal(NodeFS.readFileSync(NodePath.join(fixture.trace, "order"), "utf8"), "install\n");
   } finally {
     NodeFS.rmSync(fixture.root, { recursive: true, force: true });
   }

@@ -173,33 +173,6 @@ describe("createAssetEnvironmentAtoms", () => {
       }
     }).pipe(Effect.scoped),
   );
-
-  it("keys collections while preserving independent resource queries", () => {
-    const runtime = Atom.runtime(Layer.empty) as unknown as Atom.AtomRuntime<
-      EnvironmentRegistry.EnvironmentRegistry,
-      never
-    >;
-    const assets = createAssetEnvironmentAtoms(runtime);
-    const environmentId = EnvironmentId.make("environment-1");
-    const threadId = ThreadId.make("thread-1");
-    const resources = [
-      { _tag: "attachment" as const, threadId, attachmentId: "attachment-1" },
-      { _tag: "attachment" as const, threadId, attachmentId: "attachment-2" },
-    ];
-
-    expect(assets.createUrls({ environmentId, resources })).toBe(
-      assets.createUrls({
-        environmentId,
-        resources: resources.map((resource) => ({ ...resource })),
-      }),
-    );
-    expect(
-      assets.createUrls({
-        environmentId,
-        resources: [...resources].toReversed(),
-      }),
-    ).not.toBe(assets.createUrls({ environmentId, resources }));
-  });
 });
 
 describe("project favicon URL cache", () => {

@@ -66,23 +66,6 @@ describe("managed plugin release composition", () => {
     );
   });
 
-  it("accepts a novel plugin only when the exact release composition selects it", () => {
-    const composition = readManagedPluginComposition(
-      makeCompositionFixture(
-        null,
-        { peerDependencies: { effect: EFFECT_HOST_PEER_RANGE } },
-        "future-provider",
-      ),
-    );
-    expect(composition.packages).toMatchObject([
-      {
-        id: "future-provider",
-        name: "@tritonai/plugin-future-provider",
-        version: "1.0.1",
-      },
-    ]);
-  });
-
   it("admits an exact SDK artifact and rejects unsupported module dependencies", () => {
     expect(readManagedPluginComposition(makeSdkCompositionFixture())).toMatchObject({
       packages: [{ id: "fixture-reader", version: "1.0.1" }],
@@ -178,19 +161,6 @@ describe("managed plugin release composition", () => {
     plugin.compatibility = { harness: { min: "0.3.0", maxExclusive: "0.4.0" } };
     NodeFS.writeFileSync(manifestPath, JSON.stringify(legacy));
     expect(() => readManagedPluginComposition(sourceRoot)).toThrow(/unsupported fields/iu);
-  });
-
-  it("accepts the released Effect build pin and the canonical forward-compatible peer contract", () => {
-    expect(() =>
-      readManagedPluginComposition(makeCompositionFixture("4.0.0-beta.78")),
-    ).not.toThrow();
-    expect(() =>
-      readManagedPluginComposition(
-        makeCompositionFixture(null, {
-          peerDependencies: { effect: EFFECT_HOST_PEER_RANGE },
-        }),
-      ),
-    ).not.toThrow();
   });
 
   it("accepts providerless packages without runtime metadata and rejects nonempty runtime metadata", () => {

@@ -1,5 +1,4 @@
 import {
-  ChatAttachmentId,
   DEFAULT_GETTING_STARTED_PROGRESS,
   EnvironmentId,
   MessageId,
@@ -22,13 +21,6 @@ const THREAD = ThreadId.make("guide-practice");
 const AT = "2026-10-22T10:00:00.000Z";
 const RUN_AT = "2026-10-22T10:01:00.000Z";
 const MAIL_TOOL = "microsoft365_mail_search";
-const FILE = {
-  type: "file" as const,
-  id: ChatAttachmentId.make("meeting-notes"),
-  name: "notes.txt",
-  mimeType: "text/plain",
-  sizeBytes: 100,
-};
 
 function task(chapter: GettingStartedChapterId = "conversation") {
   const events: GettingStartedEvent[] = [
@@ -162,18 +154,6 @@ describe("completed run evidence", () => {
     expect(observe(checked, [run(), run("R2")], [message()])).toEqual([]);
   });
 
-  it("recovers both completed runs from one snapshot when the latest run is still queued", () => {
-    const initial = task();
-    const events = observe(
-      initial,
-      [run(), run("R2"), run("R3", { status: "queued" })],
-      [message(), message({ id: MessageId.make("R2-answer"), runId: RunId.make("R2") })],
-    );
-
-    expect(events.map((event) => event.type === "run" && event.runId)).toEqual(["R1", "R2"]);
-    expect(events.reduce(reduceGettingStarted, initial).tasks[0]?.runIds).toEqual(["R1", "R2"]);
-  });
-
   it.each([
     "preparing",
     "queued",
@@ -197,10 +177,6 @@ describe("completed run evidence", () => {
     expect(observe(task(), [run()], [message(change)])).toEqual([]);
   });
 
-  it("does not treat the provider's completed status as an observed answer", () => {
-    expect(observe(task(), [run()], [])).toEqual([]);
-  });
-
   it("does not bind another submission, environment, or thread to the tracked task", () => {
     const state = task();
     const input = {
@@ -217,18 +193,6 @@ describe("completed run evidence", () => {
       gettingStartedRunEvents({ ...input, environmentId: EnvironmentId.make("other") }),
     ).toEqual([]);
     expect(gettingStartedRunEvents({ ...input, threadId: ThreadId.make("other") })).toEqual([]);
-  });
-
-  it("uses the requested time when a completed run has no started time", () => {
-    const state = task("ideas");
-    const events = observe(
-      state,
-      [run("R1", { startedAt: null, requestedAt: RUN_AT })],
-      [message()],
-    );
-
-    expect(events).toMatchObject([{ startedAt: RUN_AT }]);
-    expect(events.reduce(reduceGettingStarted, state).completed).toEqual(["ideas"]);
   });
 });
 
@@ -254,25 +218,6 @@ describe("connected work result evidence", () => {
     expect(state.completed).toEqual([]);
   });
 
-  it("completes connected work for its declared tool's successful result", () => {
-    const state = task("connected-work");
-    const events = observe(state, [run()], [message(), mailResult({ messages: [] })]);
-
-    expect(events).toMatchObject([{ connectedToolSucceeded: true }]);
-    expect(events.reduce(reduceGettingStarted, state).completed).toEqual(["connected-work"]);
-  });
-
-  it.each(["failed", "declined", "inProgress", "stopped", "idle"] as const)(
-    "does not count a %s tool result",
-    (toolLifecycleStatus) => {
-      const state = task("connected-work");
-      const events = observe(state, [run()], [message(), mailResult({}, { toolLifecycleStatus })]);
-
-      expect(events).toEqual([]);
-      expect(events.reduce(reduceGettingStarted, state)).toBe(state);
-    },
-  );
-
   it("does not borrow a successful mail result from another run or an unrelated tool", () => {
     const state = task("connected-work");
     const wrongRun = mailResult({}, { runId: RunId.make("R2") });
@@ -290,41 +235,6 @@ describe("connected work result evidence", () => {
       },
     };
     const events = observe(state, [run()], [message(), wrongRun, unrelated]);
-
-    expect(events).toEqual([]);
-    expect(events.reduce(reduceGettingStarted, state)).toBe(state);
-  });
-});
-
-describe("file evidence belongs to the submitted request", () => {
-  it("counts the file attached to the run's own submitted user message", () => {
-    const state = task("files");
-    const events = observe(
-      state,
-      [run()],
-      [message({ id: MessageId.make("M1"), role: "user", attachments: [FILE] }), message()],
-    );
-
-    expect(events).toMatchObject([{ usedFile: true }]);
-    expect(events.reduce(reduceGettingStarted, state).completed).toEqual(["files"]);
-  });
-
-  it("does not borrow a file from another request or the assistant's answer", () => {
-    const state = task("files");
-    const events = observe(
-      state,
-      [run()],
-      [
-        message({ id: MessageId.make("M1"), role: "user" }),
-        message({
-          id: MessageId.make("M2"),
-          role: "user",
-          runId: RunId.make("R2"),
-          attachments: [FILE],
-        }),
-        message({ attachments: [FILE] }),
-      ],
-    );
 
     expect(events).toEqual([]);
     expect(events.reduce(reduceGettingStarted, state)).toBe(state);

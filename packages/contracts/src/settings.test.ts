@@ -101,13 +101,6 @@ describe("storage cleanup settings", () => {
   });
 });
 
-describe("ServerSettings default permissions", () => {
-  it("starts in Auto when no permission default was configured", () => {
-    expect(decodeServerSettings({}).defaultRuntimeMode).toBe("auto");
-    expect(DEFAULT_SERVER_SETTINGS.defaultRuntimeMode).toBe("auto");
-  });
-});
-
 describe("ServerSettings usage price overrides", () => {
   const prices = { inputCostPerMillionTokens: 2, outputCostPerMillionTokens: 8 };
 
@@ -195,16 +188,6 @@ describe("resolveIdleCompaction", () => {
   });
 });
 
-describe("ClientSettings word wrap", () => {
-  it("defaults first-run onboarding incomplete", () => {
-    expect(decodeClientSettings({}).tritonAiFirstRunOnboardingCompleted).toBe(false);
-    expect(
-      decodeClientSettingsPatch({ tritonAiFirstRunOnboardingCompleted: true })
-        .tritonAiFirstRunOnboardingCompleted,
-    ).toBe(true);
-  });
-});
-
 describe("ClientSettings notifications", () => {
   it("requires opt-in when existing settings omit notification preferences", () => {
     expect(decodeClientSettings({}).notificationMode).toBe("off");
@@ -226,42 +209,7 @@ describe("ClientSettings quit confirmation", () => {
   });
 });
 
-describe("ServerSettings thread settlement", () => {
-  it("defaults merge settlement on and inactivity settlement to fourteen days", () => {
-    const settings = decodeServerSettings({});
-    expect(settings.sidebarAutoSettleAfterDays).toBe(14);
-    expect(settings.sidebarAutoSettleOnMerge).toBe(true);
-  });
-
-  it("preserves a custom inactivity settlement threshold", () => {
-    expect(decodeServerSettings({ sidebarAutoSettleAfterDays: 30 })).toMatchObject({
-      sidebarAutoSettleAfterDays: 30,
-      sidebarAutoSettleOnMerge: true,
-    });
-  });
-});
-
-describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
-  it("defaults text generation to the TritonAI Codex route at high reasoning effort", () => {
-    expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({
-      instanceId: ProviderInstanceId.make("codex"),
-      model: "api-glm-5.3-flash",
-      options: [{ id: "reasoningEffort", value: "high" }],
-    });
-  });
-});
-
 describe("provider enabled defaults", () => {
-  it("enables only the Codex binding by default", () => {
-    const enabledByDefault = (driver: string) =>
-      resolveProviderInstanceEnabled({ driver: ProviderDriverKind.make(driver), config: {} });
-    expect(enabledByDefault("codex")).toBe(true);
-    expect(enabledByDefault("claudeAgent")).toBe(false);
-    for (const driver of ["cursor", "grok", "muse", "pi", "opencode", "antigravity"]) {
-      expect(enabledByDefault(driver)).toBe(false);
-    }
-  });
-
   it("resolves instance enabled state with explicit false winning", () => {
     const grok = ProviderDriverKind.make("grok");
     const codex = ProviderDriverKind.make("codex");

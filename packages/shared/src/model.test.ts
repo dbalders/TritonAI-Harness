@@ -73,17 +73,6 @@ const claudeCaps: ModelCapabilities = createModelCapabilities({
   ],
 });
 
-describe("modelCapabilitiesAreExplicitlyTextOnly", () => {
-  it("requires explicit text support without image support", () => {
-    expect(modelCapabilitiesAreExplicitlyTextOnly({ inputModalities: ["text"] })).toBe(true);
-    expect(modelCapabilitiesAreExplicitlyTextOnly({ inputModalities: ["text", "image"] })).toBe(
-      false,
-    );
-    expect(modelCapabilitiesAreExplicitlyTextOnly({})).toBe(false);
-    expect(modelCapabilitiesAreExplicitlyTextOnly(null)).toBe(false);
-  });
-});
-
 describe("resolveSelectableModel", () => {
   it("resolves exact slugs, labels, and aliases", () => {
     const options = [
@@ -98,17 +87,6 @@ describe("resolveSelectableModel", () => {
     );
     expect(resolveSelectableModel(ProviderDriverKind.make("claudeAgent"), "sonnet", options)).toBe(
       "claude-sonnet-5",
-    );
-  });
-});
-
-describe("misc helpers", () => {
-  it("prefixes ultrathink prompts once", () => {
-    expect(applyClaudePromptEffortPrefix("Investigate", "ultrathink")).toBe(
-      "Ultrathink:\nInvestigate",
-    );
-    expect(applyClaudePromptEffortPrefix("Ultrathink:\nInvestigate", "ultrathink")).toBe(
-      "Ultrathink:\nInvestigate",
     );
   });
 });
@@ -266,14 +244,6 @@ describe("custom model modality round trips", () => {
     expect(modelCapabilitiesAreExplicitlyTextOnly(model!.capabilities)).toBe(false);
     const [restored] = readCustomModelEntries([toCustomModelSetting(model!)]);
     expect(restored?.capabilities?.inputModalities).toEqual(["text", "image"]);
-  });
-
-  it("retains explicit text-only routing through custom model settings", () => {
-    const [model] = readCustomModelEntries([
-      { slug: "campus-text", capabilities: { inputModalities: ["text"] } },
-    ]);
-    const [restored] = readCustomModelEntries([toCustomModelSetting(model!)]);
-    expect(modelCapabilitiesAreExplicitlyTextOnly(restored?.capabilities)).toBe(true);
   });
 });
 

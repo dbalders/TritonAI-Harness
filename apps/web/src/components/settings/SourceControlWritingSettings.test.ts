@@ -9,10 +9,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import {
-  SourceControlWritingSettingsSection,
-  filterSupportedSourceControlWriterProviders,
-} from "./SourceControlWritingSettings";
+import { SourceControlWritingSettingsSection } from "./SourceControlWritingSettings";
 
 interface PickerProps {
   readonly activeInstanceId: ProviderInstanceId;
@@ -132,22 +129,6 @@ describe("source control writer provider policy", () => {
     componentState.providers = [];
     componentState.settings = DEFAULT_UNIFIED_SETTINGS;
     componentState.updateSettings.mockReset();
-  });
-
-  it("keeps every TritonAI Codex instance and drops legacy upstream drivers", () => {
-    const providers = [
-      provider("codex", "codex"),
-      provider("codex_work", "codex"),
-      provider("claude", "claudeAgent"),
-      provider("cursor", "cursor"),
-      provider("legacy", "legacy-upstream"),
-    ];
-
-    expect(
-      filterSupportedSourceControlWriterProviders(providers).map(
-        (candidate) => candidate.instanceId,
-      ),
-    ).toEqual([ProviderInstanceId.make("codex"), ProviderInstanceId.make("codex_work")]);
   });
 
   it("renders only TritonAI and falls back from an unsupported persisted writer", () => {

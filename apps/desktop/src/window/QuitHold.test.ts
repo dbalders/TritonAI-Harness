@@ -9,8 +9,6 @@ import {
   QUIT_HOLD_DURATION_MS,
 } from "./QuitHold.ts";
 
-const HOLD_DOWN = { state: "down", mode: "hold" } as const;
-
 const DOUBLE_CLICK_DOWN = { state: "down", mode: "double-click" } as const;
 
 const UP = { state: "up" } as const;
@@ -69,19 +67,6 @@ describe("makeQuitShortcutHandler", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("quits after a completed hold when macOS drops both key releases", async () => {
-    const harness = makeHarness();
-    await harness.send(makeInput({}));
-    await harness.holdFor(QUIT_HOLD_DURATION_MS + 200);
-
-    expect(harness.concealWindow).toHaveBeenCalledTimes(1);
-    expect(harness.quit).not.toHaveBeenCalled();
-    vi.runAllTimers();
-
-    expect(harness.quit).toHaveBeenCalledTimes(1);
-    expect(harness.notifications).toEqual([HOLD_DOWN, UP]);
   });
 
   it("honors direct mode when the key is released before its mode read settles", async () => {

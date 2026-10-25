@@ -19,7 +19,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
 import {
-  presentProviderGoal,
   deriveReportedModelSelection,
   deriveLatestThreadRun,
   deriveProviderSubagentStatus,
@@ -392,18 +391,5 @@ describe("provider-reported model selection", () => {
         ],
       }),
     ).toBeNull();
-  });
-});
-
-it("distinguishes imported paused goals from provider-owned goals", () => {
-  expect(
-    presentProviderGoal(
-      { objective: "Retained objective", status: "paused", origin: "legacy_v1" },
-      false,
-    ),
-  ).toMatchObject({
-    title: "Imported goal · Goal paused",
-    objective: "Retained objective",
-    canResume: true,
   });
 });

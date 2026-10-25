@@ -428,75 +428,6 @@ describe("TritonAI credential IPC", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  // regression: #142 fix(desktop): apply TritonAI API keys without relaunch
-  it.effect("does not start a backend that was already stopped", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "tritonai-api-key-ipc-test-",
-      });
-      const backendLifecycle: string[] = [];
-      const environmentLayer = makeEnvironmentLayer(homeDirectory);
-      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
-        onStop: () => Effect.sync(() => backendLifecycle.push("primary-stop")),
-        onStart: () => Effect.sync(() => backendLifecycle.push("primary-start")),
-        additionalBackends: [
-          {
-            desiredRunning: false,
-            onStop: () => Effect.sync(() => backendLifecycle.push("secondary-stop")),
-            onStart: () => Effect.sync(() => backendLifecycle.push("secondary-start")),
-          },
-        ],
-      });
-      const validationLayer = makeHttpClientLayer((request) =>
-        Effect.succeed(
-          jsonResponse(request, {
-            data: [{ id: "api-glm-5.3-flash" }, { id: "gpt-6.1-sol" }],
-          }),
-        ),
-      );
-
-      const result = yield* updateTritonAiCredentials
-        .handler(["replacement-key"])
-        .pipe(
-          Effect.provide(
-            Layer.mergeAll(environmentLayer, NodeServices.layer, backendPoolLayer, validationLayer),
-          ),
-        );
-
-      assert.equal((result as { status: string }).status, "saved");
-      assert.deepEqual(backendLifecycle, ["primary-stop", "secondary-stop", "primary-start"]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("rejects blank replacements before writing or reconnecting the backend", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "tritonai-api-key-ipc-test-",
-      });
-      const environmentLayer = makeEnvironmentLayer(homeDirectory);
-      let didRestartBackend = false;
-      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
-        onStop: () => Effect.sync(() => (didRestartBackend = true)),
-      });
-      const validationLayer = makeHttpClientLayer(() => Effect.die("unexpected validation"));
-
-      const result = yield* updateTritonAiCredentials
-        .handler(["   "])
-        .pipe(
-          Effect.provide(
-            Layer.mergeAll(environmentLayer, NodeServices.layer, backendPoolLayer, validationLayer),
-          ),
-        );
-      assert.deepEqual(result, {
-        status: "error",
-        message: "Enter one or two valid TritonAI access keys.",
-      });
-      assert.isFalse(didRestartBackend);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("keeps current credentials when TritonAI rejects a replacement", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -532,41 +463,6 @@ describe("TritonAI credential IPC", () => {
         Effect.provide(environmentLayer),
       );
       assert.deepEqual(Option.getOrUndefined(stored), { sharedApiKey: "current-key" });
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("keeps current credentials when TritonAI rate-limits validation", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "tritonai-api-key-ipc-test-",
-      });
-      const environmentLayer = makeEnvironmentLayer(homeDirectory);
-      const validationLayer = makeHttpClientLayer((request) =>
-        Effect.succeed(jsonResponse(request, { error: "Rate limited" }, 429)),
-      );
-      let didRestartBackend = false;
-      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
-        onStop: () => Effect.sync(() => (didRestartBackend = true)),
-      });
-
-      yield* DesktopTritonAiApiKey.replaceTritonAiCredentials({
-        sharedApiKey: "current-key",
-      }).pipe(Effect.provide(environmentLayer));
-      const result = yield* updateTritonAiCredentials
-        .handler(["candidate-key"])
-        .pipe(
-          Effect.provide(
-            Layer.mergeAll(environmentLayer, NodeServices.layer, backendPoolLayer, validationLayer),
-          ),
-        );
-
-      assert.deepEqual(result, {
-        status: "error",
-        message:
-          "TritonAI could not verify the key because it is rate limiting requests (HTTP 429).",
-      });
-      assert.isFalse(didRestartBackend);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

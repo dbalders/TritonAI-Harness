@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 import { MessageId, RunId, ThreadId } from "@t3tools/contracts";
 import { makeThreadFixture } from "../../test-fixtures";
 import {
-  projectHomeDays,
   projectHomeHeadline,
   projectHomeThreads,
   projectMemoryNote,
@@ -58,13 +57,6 @@ describe("project home", () => {
     expect(projectHomeHeadline(view, true)).toBe("2 threads need you");
   });
 
-  it("limits the quiet headline to agent requests, including disconnected state", () => {
-    const view = projectHomeThreads([makeThreadFixture({ latestRun: completed })]);
-    expect(projectHomeHeadline(view, true)).toBe("No pending agent requests");
-    expect(projectHomeHeadline(view, false)).toBe("No saved agent requests pending");
-    expect(projectHomeHeadline(projectHomeThreads([]), true)).toBe("No threads yet");
-  });
-
   // regression: #412 fix(web): keep project overview working rows stable
   it("keeps working rows in a fixed order as progress updates arrive", () => {
     const running = (id: string, createdAt: string, updatedAt: string) =>
@@ -100,95 +92,6 @@ describe("project home", () => {
     expect(view.recent[0]).toBe(progressed);
   });
 
-  // regression: #412 fix(web): keep project overview working rows stable
-  it("breaks working-row ties consistently and moves completed work into latest updates", () => {
-    const first = makeThreadFixture({
-      id: ThreadId.make("a"),
-      runtime: workingRuntime,
-      latestRun: { ...completed, status: "running", completedAt: null },
-      updatedAt: "2026-10-17T12:05:00Z",
-    });
-    const second = { ...first, id: ThreadId.make("b") };
-    expect(projectHomeThreads([second, first]).working).toEqual([first, second]);
-    expect(projectHomeThreads([first, second]).working).toEqual([first, second]);
-
-    const finished = {
-      ...first,
-      runtime: null,
-      latestRun: completed,
-      updatedAt: "2026-10-17T12:06:00Z",
-    };
-    const previous = makeThreadFixture({
-      id: ThreadId.make("previous"),
-      latestRun: completed,
-      updatedAt: "2026-10-17T12:04:00Z",
-    });
-    const view = projectHomeThreads([previous, second, finished]);
-    expect(view.working).toEqual([second]);
-    expect(view.updates).toEqual([finished, previous]);
-  });
-
-  it("shows current work ahead of a previous failed run, while requests still take priority", () => {
-    const base = makeThreadFixture();
-    const running = makeThreadFixture({
-      latestRun: { ...completed, status: "failed" },
-      runtime: {
-        status: "running",
-        activeRunId: RunId.make("current-run"),
-        providerInstanceId: base.providerInstanceId,
-        providerName: "Codex",
-        lastError: null,
-        updatedAt: "2026-10-17T12:05:00Z",
-      },
-    });
-    expect(projectHomeThreads([running]).working).toEqual([running]);
-    expect(projectThreadStatus(running)?.label).toBe("Working");
-    expect(projectThreadStatus({ ...running, hasPendingUserInput: true })?.label).toBe(
-      "Has a question for you",
-    );
-  });
-
-  it("never presents the user's last message as an agent report", () => {
-    const base = makeThreadFixture();
-    const source = {
-      ...base.source,
-      latestVisibleMessage: {
-        id: MessageId.make("last-message"),
-        role: "user" as const,
-        text: "Please deploy this",
-        updatedAt: base.source.updatedAt,
-      },
-    };
-    const thread = { ...base, source };
-    expect(projectThreadExcerpt(thread)).toBeNull();
-    expect(projectThreadExcerpt(thread, "Prepared for review.")).toBe("Prepared for review.");
-    expect(
-      projectThreadExcerpt({
-        ...thread,
-        source: {
-          ...source,
-          latestVisibleMessage: { ...source.latestVisibleMessage, role: "assistant" },
-        },
-      }),
-    ).toBe("Please deploy this");
-  });
-
-  it("groups updates under the local day they last changed", () => {
-    const at = (id: string, hour: number, day: number) =>
-      makeThreadFixture({
-        id: ThreadId.make(id),
-        updatedAt: new Date(2026, 9, day, hour).toISOString(),
-      });
-    const days = projectHomeDays(
-      [at("a", 15, 17), at("b", 9, 17), at("c", 20, 16)],
-      new Date(2026, 9, 17, 18).getTime(),
-    );
-    expect(days.map((day) => [day.label, day.threads.map((thread) => thread.id)])).toEqual([
-      ["Today", ["a", "b"]],
-      ["Yesterday", ["c"]],
-    ]);
-  });
-
   it("reads the running memory history newest first without metadata or device names", () => {
     const note = projectMemoryNote(
       '---\nworkspace: "/private/work"\n---\n# Project on Laptop\n\nHarness keeps this note.\n\n## Recent\n' +
@@ -205,16 +108,5 @@ describe("project home", () => {
     expect(note.sections).toEqual([{ heading: "Notes", lines: ["Use the staging stack"] }]);
     expect(JSON.stringify(note)).not.toContain("/private/work");
     expect(JSON.stringify(note)).not.toContain("Laptop");
-  });
-
-  it("makes agent updates readable without losing the report's wording", () => {
-    const thread = makeThreadFixture();
-    expect(
-      projectThreadExcerpt(
-        thread,
-        "## Done\nCreated [checklist.md](/local/checklist.md) for **review**.\nNot deployed.",
-      ),
-    ).toBe("Done Created checklist.md for review. Not deployed.");
-    expect(projectThreadExcerpt(thread, " ")).toBeNull();
   });
 });

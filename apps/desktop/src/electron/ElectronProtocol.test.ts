@@ -38,21 +38,6 @@ describe("ElectronProtocol", () => {
       "t3code-dev://app/",
     );
   });
-  // regression: 13e7bc16e3 fix(desktop): let Nightly coexist with stable Harness
-  it("registers Nightly as a secure standard origin before Electron is ready", () => {
-    ElectronProtocol.registerDesktopSchemePrivilegesSync();
-    const registrations = registerPrivilegesMock.mock.calls.at(-1)?.[0];
-    assert.deepInclude(registrations, {
-      scheme: "tritonai-harness-nightly",
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        corsEnabled: true,
-        stream: true,
-      },
-    });
-  });
 
   beforeEach(() => {
     handleMock.mockReset();

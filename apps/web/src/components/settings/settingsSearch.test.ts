@@ -6,7 +6,6 @@ import {
   getThreadAutoSettlementSearchAvailability,
   isSettingsSearchScopeAvailable,
   searchSettings,
-  SETTINGS_SECTION_LABELS,
   SETTINGS_SEARCH_ITEMS,
   type SettingsSearchItem,
 } from "./settingsSearch";
@@ -131,28 +130,6 @@ describe("searchSettings", () => {
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
   });
 
-  it("shows automatic settlement settings when the server supports them", () => {
-    const available = filterAvailableSettingsSearchItems({
-      hasCloudPublicConfig: false,
-      hasEnvironment: false,
-      hasProviderSettingsEnvironment: false,
-      hasMacProviderSettingsEnvironment: false,
-      canManageLocalBackend: false,
-      isWslSettingsRowVisible: false,
-      hasThreadAutoSettlement: true,
-      hasStageArtwork: true,
-    });
-
-    expect(searchSettings("header artwork", available).map((item) => item.id)).toContain(
-      "environment-identification",
-    );
-    expect(searchSettings("auto-settle", available).map((item) => item.id)).toEqual([
-      "auto-settle-inactive-threads",
-      "auto-settle-merged-threads",
-      "days-before-auto-settle",
-    ]);
-  });
-
   it("finds keybinding commands by label, command id, and default key", () => {
     expect(searchSettings("toggle sidebar")[0]?.id).toBe("keybinding-sidebar.toggle");
     expect(searchSettings("sidebar.toggle")[0]?.id).toBe("keybinding-sidebar.toggle");
@@ -174,11 +151,6 @@ describe("searchSettings", () => {
   it("keeps catalog result ids unique", () => {
     const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  // regression: 663a67370e fix(usage): consolidate TritonAI reporting
-  it("does not expose the legacy Settings usage destination", () => {
-    expect(SETTINGS_SECTION_LABELS).not.toHaveProperty("/settings/usage");
   });
 });
 

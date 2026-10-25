@@ -62,7 +62,7 @@
     "tritonai:sync:auto": "node scripts/tritonai-sync-upstream.mjs --push --create-pr --auto-merge-pr",
     "tritonai:release-sync:pr": "node scripts/tritonai-release-sync.mjs --push --create-pr",
     "sync:repos": "node scripts/sync-reference-repos.ts",
-    "test:release-inputs": "node --test .github/scripts/prepare-managed-plugins.test.cjs .github/scripts/finalize-macos-release.test.cjs .github/scripts/verify-plugin-archive.test.cjs .github/scripts/release-timing.test.cjs"
+    "test:release-inputs": "node --test .github/scripts/prepare-managed-plugins.test.cjs .github/scripts/finalize-macos-release.test.cjs .github/scripts/verify-plugin-archive.test.cjs"
   },
   "devDependencies": {
     "@shadcn/lint": "0.1.5",

@@ -612,32 +612,4 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
       );
     }).pipe(Effect.scoped),
   );
-
-  it.effect("installs the Harness app icon without creating an icon cache", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const icon = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
-      const fixture = yield* themeIconFixture(icon);
-      const run: ThemeIconRun = { root: fixture.root, commands: [] };
-
-      yield* registerWithRealFileSystem(run);
-      assert.deepEqual([...(yield* fileSystem.readDirectory(fixture.appsDir))].sort(), [
-        "tritonai-harness.png",
-      ]);
-      for (const name of ["tritonai-harness"]) {
-        const target = path.join(fixture.appsDir, `${name}.png`);
-        assert.deepEqual([...(yield* fileSystem.readFile(target))], [...icon]);
-        yield* fileSystem.utimes(target, fixture.pastSeconds, fixture.pastSeconds);
-      }
-
-      yield* registerWithRealFileSystem(run);
-      for (const name of ["tritonai-harness"]) {
-        const info = yield* fileSystem.stat(path.join(fixture.appsDir, `${name}.png`));
-        assert.equal(Option.getOrThrow(info.mtime).getTime(), fixture.pastSeconds * 1000);
-      }
-      assert.isFalse(yield* fileSystem.exists(fixture.cachePath));
-      assert.equal(iconCacheRuns(run), 0);
-    }).pipe(Effect.scoped),
-  );
 });

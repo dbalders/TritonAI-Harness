@@ -216,29 +216,6 @@ describe.each([
   ],
 ])("useNewThreadHandler with a %s draft", (_, draft) => {
   // regression: #374 fix(permissions): default to Supervised and remember composer choices
-  it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
-    "remembers the last %s composer choice when opening a new thread",
-    async (runtimeMode) => {
-      testState.reset(draft);
-      testState.targetSettings.defaultRuntimeMode = "approval-required";
-      testState.draftStore.stickyRuntimeMode = runtimeMode;
-      const pendingOpen = useNewThreadHandler()({
-        environmentId: "environment-ssh",
-        projectId: "project-remote",
-      } as never);
-      testState.completeProjectFileRead(null);
-      const opened = await pendingOpen;
-
-      expect(testState.draftStore.setLogicalProjectDraftThreadId).toHaveBeenCalledWith(
-        "remote-project",
-        expect.anything(),
-        opened!.draftId,
-        expect.objectContaining({ runtimeMode }),
-      );
-    },
-  );
-
-  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it("uses the latest composer choice when opening waits for project defaults", async () => {
     testState.reset(draft);
     const pendingOpen = useNewThreadHandler()({

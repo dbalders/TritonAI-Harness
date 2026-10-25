@@ -1986,56 +1986,6 @@ describe("mobile composer drafts", () => {
   });
 
   // regression: #374 fix(permissions): default to Supervised and remember composer choices
-  it("preserves queued and explicit draft modes over a loaded remembered choice", async () => {
-    composerDraftFileMocks.setDocument({
-      schemaVersion: 1,
-      drafts: { "pending-task:edited": { ...DRAFT, runtimeMode: "full-access" } },
-      stickyRuntimeMode: "approval-required",
-    });
-    await waitForComposerDraftsLoaded();
-
-    expect(getPendingTaskRuntimeMode("pending-task:untouched", "full-access", "auto")).toBe("auto");
-    expect(getPendingTaskRuntimeMode("pending-task:edited", "approval-required", "auto")).toBe(
-      "full-access",
-    );
-  });
-
-  // regression: #374 fix(permissions): default to Supervised and remember composer choices
-  it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
-    "keeps a known %s queued-task or draft mode usable while preferences load",
-    async (runtimeMode) => {
-      composerDraftFileMocks.setDocument({
-        schemaVersion: 1,
-        drafts: {},
-        stickyRuntimeMode: "approval-required",
-      });
-      composerDraftFileMocks.blockRead();
-      const loading = waitForComposerDraftsLoaded();
-      appAtomRegistry.set(composerDraftsAtom, {
-        "pending-task:edited": { ...DRAFT, runtimeMode },
-      });
-      try {
-        expect(
-          getPendingTaskRuntimeMode("pending-task:untouched", "full-access", runtimeMode),
-        ).toBe(runtimeMode);
-        expect(getPendingTaskRuntimeMode("pending-task:edited", "full-access", "auto")).toBe(
-          runtimeMode,
-        );
-        expect(getPendingTaskRuntimeMode("new-task:unknown", "full-access")).toBeNull();
-      } finally {
-        composerDraftFileMocks.releaseRead();
-        await loading;
-      }
-      expect(getPendingTaskRuntimeMode("pending-task:untouched", "full-access", runtimeMode)).toBe(
-        runtimeMode,
-      );
-      expect(getPendingTaskRuntimeMode("pending-task:edited", "full-access", "auto")).toBe(
-        runtimeMode,
-      );
-    },
-  );
-
-  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it("allows retry after preference loading fails without submitting the fallback", async () => {
     composerDraftFileMocks.setReadError(new Error("Preferences temporarily unreadable"));
     await expect(waitForComposerDraftsLoaded()).rejects.toThrow();

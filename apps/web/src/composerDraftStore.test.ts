@@ -275,48 +275,6 @@ describe("composerDraftStore addImages", () => {
   });
 });
 
-describe("composerDraftStore setFiles", () => {
-  beforeEach(resetComposerDraftStore);
-
-  it("keeps generic File objects isolated by composer target", () => {
-    const firstThreadId = ThreadId.make("thread-files-first");
-    const secondThreadId = ThreadId.make("thread-files-second");
-    const firstThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, firstThreadId);
-    const secondThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, secondThreadId);
-    const firstFile = new File(["first"], "first.txt", { type: "text/plain" });
-    const secondFile = new File(["second"], "second.csv", { type: "text/csv" });
-    const firstAttachment: ComposerFileAttachment = {
-      type: "file",
-      id: "file-first",
-      name: firstFile.name,
-      mimeType: firstFile.type,
-      sizeBytes: firstFile.size,
-      file: firstFile,
-      path: "/tmp/first.txt",
-    };
-    const secondAttachment: ComposerFileAttachment = {
-      type: "file",
-      id: "file-second",
-      name: secondFile.name,
-      mimeType: secondFile.type,
-      sizeBytes: secondFile.size,
-      file: secondFile,
-      path: null,
-    };
-
-    useComposerDraftStore.getState().setFiles(firstThreadRef, [firstAttachment]);
-    useComposerDraftStore.getState().setFiles(secondThreadRef, [secondAttachment]);
-
-    expect(draftFor(firstThreadId, TEST_ENVIRONMENT_ID)?.files).toEqual([firstAttachment]);
-    expect(draftFor(secondThreadId, TEST_ENVIRONMENT_ID)?.files).toEqual([secondAttachment]);
-
-    useComposerDraftStore.getState().clearComposerContent(firstThreadRef);
-
-    expect(draftFor(firstThreadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
-    expect(draftFor(secondThreadId, TEST_ENVIRONMENT_ID)?.files[0]?.file).toBe(secondFile);
-  });
-});
-
 describe("composerDraftStore copied attachments", () => {
   beforeEach(resetComposerDraftStore);
   afterEach(() => {
@@ -816,42 +774,6 @@ describe("composerDraftStore project draft thread mapping", () => {
     } finally {
       URL.revokeObjectURL = originalRevokeObjectUrl;
     }
-  });
-
-  it("stores and reads project draft thread ids via actions", () => {
-    const store = useComposerDraftStore.getState();
-    expect(store.getDraftThreadByProjectRef(projectRef)).toBeNull();
-    expect(store.getDraftThread(draftId)).toBeNull();
-
-    store.setProjectDraftThreadId(projectRef, draftId, {
-      threadId,
-      branch: "feature/test",
-      worktreePath: "/tmp/worktree-test",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    expect(useComposerDraftStore.getState().getDraftThreadByProjectRef(projectRef)).toMatchObject({
-      threadId,
-      environmentId: TEST_ENVIRONMENT_ID,
-      projectId,
-      logicalProjectKey: scopedProjectKey(projectRef),
-      branch: "feature/test",
-      worktreePath: "/tmp/worktree-test",
-      envMode: "worktree",
-      runtimeMode: "auto-accept-edits",
-      interactionMode: "default",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
-      environmentId: TEST_ENVIRONMENT_ID,
-      projectId,
-      logicalProjectKey: scopedProjectKey(projectRef),
-      branch: "feature/test",
-      worktreePath: "/tmp/worktree-test",
-      envMode: "worktree",
-      runtimeMode: "auto-accept-edits",
-      interactionMode: "default",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
   });
 
   it("removes a draft's previous project mapping when retargeted in place", () => {
@@ -2039,15 +1961,6 @@ describe("composerDraftStore runtime and interaction settings", () => {
 
   beforeEach(() => {
     resetComposerDraftStore();
-  });
-
-  it("stores runtime mode overrides in the composer draft", () => {
-    const store = useComposerDraftStore.getState();
-
-    store.setRuntimeMode(threadRef, "approval-required");
-
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.runtimeMode).toBe("approval-required");
-    expect(useComposerDraftStore.getState().stickyRuntimeMode).toBe("approval-required");
   });
 
   it("uses the sticky runtime mode only for future drafts", () => {

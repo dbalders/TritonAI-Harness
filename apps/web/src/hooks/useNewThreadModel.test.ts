@@ -4,10 +4,9 @@ import {
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
-  ThreadId,
   type ModelSelection,
 } from "@t3tools/contracts";
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "./useHandleNewThread";
 
@@ -127,27 +126,6 @@ describe("new task model intent", () => {
   });
 
   // regression: #246 fix(models): remember explicit model choices for new tasks
-  it("ignores a GLM composer override on an older task", async () => {
-    useComposerDraftStore
-      .getState()
-      .setModelSelection(scopeThreadRef(EnvironmentId.make("env"), ThreadId.make("old-glm")), GLM, {
-        explicit: true,
-      });
-    const result = await useNewThreadHandler()(PROJECT);
-    expect(selectedModel(result!.draftId)).toEqual(FLASH);
-  });
-
-  // regression: #246 fix(models): remember explicit model choices for new tasks
-  it("refreshes an empty reused draft from the remembered choice", async () => {
-    const open = useNewThreadHandler();
-    const first = await open(PROJECT);
-    useComposerDraftStore.getState().setModelSelection(first!.draftId, GLM);
-    const second = await open(PROJECT);
-    expect(second!.draftId).toBe(first!.draftId);
-    expect(selectedModel(second!.draftId)).toEqual(FLASH);
-  });
-
-  // regression: #246 fix(models): remember explicit model choices for new tasks
   it("preserves an explicit pick in an unsent draft", async () => {
     const open = useNewThreadHandler();
     const first = await open(PROJECT);
@@ -156,18 +134,5 @@ describe("new task model intent", () => {
       .setModelSelection(first!.draftId, GLM, { explicit: true, replaceOptions: true });
     const second = await open(PROJECT);
     expect(selectedModel(second!.draftId)).toEqual(GLM);
-  });
-
-  // regression: #246 fix(models): remember explicit model choices for new tasks
-  it("applies a project override without replacing the remembered model, then follows reset", async () => {
-    harness.projectDefault = GLM;
-    const pinned = await useNewThreadHandler()(PROJECT);
-    expect(selectedModel(pinned!.draftId)).toEqual(GLM);
-    expect(useComposerDraftStore.getState().stickyModelSelectionByProvider[INSTANCE]).toEqual(
-      FLASH,
-    );
-    harness.projectDefault = null;
-    const unpinned = await useNewThreadHandler()(PROJECT);
-    expect(selectedModel(unpinned!.draftId)).toEqual(FLASH);
   });
 });

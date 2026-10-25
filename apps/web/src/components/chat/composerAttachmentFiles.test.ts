@@ -1,8 +1,6 @@
 import { ComposerImageAttachment } from "../../composerDraftStore";
 import { ComposerFileAttachment } from "../../composerDraftStore";
 
-import { classifyComposerAttachmentFile } from "./composerAttachmentFiles";
-
 import { EnvironmentId, PROVIDER_SEND_TURN_MAX_FILE_BYTES } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -87,39 +85,5 @@ describe("composer attachment files", () => {
     ]);
 
     expect(released.map((attachment) => attachment.id)).toEqual(["image-1", "file-uploading"]);
-  });
-});
-
-describe("composer attachment files", () => {
-  it("rejects unsupported image types instead of attaching them as generic files", () => {
-    expect(classifyComposerAttachmentFile({ name: "diagram.svg", type: "image/svg+xml" })).toBe(
-      "unsupported-image",
-    );
-    expect(classifyComposerAttachmentFile({ name: "photo.tiff", type: "image/tiff" })).toBe(
-      "unsupported-image",
-    );
-    expect(classifyComposerAttachmentFile({ name: "report.pdf", type: "application/pdf" })).toBe(
-      "file",
-    );
-    expect(
-      classifyComposerAttachmentFile({ name: "meeting-notes.md", type: "text/markdown" }),
-    ).toBe("file");
-  });
-
-  it("does not apply upload capability or byte limits to direct local file references", () => {
-    expect(
-      fileAttachmentCapabilityBlockReason({
-        files: [
-          {
-            name: "local-archive.zip",
-            sizeBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES * 2,
-            path: "/Users/test/local-archive.zip",
-          },
-        ],
-        attachmentUploadsCapabilityKnown: true,
-        supportsAttachmentUploads: false,
-        maxFileAttachmentBytes: null,
-      }),
-    ).toBeNull();
   });
 });

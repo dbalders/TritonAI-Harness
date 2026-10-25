@@ -1021,9 +1021,9 @@ export {
 
 /** Project sections are activity-oriented: once the stable project grouping
     has narrowed the list, the most recently used thread belongs at the top. */
-export function sortThreadsByActivityForSidebar<
-  T extends { readonly id: string } & ThreadSortInput,
->(threads: readonly T[]): T[] {
+function sortThreadsByActivityForSidebar<T extends { readonly id: string } & ThreadSortInput>(
+  threads: readonly T[],
+): T[] {
   return sortThreads(threads, "updated_at");
 }
 

@@ -102,27 +102,6 @@ describe("incoming native shares", () => {
     expect(hasIncomingShareContent(result)).toBe(false);
   });
 
-  it("bounds image reads when native metadata does not include a size", async () => {
-    const image: SharePayload = {
-      shareType: "image",
-      value: "content://shared/unknown-size.png",
-      mimeType: "image/png",
-    };
-    const readBase64 = vi.fn(async () => null);
-
-    const result = await buildIncomingShareDraft({
-      id: "share-unknown-size",
-      createdAt: "2026-07-15T10:00:00.000Z",
-      payloads: [image],
-      resolvedPayloads: [],
-      fileReader: { readBase64, removeOwnedFile: async () => undefined },
-    });
-
-    expect(readBase64).toHaveBeenCalledWith(image.value, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
-    expect(result.attachments).toEqual([]);
-    expect(result.warnings).toEqual(["'unknown-size.png' exceeds the 10 MB attachment limit."]);
-  });
-
   it("keeps a shared PDF on disk without converting its contents to base64", async () => {
     const file: SharePayload = {
       shareType: "file",

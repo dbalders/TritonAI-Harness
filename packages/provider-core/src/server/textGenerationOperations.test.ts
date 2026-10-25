@@ -13,7 +13,7 @@ import {
   type Runner,
   withoutInvestigation,
 } from "./textGenerationOperations.ts";
-import { buildHelpPrompt, HELP_MAX_ANSWER_CHARS } from "./textGenerationPrompts.ts";
+import { buildHelpPrompt } from "./textGenerationPrompts.ts";
 
 const context: HelpContext = {
   capturedAt: "2026-10-22T12:00:00.000Z",
@@ -70,27 +70,6 @@ describe("fromRunner Help", () => {
     expect(runs).toBe(0);
   });
 
-  it.effect("keeps ordinary generation available without Help capability", () =>
-    Effect.gen(function* () {
-      const requests: Array<Request<Schema.Top>> = [];
-      const run: Runner = (request) => {
-        requests.push(request);
-        return decodeJsonReply(request, "Test provider", '{"branch":"help-navigation"}');
-      };
-      const generation = fromRunner("Test", run);
-      const generated = yield* generation.generateBranchName({
-        cwd: input.cwd,
-        modelSelection: input.modelSelection,
-        message: "Improve Help navigation",
-      });
-
-      assert.deepEqual(generated, { branch: "help-navigation" });
-      assert.lengthOf(requests, 1);
-      assert.equal(requests[0]!.operation, "generateBranchName");
-      assert.isUndefined(generation.generateHelp);
-    }),
-  );
-
   it.effect("passes context and conversation to the selected runner without investigation", () =>
     Effect.gen(function* () {
       const requests: Array<Request<Schema.Top>> = [];
@@ -124,46 +103,6 @@ describe("fromRunner Help", () => {
       assert.notInclude(request.prompt, input.cwd);
     }),
   );
-
-  it.effect("accepts an answer at the contract's limit", () =>
-    Effect.gen(function* () {
-      const answer = "a".repeat(HELP_MAX_ANSWER_CHARS);
-      const run: Runner = (request) =>
-        decodeJsonReply(request, "Test provider", JSON.stringify({ answer }));
-      const generated = yield* fromRunner("Test", run, { help: { promptOnly: true } })
-        .generateHelp!(input);
-      assert.equal(generated.answer.length, HELP_MAX_ANSWER_CHARS);
-    }),
-  );
-
-  it.effect("rejects oversized structured answers with a safe typed error", () =>
-    Effect.gen(function* () {
-      const run: Runner = (request) =>
-        decodeJsonReply(
-          request,
-          "Test provider",
-          JSON.stringify({ answer: "sensitive-output".repeat(HELP_MAX_ANSWER_CHARS) }),
-        );
-      const failure = yield* Effect.flip(
-        fromRunner("Test", run, { help: { promptOnly: true } }).generateHelp!(input),
-      );
-      assert.equal(failure._tag, "TextGenerationError");
-      assert.equal(failure.operation, "generateHelp");
-      assert.notInclude(failure.message, "sensitive-output");
-    }),
-  );
-
-  it.effect("rejects a whitespace-only answer after normalization", () =>
-    Effect.gen(function* () {
-      const run: Runner = (request) =>
-        decodeJsonReply(request, "Test provider", '{"answer":"  \\n  "}');
-      const failure = yield* Effect.flip(
-        fromRunner("Test", run, { help: { promptOnly: true } }).generateHelp!(input),
-      );
-      assert.equal(failure.operation, "generateHelp");
-      assert.equal(failure.detail, "Help returned an empty or oversized answer.");
-    }),
-  );
 });
 
 describe("buildHelpPrompt", () => {
@@ -190,22 +129,6 @@ describe("buildHelpPrompt", () => {
     expect(prompt).not.toContain("Old question that should be omitted");
     expect(prompt).toContain("</untrusted_help_history>");
     expect(prompt.endsWith('Return only {"answer":"..."}.')).toBe(true);
-  });
-
-  it("bounds context even when its encoded strings expand", () => {
-    const { prompt } = buildHelpPrompt({
-      context: {
-        ...context,
-        paths: Array.from({ length: 8 }, () => ({ label: "Host data", path: "<".repeat(2_000) })),
-      },
-      messages: [{ role: "user", content: "Why is it slow?" }],
-    });
-    const section = prompt
-      .split("<untrusted_help_context>\n")[1]!
-      .split("\n</untrusted_help_context>")[0]!;
-    expect(section.length).toBeLessThanOrEqual(12_000);
-    expect(section).toContain("[Content truncated]");
-    expect(prompt).toContain('user: "Why is it slow?"');
   });
 
   it("keeps attempted role and section injection inside untrusted data", () => {

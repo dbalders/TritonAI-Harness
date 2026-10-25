@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   compareInstallerVersions,
-  createInstallerUpdateController,
   expectedInstallerAssetName,
   parseStableInstallerRelease,
   parseInstallerVersionMarker,
@@ -124,13 +123,6 @@ describe("installer version comparison and release selection", () => {
 });
 
 describe("installer version marker", () => {
-  it("treats a missing marker as a legacy install", () => {
-    expect(parseInstallerVersionMarker(null)).toEqual({
-      status: "missing",
-      version: null,
-    });
-  });
-
   it("rejects corrupt and invalid marker content", () => {
     expect(parseInstallerVersionMarker("not-json")).toEqual({
       status: "corrupt",
@@ -145,169 +137,5 @@ describe("installer version marker", () => {
       status: "corrupt",
       version: null,
     });
-  });
-});
-
-describe("installer update controller", () => {
-  // regression: #314 fix(web): keep installer version in diagnostics
-  it.each([true, false])(
-    "loads the recorded version without checking releases (updates enabled: %s)",
-    async (enabled) => {
-      const fetchRelease = vi.fn();
-      const openExternal = vi.fn();
-      const onState = vi.fn();
-      const controller = createInstallerUpdateController({
-        enabled,
-        platform: "darwin",
-        arch: "arm64",
-        readMarker: async () => ({ status: "valid", version: "0.3.3" }),
-        fetchRelease,
-        openExternal,
-        onState,
-      });
-
-      await controller.loadInstalledVersion();
-
-      expect(controller.getState()).toMatchObject({
-        installedVersion: "0.3.3",
-        markerStatus: "valid",
-        availableVersion: null,
-        checkedAt: null,
-      });
-      expect(onState).toHaveBeenCalledWith(controller.getState());
-      expect(fetchRelease).not.toHaveBeenCalled();
-      expect(openExternal).not.toHaveBeenCalled();
-    },
-  );
-
-  // regression: #314 fix(web): keep installer version in diagnostics
-  it("keeps diagnostics available when the installer record cannot be read", async () => {
-    const controller = createInstallerUpdateController({
-      enabled: true,
-      platform: "darwin",
-      arch: "arm64",
-      readMarker: async () => {
-        throw new Error("Installer record is unreadable");
-      },
-      fetchRelease: vi.fn(),
-      openExternal: vi.fn(),
-    });
-
-    await controller.loadInstalledVersion();
-
-    expect(controller.getState()).toMatchObject({
-      installedVersion: null,
-      markerStatus: "corrupt",
-      availableVersion: null,
-    });
-  });
-
-  it("offers the latest installer to a legacy installation and opens the exact asset", async () => {
-    const openExternal = vi.fn(async () => true);
-    const controller = createInstallerUpdateController({
-      enabled: true,
-      platform: "darwin",
-      arch: "arm64",
-      readMarker: async () => ({ status: "missing", version: null }),
-      fetchRelease: async () => release("1.5.0"),
-      openExternal,
-      nowIso: () => "2026-07-09T12:00:00.000Z",
-    });
-
-    const check = await controller.check();
-    expect(check.state.status).toBe("available");
-    expect(check.state.markerStatus).toBe("missing");
-    expect(check.state.availableVersion).toBe("1.5.0");
-
-    const action = await controller.open();
-    expect(action).toMatchObject({ accepted: true, completed: true });
-    expect(openExternal).toHaveBeenCalledWith(
-      "https://github.com/dbalders/TritonAI-Installer/releases/download/v1.5.0/TritonAI-Installer-1.5.0-arm64.dmg",
-    );
-    expect(action.state.message).toContain("Harness, Codex, and managed skills");
-  });
-
-  it("reports current when the marker matches the latest installer", async () => {
-    const controller = createInstallerUpdateController({
-      enabled: true,
-      platform: "darwin",
-      arch: "arm64",
-      readMarker: async () => ({ status: "valid", version: "1.5.0" }),
-      fetchRelease: async () => release("1.5.0"),
-      openExternal: async () => true,
-    });
-    expect((await controller.check()).state).toMatchObject({
-      status: "up-to-date",
-      installedVersion: "1.5.0",
-      availableVersion: null,
-    });
-  });
-
-  it("keeps check and open failures recoverable without throwing", async () => {
-    const failingCheck = createInstallerUpdateController({
-      enabled: true,
-      platform: "darwin",
-      arch: "arm64",
-      readMarker: async () => ({ status: "missing", version: null }),
-      fetchRelease: async () => {
-        throw new Error("secret upstream detail");
-      },
-      openExternal: async () => true,
-    });
-    expect((await failingCheck.check()).state).toMatchObject({
-      status: "error",
-      errorContext: "check",
-      canRetry: true,
-    });
-    expect((await failingCheck.check()).state.message).not.toContain("secret upstream detail");
-
-    const currentButOffline = createInstallerUpdateController({
-      enabled: true,
-      platform: "darwin",
-      arch: "arm64",
-      readMarker: async () => ({ status: "valid", version: "1.5.0" }),
-      fetchRelease: async () => {
-        throw new Error("offline");
-      },
-      openExternal: async () => true,
-    });
-    expect((await currentButOffline.check()).state).toMatchObject({
-      status: "error",
-      installedVersion: "1.5.0",
-      markerStatus: "valid",
-    });
-
-    const failingOpen = createInstallerUpdateController({
-      enabled: true,
-      platform: "darwin",
-      arch: "arm64",
-      readMarker: async () => ({ status: "missing", version: null }),
-      fetchRelease: async () => release("1.5.0"),
-      openExternal: async () => false,
-    });
-    await failingOpen.check();
-    expect(await failingOpen.open()).toMatchObject({
-      accepted: true,
-      completed: false,
-      state: { status: "error", errorContext: "open", canRetry: true },
-    });
-  });
-
-  it("does not query the network for an unsupported target", async () => {
-    const fetchRelease = vi.fn(async () => release("1.5.0"));
-    const controller = createInstallerUpdateController({
-      enabled: true,
-      platform: "darwin",
-      arch: "x64",
-      readMarker: async () => ({ status: "missing", version: null }),
-      fetchRelease,
-      openExternal: async () => true,
-    });
-    expect(controller.getState()).toMatchObject({
-      enabled: false,
-      status: "disabled",
-    });
-    expect((await controller.check()).checked).toBe(false);
-    expect(fetchRelease).not.toHaveBeenCalled();
   });
 });

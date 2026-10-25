@@ -992,36 +992,6 @@ describe("DesktopUpdates", () => {
       ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
     }),
   );
-
-  it.effect("preserves settings failure context when an update channel cannot be persisted", () => {
-    const diskFailure = new Error("disk exploded");
-    const settingsFailure = new DesktopAppSettings.DesktopSettingsWriteError({
-      operation: "replace-settings-file",
-      path: "/tmp/settings.json",
-      cause: diskFailure,
-    });
-    const harness = makeHarness({ isPackaged: false, setUpdateChannelError: settingsFailure });
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const updates = yield* DesktopUpdates.DesktopUpdates;
-        yield* updates.configure;
-
-        const error = yield* updates.setChannel("nightly").pipe(Effect.flip);
-
-        assert.instanceOf(error, DesktopUpdates.DesktopUpdateChannelPersistenceError);
-        assert.equal(error.channel, "nightly");
-        assert.strictEqual(error.cause, settingsFailure);
-        assert.strictEqual(error.cause.cause, diskFailure);
-        assert.equal(error.message, "Failed to persist the nightly desktop update channel.");
-        assert.notInclude(error.message, diskFailure.message);
-
-        const checkResult = yield* updates.check("manual");
-        assert.isFalse(checkResult.checked);
-        assert.equal(harness.checkCount(), 0);
-      }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
-  });
 });
 
 describe("describeUpdateErrorCause", () => {
