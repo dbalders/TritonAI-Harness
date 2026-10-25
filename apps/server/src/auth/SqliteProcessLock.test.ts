@@ -5,6 +5,8 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
@@ -143,11 +145,20 @@ it.layer(NodeServices.layer)("SqliteProcessLock", (it) => {
       const child = yield* Effect.promise(() => spawnLockOwner(lockPath));
 
       yield* Effect.gen(function* () {
+        const retryEntered = yield* Deferred.make<void>();
+        const clock = yield* Clock.Clock;
         const contender = yield* acquireSqliteProcessLock(lockPath, "test secret", {
           retryCount: 100,
           retryDelay: "1 second",
-        }).pipe(Effect.forkScoped);
-        yield* Effect.sleep("20 millis");
+        }).pipe(
+          Effect.provideService(Clock.Clock, {
+            ...clock,
+            sleep: () =>
+              Deferred.succeed(retryEntered, undefined).pipe(Effect.andThen(Effect.never)),
+          }),
+          Effect.forkScoped,
+        );
+        yield* Deferred.await(retryEntered);
         yield* Fiber.interrupt(contender);
       }).pipe(Effect.ensuring(Effect.promise(() => terminateLockOwner(child))));
 
@@ -201,11 +212,19 @@ it.layer(NodeServices.layer)("SqliteProcessLock", (it) => {
       const lockPath = `${directory}/secret.lock`;
 
       const owner = yield* acquireSqliteProcessLock(lockPath, "test secret");
+      const retryEntered = yield* Deferred.make<void>();
+      const clock = yield* Clock.Clock;
       const contender = yield* acquireSqliteProcessLock(lockPath, "test secret", {
         retryCount: 100,
         retryDelay: "1 second",
-      }).pipe(Effect.forkScoped);
-      yield* Effect.sleep("20 millis");
+      }).pipe(
+        Effect.provideService(Clock.Clock, {
+          ...clock,
+          sleep: () => Deferred.succeed(retryEntered, undefined).pipe(Effect.andThen(Effect.never)),
+        }),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(retryEntered);
       yield* Fiber.interrupt(contender);
       assert.strictEqual(probeLock(lockPath), "busy");
 

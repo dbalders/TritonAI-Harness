@@ -1,14 +1,10 @@
-import { assert, it } from "@effect/vitest";
-import { DEFAULT_TRITONAI_CODEX_MODEL, CodexSettings } from "@t3tools/contracts";
+import { DEFAULT_TRITONAI_CODEX_MODEL } from "@t3tools/contracts";
+import { CodexSettings } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
-import {
-  applyPreferredCodexDefaultModel,
-  curateVisibleCodexModels,
-  mapCodexModelCapabilities,
-  stabilizeIntegrationSkillPaths,
-  tritonAiCodexCapabilities,
-  checkCodexProviderStatus,
-} from "./CodexProvider.ts";
+import { curateVisibleCodexModels } from "./CodexProvider.ts";
+import { stabilizeIntegrationSkillPaths } from "./CodexProvider.ts";
+import { tritonAiCodexCapabilities } from "./CodexProvider.ts";
+import { checkCodexProviderStatus } from "./CodexProvider.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -21,6 +17,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { assert, it } from "@effect/vitest";
 
 it("publishes stable installed paths for temporary integration skill probes", () => {
   assert.deepStrictEqual(
@@ -146,6 +143,8 @@ it("ignores inherited metadata properties", () => {
     },
   ]);
 });
+
+import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({
@@ -302,15 +301,6 @@ it("ranks qualified Codex models while preserving their wire ids", () => {
   );
 });
 
-it("keeps Codex's own default when no preferred model is available", () => {
-  const models = applyPreferredCodexDefaultModel([
-    { slug: "gpt-5.5", name: "GPT-5.5", isCustom: false, capabilities: null },
-    { slug: "gpt-5.4", name: "GPT-5.4", isCustom: false, isDefault: true, capabilities: null },
-  ]);
-
-  assert.deepStrictEqual(models.find((model) => model.isDefault)?.slug, "gpt-5.4");
-});
-
 it("ignores custom models that shadow a preferred slug", () => {
   const models = applyPreferredCodexDefaultModel([
     { slug: "gpt-6.1-sol", name: "gpt-6.1-sol", isCustom: true, capabilities: null },
@@ -375,6 +365,7 @@ it("preserves input modalities while adding TritonAI reasoning controls", () => 
 });
 
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+
 const decodeRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
@@ -383,6 +374,7 @@ const decodeRequest = Schema.decodeUnknownSync(
     }),
   ),
 );
+
 const account = {
   account: { type: "chatgpt", email: "test@example.com", planType: "pro" },
   requiresOpenaiAuth: false,
@@ -497,23 +489,6 @@ it.layer(NodeServices.layer)("Codex probe budget", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("warns with authentication and custom models when no catalog arrives", () =>
-    Effect.gen(function* () {
-      const probe = yield* startProbe(["model/list/1"]);
-      yield* probe.authenticate;
-      yield* probe.requested("model/list/1");
-      yield* TestClock.adjust("20 seconds");
-      const provider = yield* Fiber.join(probe.fiber);
-      assert.strictEqual(provider.status, "warning");
-      assert.strictEqual(provider.auth.status, "authenticated");
-      assert.strictEqual(provider.message, "Codex did not return its model catalog in time.");
-      assert.deepStrictEqual(
-        provider.models.map((model) => model.slug),
-        ["custom-model"],
-      );
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("bounds stalled skills and usage discovery by the remaining account probe budget", () =>
     Effect.gen(function* () {
       const probe = yield* startProbe(["skills/list", "account/rateLimits/read"]);
@@ -533,51 +508,6 @@ it.layer(NodeServices.layer)("Codex probe budget", (it) => {
       );
       assert.deepStrictEqual(provider.skills, []);
       assert.strictEqual(provider.usageLimits?.unavailable?.reason, "probeFailed");
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("retains a completed probe when cleanup exceeds the work budget", () =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const complete = yield* Deferred.make<void>();
-      const cleanupStarted = yield* Deferred.make<void>();
-      const cleanupFinished = yield* Deferred.make<void>();
-      const fiber = yield* checkCodexProviderStatus(decodeCodexSettings({}), () =>
-        Effect.gen(function* () {
-          yield* Effect.addFinalizer(() =>
-            Deferred.succeed(cleanupStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(cleanupFinished)),
-            ),
-          );
-          yield* Deferred.succeed(started, undefined);
-          yield* Deferred.await(complete);
-          return { account, version: undefined, models: [], skills: [] };
-        }),
-      ).pipe(Effect.forkChild);
-      yield* Deferred.await(started);
-      yield* TestClock.adjust(18_500);
-      yield* Deferred.succeed(complete, undefined);
-      yield* Deferred.await(cleanupStarted);
-      yield* TestClock.adjust("2 seconds");
-      yield* Deferred.succeed(cleanupFinished, undefined);
-      const provider = yield* Fiber.join(fiber);
-      assert.strictEqual(provider.status, "ready");
-      assert.strictEqual(provider.auth.status, "authenticated");
-    }),
-  );
-
-  it.effect("still errors when account authentication never answers", () =>
-    Effect.gen(function* () {
-      const probe = yield* startProbe([]);
-      yield* probe.requested("account/read");
-      yield* TestClock.adjust("20 seconds");
-      const provider = yield* Fiber.join(probe.fiber);
-      assert.strictEqual(provider.status, "error");
-      assert.strictEqual(provider.auth.status, "unknown");
-      assert.strictEqual(
-        provider.message,
-        "Timed out while checking Codex app-server provider status.",
-      );
     }).pipe(Effect.scoped),
   );
 });

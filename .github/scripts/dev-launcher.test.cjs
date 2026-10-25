@@ -71,17 +71,16 @@ function fixture(t, { lsof = true } = {}) {
     children.push(child);
     const lines = readline.createInterface({ input: child.stdout });
     const first = await new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("Launcher did not report its owner")),
-        10_000,
-      );
+      const deadline = AbortSignal.timeout(10_000);
+      const expired = () => reject(new Error("Launcher did not report its owner"));
+      deadline.addEventListener("abort", expired, { once: true });
       lines.once("line", (line) => {
-        clearTimeout(timer);
+        deadline.removeEventListener("abort", expired);
         resolve(JSON.parse(line));
       });
       child.once("error", reject);
       child.once("exit", (code) => {
-        clearTimeout(timer);
+        deadline.removeEventListener("abort", expired);
         reject(new Error(`Launcher exited ${code}`));
       });
     });

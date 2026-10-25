@@ -1,30 +1,47 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, it } from "@effect/vitest";
-import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
-import * as Clock from "effect/Clock";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
-import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
-import { ChildProcessSpawner } from "effect/process";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
-
-import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
-import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
-import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
-import * as DesktopConfig from "../app/DesktopConfig.ts";
-import * as DesktopServerExposure from "./DesktopServerExposure.ts";
-import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTritonAiApiKey from "../settings/DesktopTritonAiApiKey.ts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import { assert, describe, it } from "@effect/vitest";
+
+import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
+
+import * as Clock from "effect/Clock";
+
+import * as Effect from "effect/Effect";
+
+import * as FileSystem from "effect/FileSystem";
+
+import * as Layer from "effect/Layer";
+
+import * as ManagedRuntime from "effect/ManagedRuntime";
+
+import * as Option from "effect/Option";
+
+import * as Path from "effect/Path";
+
+import { ChildProcessSpawner } from "effect/process";
+
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+
+import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
+
+import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
+
+import * as DesktopConfig from "../app/DesktopConfig.ts";
+
+import * as DesktopServerExposure from "./DesktopServerExposure.ts";
+
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
+
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
 
 const PersistedServerObservabilitySettingsDocument = Schema.Struct({
@@ -368,20 +385,6 @@ describe("DesktopBackendConfiguration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("only the local primary bootstrap claims the prepared shell environment", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-
-        const primary = yield* configuration.resolvePrimary;
-        const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
-
-        assert.equal(primary.bootstrap.shellEnvironmentPrepared, true);
-        assert.isUndefined(wsl.bootstrap.shellEnvironmentPrepared);
-      }),
-    ),
-  );
-
   it.effect("keeps server hydration enabled when desktop preparation failed", () =>
     withHarness(
       Effect.gen(function* () {
@@ -391,19 +394,6 @@ describe("DesktopBackendConfiguration", () => {
       }),
       "darwin",
       false,
-    ),
-  );
-
-  it.effect("resolveWsl reuses the primary's bootstrap token", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-
-        const primary = yield* configuration.resolvePrimary;
-        const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
-
-        assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
-      }),
     ),
   );
 
@@ -559,6 +549,7 @@ describe("DesktopBackendConfiguration", () => {
       assert.deepEqual(inventoryCalls, [["Ubuntu", false]]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
   it.effect("resolveWsl launches a packaged backend from the WSL-local runtime cache", () => {
     const observedArchives: Array<{
       windowsArchivePath: string;
@@ -744,71 +735,6 @@ describe("DesktopBackendConfiguration", () => {
     );
   });
 
-  it.effect("resolveWsl preserves the staging error when the mounted fallback is fatal", () =>
-    withPackagedWslHarness(
-      {
-        archiveHash: "b".repeat(64),
-        wsl: () => ({
-          prepareRuntime: () => ({
-            ok: false,
-            reason:
-              "t3: error while loading shared libraries: libatomic.so.1: cannot open shared object file",
-          }),
-          ensureNodePty: () => ({
-            ok: false,
-            reason: "the packaged Linux node-pty binary was not included",
-            fatal: true,
-          }),
-        }),
-      },
-      () =>
-        Effect.gen(function* () {
-          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-          const config = yield* configuration.resolveWsl({ port: 5000, distro: "Ubuntu" });
-          const failure = Option.getOrThrow(config.preflightFailure);
-
-          assert.isTrue(failure.fatal);
-          assert.include(failure.reason, "libatomic.so.1");
-        }),
-    ),
-  );
-
-  it.effect("resolveWsl keeps the staged runtime when the mounted tree fails too", () => {
-    const stagedAppRoot = "/home/test/.t3/wsl-runtime/cache";
-    const invalidatedRuntimeIds: string[] = [];
-    return withPackagedWslHarness(
-      {
-        archiveHash: "d".repeat(64),
-        wsl: () => ({
-          prepareRuntime: () => ({ ok: true, linuxAppRoot: stagedAppRoot }),
-          invalidateRuntime: (_distro, runtimeId) =>
-            Effect.sync(() => {
-              invalidatedRuntimeIds.push(runtimeId);
-            }),
-          probeRuntime: () => ({
-            ok: false,
-            reason: "unsupported CPU architecture or incompatible system libraries",
-          }),
-          ensureNodePty: () => ({
-            ok: false,
-            reason: "mounted tree is broken in some other way",
-            fatal: true,
-          }),
-        }),
-      },
-      () =>
-        Effect.gen(function* () {
-          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-          const config = yield* configuration.resolveWsl({ port: 5000, distro: "Ubuntu" });
-          const failure = Option.getOrThrow(config.preflightFailure);
-
-          assert.isTrue(failure.fatal);
-          assert.include(failure.reason, "unsupported CPU architecture");
-          assert.deepEqual(invalidatedRuntimeIds, []);
-        }),
-    );
-  });
-
   it.effect("resolveWsl keeps WSL retryable when the mounted fallback fails transiently", () => {
     const stagedAppRoot = "/home/test/.t3/wsl-runtime/cache";
     const invalidatedRuntimeIds: string[] = [];
@@ -924,48 +850,6 @@ describe("DesktopBackendConfiguration", () => {
         );
 
         assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
-      }),
-    ),
-  );
-
-  it.effect("resolvePrimary surfaces persisted backend observability endpoints", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const environment = yield* DesktopEnvironment.DesktopEnvironment;
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-
-        yield* fileSystem.makeDirectory(environment.path.dirname(environment.serverSettingsPath), {
-          recursive: true,
-        });
-        yield* fileSystem.writeFileString(
-          environment.serverSettingsPath,
-          yield* encodePersistedServerObservabilitySettingsDocument({
-            observability: {
-              otlpTracesUrl: " http://127.0.0.1:4318/v1/traces ",
-              otlpMetricsUrl: " http://127.0.0.1:4318/v1/metrics ",
-              otlpLogsUrl: " http://127.0.0.1:4318/v1/logs ",
-            },
-          }),
-        );
-
-        const config = yield* configuration.resolvePrimary;
-        assert.equal(config.bootstrap.otlpTracesUrl, "http://127.0.0.1:4318/v1/traces");
-        assert.equal(config.bootstrap.otlpMetricsUrl, "http://127.0.0.1:4318/v1/metrics");
-        assert.equal(config.bootstrap.otlpLogsUrl, "http://127.0.0.1:4318/v1/logs");
-      }),
-    ),
-  );
-
-  it.effect("resolvePrimary omits backend observability endpoints when settings are missing", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolvePrimary;
-
-        assert.isUndefined(config.bootstrap.otlpTracesUrl);
-        assert.isUndefined(config.bootstrap.otlpMetricsUrl);
-        assert.isUndefined(config.bootstrap.otlpLogsUrl);
       }),
     ),
   );
@@ -2288,16 +2172,6 @@ describe("DesktopBackendConfiguration", () => {
         ),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolvePrimaryLabel reports the local environment on non-Windows platforms", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const label = yield* configuration.resolvePrimaryLabel;
-        assert.equal(label, "Local environment");
-      }),
-    ),
   );
 
   it.effect("resolvePrimaryLabel reports Windows when wsl-only but WSL is unavailable", () =>

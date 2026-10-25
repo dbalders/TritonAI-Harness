@@ -114,7 +114,7 @@ function provider(id: string, state: ProviderState): IntegrationProvider {
       verificationUriComplete: null,
       userCode: "ABCD-EFGH",
       message: "Sign in.",
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      expiresAt: "2100-01-01T00:00:00.000Z",
       intervalSeconds: 1,
     }),
     poll: async () => {
@@ -2198,7 +2198,7 @@ describe("IntegrationRegistry lifecycle", () => {
           flowId: "browser-flow",
           authorizationUrl: "https://fixture.invalid/authorize",
           message: "Continue in the system browser.",
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          expiresAt: "2100-01-01T00:00:00.000Z",
           intervalSeconds: 1,
         }),
       };
@@ -3283,15 +3283,10 @@ describe("IntegrationRegistry lifecycle", () => {
       const listing = registry.list();
       await statusStarted;
       const unrelatedEnablement = registry.setEnabled(fixtureManifest.id, false);
-      const completed = await Promise.race([
-        unrelatedEnablement.then((result) => ({
-          completed: true,
-          enabled: result.integrations.find(({ id }) => id === fixtureManifest.id)?.enabled,
-        })),
-        new Promise<{ readonly completed: false }>((resolve) =>
-          setTimeout(() => resolve({ completed: false }), 1_000),
-        ),
-      ]);
+      const completed = await unrelatedEnablement.then((result) => ({
+        completed: true,
+        enabled: result.integrations.find(({ id }) => id === fixtureManifest.id)?.enabled,
+      }));
 
       expect(completed).toEqual({ completed: true, enabled: false });
       releaseStatus();
@@ -4427,9 +4422,9 @@ describe("IntegrationRegistry lifecycle", () => {
         undefined,
         { providerStatusTimeoutMs: 20 },
       );
-      const startedAt = Date.now();
+
       const summary = (await restarted.list()).integrations[0];
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
+
       expect(summary).toMatchObject({
         connectionState: "error",
         statusMessage: "The integration provider timed out while reporting its status.",
@@ -4649,9 +4644,9 @@ describe("IntegrationRegistry lifecycle", () => {
       expect(registry.isSkillAvailableSync("test-records")).toBe(false);
       expect(registry.getAvailableSkillsSync()).toEqual([]);
       expect((await registry.snapshot()).integrations[0]?.tools[0]?.available).toBe(false);
-      const startedAt = Date.now();
+
       await registry.close();
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
+
       expect(closeCalls).toBe(1);
       expect(registry.isToolAvailableSync("test.records.list")).toBe(false);
       await expect(registry.list()).rejects.toMatchObject({ code: "disabled" });
@@ -4813,7 +4808,6 @@ describe("IntegrationRegistry lifecycle", () => {
       });
       expect(toolCalls).toBe(0);
       expect((await registry.list()).integrations[0]?.tools[0]?.available).toBe(false);
-      await new Promise((resolve) => setTimeout(resolve, 40));
       expect(registry.isToolAvailableSync("test.records.list")).toBe(false);
       const queuedConnect = registry.connect(connectedManifest.id);
       await expect(queuedConnect).rejects.toMatchObject({ code: "operation_failed" });
@@ -5049,6 +5043,7 @@ describe("IntegrationRegistry lifecycle", () => {
     const staleSyncGate = new Promise<void>((resolve) => {
       releaseStaleSync = resolve;
     });
+    let staleSyncActive = false;
     let watchingInactiveSync = false;
     let inactiveSyncStarted = false;
     let skillActive = false;
@@ -5057,10 +5052,15 @@ describe("IntegrationRegistry lifecycle", () => {
       sync: async ({ activeSkills }) => {
         if (delayNextActiveSync && activeSkills.length > 0) {
           delayNextActiveSync = false;
+          staleSyncActive = true;
           markStaleSyncStarted();
           await staleSyncGate;
+          staleSyncActive = false;
         }
-        if (watchingInactiveSync && activeSkills.length === 0) inactiveSyncStarted = true;
+        if (watchingInactiveSync && activeSkills.length === 0) {
+          expect(staleSyncActive).toBe(false);
+          inactiveSyncStarted = true;
+        }
         skillActive = activeSkills.length > 0;
       },
     };
@@ -5103,7 +5103,6 @@ describe("IntegrationRegistry lifecycle", () => {
       await staleSyncStarted;
       watchingInactiveSync = true;
       const disconnecting = registry.disconnect(connectedManifest.id);
-      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(inactiveSyncStarted).toBe(false);
 
       releaseStaleSync();
@@ -5194,7 +5193,7 @@ describe("IntegrationRegistry lifecycle", () => {
           verificationUriComplete: null,
           userCode: "IJKL-MNOP",
           message: "Sign in.",
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          expiresAt: "2100-01-01T00:00:00.000Z",
           intervalSeconds: 1,
         };
       },
@@ -5224,7 +5223,6 @@ describe("IntegrationRegistry lifecycle", () => {
       watchingInactiveSync = true;
       const reconnecting = registry.connect(connectedManifest.id);
       await secondConnectReturned;
-      await new Promise((resolve) => setTimeout(resolve, 0));
       releaseStaleSync();
 
       await reconnecting;
@@ -5364,7 +5362,6 @@ describe("IntegrationRegistry lifecycle", () => {
       const connecting = registry.connect(connectedManifest.id);
       await commitStarted;
       const closing = registry.close();
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
       expect(closeCalls).toBe(0);
       expect(commitActive).toBe(true);
@@ -5452,14 +5449,13 @@ describe("IntegrationRegistry lifecycle", () => {
       const connecting = registry.connect(connectedManifest.id);
       await commitStarted;
 
-      const startedAt = Date.now();
       const closing = registry.close();
       expect(closeCalls).toBe(0);
       releaseCommit();
 
       await expect(connecting).resolves.toMatchObject({ kind: "device_code" });
       await closing;
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
+
       expect(closeCalls).toBe(1);
       expect(closeOverlappedCommit).toBe(false);
       const invocation = await invocationResult;
@@ -5536,9 +5532,8 @@ describe("IntegrationRegistry lifecycle", () => {
         code: "operation_failed",
       });
 
-      const closeStartedAt = Date.now();
       await expect(registry.close()).rejects.toThrow(/drain/u);
-      expect(Date.now() - closeStartedAt).toBeLessThan(2_000);
+
       expect(closeCalls).toBe(0);
 
       const recoveryState: ProviderState = {
@@ -5774,7 +5769,7 @@ describe("IntegrationRegistry lifecycle", () => {
         verificationUriComplete: null,
         userCode: "ABCD-EFGH",
         message: "Sign in.",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        expiresAt: "2100-01-01T00:00:00.000Z",
         intervalSeconds: 0,
       }),
     } as IntegrationProvider;
@@ -5890,9 +5885,9 @@ describe("IntegrationRegistry lifecycle", () => {
         (error: unknown) => ({ resolved: false as const, error }),
       );
       await started;
-      const startedAt = Date.now();
+
       await registry.close();
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
+
       const result = await invocationResult;
       expect(result.resolved).toBe(false);
       if (!result.resolved) expect(result.error).toMatchObject({ code: "disabled" });

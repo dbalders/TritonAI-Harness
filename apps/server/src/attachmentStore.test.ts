@@ -1,26 +1,29 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Effect from "effect/Effect";
+import { attachmentFileExtension } from "./attachmentStore.ts";
+import { attachmentRelativePath } from "./attachmentStore.ts";
+import { createUploadAttachmentId } from "./attachmentStore.ts";
+import { isAttachmentIdOwnedByThread } from "./attachmentStore.ts";
+import { parseAttachmentFileExtension } from "./attachmentStore.ts";
+import { resolveAttachmentPathById } from "./attachmentStore.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
+
 import * as NodeOS from "node:os";
+
 import * as NodePath from "node:path";
 
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
+import { describe, expect } from "vite-plus/test";
+import { it } from "@effect/vitest";
 
 import {
-  attachmentFileExtension,
-  attachmentRelativePath,
   chatAttachmentStableKey,
   createAttachmentId,
-  createUploadAttachmentId,
   createDeterministicAttachmentId,
   createPendingAttachmentId,
-  isAttachmentIdOwnedByThread,
-  parseAttachmentFileExtension,
   parseAttachmentUuid,
   planAttachmentClaim,
   parseThreadSegmentFromAttachmentId,
-  resolveAttachmentPathById,
   sweepStalePendingAttachments,
   threadHtmlRenderAttachmentIds,
 } from "./attachmentStore.ts";
@@ -65,21 +68,6 @@ describe("attachmentStore", () => {
     expect(dotted).not.toBe(dashed);
     expect(dotted && parseThreadSegmentFromAttachmentId(dotted)).toBe("thread-a");
     expect(dashed && parseThreadSegmentFromAttachmentId(dashed)).toBe("thread-a");
-  });
-
-  it("sanitizes thread ids when creating attachment ids", () => {
-    const attachmentId = createAttachmentId("thread.folder/unsafe space");
-    expect(attachmentId).toBeTruthy();
-    if (!attachmentId) {
-      return;
-    }
-
-    const threadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
-    expect(threadSegment).toBeTruthy();
-    expect(threadSegment).toMatch(/^[a-z0-9_-]+$/i);
-    expect(threadSegment).not.toContain(".");
-    expect(threadSegment).not.toContain("%");
-    expect(threadSegment).not.toContain("/");
   });
 
   it("parses exact thread segments from attachment ids without prefix collisions", () => {

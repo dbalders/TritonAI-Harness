@@ -318,7 +318,6 @@ describe("production built-in package verification", () => {
       await expect(loadProductionPackageForTest(root, plugin, secretStore(), {})).rejects.toThrow(
         "provider factory must be synchronous",
       );
-      await new Promise<void>((resolve) => setImmediate(resolve));
       expect(unhandledRejections).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);

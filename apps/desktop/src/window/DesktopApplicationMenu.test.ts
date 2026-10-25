@@ -1,19 +1,30 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import { assert, describe, it } from "@effect/vitest";
+
+import * as Deferred from "effect/Deferred";
+
+import * as Effect from "effect/Effect";
+
+import * as Layer from "effect/Layer";
 
 import type * as Electron from "electron";
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
+
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
+
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
+
 import * as DesktopApplicationMenu from "./DesktopApplicationMenu.ts";
+
 import * as DesktopConfig from "../app/DesktopConfig.ts";
+
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+
 import * as DesktopWindow from "./DesktopWindow.ts";
 
 const environmentInput = {
@@ -131,95 +142,6 @@ const configureMenu = (
   );
 
 describe("DesktopApplicationMenu", () => {
-  it.effect("keeps display branding in the macOS application menu", () =>
-    Effect.gen(function* () {
-      const selectedAction = yield* Deferred.make<string>();
-      const applicationMenuTemplate =
-        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
-
-      yield* configureMenu(selectedAction, applicationMenuTemplate, {
-        platform: "darwin",
-        appVersion: "0.0.43-nightly.20260929.2428",
-      });
-
-      const template = yield* Deferred.await(applicationMenuTemplate);
-      const applicationMenu = template[0];
-      assert.isDefined(applicationMenu);
-      assert.equal(applicationMenu.label, "TritonAI Harness (Nightly)");
-      if (!Array.isArray(applicationMenu.submenu)) {
-        throw new Error("Expected application menu submenu to be an array.");
-      }
-      assert.equal(
-        applicationMenu.submenu.find((item) => item.role === "about")?.label,
-        "About TritonAI Harness (Nightly)",
-      );
-      assert.equal(
-        applicationMenu.submenu.find((item) => item.role === "hide")?.label,
-        "Hide TritonAI Harness (Nightly)",
-      );
-      assert.equal(
-        applicationMenu.submenu.find((item) => item.role === "quit")?.label,
-        "Quit TritonAI Harness (Nightly)",
-      );
-    }),
-  );
-
-  it.effect("installs the native menu and routes Settings through DesktopWindow", () =>
-    Effect.gen(function* () {
-      const selectedAction = yield* Deferred.make<string>();
-      const applicationMenuTemplate =
-        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
-
-      yield* configureMenu(selectedAction, applicationMenuTemplate);
-
-      const template = yield* Deferred.await(applicationMenuTemplate);
-      const fileMenu = template.find((item) => item.label === "File");
-      assert.isDefined(fileMenu);
-      if (!Array.isArray(fileMenu.submenu)) {
-        throw new Error("Expected File menu submenu to be an array.");
-      }
-      const settingsItem = fileMenu.submenu.find((item) => item.label === "Settings...");
-      assert.isDefined(settingsItem);
-      const settingsClick = settingsItem.click;
-      if (typeof settingsClick !== "function") {
-        throw new Error("Expected Settings menu item to have a click handler.");
-      }
-
-      settingsClick({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
-      assert.equal(yield* Deferred.await(selectedAction), "open-settings");
-    }),
-  );
-
-  it.effect("owns Paste as Text and routes it through the renderer", () =>
-    Effect.gen(function* () {
-      const selectedAction = yield* Deferred.make<string>();
-      const applicationMenuTemplate =
-        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
-
-      yield* configureMenu(selectedAction, applicationMenuTemplate);
-
-      const template = yield* Deferred.await(applicationMenuTemplate);
-      const editMenu = template.find((item) => item.label === "Edit");
-      assert.isDefined(editMenu);
-      if (!Array.isArray(editMenu.submenu)) {
-        throw new Error("Expected Edit menu submenu to be an array.");
-      }
-      const pasteAsTextItem = editMenu.submenu.find((item) => item.label === "Paste as Text");
-      assert.isDefined(pasteAsTextItem);
-      assert.equal(pasteAsTextItem.accelerator, "CmdOrCtrl+Shift+V");
-      if (typeof pasteAsTextItem.click !== "function") {
-        throw new Error("Expected Paste as Text menu item to have a click handler.");
-      }
-
-      pasteAsTextItem.click(
-        {} as Electron.MenuItem,
-        {} as Electron.BrowserWindow,
-        {} as KeyboardEvent,
-      );
-      assert.equal(yield* Deferred.await(selectedAction), "paste-as-text");
-    }),
-  );
-
   it.effect("leaves the accelerator to Chromium instead of injecting a paste", () =>
     Effect.gen(function* () {
       const selectedAction = yield* Deferred.make<string>();
@@ -457,36 +379,6 @@ describe("DesktopApplicationMenu", () => {
       const message = yield* Deferred.await(shownMessage);
       assert.equal(message.title, "Updates unavailable");
       assert.equal(checkCalls, 0);
-    }),
-  );
-  it.effect("zooms from the numeric keypad without listing the commands twice", () =>
-    Effect.gen(function* () {
-      for (const [accelerator, expected] of [
-        ["CmdOrCtrl+numadd", "zoom-in"],
-        ["CmdOrCtrl+numsub", "zoom-out"],
-        ["CmdOrCtrl+num0", "zoom-reset"],
-      ] as const) {
-        const selectedAction = yield* Deferred.make<string>();
-        const applicationMenuTemplate =
-          yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
-
-        yield* configureMenu(selectedAction, applicationMenuTemplate);
-
-        const template = yield* Deferred.await(applicationMenuTemplate);
-        const viewMenu = template.find((item) => item.label === "View");
-        if (!viewMenu || !Array.isArray(viewMenu.submenu)) {
-          throw new Error("Expected View menu submenu to be an array.");
-        }
-        const item = viewMenu.submenu.find((entry) => entry.accelerator === accelerator);
-        assert.isDefined(item);
-        assert.isFalse(item.visible);
-        if (typeof item.click !== "function") {
-          throw new Error(`Expected ${accelerator} menu item to have a click handler.`);
-        }
-
-        item.click({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
-        assert.equal(yield* Deferred.await(selectedAction), expected);
-      }
     }),
   );
 

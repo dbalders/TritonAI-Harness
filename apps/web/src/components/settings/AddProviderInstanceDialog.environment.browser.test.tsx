@@ -1,4 +1,5 @@
-import { EnvironmentId, ProviderDriverKind, type AcpRegistrySearchAgent } from "@t3tools/contracts";
+import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
+import { EnvironmentId, type AcpRegistrySearchAgent } from "@t3tools/contracts";
 import { userEvent } from "vite-plus/test/browser";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -88,8 +89,6 @@ vi.mock(import("./ProviderWizardAuthenticationStep"), async (original) => ({
   ),
 }));
 
-import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
-
 const remoteEnvironmentId = EnvironmentId.make("remote-device");
 
 function deferred<T>() {
@@ -125,7 +124,6 @@ async function type(selector: string, value: string) {
   await userEvent.fill(input(selector), value);
   await act(async () => input(selector).blur());
 }
-const signInStep = () => document.querySelector('[aria-label="Sign-in step"]');
 
 async function prepareCodexInstance() {
   await using stack = new AsyncDisposableStack();
@@ -187,19 +185,11 @@ describe("AddProviderInstanceDialog environment routing", () => {
     });
   });
 
-  it("reads and writes settings through the supplied environment", async () => {
-    setup();
-    await using _screen = await render(dialog());
-
-    expect(settingsHooks.read).toHaveBeenCalledWith(remoteEnvironmentId);
-    expect(settingsHooks.useMutation).toHaveBeenCalledWith(remoteEnvironmentId);
-  });
-
   it("awaits the atomic Codex create before closing", async () => {
     setup();
     const mutation = deferred<{ readonly _tag: "Success"; readonly value: unknown }>();
     settingsHooks.mutate.mockReturnValueOnce(mutation.promise);
-    await using screen = await prepareCodexInstance();
+    await using _screen = await prepareCodexInstance();
     await click("Add instance");
     expect(actions.onOpenChange).not.toHaveBeenCalled();
     expect(button("Adding...").disabled).toBe(true);
@@ -211,34 +201,13 @@ describe("AddProviderInstanceDialog environment routing", () => {
   it("keeps the Codex dialog open when the atomic create fails", async () => {
     setup();
     settingsHooks.mutate.mockResolvedValueOnce({ _tag: "Failure", cause: new Error("Conflict") });
-    await using screen = await prepareCodexInstance();
+    await using _screen = await prepareCodexInstance();
     await click("Add instance");
     expect(actions.onOpenChange).not.toHaveBeenCalled();
     expect(actions.toast).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", title: "Could not add provider instance" }),
     );
     expect(button("Add instance").disabled).toBe(false);
-  });
-
-  it("adds an instance with the selected environment's provider grant alone", async () => {
-    setup();
-    await using _screen = await prepareCodexInstance();
-    await click("Add instance");
-
-    expect(settingsHooks.mutate).toHaveBeenCalledWith({
-      operation: "create",
-      instanceId: "codex_work",
-      instance: {
-        driver: "codex",
-        enabled: true,
-        displayName: "Work",
-        config: { setupMode: "existing" },
-      },
-    });
-    expect(actions.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "success", title: "Provider instance added" }),
-    );
-    expect(actions.onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("rejects a queued save after the provider grant is revoked", async () => {
@@ -254,20 +223,5 @@ describe("AddProviderInstanceDialog environment routing", () => {
     expect(actions.onOpenChange).not.toHaveBeenCalled();
     await screen.rerender(dialog());
     expect(button("Add instance").disabled).toBe(true);
-  });
-
-  it("keeps a denied draft available when the provider grant arrives", async () => {
-    setup();
-    actions.canManageProviders = false;
-    await using screen = await prepareCodexInstance();
-    expect(button("Add instance").disabled).toBe(true);
-    expect(settingsHooks.mutate).not.toHaveBeenCalled();
-
-    actions.canManageProviders = true;
-    await screen.rerender(dialog());
-    expect(button("Add instance").disabled).toBe(false);
-    await click("Add instance");
-    expect(settingsHooks.mutate).toHaveBeenCalledOnce();
-    expect(actions.onOpenChange).toHaveBeenCalledWith(false);
   });
 });

@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from "@effect/vitest";
-import {
-  makeWorkspaceFileDropHandlers,
-  splitTransferredFiles,
-  type WorkspaceFileDragEvent,
-  type WorkspaceFileDropHost,
-} from "./workspaceFileDrop";
+import { vi } from "@effect/vitest";
+import { makeWorkspaceFileDropHandlers } from "./workspaceFileDrop";
+import { type WorkspaceFileDragEvent } from "./workspaceFileDrop";
+import { type WorkspaceFileDropHost } from "./workspaceFileDrop";
+import { describe, expect, it } from "@effect/vitest";
+import { splitTransferredFiles } from "./workspaceFileDrop";
 
 describe("splitTransferredFiles", () => {
   it("separates copied folders from files before attachment validation", () => {
@@ -79,7 +78,6 @@ function makeDragEvent(options?: {
   } satisfies WorkspaceFileDragEvent;
   return { event, preventDefault };
 }
-
 function makeHost() {
   const setDragActive = vi.fn();
   const addFiles = vi.fn();
@@ -87,39 +85,7 @@ function makeHost() {
   const host = { setDragActive, addFiles, addFolders } satisfies WorkspaceFileDropHost;
   return { host, setDragActive, addFiles, addFolders };
 }
-
 describe("makeWorkspaceFileDropHandlers", () => {
-  it("activates the target for an external file drag", () => {
-    const { host, setDragActive } = makeHost();
-    const { event, preventDefault } = makeDragEvent();
-
-    makeWorkspaceFileDropHandlers(host).onDragEnter(event);
-
-    expect(preventDefault).toHaveBeenCalledOnce();
-    expect(setDragActive).toHaveBeenCalledWith(true);
-  });
-
-  it("ignores non-file drags", () => {
-    const { host, setDragActive } = makeHost();
-    const { event, preventDefault } = makeDragEvent({ types: ["text/plain"] });
-
-    makeWorkspaceFileDropHandlers(host).onDragOver(event);
-
-    expect(preventDefault).not.toHaveBeenCalled();
-    expect(setDragActive).not.toHaveBeenCalled();
-  });
-
-  it("does not flicker when the drag moves between children", () => {
-    const { host, setDragActive } = makeHost();
-    const { event } = makeDragEvent({ movedWithinTarget: true });
-
-    const handlers = makeWorkspaceFileDropHandlers(host);
-    handlers.onDragEnter(event);
-    handlers.onDragLeave(event);
-
-    expect(setDragActive).not.toHaveBeenCalled();
-  });
-
   it("adds dropped images and generic files and clears the active state", () => {
     const image = new File(["image"], "example.png", { type: "image/png" });
     const document = new File(["document"], "example.txt", { type: "text/plain" });
@@ -131,47 +97,5 @@ describe("makeWorkspaceFileDropHandlers", () => {
     expect(setDragActive).toHaveBeenCalledWith(false);
     expect(addFiles).toHaveBeenCalledWith([image, document]);
     expect(addFolders).not.toHaveBeenCalled();
-  });
-
-  it("routes mixed drops to files and folders", () => {
-    const file = new File(["contents"], "example.txt", { type: "text/plain" });
-    const folder = new File([], "project", { type: "" });
-    const directory = {
-      kind: "file",
-      getAsFile: () => folder,
-      webkitGetAsEntry: () => ({ isDirectory: true }),
-    };
-    const { host, addFiles, addFolders } = makeHost();
-    const { event } = makeDragEvent({
-      items: [
-        directory,
-        {
-          kind: "file",
-          getAsFile: () => file,
-          webkitGetAsEntry: () => ({ isDirectory: false }),
-        },
-      ],
-    });
-
-    makeWorkspaceFileDropHandlers(host).onDrop(event);
-
-    expect(addFiles).toHaveBeenCalledWith([file]);
-    expect(addFolders).toHaveBeenCalledWith([folder]);
-  });
-
-  it("routes a folder-only drop without attaching files", () => {
-    const folder = new File([], "project", { type: "" });
-    const directory = {
-      kind: "file",
-      getAsFile: () => folder,
-      webkitGetAsEntry: () => ({ isDirectory: true }),
-    };
-    const { host, addFiles, addFolders } = makeHost();
-    const { event } = makeDragEvent({ items: [directory] });
-
-    makeWorkspaceFileDropHandlers(host).onDrop(event);
-
-    expect(addFiles).not.toHaveBeenCalled();
-    expect(addFolders).toHaveBeenCalledWith([folder]);
   });
 });

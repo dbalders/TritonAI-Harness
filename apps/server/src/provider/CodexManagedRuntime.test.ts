@@ -1,32 +1,48 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
-import {
-  CodexSettings,
-  DEFAULT_TRITONAI_CODEX_HOME_PATH,
-  EnvironmentId,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
-import * as Clock from "effect/Clock";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientResponse } from "effect/http";
-import * as ServerConfig from "../config.ts";
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as CodexInstallation from "./CodexInstallation.ts";
+import { DEFAULT_TRITONAI_CODEX_HOME_PATH } from "@t3tools/contracts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { makeCodexManagedRuntime } from "./CodexManagedRuntime.ts";
-import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
-import { codexAppServerArgs } from "./codexLaunchArgs.ts";
 import { resolveManagedCodexHomeLayout } from "./CodexManagedHome.ts";
+// @effect-diagnostics nodeBuiltinImport:off - checks the host's default Codex directory without writing to it.
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import { assert, it } from "@effect/vitest";
+
+import { CodexSettings, EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
+
+import * as Clock from "effect/Clock";
+
+import * as Effect from "effect/Effect";
+
+import * as FileSystem from "effect/FileSystem";
+
+import * as Path from "effect/Path";
+
+import * as Layer from "effect/Layer";
+
+import * as Option from "effect/Option";
+
+import * as Schema from "effect/Schema";
+
+import { HttpClient, HttpClientResponse } from "effect/http";
+
+import * as ServerConfig from "../config.ts";
+
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+
+import * as CodexInstallation from "./CodexInstallation.ts";
+
+import { makeCodexManagedRuntime } from "./CodexManagedRuntime.ts";
+
+import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
+
+import { codexAppServerArgs } from "./codexLaunchArgs.ts";
 
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
 const decodeSettings = Schema.decodeSync(CodexSettings);
+
 it.effect("managed home defaults to the TritonAI Codex home and honors configured home paths", () =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
@@ -58,6 +74,7 @@ it.effect("managed home defaults to the TritonAI Codex home and honors configure
     assert.equal(configured.effectiveHomePath, "/custom/shadow");
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
 it.effect.each(
   (["managed", "local"] as const).flatMap((source) =>
     (["primary", "additional"] as const).map((account) => ({ source, account })),

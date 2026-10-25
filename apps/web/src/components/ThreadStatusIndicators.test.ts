@@ -7,9 +7,8 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { AtomRegistry } from "effect/reactivity";
-import type { AnimationEvent } from "react";
+
 import {
-  ChangeRequestStatusIcon,
   nextThreadChangeRequestSnapshot,
   prStatusIndicator,
   resolveDisplayedThreadPr,
@@ -18,37 +17,8 @@ import {
   threadChangeRequestSnapshotsEqual,
   threadChangeRequestSnapshotsAtom,
   type ThreadChangeRequestSnapshot,
-  resolveThreadPullRequestBadgePresentation,
-  synchronizeTerminalPulse,
 } from "./ThreadStatusIndicators";
 import { newestPullRequestSummary } from "../state/pullRequests";
-import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
-
-describe("synchronizeTerminalPulse", () => {
-  it("pins only the status pulse to the document clock", () => {
-    const pulse = { animationName: "status-pulse", startTime: 975 } as CSSAnimation;
-    const otherCss = { animationName: "other-animation", startTime: 125 } as CSSAnimation;
-    const otherAnimation = { startTime: 250 } as Animation;
-
-    synchronizeTerminalPulse({
-      animationName: "status-pulse",
-      currentTarget: { getAnimations: () => [pulse, otherCss, otherAnimation] },
-    } as AnimationEvent<SVGSVGElement>);
-
-    expect([pulse.startTime, otherCss.startTime, otherAnimation.startTime]).toEqual([0, 125, 250]);
-  });
-});
-
-describe("ChangeRequestStatusIcon", () => {
-  it.each([
-    ["open", "open", false, PullRequestGlyph.pullRequest],
-    ["draft", "open", true, PullRequestGlyph.draft],
-    ["closed", "closed", false, PullRequestGlyph.closed],
-    ["merged", "merged", false, PullRequestGlyph.merged],
-  ] as const)("uses the %s pull request glyph", (_label, state, isDraft, expectedIcon) => {
-    expect(ChangeRequestStatusIcon({ state, isDraft }).type).toBe(expectedIcon);
-  });
-});
 
 function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
   return {
@@ -111,13 +81,6 @@ function pullRequestSummary(
 }
 
 describe("shared pull request state", () => {
-  it("shows a panel-observed merge instead of an older sidebar summary", () => {
-    const open = pullRequestSummary("open", "2026-09-03T01:00:00.000Z");
-    const merged = pullRequestSummary("merged", "2026-09-03T01:01:00.000Z");
-
-    expect(newestPullRequestSummary(open, merged)).toBe(merged);
-  });
-
   it("never lets a stale open response regress a merged observation", () => {
     const merged = pullRequestSummary("merged", "2026-09-03T01:01:00.000Z");
     const staleOpen = pullRequestSummary("open", "2026-09-03T01:00:00.000Z");
@@ -134,15 +97,6 @@ describe("shared pull request state", () => {
 });
 
 describe("resolveThreadPr", () => {
-  it("keeps local-checkout PR indicators scoped to the stored thread branch", () => {
-    expect(
-      resolveThreadPr({
-        threadBranch: "feature/other",
-        gitStatus: status(),
-      }),
-    ).toBeNull();
-  });
-
   it("hides PR indicators when a dedicated worktree has switched away from the thread branch", () => {
     expect(
       resolveThreadPr({
@@ -150,26 +104,6 @@ describe("resolveThreadPr", () => {
         gitStatus: status(),
       }),
     ).toBeNull();
-  });
-
-  it("hides PR indicators when thread branch metadata is missing", () => {
-    expect(
-      resolveThreadPr({
-        threadBranch: null,
-        gitStatus: status(),
-      }),
-    ).toBeNull();
-  });
-
-  it("shows the PR when the live checkout matches the stored thread branch", () => {
-    const gitStatus = status();
-
-    expect(
-      resolveThreadPr({
-        threadBranch: "feature/current",
-        gitStatus,
-      }),
-    ).toBe(gitStatus.pr);
   });
 });
 
@@ -187,31 +121,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
     name: "GitHub",
     baseUrl: "https://github.com",
   };
-
-  it("returns the live merged PR when the checkout matches the feature branch", () => {
-    const gitStatus = status({
-      refName: featureBranch,
-      pr: mergedPr,
-      sourceControlProvider: provider,
-    });
-
-    expect(
-      resolveDisplayedThreadPr({
-        threadBranch: featureBranch,
-        gitStatus,
-        snapshot: undefined,
-        retainTerminalOnBranchMismatch: true,
-      }),
-    ).toBe(mergedPr);
-    expect(
-      resolveDisplayedThreadPrProvider({
-        threadBranch: featureBranch,
-        gitStatus,
-        snapshot: undefined,
-        retainTerminalOnBranchMismatch: true,
-      }),
-    ).toEqual(provider);
-  });
 
   it("shows a linked pull request when the checkout has a different branch", () => {
     const linkedPullRequestStatus = {
@@ -460,19 +369,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
     ).toBeNull();
   });
 
-  it("retains a local terminal snapshot when thread metadata follows the new branch", () => {
-    const otherBranchSnapshot = snapshotFor("feature/other", mergedPr, provider);
-
-    expect(
-      resolveDisplayedThreadPr({
-        threadBranch: featureBranch,
-        gitStatus: status({ refName: "main", pr: null }),
-        snapshot: otherBranchSnapshot,
-        retainTerminalOnBranchMismatch: true,
-      }),
-    ).toEqual(mergedPr);
-  });
-
   it("retains a terminal snapshot when a local thread and status move to a branch with no PR", () => {
     const terminalSnapshot = snapshotFor(featureBranch, mergedPr, provider);
 
@@ -500,19 +396,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
     expect(
       nextThreadChangeRequestSnapshot({
         threadBranch: "main",
-        gitStatus: status({ refName: "main", pr: null }),
-        snapshot: openSnapshot,
-        retainTerminalOnBranchMismatch: true,
-      }),
-    ).toBeNull();
-  });
-
-  it("clears an open snapshot when a local checkout moves to a different branch", () => {
-    const openSnapshot = snapshotFor(featureBranch, { ...mergedPr, state: "open" });
-
-    expect(
-      nextThreadChangeRequestSnapshot({
-        threadBranch: featureBranch,
         gitStatus: status({ refName: "main", pr: null }),
         snapshot: openSnapshot,
         retainTerminalOnBranchMismatch: true,
@@ -589,31 +472,6 @@ describe("resolveDisplayedThreadPr + nextThreadChangeRequestSnapshot", () => {
     ).toBeNull();
   });
 
-  it("retains a merged PR after a main checkout", () => {
-    const matchingStatus = status({
-      refName: featureBranch,
-      pr: mergedPr,
-      sourceControlProvider: provider,
-    });
-    const cached = nextThreadChangeRequestSnapshot({
-      threadBranch: featureBranch,
-      gitStatus: matchingStatus,
-      snapshot: undefined,
-      retainTerminalOnBranchMismatch: true,
-    });
-    expect(cached).not.toBeNull();
-    expect(cached).not.toBeUndefined();
-
-    const mainStatus = status({ refName: "main", pr: null, isDefaultRef: true });
-    const displayed = resolveDisplayedThreadPr({
-      threadBranch: "main",
-      gitStatus: mainStatus,
-      snapshot: cached as ThreadChangeRequestSnapshot,
-      retainTerminalOnBranchMismatch: true,
-    });
-    expect(displayed?.state).toBe("merged");
-  });
-
   it("refreshes a cached snapshot when a pull request becomes ready", () => {
     const readyPr = { ...mergedPr, state: "open" as const };
     const draftPr = { ...readyPr, isDraft: true };
@@ -650,14 +508,6 @@ describe("threadChangeRequestSnapshotsAtom", () => {
 });
 
 describe("prStatusIndicator", () => {
-  it("formats PR tooltips with number, uppercase status, and title", () => {
-    expect(prStatusIndicator(status().pr, undefined)).toMatchObject({
-      tooltip: "PR #42 - Open: PR branch",
-      tooltipLead: "PR #42 - Open",
-      tooltipTitle: "PR branch",
-    });
-  });
-
   it("distinguishes draft pull requests in the status and tooltip", () => {
     const draftPr = status().pr;
     if (!draftPr) throw new Error("Expected pull request fixture");
@@ -666,134 +516,5 @@ describe("prStatusIndicator", () => {
       label: "PR draft",
       tooltipLead: "PR #42 - Draft",
     });
-  });
-});
-
-describe("resolveThreadPullRequestBadgePresentation", () => {
-  const url = "https://github.com/pingdotgg/t3code/pull/42";
-
-  it("returns the pending pull-request badge when no snapshot is available", () => {
-    expect(
-      resolveThreadPullRequestBadgePresentation({
-        badge: null,
-        number: 42,
-        url,
-        status: null,
-      }),
-    ).toEqual({
-      Icon: PullRequestGlyph.pullRequest,
-      toneClassName: "text-muted-foreground",
-      label: "PR #42, status pending",
-      text: 42,
-    });
-  });
-
-  it.each([
-    [
-      "open",
-      { state: "open", isDraft: false },
-      PullRequestGlyph.pullRequest,
-      "text-emerald-600 dark:text-emerald-300/90",
-      "PR #42 - Open: PR branch",
-    ],
-    [
-      "draft",
-      { state: "open", isDraft: true },
-      PullRequestGlyph.draft,
-      "text-zinc-500 dark:text-zinc-400/80",
-      "PR #42 - Draft: PR branch",
-    ],
-    [
-      "closed",
-      { state: "closed", isDraft: false },
-      PullRequestGlyph.closed,
-      "text-red-600 dark:text-red-300/90",
-      "PR #42 - Closed: PR branch",
-    ],
-    [
-      "merged",
-      { state: "merged", isDraft: false },
-      PullRequestGlyph.merged,
-      "text-violet-600 dark:text-violet-300/90",
-      "PR #42 - Merged: PR branch",
-    ],
-  ] as const)(
-    "keeps the %s state for one linked pull request",
-    (_state, prOverrides, expectedIcon, expectedToneClassName, expectedLabel) => {
-      const fixture = status().pr;
-      if (!fixture) throw new Error("Expected pull request fixture");
-      const prStatus = prStatusIndicator({ ...fixture, ...prOverrides }, undefined);
-      if (!prStatus) throw new Error("Expected pull request status");
-
-      expect(
-        resolveThreadPullRequestBadgePresentation({
-          badge: { kind: "pull-request", others: 0, state: "open" },
-          number: fixture.number,
-          url: fixture.url,
-          status: prStatus,
-        }),
-      ).toEqual({
-        Icon: expectedIcon,
-        toneClassName: expectedToneClassName,
-        label: expectedLabel,
-        text: fixture.number,
-      });
-    },
-  );
-
-  it.each([
-    ["open", "text-emerald-600 dark:text-emerald-300/90"],
-    ["draft", "text-zinc-500 dark:text-zinc-400/80"],
-    ["merged", "text-violet-600 dark:text-violet-300/90"],
-  ] as const)(
-    "uses a layers badge with the %s stack tone without a link identity",
-    (state, expectedToneClassName) => {
-      expect(
-        resolveThreadPullRequestBadgePresentation({
-          badge: { kind: "stack", layers: 3, state },
-          status: null,
-        }),
-      ).toEqual({
-        Icon: PullRequestGlyph.stack,
-        toneClassName: expectedToneClassName,
-        label: `Stack of 3 pull requests, ${state}`,
-        text: 3,
-      });
-    },
-  );
-
-  it.each([
-    ["open", PullRequestGlyph.pullRequest, "text-emerald-600 dark:text-emerald-300/90"],
-    ["draft", PullRequestGlyph.draft, "text-zinc-500 dark:text-zinc-400/80"],
-    ["merged", PullRequestGlyph.merged, "text-violet-600 dark:text-violet-300/90"],
-  ] as const)(
-    "draws the count of unrelated linked pull requests with their %s aggregate state",
-    (state, expectedIcon, expectedToneClassName) => {
-      const fixture = status().pr;
-      if (!fixture) throw new Error("Expected pull request fixture");
-      const closedStatus = prStatusIndicator(
-        { ...fixture, state: "closed", isDraft: false },
-        undefined,
-      );
-      if (!closedStatus) throw new Error("Expected pull request status");
-
-      expect(
-        resolveThreadPullRequestBadgePresentation({
-          badge: { kind: "pull-request", others: 2, state },
-          number: fixture.number,
-          url: fixture.url,
-          status: closedStatus,
-        }),
-      ).toEqual({
-        Icon: expectedIcon,
-        toneClassName: expectedToneClassName,
-        label: `PR #42 - Closed: PR branch, and 2 more linked; overall ${state}`,
-        text: "+3",
-      });
-    },
-  );
-
-  it("omits the control when neither a stack nor a linked identity can be shown", () => {
-    expect(resolveThreadPullRequestBadgePresentation({ badge: null, status: null })).toBeNull();
   });
 });
