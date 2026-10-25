@@ -11,7 +11,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { publicProxy } from "./publicProxy.ts";
-import { offlineHtmlPreview } from "../assets/HtmlPreviewPolicy.ts";
+import * as HtmlPreview from "../assets/HtmlPreview.ts";
 
 export class HtmlRenderBrowserError extends Schema.TaggedError<HtmlRenderBrowserError>()(
   "HtmlRenderBrowserError",
@@ -68,15 +68,23 @@ interface PageContent {
   readonly body: Uint8Array;
   readonly headers: ReadonlyArray<{ readonly name: string; readonly value: string }>;
 }
-const pageBody = (html: string): PageContent => {
-  const preview = offlineHtmlPreview(html);
+const pageBody = Effect.fn("headlessChrome.pageBody")(function* (html: string) {
+  const preview = yield* (yield* HtmlPreview.HtmlPreview).render(html).pipe(
+    Effect.mapError(
+      (cause) =>
+        new HtmlRenderBrowserError({
+          reason: "the offline preview could not be prepared",
+          cause,
+        }),
+    ),
+  );
   return {
     body: Buffer.from(Buffer.from(preview.html, "utf8").toString("base64"), "latin1"),
     headers: Object.entries({ "Content-Type": "text/html; charset=utf-8", ...preview.headers }).map(
       ([name, value]) => ({ name, value }),
     ),
-  };
-};
+  } satisfies PageContent;
+});
 
 const CdpMessage = Schema.fromJsonString(
   Schema.Struct({
@@ -564,7 +572,8 @@ export const captureHtmlScreenshot = Effect.fn("headlessChrome.captureHtmlScreen
       profileDirectory: path.join(directory, "profile"),
     });
     const page = yield* browser.openPage(input.width);
-    const contentHeight = yield* page.load(pageBody(input.html), input.urlFragment);
+    const body = yield* pageBody(input.html);
+    const contentHeight = yield* page.load(body, input.urlFragment);
     const capturedHeight = Math.max(1, Math.min(contentHeight, MAX_CAPTURE_HEIGHT));
     const png = yield* page.screenshot(capturedHeight);
     return { png, contentHeight, capturedHeight, consoleMessages: page.consoleMessages() };
@@ -599,7 +608,7 @@ export const measureHtmlHeights = Effect.fn("headlessChrome.measureHtmlHeights")
     noSandbox: input.noSandbox,
     profileDirectory: path.join(directory, "profile"),
   });
-  const body = pageBody(input.html);
+  const body = yield* pageBody(input.html);
   return yield* Effect.forEach(
     input.widths,
     (width) =>

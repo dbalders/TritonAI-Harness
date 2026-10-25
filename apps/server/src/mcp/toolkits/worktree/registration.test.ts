@@ -35,6 +35,7 @@ import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpSessionRegistry from "../../McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as PreviewBrowser from "../../../preview/PreviewBrowser.ts";
+import * as HtmlPreviewTestkit from "../../../assets/HtmlPreview.testkit.ts";
 import * as ProjectBriefService from "../../../projectBrief/ProjectBriefService.ts";
 
 const layerStubServices = Layer.mergeAll(
@@ -88,6 +89,7 @@ it.live("production mcp layer lists worktree tools over http", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const layerRoutes = McpHttpServer.makeLayer(async () => ({ toolDefinitions: () => [] })).pipe(
+        Layer.provide(HtmlPreviewTestkit.layer),
         Layer.provide(McpSessionRegistry.layer),
       );
       yield* HttpRouter.serve(layerRoutes, {

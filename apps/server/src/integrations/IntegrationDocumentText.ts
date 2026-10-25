@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off - the Promise-based registry owns this bounded child process and its kill timer.
 import * as NodeChildProcess from "node:child_process";
-import * as NodePath from "node:path";
-import * as NodeSea from "node:sea";
+import { resolveServerWorkerCommand } from "../utils/serverWorkerCommand.ts";
 
 import {
   DOCUMENT_TEXT_MAX_CHARACTERS,
@@ -56,12 +55,7 @@ const MAX_QUEUED_EXTRACTIONS = 8;
  * rather than an arbitrary script.
  */
 export function resolveDocumentTextWorkerCommand(): DocumentTextWorkerCommand | null {
-  if (NodeSea.isSea()) {
-    return { command: process.execPath, args: ["__document-text"], limitsVia: "environment" };
-  }
-  const entry = process.argv[1];
-  if (!entry || !/^bin\.(?:m?js|ts)$/u.test(NodePath.basename(entry))) return null;
-  return { command: process.execPath, args: [entry, "__document-text"] };
+  return resolveServerWorkerCommand("__document-text");
 }
 
 function failed(

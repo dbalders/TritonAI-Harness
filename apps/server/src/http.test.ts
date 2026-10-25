@@ -16,6 +16,7 @@ import * as Queue from "effect/Queue";
 import * as Tracer from "effect/Tracer";
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServerResponse } from "effect/http";
 import { openMediaFile } from "./assets/MediaFile.ts";
+import * as HtmlPreviewTestkit from "./assets/HtmlPreview.testkit.ts";
 
 import { injectMcpAppCsp, MCP_APP_MAX_HTML_BYTES } from "@t3tools/shared/mcpApp";
 import { ORCHESTRATION_PROTOCOL_HEADER } from "@t3tools/contracts";
@@ -219,7 +220,9 @@ describe("browser API CORS", () => {
   });
 });
 
-const layerFileResponse = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
+const layerFileResponse = Layer.mergeAll(NodeHttpPlatform.layer, HtmlPreviewTestkit.layer).pipe(
+  Layer.provideMerge(NodeServices.layer),
+);
 
 const makeStaticRequest = Effect.fn("HttpTest.makeStaticRequest")(function* (staticDir: string) {
   const config = yield* ServerConfig.ServerConfig;

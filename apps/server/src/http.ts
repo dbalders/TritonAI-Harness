@@ -30,7 +30,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import * as ServerConfig from "./config.ts";
-import { offlineHtmlPreview } from "./assets/HtmlPreviewPolicy.ts";
+import * as HtmlPreview from "./assets/HtmlPreview.ts";
 import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveAsset } from "./assets/AssetAccess.ts";
 import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
@@ -186,7 +186,17 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
         },
       );
     }
-    const preview = offlineHtmlPreview(new TextDecoder().decode(bytes));
+    const preview = yield* (yield* HtmlPreview.HtmlPreview)
+      .render(new TextDecoder().decode(bytes))
+      .pipe(Effect.catchTags({ HtmlPreviewError: () => Effect.succeed(null) }));
+    if (preview === null)
+      return HttpServerResponse.text(
+        "HTML preview is temporarily unavailable. Download the file to inspect it.",
+        {
+          status: 503,
+          headers: { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" },
+        },
+      );
     const body = new TextEncoder().encode(preview.html);
     Object.assign(headers, preview.headers, { "Content-Length": String(body.byteLength) });
     return method === "HEAD"

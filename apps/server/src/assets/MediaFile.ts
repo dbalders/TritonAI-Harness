@@ -113,19 +113,17 @@ export const readMediaFileBounded = Effect.fn("readMediaFileBounded")(function* 
 ) {
   return yield* Effect.tryPromise({
     try: async () => {
-      const bytes = new Uint8Array(limit + 1);
+      const chunks: Array<Uint8Array> = [];
       let position = 0;
-      while (position < bytes.length) {
-        const { bytesRead } = await file.handle.read(
-          bytes,
-          position,
-          bytes.length - position,
-          position,
-        );
+      while (position <= limit) {
+        const bytes = new Uint8Array(Math.min(64 * 1024, limit + 1 - position));
+        const { bytesRead } = await file.handle.read(bytes, 0, bytes.length, position);
         if (bytesRead === 0) break;
         position += bytesRead;
+        if (position > limit) return null;
+        chunks.push(bytes.subarray(0, bytesRead));
       }
-      return position > limit ? null : bytes.subarray(0, position);
+      return Buffer.concat(chunks, position);
     },
     catch: (cause) => new MediaFileReadError({ path: filePath, cause }),
   });

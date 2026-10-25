@@ -1,10 +1,35 @@
 // @effect-diagnostics nodeBuiltinImport:off - isolated TCP/UDP receivers observe real browser egress.
 import { describe, expect, it } from "vite-plus/test";
-import { parse, serialize } from "parse5";
+import { parse, serialize, type DefaultTreeAdapterMap } from "parse5";
 import { offlineHtmlPreview } from "./HtmlPreviewPolicy.ts";
 import { htmlRenderThemeMessage, injectHtmlRenderBootstrap } from "@t3tools/shared/htmlRender";
 
 describe("offline HTML preview", () => {
+  it.each([
+    '<!DOCTYPE html PUBLIC "a<script>b" "">',
+    '<html lang="<script><meta http-equiv=refresh content=0;url=https://example.invalid/escape>">',
+    '<head title="<head ><script><iframe src=https://example.invalid/escape>">',
+    '<style>body:before {content:"<script>"}</style>',
+  ])("does not turn authored script literals into active markup: %s", (input) => {
+    const result = offlineHtmlPreview(`${input}<p>Safe report</p>`);
+    const elements: Array<DefaultTreeAdapterMap["element"]> = [];
+    const visit = (node: DefaultTreeAdapterMap["node"]) => {
+      if ("tagName" in node) elements.push(node);
+      if ("childNodes" in node) node.childNodes.forEach(visit);
+    };
+    visit(parse(result.html));
+    expect(elements.filter((node) => node.tagName === "iframe")).toHaveLength(0);
+    expect(
+      elements.filter(
+        (node) => node.tagName === "meta" && node.attrs.some((attr) => attr.name === "http-equiv"),
+      ),
+    ).toHaveLength(0);
+    const scripts = elements.filter((node) => node.tagName === "script");
+    expect(scripts).toHaveLength(1);
+    const nonce = scripts[0]!.attrs.find((attr) => attr.name === "nonce")?.value;
+    expect(nonce).toMatch(/^[A-Za-z0-9+/]{32}$/);
+    expect(result.headers["Content-Security-Policy"]).toContain(`script-src 'nonce-${nonce}'`);
+  });
   it("preserves offline controls and raster data while removing executable and navigation routes", () => {
     const result = offlineHtmlPreview(`
       <style>p { color: red }</style><details open><summary>Details</summary><p>Offline</p></details>
@@ -81,7 +106,8 @@ it("keeps a real browser offline while details and inputs still work", async (ct
   if (address === null || typeof address === "string") throw new Error("Missing canary port");
   const canary = `http://127.0.0.1:${address.port}`;
   const preview = offlineHtmlPreview(
-    injectHtmlRenderBootstrap(`
+    `<!DOCTYPE html PUBLIC "a<script>b" ""><html lang='<script><meta http-equiv=refresh content=0;url=${canary}/attribute-refresh>'>` +
+      injectHtmlRenderBootstrap(`
     <details><summary>Report details</summary><p>Offline content</p></details>
     <label>Notes <input id="notes"></label><a href="${canary}/link">External link</a>
     <form action="${canary}/form"><button>Submit</button></form>
@@ -94,7 +120,8 @@ it("keeps a real browser offline while details and inputs still work", async (ct
     const p=new RTCPeerConnection({iceServers:[{urls:'stun:127.0.0.1:${udp.address().port}'}]});
     p.createDataChannel('x');p.createOffer().then(o=>p.setLocalDescription(o));
     location.href='${canary}/navigate';</script>
-  `),
+  `) +
+      "</html>",
   );
   const documentServer = NodeHttp.createServer((_req, res) => {
     res.writeHead(200, { "Content-Type": "text/html", ...preview.headers });

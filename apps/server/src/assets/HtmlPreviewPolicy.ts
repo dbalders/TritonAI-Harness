@@ -1,4 +1,4 @@
-import { parse, serialize, type DefaultTreeAdapterMap } from "parse5";
+import { defaultTreeAdapter, parse, serialize, type DefaultTreeAdapterMap } from "parse5";
 import { injectHtmlRenderBootstrap } from "@t3tools/shared/htmlRender";
 
 type Node = DefaultTreeAdapterMap["node"];
@@ -43,6 +43,14 @@ function sanitize(parent: Parent, depth = 0): void {
   });
 }
 
+function documentHead(document: DefaultTreeAdapterMap["document"]) {
+  const html = document.childNodes.find((node) => "tagName" in node && node.tagName === "html");
+  if (!html || !("tagName" in html)) throw new Error("HTML parser omitted the document element");
+  const head = html.childNodes.find((node) => "tagName" in node && node.tagName === "head");
+  if (!head || !("tagName" in head)) throw new Error("HTML parser omitted the head element");
+  return head;
+}
+
 export function offlineHtmlPreview(html: string): {
   readonly html: string;
   readonly headers: Readonly<Record<string, string>>;
@@ -52,12 +60,20 @@ export function offlineHtmlPreview(html: string): {
   const nonce = Buffer.from(globalThis.crypto.getRandomValues(new Uint8Array(24))).toString(
     "base64",
   );
-  const preview = injectHtmlRenderBootstrap(serialize(document)).replace(
-    "<script>",
-    `<script nonce="${nonce}">`,
-  );
+  const head = documentHead(document);
+  const bootstrap = documentHead(parse(injectHtmlRenderBootstrap("")));
+  // Insert trusted nodes, never markup inside page-authored attribute or doctype text.
+  const first = head.childNodes[0];
+  for (const node of bootstrap.childNodes.slice()) {
+    if ("tagName" in node && node.tagName === "script") {
+      node.attrs.push({ name: "nonce", value: nonce });
+    }
+    defaultTreeAdapter.detachNode(node);
+    if (first) defaultTreeAdapter.insertBefore(head, node, first);
+    else defaultTreeAdapter.appendChild(head, node);
+  }
   return {
-    html: preview,
+    html: serialize(document),
     headers: {
       "Content-Security-Policy": [
         "default-src 'none'",
