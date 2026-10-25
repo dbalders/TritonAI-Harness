@@ -58,7 +58,7 @@ export function MediaVideoPlayer({
   const [resume, setResume] = useState<{ time: number; playing: boolean; rate: number } | null>(
     null,
   );
-  const automaticRetries = useRef(new Set<string>());
+  const automaticRecovery = useRef({ revision, used: false });
   const src = playbackSource?.src ?? latestSrc;
   const sourceRevision = playbackSource === null ? revision : playbackSource.revision;
   const failed = src !== null ? failedSrc === src : sourceFailed;
@@ -122,8 +122,9 @@ export function MediaVideoPlayer({
     };
   }, [video]);
 
-  const retry = async () => {
+  const retry = async (manual = false) => {
     if (retrying) return;
+    if (manual) automaticRecovery.current = { revision, used: true };
     setRetrying(true);
     if (video)
       setResume({
@@ -168,7 +169,7 @@ export function MediaVideoPlayer({
                 size="sm"
                 variant="secondary"
                 disabled={retrying}
-                onClick={() => void retry()}
+                onClick={() => void retry(true)}
               >
                 <RotateCwIcon />
                 {retrying ? "Retrying…" : "Retry video"}
@@ -197,7 +198,6 @@ export function MediaVideoPlayer({
           style={style}
           onLoadedMetadata={(event) => {
             const element = event.currentTarget;
-            automaticRetries.current.clear();
             const pending = resume;
             setResume(null);
             if (pending === null) {
@@ -215,6 +215,15 @@ export function MediaVideoPlayer({
           onPause={() => setPlayingVideo(null)}
           onEnded={() => setPlayingVideo(null)}
           onError={() => {
+            if (automaticRecovery.current.revision !== sourceRevision) {
+              automaticRecovery.current = { revision: sourceRevision, used: false };
+            }
+            if (automaticRecovery.current.used) {
+              setPlayingVideo(null);
+              setFailedSrc(src);
+              return;
+            }
+            automaticRecovery.current.used = true;
             if (latestSrc !== null && src !== latestSrc) {
               if (video)
                 setResume({
@@ -224,8 +233,7 @@ export function MediaVideoPlayer({
                 });
               setPlaybackSource(null);
               setPlayingVideo(null);
-            } else if (src !== null && onRetry && !automaticRetries.current.has(src)) {
-              automaticRetries.current.add(src);
+            } else if (src !== null && onRetry) {
               void retry();
             } else {
               setPlayingVideo(null);

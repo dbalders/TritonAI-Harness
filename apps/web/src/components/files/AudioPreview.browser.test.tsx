@@ -31,6 +31,11 @@ it("keeps downloaded audio seekable after the original URL becomes unavailable",
   expect(audio.src).not.toBe(original);
   expect(audio.duration).toBeCloseTo(4);
   URL.revokeObjectURL(original);
+  const admitted = audio.src;
+  await screen.rerender(
+    <AudioPreview src="https://synthetic.invalid/renewed.wav" name="Synthetic audio" />,
+  );
+  expect(audio.src).toBe(admitted);
   audio.currentTime = 2;
   if (audio.seeking)
     await new Promise<void>((resolve) =>

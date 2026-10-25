@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import {
   type AssetCreateUrlResult,
   AssetWorkspaceAssetNotFoundError,
@@ -534,3 +535,74 @@ describe("project favicon URL cache", () => {
     }
   });
 });
+
+it.effect.each([false, true])(
+  "reauthorizes an expired static preview on remount (collection: %s)",
+  (collection) =>
+    Effect.gen(function* () {
+      let now = Date.now();
+      using _clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      let calls = 0;
+      const environmentId = EnvironmentId.make("static-remount");
+      const client = {
+        [WS_METHODS.assetsCreateUrl]: () =>
+          Effect.sync(() => ({
+            relativeUrl: `/api/assets/synthetic-${++calls}/document.pdf`,
+            expiresAt: now + 120_000,
+          })),
+      } as unknown as WsRpcProtocolClient;
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: new PrimaryConnectionTarget({
+          environmentId,
+          label: "Synthetic",
+          httpBaseUrl: "https://synthetic.invalid",
+          wsBaseUrl: "wss://synthetic.invalid",
+        }),
+        state: yield* SubscriptionRef.make<SupervisorConnectionState>({
+          ...AVAILABLE_CONNECTION_STATE,
+          phase: "connected",
+        }),
+        session: yield* SubscriptionRef.make(Option.some({ client } as RpcSession)),
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      });
+      const environments = EnvironmentRegistry.EnvironmentRegistry.of({
+        run: (_, effect) =>
+          Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        followStream: (_, stream) =>
+          Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+      const registry = AtomRegistry.make();
+      using _registry = { [Symbol.dispose]: () => registry.dispose() };
+      const assets = createAssetEnvironmentAtoms(
+        Atom.runtime(Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environments)),
+      );
+      const resource = {
+        _tag: "workspace-file" as const,
+        threadId: ThreadId.make("synthetic"),
+        path: "document.pdf",
+      };
+      const query = collection
+        ? assets.createUrls({ environmentId, resources: [resource] }).pipe(
+            Atom.map((results) => results[0]!),
+            Atom.setIdleTTL(0),
+          )
+        : assets.createUrl({ environmentId, input: { resource } });
+      const unmount = registry.mount(query);
+      const first = yield* AtomRegistry.getResult(registry, query, { suspendOnWaiting: true });
+      expect(first.relativeUrl).toContain("synthetic-1");
+      unmount();
+      // Wait for the registry's scheduled idle-node disposal before reopening the viewer.
+      yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+      now += 121_000;
+      const close = registry.mount(query);
+      using _mount = { [Symbol.dispose]: close };
+      expect(registry.get(query)._tag).not.toBe("Success");
+      const reopened = yield* AtomRegistry.getResult(registry, query, { suspendOnWaiting: true });
+      expect(reopened.relativeUrl).toContain("synthetic-2");
+      expect(reopened.expiresAt).toBeGreaterThan(now);
+      expect(calls).toBe(2);
+    }),
+);

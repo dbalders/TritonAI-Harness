@@ -75,8 +75,6 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
   func replaceURL(_ url: URL) {
     guard !finished, let player = controller.player,
       (player.currentItem?.asset as? AVURLAsset)?.url != url else { return }
-    refreshTimeout?.cancel()
-    refreshTimeout = nil
     let position = failedPosition ?? player.currentTime()
     failedPosition = nil
     let shouldPlay = player.rate > 0
@@ -94,7 +92,8 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
         } else if item.status == .readyToPlay && self.restoredReplacement !== item {
           self.restoredReplacement = item
           self.playbackError = nil
-          self.refreshAttempts = 0
+          self.refreshTimeout?.cancel()
+          self.refreshTimeout = nil
           let target = position.isNumeric && position.seconds >= 0 ? position : .zero
           player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { complete in
             DispatchQueue.main.async {

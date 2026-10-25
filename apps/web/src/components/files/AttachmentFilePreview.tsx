@@ -19,6 +19,7 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useClientSettings, updateClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 
+import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { AudioPreview } from "./AudioPreview";
 import { BrowserDocumentFrame } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
@@ -32,7 +33,7 @@ import {
 
 const SourcePreview = lazy(() => import("./ReadOnlySourcePreview"));
 
-const STALE_URL_MS = 5 * 60_000;
+const STALE_URL_MS = 15_000;
 
 export function ReadOnlySourcePreview(props: { name: string; text: string }) {
   return (
@@ -231,13 +232,16 @@ export function AttachmentFilePreview(props: {
     <AudioPreview src={url} name={props.name} onError={() => setError("Unable to load audio.")} />
   ) : kind === "video" ? (
     <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
-      <video
-        controls
-        playsInline
+      <MediaVideoPlayer
         src={url}
-        aria-label={props.name}
+        label={props.name}
+        revision={String(revision)}
         className="max-h-full max-w-full"
-        onError={() => setError("Unable to load video.")}
+        onRetry={async () => {
+          const renewed = await refresh();
+          if (renewed === null) throw new Error("The video is unavailable.");
+          setRemoteUrl(renewed);
+        }}
       />
     </div>
   ) : kind === "image" ? (

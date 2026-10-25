@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { usePreviewBlobUrl } from "~/hooks/usePreviewBlobUrl";
 
 export function AudioPreview(props: {
@@ -6,7 +6,8 @@ export function AudioPreview(props: {
   readonly name: string;
   readonly onError?: () => void;
 }) {
-  const preview = usePreviewBlobUrl(props.src);
+  const [source] = useState(props.src);
+  const preview = usePreviewBlobUrl(source);
   const onError = useEffectEvent(() => props.onError?.());
   useEffect(() => {
     if (preview.failed) onError();

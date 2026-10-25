@@ -1,6 +1,7 @@
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { render } from "../../../test/render";
-import clipUrl from "../../../test/fixtures/signed-url-renewal.webm?url";
+import { useState } from "react";
+import { renewalVideoBase64 } from "../../../test/fixtures/signed-url-renewal";
 import { MediaVideoPlayer } from "./MediaVideoPlayer";
 
 const metadataReady = (video: HTMLVideoElement) =>
@@ -17,7 +18,7 @@ const seekFinished = (video: HTMLVideoElement) =>
       );
 
 it("keeps paused position and playing position when the signed source renews", async () => {
-  const bytes = await (await fetch(clipUrl)).arrayBuffer();
+  const bytes = Uint8Array.from(atob(renewalVideoBase64), (value) => value.charCodeAt(0));
   const urls = [0, 1, 2].map(() => URL.createObjectURL(new Blob([bytes], { type: "video/webm" })));
   using _urls = { [Symbol.dispose]: () => urls.forEach((url) => URL.revokeObjectURL(url)) };
   const player = (src: string) => <MediaVideoPlayer src={src} label="Synthetic renewal clip" />;
@@ -54,4 +55,31 @@ it("keeps paused position and playing position when the signed source renews", a
   expect(video.currentTime).toBeGreaterThanOrEqual(position - 0.25);
   expect(video.playbackRate).toBe(1.25);
   expect(video.paused).toBe(false);
+});
+
+it("stops automatic renewal for an unplayable resource until the user retries", async () => {
+  const urls = [0, 1, 2, 3].map(() =>
+    URL.createObjectURL(new Blob(["synthetic invalid video"], { type: "video/webm" })),
+  );
+  using _urls = { [Symbol.dispose]: () => urls.forEach((url) => URL.revokeObjectURL(url)) };
+  const renewed = vi.fn();
+  function BrokenVideo() {
+    const [index, setIndex] = useState(0);
+    return (
+      <MediaVideoPlayer
+        src={urls[index]!}
+        label="Broken clip"
+        onRetry={async () => {
+          renewed();
+          setIndex((current) => current + 1);
+        }}
+      />
+    );
+  }
+  await using screen = await render(<BrokenVideo />);
+  await expect.element(screen.getByRole("alert")).toBeVisible();
+  expect(renewed).toHaveBeenCalledTimes(1);
+  await screen.getByRole("button", { name: "Retry video" }).click();
+  await expect.element(screen.getByRole("alert")).toBeVisible();
+  expect(renewed).toHaveBeenCalledTimes(2);
 });

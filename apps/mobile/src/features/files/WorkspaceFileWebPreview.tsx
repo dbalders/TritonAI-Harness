@@ -16,10 +16,11 @@ export function WorkspaceFileWebPreview(props: { readonly uri: string | null }) 
   if (props.uri === null) {
     return <FilePreviewLoading message="Preparing preview..." background="card" />;
   }
-  return <DocumentWebPreview key={props.uri} uri={props.uri} />;
+  return <DocumentWebPreview uri={props.uri} />;
 }
 
 function DocumentWebPreview(props: { readonly uri: string }) {
+  const [uri] = useState(props.uri);
   const insets = useSafeAreaInsets();
   const columnMetrics = useNativeColumnLayoutMetrics();
   const pdfTopInset = Platform.OS === "ios" ? (columnMetrics?.safeArea.top ?? insets.top) : 0;
@@ -36,10 +37,10 @@ function DocumentWebPreview(props: { readonly uri: string }) {
     return () => subscription.remove();
   }, [linkedPdf]);
 
-  if (isPdfPreviewUri(props.uri)) {
+  if (isPdfPreviewUri(uri)) {
     return (
       <View className="flex-1" style={{ paddingTop: pdfTopInset }}>
-        <PdfPreview uri={props.uri} />
+        <PdfPreview uri={uri} />
       </View>
     );
   }
@@ -67,13 +68,13 @@ function DocumentWebPreview(props: { readonly uri: string }) {
           </View>
         ) : null}
         <WebView
-          source={{ uri: props.uri }}
+          source={{ uri }}
           originWhitelist={["*"]}
           allowsBackForwardNavigationGestures
           allowsFullscreenVideo
           setSupportMultipleWindows={false}
           onShouldStartLoadWithRequest={(request) =>
-            request.url.split("#", 1)[0] === props.uri.split("#", 1)[0]
+            request.url.split("#", 1)[0] === uri.split("#", 1)[0]
           }
           startInLoadingState
           onLoadProgress={(event) => {

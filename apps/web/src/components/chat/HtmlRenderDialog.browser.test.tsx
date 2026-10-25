@@ -134,7 +134,7 @@ it("offers only full screen and opens with the inline URL while keeping the inli
 });
 
 async function renderInlineNearExpiry() {
-  cachedUrl.lifeMs = 60_000;
+  cachedUrl.lifeMs = 10_000;
   refresh.mockResolvedValueOnce("https://environment.test/inline.html");
   await using stack = new AsyncDisposableStack();
   stack.use(await renderInline());

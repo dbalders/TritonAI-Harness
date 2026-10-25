@@ -164,32 +164,20 @@ export function createAssetEnvironmentAtoms<R, E>(
       .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, () => error))));
     return { ...asset, relativeUrl: new URL(asset.relativeUrl, local.httpBaseUrl).href };
   });
-  const createUrlFamily = (kind: "favicon" | "video" | "static") =>
+  const createUrlFamily = (kind: "favicon" | "sensitive") =>
     createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:assets:create-url",
       execute,
       staleTimeMs: kind === "favicon" ? ASSET_URL_STALE_TIME_MS : 15_000,
-      idleTtlMs: ASSET_URL_IDLE_TTL_MS,
-      ...(kind === "static"
-        ? {}
-        : { refreshIntervalMs: kind === "favicon" ? ASSET_URL_REFRESH_INTERVAL_MS : 90_000 }),
+      idleTtlMs: kind === "favicon" ? ASSET_URL_IDLE_TTL_MS : 0,
+      refreshIntervalMs: kind === "favicon" ? ASSET_URL_REFRESH_INTERVAL_MS : 90_000,
       refreshTrigger: ({ input }) =>
         input.resource._tag === "media-file" ? localMediaEnvironment : undefined,
     });
-  const staticUrls = createUrlFamily("static");
-  const videoUrls = createUrlFamily("video");
+  const sensitiveUrls = createUrlFamily("sensitive");
   const faviconUrls = createUrlFamily("favicon");
-  const createUrl = (target: Parameters<typeof staticUrls>[0]) => {
-    const resource = target.input.resource;
-    if (resource._tag === "project-favicon") return faviconUrls(target);
-    const mimeType =
-      "path" in resource
-        ? mediaMimeTypeFromExtension(resource.path.slice(resource.path.lastIndexOf(".")))
-        : resource._tag === "attachment"
-          ? resource.mimeType
-          : null;
-    return mimeType?.startsWith("video/") ? videoUrls(target) : staticUrls(target);
-  };
+  const createUrl = (target: Parameters<typeof sensitiveUrls>[0]) =>
+    target.input.resource._tag === "project-favicon" ? faviconUrls(target) : sensitiveUrls(target);
   const createUrlsFamily = Atom.family((key: string) => {
     const [environmentId, resources] = parseAssetCollectionKey(key);
     return Atom.make((get) =>
@@ -201,10 +189,7 @@ export function createAssetEnvironmentAtoms<R, E>(
           }),
         ),
       ),
-    ).pipe(
-      Atom.setIdleTTL(ASSET_URL_IDLE_TTL_MS),
-      Atom.withLabel(`environment-data:assets:create-urls:${key}`),
-    );
+    ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-data:assets:create-urls:${key}`));
   });
 
   return {
