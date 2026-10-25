@@ -107,6 +107,21 @@ it("denies destination, payload, tool and worker-selected connection substitutio
   }
 });
 
+it("compares the same F05 canonical bytes for nested numeric object keys", async () => {
+  const f = fixture();
+  const input = {
+    destination: "owned-record",
+    content: "reviewed",
+    data: { "2": "two", "10": "ten", nested: { "12": "twelve", "3": "three" } },
+  };
+  f.begin(input);
+  await expect(f.channel.operation(f.request(JSON.parse(JSON.stringify(input))))).resolves.toEqual({
+    changed: true,
+  });
+  await expect(f.channel.completeInvocation({ success: true })).resolves.toEqual({ success: true });
+  expect(f.requests).toHaveLength(1);
+});
+
 it("cannot borrow a write operation during a read invocation", async () => {
   const f = fixture();
   f.channel.beginInvocation("synthetic.items.list", {}, { signal: f.controller.signal });

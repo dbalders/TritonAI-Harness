@@ -1,5 +1,4 @@
 import {
-  canonicalJson,
   isRecord,
   validateJsonValue,
   type JsonObject,
@@ -117,7 +116,7 @@ export class PluginBrokerChannel {
         invocation.used ||
         !operation ||
         operation.toolName !== invocation.toolName ||
-        canonicalJson(request.parameters) !== invocation.canonical
+        snapshotIntegrationInput(request.parameters).canonical !== invocation.canonical
       ) {
         throw new Error("Plugin broker operation does not match its admitted invocation.");
       }
