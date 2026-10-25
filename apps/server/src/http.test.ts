@@ -107,6 +107,20 @@ describe("MCP app asset responses", () => {
     }).pipe(Effect.scoped, Effect.provide(layerFileResponse)),
   );
 
+  it.effect("previews generated documents larger than the MCP snapshot limit", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-html-large-" });
+      const file = path.join(directory, "report.html");
+      yield* fs.writeFileString(file, `<p>${"x".repeat(6 * 1024 * 1024)}</p>`);
+      const response = HttpServerResponse.toWeb(yield* assetFileResponse({ path: file }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+      expect(Number(response.headers.get("content-length"))).toBeGreaterThan(6 * 1024 * 1024);
+    }).pipe(Effect.provide(layerFileResponse)),
+  );
+
   it.effect("rejects oversized captures before transforming them", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

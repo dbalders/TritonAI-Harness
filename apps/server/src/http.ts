@@ -5,6 +5,7 @@ import {
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
+import { HTML_RENDER_MAX_PAGE_BYTES } from "@t3tools/shared/htmlRender";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as ByteSize from "effect/ByteSize";
 import * as Data from "effect/Data";
@@ -171,7 +172,11 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
 ) {
   const headers = assetResponseHeaders(asset.path, asset);
   if (!asset.download && headers["Content-Type"] === "text/html; charset=utf-8") {
-    const bytes = yield* readMcpAppHtml(asset.path, asset.file);
+    const bytes = yield* readMcpAppHtml(
+      asset.path,
+      asset.file,
+      asset.renderIntent === "mcp-app" ? undefined : HTML_RENDER_MAX_PAGE_BYTES + 128 * 1024,
+    );
     if (bytes === null) {
       return HttpServerResponse.text(
         "HTML is too large to preview. Download the file to inspect it.",

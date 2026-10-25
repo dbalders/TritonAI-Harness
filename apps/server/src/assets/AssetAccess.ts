@@ -240,11 +240,11 @@ const optionOnNotFound = <A, R>(
 export const readMcpAppHtml = Effect.fn("AssetAccess.readMcpAppHtml")(function* (
   filePath: string,
   file?: OpenMediaFile,
+  limit = MCP_APP_MAX_HTML_BYTES + 128 * 1024,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   // Stored snapshots also contain a bounded CSP meta tag (up to 32 domains
   // per directive). Bound the read even if the attachment grows after minting.
-  const limit = MCP_APP_MAX_HTML_BYTES + 128 * 1024;
   if (file) return yield* readMediaFileBounded(filePath, file, limit);
   const chunks = yield* Stream.runCollect(fileSystem.stream(filePath, { bytesToRead: limit + 1 }));
   const size = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);

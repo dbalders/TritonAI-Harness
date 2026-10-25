@@ -4,6 +4,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   clampHtmlRenderHeight,
   HTML_RENDER_COLUMN_WIDTH,
+  HTML_RENDER_MAX_PAGE_BYTES,
   HTML_RENDER_MAX_TITLE_LENGTH,
   HTML_RENDER_MEASURE_FONTS,
   HTML_RENDER_MEASURE_WIDTHS,
@@ -38,7 +39,7 @@ import * as PreviewBrowserHost from "../preview/PreviewBrowserHost.ts";
 
 const MIB = 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * MIB;
-const MAX_PAGE_BYTES = 25 * MIB;
+const MAX_PAGE_BYTES = HTML_RENDER_MAX_PAGE_BYTES;
 const formatMib = (bytes: number) => `${(bytes / MIB).toFixed(1)} MiB`;
 
 export class HtmlRenderImagesNotFoundError extends Schema.TaggedError<HtmlRenderImagesNotFoundError>()(

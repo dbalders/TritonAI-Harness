@@ -6,6 +6,7 @@ import {
 } from "./themePalettes.ts";
 import { EVENT_CODE_SHORTCUT_KEYS } from "./keybindings.ts";
 
+export const HTML_RENDER_MAX_PAGE_BYTES = 25 * 1024 * 1024;
 export const HTML_RENDER_TOOL_NAME = "html_render";
 export const HTML_RENDER_MIN_HEIGHT = 80;
 export const HTML_RENDER_MAX_HEIGHT = 2000;
