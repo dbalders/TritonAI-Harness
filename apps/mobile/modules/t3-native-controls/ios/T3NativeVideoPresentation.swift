@@ -12,11 +12,13 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
   private var failedPosition: CMTime?
   private struct PlaybackSnapshot {
     let position: CMTime
-    let rate: Float
+    var rate: Float
     var shouldPlay: Bool
   }
   private var pendingPlayback: PlaybackSnapshot?
   private var itemObservation: NSKeyValueObservation?
+  private var playbackRateObserver: NSObjectProtocol?
+  private var requestedRate: Float = 0
   private var backgroundObserver: NSObjectProtocol?
   private var playbackError: Error?
   private var restoredReplacement: AVPlayerItem?
@@ -49,10 +51,29 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
     metadata.identifier = .commonIdentifierTitle
     metadata.value = title as NSString
     item.externalMetadata = [metadata]
-    controller.player = AVPlayer(playerItem: item)
+    let player = AVPlayer(playerItem: item)
+    controller.player = player
     controller.delegate = self
     controller.overrideUserInterfaceStyle = .dark
     controller.allowsPictureInPicturePlayback = false
+
+    playbackRateObserver = NotificationCenter.default.addObserver(
+      forName: AVPlayer.rateDidChangeNotification, object: player, queue: .main
+    ) { [weak self, weak player] notification in
+      guard let self, let player, !finished else { return }
+      let reason = notification.userInfo?[AVPlayer.rateDidChangeReasonKey]
+        as? AVPlayer.RateDidChangeReason
+      // Automatic loading/failure transitions must not replace a native control's play intent.
+      if reason == .setRateCalled {
+        requestedRate = player.rate
+      } else if reason == .audioSessionInterrupted || reason == .appBackgrounded {
+        requestedRate = 0
+      } else {
+        return
+      }
+      pendingPlayback?.shouldPlay = requestedRate > 0
+      if requestedRate > 0 { pendingPlayback?.rate = requestedRate }
+    }
 
     itemObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
       guard item.status == .failed else { return }
@@ -65,6 +86,7 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
     backgroundObserver = NotificationCenter.default.addObserver(
       forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
     ) { [weak self] _ in
+      self?.requestedRate = 0
       self?.pendingPlayback?.shouldPlay = false
       self?.controller.player?.pause()
     }
@@ -86,8 +108,8 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
       (player.currentItem?.asset as? AVURLAsset)?.url != url else { return }
     if pendingPlayback == nil {
       pendingPlayback = PlaybackSnapshot(
-        position: failedPosition ?? player.currentTime(), rate: player.rate,
-        shouldPlay: player.rate > 0
+        position: failedPosition ?? player.currentTime(), rate: requestedRate,
+        shouldPlay: requestedRate > 0
       )
     }
     guard let playback = pendingPlayback else { return }
@@ -111,6 +133,7 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
               guard !self.finished, !self.dismissRequested,
                 player.currentItem === item, item.status == .readyToPlay else { return }
               let shouldPlay = self.pendingPlayback?.shouldPlay == true
+              let rate = self.pendingPlayback?.rate ?? playback.rate
               self.pendingPlayback = nil
               self.playbackError = nil
               self.refreshTimeout?.cancel()
@@ -118,7 +141,7 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
               // A newer user seek interrupts this seek; keep the user's current playback state.
               guard complete else { return }
               if shouldPlay && UIApplication.shared.applicationState == .active {
-                player.playImmediately(atRate: playback.rate)
+                player.playImmediately(atRate: rate)
               } else {
                 player.pause()
               }
@@ -220,6 +243,8 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
       controller.removeFromParent()
     }
     itemObservation = nil
+    if let playbackRateObserver { NotificationCenter.default.removeObserver(playbackRateObserver) }
+    playbackRateObserver = nil
     pendingPlayback = nil
     controller.player = nil
     if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
