@@ -313,8 +313,8 @@ worktree still creates that branch and worktree with `orchestration:operate`,
 and the agent it runs can use Git however the environment allows.
 
 Settings changes, provider management, environment maintenance, access
-management, and T3 Connect management can each be granted separately. New
-pairings without `--scope` include all of them. Existing clients keep the
+management, and T3 Connect management can each be granted separately. Pairings
+without `--scope` start with view-only access. Existing clients keep the
 permissions they paired with and can stay connected after an update, but newly
 separated features may require pairing again with the permissions they need.
 Older clients may show controls that the server denies. Create a fresh pairing

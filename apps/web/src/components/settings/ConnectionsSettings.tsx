@@ -1150,7 +1150,8 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                     size="xs"
                     variant="outline"
                     disabled={isCreatingPairingLink}
-                    onClick={() =>
+                    onClick={() => {
+                      setDeviceControlConfirmed(false);
                       setPairingScopes(
                         [
                           AuthOrchestrationReadScope,
@@ -1158,8 +1159,8 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                           AuthDiagnosticsReadScope,
                           AuthTerminalReadScope,
                         ].filter((scope) => delegatableScopes.includes(scope)),
-                      )
-                    }
+                      );
+                    }}
                   >
                     Read only
                   </Button>
@@ -1167,13 +1168,14 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                     size="xs"
                     variant="outline"
                     disabled={isCreatingPairingLink}
-                    onClick={() =>
+                    onClick={() => {
+                      setDeviceControlConfirmed(false);
                       setPairingScopes(
                         AuthStandardClientScopes.filter((scope) =>
                           delegatableScopes.includes(scope),
                         ),
-                      )
-                    }
+                      );
+                    }}
                   >
                     Full control
                   </Button>
