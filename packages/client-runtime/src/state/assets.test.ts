@@ -540,8 +540,10 @@ it.effect.each([false, true])(
   "reauthorizes an expired static preview on remount (collection: %s)",
   (collection) =>
     Effect.gen(function* () {
-      let now = Date.now();
+      let now = 1_800_000_000_000;
       using _clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      using _timers = { [Symbol.dispose]: () => vi.useRealTimers() };
       let calls = 0;
       const environmentId = EnvironmentId.make("static-remount");
       const client = {
@@ -595,7 +597,7 @@ it.effect.each([false, true])(
       expect(first.relativeUrl).toContain("synthetic-1");
       unmount();
       // Wait for the registry's scheduled idle-node disposal before reopening the viewer.
-      yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
       now += 121_000;
       const close = registry.mount(query);
       using _mount = { [Symbol.dispose]: close };
