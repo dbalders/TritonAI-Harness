@@ -122,8 +122,8 @@ public final class T3NativeControlsModule: Module {
 
   @JS
   @MainActor
-  func updateVideo(url: URL, identifier: String) async {
-    guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+  func updateVideo(url: String, identifier: String) async {
+    guard let url = URL(string: url), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
       url.host != nil, videoPresentation?.identifier == identifier else { return }
     videoPresentation?.replaceURL(url)
   }
