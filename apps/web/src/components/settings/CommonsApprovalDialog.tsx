@@ -2,9 +2,8 @@ import { useEffect, useEffectEvent, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ServerRespondCommonsApprovalInput } from "@t3tools/contracts";
 import { serverEnvironment } from "~/state/server";
-import { useEnvironmentQuery } from "~/state/query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -49,14 +48,17 @@ export function CommonsApprovalDialog(props: {
   const send = async (input: ServerRespondCommonsApprovalInput) => {
     setRespondingTo(input.action.type === "respond" ? input.action.requestId : input.submissionId);
     setError(null);
-    try {
-      const result = await respond({ environmentId: props.environmentId, input });
-      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The sharing decision could not be sent.");
-    } finally {
-      setRespondingTo(null);
-    }
+    await respond({ environmentId: props.environmentId, input }).then(
+      (result) => {
+        if (result._tag === "Failure") setError(formatEnvironmentQueryError(result.cause));
+      },
+      (cause: unknown) => {
+        setError(
+          cause instanceof Error ? cause.message : "The sharing decision could not be sent.",
+        );
+      },
+    );
+    setRespondingTo(null);
   };
   const cancelOnUnmount = useEffectEvent((id: string, targetEnvironmentId: EnvironmentId) => {
     void respond({
