@@ -1,11 +1,9 @@
 import {
   AuthAccessTokenType,
   AuthAccessWriteScope,
-  AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
-  AuthSettingsWriteScope,
-  AuthSourceControlWriteScope,
   AuthStandardClientScopes,
+  AuthReadOnlyClientScopes,
   type AuthAccessTokenResult,
   type AuthBrowserSessionResult,
   type AuthClientMetadata,
@@ -80,16 +78,7 @@ const MCP_CLIENT_SESSION_TTL = Duration.days(30);
 export const mcpClientScopes = (
   access: AuthMcpClientAccess,
 ): ReadonlyArray<AuthEnvironmentScope> =>
-  access === "read-only"
-    ? [AuthOrchestrationReadScope]
-    : access === "full-access"
-      ? [
-          AuthOrchestrationReadScope,
-          AuthOrchestrationOperateScope,
-          AuthSettingsWriteScope,
-          AuthSourceControlWriteScope,
-        ]
-      : [AuthOrchestrationReadScope, AuthOrchestrationOperateScope];
+  access === "read-only" ? AuthReadOnlyClientScopes : AuthStandardClientScopes;
 
 export interface McpClientSession {
   readonly sessionId: AuthSessionId;
@@ -1047,7 +1036,7 @@ export const make = Effect.gen(function* () {
     function* (input) {
       const createdAt = yield* DateTime.now;
       const issued = yield* bootstrapCredentials.issueOneTimeToken({
-        scopes: input?.scopes ?? AuthStandardClientScopes,
+        scopes: input?.scopes ?? AuthReadOnlyClientScopes,
         subject: input?.subject ?? "one-time-token",
         ...(input?.ttl ? { ttl: input.ttl } : {}),
         ...(input?.label ? { label: input.label } : {}),
@@ -1057,7 +1046,7 @@ export const make = Effect.gen(function* () {
       return {
         id: issued.id,
         credential: issued.credential,
-        scopes: input?.scopes ?? AuthStandardClientScopes,
+        scopes: input?.scopes ?? AuthReadOnlyClientScopes,
         subject: input?.subject ?? "one-time-token",
         ...(issued.label ? { label: issued.label } : {}),
         createdAt: DateTime.toUtc(createdAt),
@@ -1142,7 +1131,7 @@ export const make = Effect.gen(function* () {
 
   const issuePairingCredential: EnvironmentAuth["Service"]["issuePairingCredential"] = (input) =>
     issuePairingCredentialForSubject({
-      scopes: input?.scopes ?? AuthStandardClientScopes,
+      scopes: input?.scopes ?? AuthReadOnlyClientScopes,
       subject: "one-time-token",
       ...(input?.label ? { label: input.label } : {}),
     }).pipe(Effect.withSpan("EnvironmentAuth.issuePairingCredential"));
@@ -1267,7 +1256,7 @@ export const make = Effect.gen(function* () {
           ? Effect.succeed({
               sessionId: session.sessionId,
               label: session.client.label ?? "MCP client",
-              access: session.scopes.includes(AuthOrchestrationOperateScope)
+              access: AuthStandardClientScopes.every((scope) => session.scopes.includes(scope))
                 ? (session.runtimeModeCeiling ?? "approval-required")
                 : "read-only",
             } satisfies McpClientSession)

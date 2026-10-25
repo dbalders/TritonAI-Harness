@@ -1,5 +1,6 @@
 import {
   CLIENT_GUARDED_RPC_SCOPES,
+  requiredScopesForAgentControl,
   type DeviceListInput,
   clientRpcRequiredScopes,
   authScopeRequiredResponse,
@@ -330,7 +331,12 @@ export const layer = (
   onAuthorized?: (method: string, payload: unknown) => Effect.Effect<void>,
 ) =>
   Layer.succeed(RpcScopeAuthorization)((effect, { rpc, payload }) => {
-    const requiredScopes = requiredScopesForRpcCall(rpc._tag, payload);
+    const requestedScopes = requiredScopesForRpcCall(rpc._tag, payload);
+    // Help uses its own host-isolated text generation and cannot steer a task.
+    const requiredScopes =
+      rpc._tag === WS_METHODS.helpAsk
+        ? requestedScopes
+        : requiredScopesForAgentControl(requestedScopes);
     const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
     if (requiredScope !== undefined) return Effect.fail(rpcAuthorizationError(requiredScope));
     return onAuthorized === undefined

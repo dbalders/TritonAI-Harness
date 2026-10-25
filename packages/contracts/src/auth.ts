@@ -128,7 +128,11 @@ export function sessionGrantsScope(
   scope: AuthEnvironmentScope,
 ): boolean {
   if (!session.authenticated) return false;
-  if (session.permissions !== undefined) return session.permissions.includes(scope);
+  if (session.permissions !== undefined) {
+    return scope === AuthOrchestrationOperateScope || scope === AuthTerminalOperateScope
+      ? AuthStandardClientScopes.every((required) => session.permissions!.includes(required))
+      : session.permissions.includes(scope);
+  }
   if (session.scopes?.includes(scope)) return true;
   if (session.auth?.serverUpdateScope !== undefined) return false;
   const parent = legacyParents[scope];
@@ -145,9 +149,8 @@ export function sessionHasLegacyPermissions(session: SessionGrantInput): boolean
   );
 }
 
-// Access and relay management are included because terminal:operate and
-// orchestration:operate already reach that authority through a shell or a
-// full-access agent. Narrowing a grant means choosing explicit scopes.
+// Agent control requires this complete authority set on the server. A supervised
+// provider can still run host tools, so runtime modes cannot narrow client grants.
 export const AuthStandardClientScopes = [
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
@@ -166,6 +169,17 @@ export const AuthStandardClientScopes = [
   AuthAccessWriteScope,
   AuthRelayWriteScope,
 ] as const;
+
+export const AuthReadOnlyClientScopes = [AuthOrchestrationReadScope] as const;
+
+/** Provider runtime modes are interaction policies, not a client security sandbox. */
+export function requiredScopesForAgentControl(
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+): ReadonlyArray<AuthEnvironmentScope> {
+  return scopes.includes(AuthOrchestrationOperateScope) || scopes.includes(AuthTerminalOperateScope)
+    ? [...new Set([...scopes, ...AuthStandardClientScopes])]
+    : scopes;
+}
 
 export const AuthTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;

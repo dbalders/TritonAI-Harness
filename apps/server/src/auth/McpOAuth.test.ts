@@ -238,7 +238,7 @@ it.live("signs in with a pairing code and issues a token only /mcp accepts", () 
   withRoutes((handler, auth) =>
     Effect.gen(function* () {
       const clientId = yield* registeredClientId(handler);
-      const pairing = yield* auth.issuePairingCredential();
+      const pairing = yield* auth.issuePairingCredential({ scopes: AuthStandardClientScopes });
       const params = authorizeParams(clientId);
 
       const wrongCode = yield* decide(handler, params, {
@@ -281,7 +281,7 @@ it.live("signs in with a pairing code and issues a token only /mcp accepts", () 
         access_token: string;
         scope: string;
       };
-      expect(token.scope).toBe("orchestration:read orchestration:operate");
+      expect(token.scope).toBe(AuthStandardClientScopes.join(" "));
 
       expect((yield* exchange(verifier)).status).toBe(400);
 
@@ -335,7 +335,7 @@ it.live("signs in a hosted agent with an https callback that asked for a client 
       );
       expect(details).toMatchObject({ clientName: "Hosted bot", redirectHost: "bot.example" });
 
-      const pairing = yield* auth.issuePairingCredential();
+      const pairing = yield* auth.issuePairingCredential({ scopes: AuthStandardClientScopes });
       const approved = yield* decide(handler, params, {
         _tag: "pairing-code",
         access: "approval-required",
@@ -373,7 +373,7 @@ it.live("rejects a wrong PKCE verifier and spends the code", () =>
   withRoutes((handler, auth) =>
     Effect.gen(function* () {
       const clientId = yield* registeredClientId(handler);
-      const pairing = yield* auth.issuePairingCredential();
+      const pairing = yield* auth.issuePairingCredential({ scopes: AuthStandardClientScopes });
       const params = authorizeParams(clientId);
       const approved = yield* decide(handler, params, {
         _tag: "pairing-code",

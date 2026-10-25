@@ -280,11 +280,17 @@ npx t3 pair --scope orchestration:read --scope relay:read
 
 The selected scopes replace the default permissions. The same option works with
 `npx t3 auth pairing create` and `npx t3 auth session issue`; each command's
-`--help` lists the available scopes. Without `--scope`, pairing tokens and issued
-bearer sessions get every permission, including managing access and T3 Connect.
-A terminal or a full-access agent on the host can reach those as well, so a
-client that should not manage access also needs to go without `terminal:operate`
-and `orchestration:operate`.
+`--help` lists the available scopes. Pairing tokens default to view-only access.
+CLI-issued bearer sessions default to every permission, including managing access
+and T3 Connect; choose explicit scopes to narrow them.
+The pairing form starts with view-only access. Choose **Full control** and confirm
+that you trust the device to run commands, read credentials, change files, and
+grant access before pairing a device that will run agents. Agent control requires
+every permission, including when the agent asks for approvals; removing any one
+blocks launching, continuing, and approving tasks. Runtime modes control how an
+agent asks for permission, rather than limiting what a paired device can access.
+New sessions that can operate tasks or terminals expire within eight hours. Create a
+fresh pairing link when access expires.
 
 To change an existing client's permissions, create a fresh pairing link with the
 scopes it needs. In a browser opened directly on the environment, open that link

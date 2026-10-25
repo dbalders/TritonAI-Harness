@@ -851,3 +851,19 @@ it.layer(NodeServices.layer)("SessionStore.layer", (it) => {
     }).pipe(Effect.provide(Layer.mergeAll(layerSessionStore(), SqlitePersistence.layerMemory))),
   );
 });
+
+it.effect("bounds task and terminal sessions even when a longer lifetime is requested", () =>
+  Effect.gen(function* () {
+    const sessions = yield* SessionStore.SessionStore;
+    for (const scope of ["orchestration:operate", "terminal:operate"] as const) {
+      const issued = yield* sessions.issue({ scopes: [scope], ttl: Duration.days(30) });
+      yield* TestClock.adjust(Duration.hours(8));
+      expect((yield* sessions.verify(issued.token).pipe(Effect.flip))._tag).toBe(
+        "SessionTokenExpiredError",
+      );
+    }
+    const view = yield* sessions.issue({ scopes: ["orchestration:read"] });
+    yield* TestClock.adjust(Duration.days(1));
+    expect((yield* sessions.verify(view.token)).scopes).toEqual(["orchestration:read"]);
+  }).pipe(Effect.provide(layerSessionStore().pipe(Layer.provide(NodeServices.layer)))),
+);

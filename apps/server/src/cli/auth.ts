@@ -1,4 +1,8 @@
-import { AuthSessionId, AuthStandardClientScopes } from "@t3tools/contracts";
+import {
+  AuthSessionId,
+  AuthStandardClientScopes,
+  AuthReadOnlyClientScopes,
+} from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -79,7 +83,7 @@ const tokenOnlyFlag = Flag.Boolean("token-only").pipe(
 
 const pairingCreateCommand = Command.make("create", {
   ...authLocationFlags,
-  scopes: authScopesFlag(AuthStandardClientScopes),
+  scopes: authScopesFlag(AuthReadOnlyClientScopes),
   ttl: ttlFlag,
   label: labelFlag,
   baseUrl: baseUrlFlag,

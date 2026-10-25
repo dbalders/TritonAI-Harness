@@ -1,6 +1,8 @@
 import {
   AuthSessionId,
   AuthStandardClientScopes,
+  AuthOrchestrationOperateScope,
+  AuthTerminalOperateScope,
   AuthEnvironmentScopes,
   type AuthClientMetadata,
   type AuthClientSession,
@@ -423,6 +425,7 @@ export class SessionStore extends Context.Service<
 
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
+const DEVICE_CONTROL_SESSION_TTL = Duration.hours(8);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
 
 const SessionClaims = Schema.Struct({
@@ -658,8 +661,14 @@ export const make = Effect.gen(function* () {
           .pipe(Effect.mapError((cause) => new SessionCredentialIssueError({ cause }))),
       );
       const issuedAt = yield* DateTime.now;
+      const scopes = input?.scopes ?? AuthStandardClientScopes;
+      const requestedTtl = Duration.toMillis(input?.ttl ?? DEFAULT_SESSION_TTL);
+      const deviceControl =
+        scopes.includes(AuthOrchestrationOperateScope) || scopes.includes(AuthTerminalOperateScope);
       const expiresAt = DateTime.add(issuedAt, {
-        milliseconds: Duration.toMillis(input?.ttl ?? DEFAULT_SESSION_TTL),
+        milliseconds: deviceControl
+          ? Math.min(requestedTtl, Duration.toMillis(DEVICE_CONTROL_SESSION_TTL))
+          : requestedTtl,
       });
       const claims: SessionClaims = {
         v: 1,

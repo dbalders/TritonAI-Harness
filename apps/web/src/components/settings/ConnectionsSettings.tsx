@@ -26,10 +26,12 @@ import {
   AuthEnvironmentMaintainScope,
   AuthDiagnosticsReadScope,
   AuthOrchestrationReadScope,
+  AuthOrchestrationOperateScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
   AuthFilesystemReadScope,
   AuthStandardClientScopes,
+  AuthReadOnlyClientScopes,
   AuthTerminalReadScope,
   type AuthClientSession,
   type AuthEnvironmentScope,
@@ -1032,8 +1034,10 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pairingLabel, setPairingLabel] = useState("");
   const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthGrantScope>>([
-    ...AuthStandardClientScopes,
+    ...AuthReadOnlyClientScopes,
   ]);
+  const [deviceControlConfirmed, setDeviceControlConfirmed] = useState(false);
+  const deviceControlSelected = pairingScopes.includes(AuthOrchestrationOperateScope);
   const selectedScopes = pairingScopes.filter((scope) => delegatableScopes.includes(scope));
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
 
@@ -1041,6 +1045,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     if (
       primaryEnvironmentId === null ||
       selectedScopes.length === 0 ||
+      (deviceControlSelected && !deviceControlConfirmed) ||
       !readEnvironmentScope(primaryEnvironmentId, AuthAccessWriteScope) ||
       !selectedScopes.every((scope) => readEnvironmentScope(primaryEnvironmentId, scope))
     )
@@ -1054,7 +1059,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
       onPairingLinkCreated(created);
       setPairingLabel("");
       setPairingScopes(
-        AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
+        AuthReadOnlyClientScopes.filter((scope) => delegatableScopes.includes(scope)),
       );
       setDialogOpen(false);
     });
@@ -1073,6 +1078,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
   };
 
   const togglePairingScope = (scope: AuthGrantScope, checked: boolean) => {
+    setDeviceControlConfirmed(false);
     setPairingScopes((current) => togglePairingScopeSelection(current, scope, checked));
   };
 
@@ -1090,10 +1096,11 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
         open={dialogOpen}
         onOpenChange={(open) => {
           setDialogOpen(open);
+          setDeviceControlConfirmed(false);
           if (!open) {
             setPairingLabel("");
             setPairingScopes(
-              AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
+              AuthReadOnlyClientScopes.filter((scope) => delegatableScopes.includes(scope)),
             );
           }
         }}
@@ -1165,7 +1172,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                       )
                     }
                   >
-                    Standard
+                    Full control
                   </Button>
                 </div>
               </div>
@@ -1192,6 +1199,18 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                   ),
                 )}
               </div>
+              {deviceControlSelected ? (
+                <label className="flex items-start gap-3 text-xs text-warning">
+                  <Checkbox
+                    checked={deviceControlConfirmed}
+                    onCheckedChange={(value) => setDeviceControlConfirmed(value === true)}
+                  />
+                  <span>
+                    I trust this device to run commands, read credentials, change files, and grant
+                    access. Its session expires within 8 hours.
+                  </span>
+                </label>
+              ) : null}
               {selectedScopes.length === 0 ? (
                 <p className="text-xs text-destructive">Select at least one permission.</p>
               ) : selectedScopes.includes(AuthAccessWriteScope) ? (
@@ -1210,7 +1229,11 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
               Cancel
             </Button>
             <Button
-              disabled={isCreatingPairingLink || selectedScopes.length === 0}
+              disabled={
+                isCreatingPairingLink ||
+                selectedScopes.length === 0 ||
+                (deviceControlSelected && !deviceControlConfirmed)
+              }
               onClick={() => void handleCreatePairingLink()}
             >
               {isCreatingPairingLink ? "Creating…" : "Create link"}

@@ -1,4 +1,9 @@
-import type { AdvertisedEndpoint, DesktopUpdateState, DesktopWslState } from "@t3tools/contracts";
+import {
+  AuthStandardClientScopes,
+  type AdvertisedEndpoint,
+  type DesktopUpdateState,
+  type DesktopWslState,
+} from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   applyWslEnableSelection,
@@ -12,14 +17,19 @@ import {
 } from "./ConnectionsSettings.logic";
 
 describe("togglePairingScopeSelection", () => {
+  it("selects complete authority for agent control and removes control when narrowed", () => {
+    const full = togglePairingScopeSelection(["orchestration:read"], "orchestration:operate", true);
+    expect(full).toEqual(AuthStandardClientScopes);
+    expect(togglePairingScopeSelection([], "terminal:operate", true)).toEqual(
+      AuthStandardClientScopes,
+    );
+    for (const scope of AuthStandardClientScopes) {
+      expect(togglePairingScopeSelection(full, scope, false)).not.toContain(
+        "orchestration:operate",
+      );
+    }
+  });
   it.each([
-    {
-      label: "adds terminal:read when terminal:operate is selected",
-      current: ["orchestration:read"],
-      scope: "terminal:operate",
-      checked: true,
-      expected: ["orchestration:read", "terminal:operate", "terminal:read"],
-    },
     {
       label: "drops terminal:operate when terminal:read is cleared",
       current: ["terminal:read", "terminal:operate", "relay:read"],

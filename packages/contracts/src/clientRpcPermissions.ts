@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
 import {
   AuthOrchestrationOperateScope,
+  requiredScopesForAgentControl,
   AuthOrchestrationReadScope,
   AuthDiagnosticsReadScope,
   AuthPreviewOperateScope,
@@ -81,12 +82,15 @@ export function clientRpcRequiredScopes(
     method === WS_METHODS.projectOverviewDismiss ||
     method === WS_METHODS.projectOverviewRestore
   ) {
-    return [AuthOrchestrationOperateScope, AuthFilesystemReadScope];
+    return requiredScopesForAgentControl([AuthOrchestrationOperateScope, AuthFilesystemReadScope]);
   }
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {
     const payload = decodePrepareThread(input);
     if (payload.mode === "worktree" && payload.threadId !== undefined)
-      return [AuthSourceControlWriteScope, AuthOrchestrationOperateScope];
+      return requiredScopesForAgentControl([
+        AuthSourceControlWriteScope,
+        AuthOrchestrationOperateScope,
+      ]);
   }
   if (method === WS_METHODS.gitRunStackedAction && input !== undefined) {
     const payload = decodeStackedAction(input);
@@ -97,6 +101,6 @@ export function clientRpcRequiredScopes(
       return [AuthSourceControlWriteScope, AuthOrchestrationReadScope];
   }
   return Object.hasOwn(CLIENT_GUARDED_RPC_SCOPES, method)
-    ? [CLIENT_GUARDED_RPC_SCOPES[method as ClientGuardedRpcTag]]
+    ? requiredScopesForAgentControl([CLIENT_GUARDED_RPC_SCOPES[method as ClientGuardedRpcTag]])
     : [];
 }

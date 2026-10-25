@@ -30,8 +30,9 @@ export const AUTH_SCOPE_OPTIONS: ReadonlyArray<{
   },
   {
     scope: AuthOrchestrationOperateScope,
-    title: "Operate tasks",
-    description: "Start, update, and stop tasks.",
+    title: "Full device control",
+    description:
+      "Run agents with host files, commands, credentials, and access management. Requires all permissions, in every runtime mode.",
   },
   {
     scope: AuthSettingsWriteScope,
@@ -66,7 +67,8 @@ export const AUTH_SCOPE_OPTIONS: ReadonlyArray<{
   {
     scope: AuthTerminalOperateScope,
     title: "Use terminals",
-    description: "Create terminals and send input to running shells.",
+    description:
+      "Run host commands with access to files, credentials, and access management. Requires all permissions.",
   },
   {
     scope: AuthSourceControlWriteScope,

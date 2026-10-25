@@ -2,6 +2,8 @@ import {
   type AdvertisedEndpoint,
   type AuthGrantScope,
   AuthTerminalOperateScope,
+  AuthOrchestrationOperateScope,
+  AuthStandardClientScopes,
   AuthTerminalReadScope,
   type DesktopBridge,
   type DesktopServerExposureState,
@@ -23,6 +25,13 @@ export function togglePairingScopeSelection(
   scope: AuthGrantScope,
   checked: boolean,
 ): ReadonlyArray<AuthGrantScope> {
+  if (checked && (scope === AuthOrchestrationOperateScope || scope === AuthTerminalOperateScope))
+    return [...AuthStandardClientScopes];
+  if (!checked) {
+    current = current.filter(
+      (value) => value !== AuthOrchestrationOperateScope && value !== AuthTerminalOperateScope,
+    );
+  }
   const without = (scopes: ReadonlyArray<AuthGrantScope>) =>
     scopes.filter((currentScope) => currentScope !== scope);
   if (!checked) {

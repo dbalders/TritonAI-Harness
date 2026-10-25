@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
+  AuthStandardClientScopes,
   AuthOrchestrationReadScope,
   AuthFilesystemReadScope,
   AuthPreviewOperateScope,
@@ -46,8 +47,8 @@ const grant = (allowed: boolean): AuthSessionState => ({
     sessionMethods: [],
     sessionCookieName: "test",
   },
-  scopes: allowed ? [AuthOrchestrationOperateScope] : [],
-  permissions: allowed ? [AuthOrchestrationOperateScope] : [],
+  scopes: allowed ? AuthStandardClientScopes : [],
+  permissions: allowed ? AuthStandardClientScopes : [],
 });
 const runtime = Atom.runtime(
   Layer.succeed(EnvironmentRegistry, {
@@ -105,7 +106,7 @@ describe("command permissions", () => {
       Effect.gen(function* () {
         const registry = yield* setup;
         const close = createCommandPermissions(runtime, WS_METHODS.previewClose);
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
         expect(registry.get(close.permissionAtom(env))).toBe(false);
         expect((yield* close.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
           "EnvironmentAuthorizationError",
@@ -134,7 +135,7 @@ describe("command permissions", () => {
       Effect.gen(function* () {
         const registry = yield* setup;
         const cleanup = createCommandPermissions(runtime, WS_METHODS.serverRunStorageCleanup);
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
         expect(registry.get(cleanup.permissionAtom(env))).toBe(false);
         expect((yield* cleanup.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
           "EnvironmentAuthorizationError",
@@ -160,7 +161,7 @@ describe("command permissions", () => {
       Effect.gen(function* () {
         const registry = yield* setup;
         const check = createCommandPermissions(runtime, WS_METHODS.serverCheckOtlpEndpoint);
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
         expect(registry.get(check.permissionAtom(env))).toBe(false);
         registry.set(
           sessions(env),
@@ -284,7 +285,7 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* setup;
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
         const git = createCommandPermissions(runtime, WS_METHODS.vcsInit);
         expect((yield* git.authorize(registry, env).pipe(Effect.flip)).requiredPermission).toBe(
           AuthSourceControlWriteScope,
@@ -314,8 +315,8 @@ it.effect(
           sessions(env),
           AsyncResult.success({
             ...grant(true),
-            scopes: [AuthSourceControlWriteScope, AuthOrchestrationOperateScope],
-            permissions: [AuthSourceControlWriteScope, AuthOrchestrationOperateScope],
+            scopes: AuthStandardClientScopes,
+            permissions: AuthStandardClientScopes,
           }),
         );
         expect(registry.get(prepare.permissionAtom(env, input))).toBe(true);

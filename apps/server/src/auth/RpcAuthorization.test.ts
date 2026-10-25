@@ -1,5 +1,10 @@
 import {
   AuthEnvironmentMaintainScope,
+  AuthStandardClientScopes,
+  CommandId,
+  MessageId,
+  RuntimeRequestId,
+  type OrchestrationV2Command,
   AuthDiagnosticsReadScope,
   AuthFilesystemReadScope,
   AuthProvidersManageScope,
@@ -769,7 +774,9 @@ it.effect("requires filesystem permission before project-brief capture or dispat
               handled = true;
             }).pipe(Effect.andThen(Effect.never)),
           ),
-          RpcAuthorization.layer([AuthOrchestrationOperateScope]),
+          RpcAuthorization.layer(
+            AuthStandardClientScopes.filter((scope) => scope !== AuthFilesystemReadScope),
+          ),
         ),
       ),
     );
@@ -905,7 +912,9 @@ it.effect("protects cached project overviews with filesystem permission", () =>
           group.toLayerHandler(WS_METHODS.projectOverviewEnsure, denyHandler),
           group.toLayerHandler(WS_METHODS.projectOverviewDismiss, denyHandler),
           group.toLayerHandler(WS_METHODS.projectOverviewRestore, denyHandler),
-          RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+          RpcAuthorization.layer(
+            AuthStandardClientScopes.filter((scope) => scope !== AuthFilesystemReadScope),
+          ),
         ),
       ),
     );
@@ -933,4 +942,143 @@ it.effect("protects cached project overviews with filesystem permission", () =>
     );
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
+);
+
+describe("agent control authority", () => {
+  const method = ORCHESTRATION_V2_WS_METHODS.dispatchCommand;
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof method> => tag !== method,
+    ),
+  );
+  const commandId = CommandId.make("authority-command");
+  const threadId = ThreadId.make("existing-full-access-thread");
+  const commands: ReadonlyArray<OrchestrationV2Command> = [
+    ...["approval-required", "auto-accept-edits", "auto", "full-access"].map((runtimeMode) => ({
+      type: "thread.runtime-mode.set" as const,
+      commandId,
+      threadId,
+      runtimeMode: runtimeMode as
+        | "approval-required"
+        | "auto-accept-edits"
+        | "auto"
+        | "full-access",
+    })),
+    {
+      type: "runtime-request.respond" as const,
+      commandId,
+      threadId,
+      requestId: RuntimeRequestId.make("pending-approval"),
+      decision: "accept" as const,
+    },
+    {
+      type: "message.dispatch" as const,
+      createdBy: "user",
+      creationSource: "web",
+      commandId,
+      threadId,
+      messageId: MessageId.make("follow-up"),
+      text: "synthetic continuation",
+      attachments: [],
+      dispatchMode: { type: "start_immediately" as const },
+    },
+  ];
+
+  it.effect.each(AuthStandardClientScopes)(
+    "denies existing-thread commands when %s is missing",
+    (missing) =>
+      Effect.gen(function* () {
+        const handled: string[] = [];
+        const client = yield* RpcTest.makeClient(group).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              group.toLayerHandler(method, (command) =>
+                Effect.sync(() => {
+                  handled.push(command.type);
+                  return { sequence: 1 };
+                }),
+              ),
+              RpcAuthorization.layer(AuthStandardClientScopes.filter((scope) => scope !== missing)),
+            ),
+          ),
+        );
+        for (const command of commands) {
+          expect(yield* client[method](command).pipe(Effect.flip)).toMatchObject({
+            _tag: "EnvironmentAuthorizationError",
+            requiredPermission: missing,
+          });
+        }
+        expect(handled).toEqual([]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("preserves explicitly authorized full-control commands", () =>
+    Effect.gen(function* () {
+      const handled: string[] = [];
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(method, (command) =>
+              Effect.sync(() => {
+                handled.push(command.type);
+                return { sequence: 1 };
+              }),
+            ),
+            RpcAuthorization.layer(AuthStandardClientScopes),
+          ),
+        ),
+      );
+      for (const command of commands)
+        expect(yield* client[method](command)).toEqual({ sequence: 1 });
+      expect(handled).toHaveLength(commands.length);
+    }).pipe(Effect.scoped),
+  );
+});
+
+it.effect(
+  "denies narrow-token launches in all runtime modes before provider/session creation",
+  () =>
+    Effect.gen(function* () {
+      const method = ORCHESTRATION_V2_WS_METHODS.launchThread;
+      const group = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof method> => tag !== method,
+        ),
+      );
+      let handled = false;
+      const client = yield* RpcTest.makeClient(group).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            group.toLayerHandler(method, () =>
+              Effect.sync(() => {
+                handled = true;
+              }).pipe(Effect.andThen(Effect.never)),
+            ),
+            RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+          ),
+        ),
+      );
+      for (const runtimeMode of [
+        "approval-required",
+        "auto-accept-edits",
+        "auto",
+        "full-access",
+      ] as const) {
+        expect(
+          yield* client[method]({
+            commandId: CommandId.make("launch"),
+            projectId: ProjectId.make("project"),
+            title: "Synthetic launch",
+            runtimeMode,
+            interactionMode: "default",
+            modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "synthetic" },
+            workspaceStrategy: { type: "root" },
+          }).pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "EnvironmentAuthorizationError",
+          requiredPermission: AuthSettingsWriteScope,
+        });
+      }
+      expect(handled).toBe(false);
+    }).pipe(Effect.scoped),
 );
