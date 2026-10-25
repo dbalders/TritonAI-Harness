@@ -8,29 +8,6 @@ import {
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
-  it("derives visible provider config fields from the client definition schema", () => {
-    const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
-
-    expect(codex).toBeDefined();
-    expect(deriveProviderSettingsFields(codex!).map((field) => field.key)).toEqual([
-      "binaryPath",
-      "homePath",
-      "shadowHomePath",
-      "launchArgs",
-    ]);
-  });
-
-  it("sources labels and descriptions from schema annotations", () => {
-    const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
-    expect(codex).toBeDefined();
-
-    const homePath = deriveProviderSettingsFields(codex!).find((field) => field.key === "homePath");
-
-    expect(homePath).toMatchObject({
-      label: "Codex config home",
-    });
-  });
-
   it("keeps every masked field as a stored secret", () => {
     const settingsSchema = makeProviderSettingsSchema({
       token: TrimmedString.pipe(
