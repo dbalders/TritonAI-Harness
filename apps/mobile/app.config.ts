@@ -18,6 +18,8 @@ const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
+// Launch screens do not apply iOS's app-icon mask. Use the rounded, transparent
+// universal exports there while keeping the installed iOS icon artwork opaque.
 // Android exports keep the approved Harness badges inside the platform's safe zone.
 
 if (
@@ -33,7 +35,7 @@ if (
 const DEVELOPMENT_ASSETS = {
   appIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
   iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentUniversalIconPng),
   androidAdaptiveForeground: "./assets/android-icon-foreground-dev.png",
   androidAdaptiveBackgroundColor: "#0B2237",
   androidAdaptiveBackgroundImage: undefined,
@@ -46,7 +48,7 @@ const DEVELOPMENT_ASSETS = {
 const PREVIEW_ASSETS = {
   appIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
   iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyLinuxIconPng),
   androidAdaptiveForeground: "./assets/android-icon-foreground-nightly.png",
   androidAdaptiveBackgroundColor: "#111533",
   androidAdaptiveBackgroundImage: undefined,
@@ -60,7 +62,7 @@ const RELEASE_ASSETS = {
   appIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
   // Use the Mac logo's opaque master so iOS supplies the only icon mask and treatment.
   iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
+  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionLinuxIconPng),
   androidAdaptiveForeground: "./assets/android-icon-foreground.png",
   androidAdaptiveBackgroundColor: "#182B49",
   androidAdaptiveBackgroundImage: undefined,
