@@ -5,6 +5,7 @@ import { AssetResource } from "./assets.ts";
 const decodeAssetResource = Schema.decodeUnknownSync(AssetResource);
 
 describe("AssetResource", () => {
+  // regression: #433 fix(files): offer open and download actions for unsupported files
   it("preserves explicit download requests for host and workspace files", () => {
     for (const resource of [
       { _tag: "workspace-file", threadId: "thread-1", path: "deck.pptx" },

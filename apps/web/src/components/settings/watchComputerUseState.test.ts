@@ -37,6 +37,7 @@ describe("computer-use permission observation", () => {
     vi.unstubAllGlobals();
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("detects a grant without a focus event and stops polling once a restart is all that remains", async () => {
     const read = vi.fn().mockResolvedValueOnce(missing).mockResolvedValue(granted);
     watch(read);
@@ -50,6 +51,7 @@ describe("computer-use permission observation", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("refreshes immediately on focus and detects revoked access after setup", async () => {
     const read = vi.fn().mockResolvedValueOnce(granted).mockResolvedValue(missing);
     watch(read);
@@ -61,6 +63,7 @@ describe("computer-use permission observation", () => {
     expect(read).toHaveBeenCalledTimes(3);
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("pauses while hidden and immediately catches up when the panel is visible", async () => {
     const read = vi.fn().mockResolvedValue(missing);
     watch(read);
@@ -76,6 +79,7 @@ describe("computer-use permission observation", () => {
     expect(onState).toHaveBeenLastCalledWith(granted);
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("queues a focus refresh even when the active read returns fully granted", async () => {
     let finish!: (state: DesktopComputerUseState) => void;
     const read = vi
@@ -92,6 +96,7 @@ describe("computer-use permission observation", () => {
     expect(onState).toHaveBeenLastCalledWith(missing);
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("serializes slow checks across timer, focus, and manual refresh requests", async () => {
     let finish!: (state: DesktopComputerUseState) => void;
     const read = vi.fn(() => new Promise<DesktopComputerUseState>((resolve) => (finish = resolve)));
@@ -105,6 +110,7 @@ describe("computer-use permission observation", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("ignores an old response after unmount or an opt-in change and removes listeners", async () => {
     let finish!: (state: DesktopComputerUseState) => void;
     const read = vi.fn(() => new Promise<DesktopComputerUseState>((resolve) => (finish = resolve)));
@@ -118,6 +124,7 @@ describe("computer-use permission observation", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it.each([
     { ...missing, enabled: false },
     { ...missing, available: false },
@@ -131,6 +138,7 @@ describe("computer-use permission observation", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("recovers from a transient read failure during onboarding", async () => {
     const failure = new Error("IPC temporarily unavailable");
     const read = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(granted);

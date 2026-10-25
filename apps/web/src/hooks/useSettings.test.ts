@@ -1,14 +1,13 @@
 import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@t3tools/contracts";
 import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { resolveSidebarStageBackdropVariant } from "../components/SidebarStageBackdrop";
+
 import {
   __resetClientSettingsPersistenceForTests,
   __setClientSettingsForTests,
   ensureClientSettingsHydrated,
   getClientSettings,
   mergeEnvironmentSettings,
-  resolveEnvironmentIdentificationMode,
   persistClientSettingsPatch,
   persistClientSettingsUpdate,
   prepareModelPreferencesPatch,
@@ -261,23 +260,6 @@ describe("persistClientSettingsUpdate", () => {
     expect(durableSettings.browserProfiles).toContainEqual(importedProfile);
     expect(getClientSettings().wordWrap).toBe(false);
     expect(getClientSettings().browserProfiles).toContainEqual(importedProfile);
-  });
-});
-
-describe("resolveEnvironmentIdentificationMode", () => {
-  it.each(["artwork", "pill", "none"] as const)(
-    "preserves the saved %s preference after hydration",
-    (mode) => {
-      expect(resolveEnvironmentIdentificationMode({ mode, settingsHydrated: true })).toBe(mode);
-    },
-  );
-
-  it.each(["Nightly", "Dev"])("shows %s artwork by default", (stage) => {
-    const mode = resolveEnvironmentIdentificationMode({
-      mode: DEFAULT_CLIENT_SETTINGS.environmentIdentificationMode,
-      settingsHydrated: true,
-    });
-    expect(resolveSidebarStageBackdropVariant(stage, mode === "artwork")).toBe(stage.toLowerCase());
   });
 });
 

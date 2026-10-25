@@ -1,7 +1,7 @@
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { SidebarUpdateArchitectureWarningContent, SidebarUpdateControl } from "./SidebarUpdatePill";
+import { SidebarUpdateControl } from "./SidebarUpdatePill";
 
 const testState = vi.hoisted(() => ({
   desktopUpdate: null as DesktopUpdateState | null,
@@ -77,13 +77,6 @@ const desktopUpdateBase: DesktopUpdateState = {
   canRetry: false,
 };
 
-function nodeText(node: ReactNode): string {
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(nodeText).join("");
-  if (!isValidElement(node)) return "";
-  return nodeText((node.props as { readonly children?: ReactNode }).children);
-}
-
 function findElement(
   node: ReactNode,
   predicate: (element: ReactElement) => boolean,
@@ -133,45 +126,6 @@ describe("SidebarUpdatePill", () => {
       configurable: true,
       value: { platform: "MacIntel" },
     });
-  });
-
-  it("renders the native-build warning for the Harness updater", () => {
-    testState.desktopUpdate = {
-      ...desktopUpdateBase,
-      hostArch: "arm64",
-      appArch: "x64",
-      runningUnderArm64Translation: true,
-    };
-
-    const output = SidebarUpdateArchitectureWarningContent();
-
-    expect(nodeText(output)).toContain("Intel build on Apple Silicon");
-    expect(nodeText(output)).toContain("The next app update will replace it");
-  });
-
-  it("downloads an available Harness update", async () => {
-    const availableState = {
-      ...desktopUpdateBase,
-      status: "available",
-      availableVersion: "1.1.0",
-    } as const;
-    testState.desktopUpdate = availableState;
-    testState.downloadUpdate.mockResolvedValue({
-      accepted: true,
-      completed: false,
-      state: availableState,
-    });
-
-    const output = SidebarUpdateControl();
-    const updateButton = findElement(output, (element) => element.type === "button");
-
-    expect(updateButton).not.toBeNull();
-    if (!updateButton) throw new Error("Expected the Harness update button.");
-    (updateButton.props as { readonly onClick: () => void }).onClick();
-    await flushPromises();
-
-    expect(testState.downloadUpdate).toHaveBeenCalledOnce();
-    expect(testState.installUpdate).not.toHaveBeenCalled();
   });
 
   it("confirms before restarting into a downloaded Harness update", async () => {

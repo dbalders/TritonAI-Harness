@@ -26,6 +26,7 @@ afterEach(() => {
 });
 
 describe("managed plugin release composition", () => {
+  // regression: #205 fix(release): accept pinned plugin inputs in cross-platform builds
   it.each(["refs/heads/main", "refs/tags/plugins-v1.0.1", "a".repeat(40)])(
     "accepts an exact release source selected by %s",
     (ref) => {
@@ -42,6 +43,7 @@ describe("managed plugin release composition", () => {
     },
   );
 
+  // regression: #205 fix(release): accept pinned plugin inputs in cross-platform builds
   it.each([
     "main",
     "a".repeat(7),
@@ -131,6 +133,7 @@ describe("managed plugin release composition", () => {
     ).toThrow(/16384-byte limit/u);
   });
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it("binds isolated validation to the exact composition and configuration", () => {
     const composition = readManagedPluginComposition(makeCompositionFixture());
     const configuration = '{"microsoft-365":{"clientId":"example"}}';

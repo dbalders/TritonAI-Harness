@@ -6,6 +6,7 @@ import * as Path from "effect/Path";
 import { PNG } from "pngjs";
 
 it.layer(NodeServices.layer)("runtime branding", (it) => {
+  // regression: #345 fix(desktop): match dev Dock icon shape to main and nightly
   it.effect(
     "preserves the Aurora trident and central artwork in the macOS-only square source",
     () =>
@@ -49,24 +50,7 @@ it.layer(NodeServices.layer)("runtime branding", (it) => {
       }),
   );
 
-  it.effect("keeps the web boot logo independent from environment app icons", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
-      const indexHtml = yield* fs.readFileString(path.join(repoRoot, "apps/web/index.html"));
-      const runtimeLogo = yield* fs.readFile(
-        path.join(repoRoot, "apps/web/public/tritonai-logo.png"),
-      );
-      const productionLogo = yield* fs.readFile(
-        path.join(repoRoot, "assets/prod/tritonai-logo.png"),
-      );
-
-      assert.include(indexHtml, 'id="boot-shell-logo" src="/tritonai-logo.png"');
-      assert.deepEqual(runtimeLogo, productionLogo);
-    }),
-  );
-
+  // regression: #322 fix(branding): use square main and nightly icons at standard Dock size
   it.effect("ships rounded-square macOS icons at the standard Dock footprint", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

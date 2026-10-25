@@ -26,6 +26,7 @@ import * as ElectronProtocol from "./ElectronProtocol.ts";
 const layerProtocol = ElectronProtocol.layer.pipe(Layer.provide(NodeServices.layer));
 
 describe("ElectronProtocol", () => {
+  // regression: 13e7bc16e3 fix(desktop): let Nightly coexist with stable Harness
   it("uses distinct production origins while preserving development's origin", () => {
     assert.equal(ElectronProtocol.getDesktopUrl(false, "0.3.3"), "t3code://app/");
     assert.equal(
@@ -37,6 +38,7 @@ describe("ElectronProtocol", () => {
       "t3code-dev://app/",
     );
   });
+  // regression: 13e7bc16e3 fix(desktop): let Nightly coexist with stable Harness
   it("registers Nightly as a secure standard origin before Electron is ready", () => {
     ElectronProtocol.registerDesktopSchemePrivilegesSync();
     const registrations = registerPrivilegesMock.mock.calls.at(-1)?.[0];

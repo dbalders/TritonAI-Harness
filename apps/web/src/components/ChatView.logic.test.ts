@@ -1347,6 +1347,7 @@ describe("thread error routing", () => {
 });
 
 describe("hasServerAcknowledgedLocalDispatch", () => {
+  // regression: #7897 fix(chat): stop pushing follow-up messages to the top
   it("keeps a follow-up active while its provider session is starting", () => {
     const localDispatch = createLocalDispatchSnapshot(
       makeThread({ latestRun: completedTurn, runtime: readySession }),
@@ -1758,6 +1759,7 @@ describe("proactive panels", () => {
     ).toBe(false);
   });
 
+  // regression: #12142 fix(web): prioritize linked pull requests over automatic diffs
   it.each([
     { files: 0, additions: 0, deletions: 0, action: "ignore" },
     { files: 1, additions: 1, deletions: 0, action: "ignore" },
@@ -1838,6 +1840,7 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
     },
   };
 
+  // regression: #7971 fix(web): stop tool calls from leaving a blank page in threads
   it("releases the send anchor for tool activity in the active turn", () => {
     expect(
       shouldReleaseTimelineAnchorForToolActivity({
@@ -1849,6 +1852,7 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
     ).toBe(true);
   });
 
+  // regression: #7971 fix(web): stop tool calls from leaving a blank page in threads
   it("keeps the anchor while the user reads history", () => {
     expect(
       shouldReleaseTimelineAnchorForToolActivity({
@@ -1860,6 +1864,7 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
     ).toBe(false);
   });
 
+  // regression: #7971 fix(web): stop tool calls from leaving a blank page in threads
   it("ignores tool activity from earlier turns", () => {
     expect(
       shouldReleaseTimelineAnchorForToolActivity({
@@ -1879,6 +1884,7 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
     ).toBe(false);
   });
 
+  // regression: #7971 fix(web): stop tool calls from leaving a blank page in threads
   it("ignores thinking and error rows without tool activity", () => {
     expect(
       shouldReleaseTimelineAnchorForToolActivity({
@@ -1912,6 +1918,7 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
     ).toBe(false);
   });
 
+  // regression: #7971 fix(web): stop tool calls from leaving a blank page in threads
   it("does nothing without an anchor or running turn", () => {
     const input = {
       anchorMessageId,

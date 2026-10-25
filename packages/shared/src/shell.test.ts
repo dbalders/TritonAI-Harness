@@ -115,6 +115,7 @@ describe("readEnvironmentFromLoginShell probe", () => {
 });
 
 describe("readEnvironmentFromLoginShell", () => {
+  // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
   it.skipIf(!NodeFS.existsSync("/bin/sh"))("terminates a shell that ignores SIGTERM", () => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-login-shell-timeout-"));
     const shell = NodePath.join(directory, "shell");
@@ -499,6 +500,7 @@ describe("mergePathValues", () => {
 });
 
 effectIt.layer(NodeServices.layer)("isCommandAvailable", (it) => {
+  // regression: #18871 fix(server): return null for unresolved optional commands
   it.effect.each(["win32", "linux"] as const)(
     "records available commands as successful lookups on %s",
     (platform) =>

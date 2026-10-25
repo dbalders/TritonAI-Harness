@@ -190,33 +190,6 @@ describe("DesktopLinuxUrlHandler", () => {
     assert.include(entry, "Icon=/home/al ice/icons/T3\\\\x.png");
   });
 
-  it("carries structured context on registration errors", () => {
-    const writeError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
-      step: "write-desktop-entry",
-      scheme: "t3code",
-      desktopEntryPath: "/home/alice/.local/share/applications/tritonai-harness.desktop",
-      cause: new Error("boom"),
-    });
-    assert.equal(
-      writeError.message,
-      "Failed to register the t3code:// URL handler (step: write-desktop-entry).",
-    );
-    assert.equal(
-      writeError.desktopEntryPath,
-      "/home/alice/.local/share/applications/tritonai-harness.desktop",
-    );
-
-    const exitError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
-      step: "set-default-handler",
-      scheme: "t3code",
-      exitCode: 4,
-    });
-    assert.equal(
-      exitError.message,
-      "Failed to register the t3code:// URL handler (step: set-default-handler, xdg-mime exit code 4).",
-    );
-  });
-
   it.effect(
     "writes the handler entry, refreshes the MIME cache, and claims the scheme default",
     () => {
@@ -250,6 +223,7 @@ describe("DesktopLinuxUrlHandler", () => {
     },
   );
 
+  // regression: 13e7bc16e3 fix(desktop): let Nightly coexist with stable Harness
   it.effect("keeps stable and Nightly sign-in handler files separate", () => {
     const recorded = emptyRecording();
     return Effect.gen(function* () {

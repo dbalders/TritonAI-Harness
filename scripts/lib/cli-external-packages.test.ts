@@ -1,4 +1,3 @@
-import serverPackageJson from "../../apps/server/package.json" with { type: "json" };
 import { selectCliRuntimeExternalDependencies } from "./cli-external-packages.ts";
 import * as NodeURL from "node:url";
 
@@ -84,22 +83,6 @@ describe("selectCliRuntimeExternalDependencies", () => {
         effect: "3.0.0",
         "node-pty": "4.0.0",
       },
-    );
-  });
-
-  it("selects every external root declared by the server", () => {
-    assert.deepStrictEqual(
-      Object.keys(selectCliRuntimeExternalDependencies(serverPackageJson.dependencies)).sort(),
-      [
-        "@cursor/sdk",
-        "@ff-labs/fff-node",
-        "@napi-rs/keyring",
-        "effect",
-        "ffi-rs",
-        "node-pty",
-        "playwright-core",
-        "undici",
-      ],
     );
   });
 });

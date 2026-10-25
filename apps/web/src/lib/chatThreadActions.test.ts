@@ -12,6 +12,7 @@ const LAST_SELECTED_MODEL: ModelSelection = {
 };
 
 describe("chatThreadActions", () => {
+  // regression: #246 fix(models): remember explicit model choices for new tasks
   it("uses provider defaults only before any manual choice or project override", () => {
     expect(
       resolveNewThreadModelSelectionOverride({
@@ -21,6 +22,7 @@ describe("chatThreadActions", () => {
     ).toBeNull();
   });
 
+  // regression: #246 fix(models): remember explicit model choices for new tasks
   it("uses the last explicit model selection for unpinned projects", () => {
     expect(
       resolveNewThreadModelSelectionOverride({
@@ -30,6 +32,7 @@ describe("chatThreadActions", () => {
     ).toEqual(LAST_SELECTED_MODEL);
   });
 
+  // regression: #246 fix(models): remember explicit model choices for new tasks
   it("keeps an intentional project override above the last manual choice", () => {
     expect(
       resolveNewThreadModelSelectionOverride({

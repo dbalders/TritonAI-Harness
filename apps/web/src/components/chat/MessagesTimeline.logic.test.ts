@@ -3933,6 +3933,7 @@ describe("shouldCollapseUserMessage", () => {
 });
 
 describe("deriveMessagesTimelineRows", () => {
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it.each([false, true])(
     "keeps consecutive and mixed computer-use calls out of the live aggregate (mixed=%s)",
     (mixed) => {
@@ -3978,6 +3979,7 @@ describe("deriveMessagesTimelineRows", () => {
     },
   );
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("keeps computer-use activity visible after a turn finishes", () => {
     const runId = RunId.make("computer-use-turn");
     const createdAt = "2026-09-10T23:20:00Z";

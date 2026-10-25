@@ -1915,6 +1915,7 @@ describe("mobile composer drafts", () => {
     expect(findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), to)).toEqual([key]);
   });
 
+  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
     "persists and reloads the last %s composer choice without changing existing drafts",
     async (runtimeMode) => {
@@ -1938,6 +1939,7 @@ describe("mobile composer drafts", () => {
     },
   );
 
+  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it("keeps a newer composer choice while an older saved choice is loading", async () => {
     vi.useFakeTimers();
     composerDraftFileMocks.setDocument({
@@ -1956,12 +1958,14 @@ describe("mobile composer drafts", () => {
     expect(JSON.parse(composerDraftFileMocks.getDocument()).stickyRuntimeMode).toBe("auto");
   });
 
+  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it("loads older draft documents without inventing a remembered mode", () => {
     expect(
       decodePersistedComposerState({ schemaVersion: 1, drafts: {} }).stickyRuntimeMode,
     ).toBeNull();
   });
 
+  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it("does not freeze the project fallback into a pending task before preferences load", async () => {
     composerDraftFileMocks.setDocument({
       schemaVersion: 1,
@@ -1981,6 +1985,7 @@ describe("mobile composer drafts", () => {
     );
   });
 
+  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it("preserves queued and explicit draft modes over a loaded remembered choice", async () => {
     composerDraftFileMocks.setDocument({
       schemaVersion: 1,
@@ -1995,6 +2000,7 @@ describe("mobile composer drafts", () => {
     );
   });
 
+  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
     "keeps a known %s queued-task or draft mode usable while preferences load",
     async (runtimeMode) => {
@@ -2029,6 +2035,7 @@ describe("mobile composer drafts", () => {
     },
   );
 
+  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it("allows retry after preference loading fails without submitting the fallback", async () => {
     composerDraftFileMocks.setReadError(new Error("Preferences temporarily unreadable"));
     await expect(waitForComposerDraftsLoaded()).rejects.toThrow();
@@ -2047,6 +2054,7 @@ describe("mobile composer drafts", () => {
     expect(getPendingTaskRuntimeMode("new-task:retry", "full-access")).toBe("approval-required");
   });
 
+  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it("uses an explicit choice after a persistent read failure without overwriting saved drafts", async () => {
     vi.useFakeTimers();
     const savedDocument = { schemaVersion: 1, drafts: { "environment-1:thread-1": DRAFT } };

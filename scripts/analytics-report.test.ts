@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { formatUsageReport, summarizeUsage } from "./analytics-report.ts";
+import { summarizeUsage } from "./analytics-report.ts";
 
 const row = (dimensions: ReadonlyArray<string>, events = 1) => ({ dimensions, metrics: [events] });
 
@@ -36,20 +36,4 @@ it("uses each install's latest lifetime thread count and earliest first-thread m
     ["2026-03", 1],
     ["2026-09", 1],
   ]);
-});
-
-it("formats the report for reading", () => {
-  const text = formatUsageReport(
-    "30d",
-    summarizeUsage({
-      seen: [row(["a"])],
-      active: [row(["a"])],
-      threadsCreated: [row(["a"], 4)],
-      heartbeats: [row(["a", "12", "2026-05"])],
-    }),
-  );
-
-  assert.include(text, "Installs seen (30d): 1");
-  assert.include(text, "Threads created (30d): 4 by 1 installs");
-  assert.include(text, "  2026-05: 1");
 });

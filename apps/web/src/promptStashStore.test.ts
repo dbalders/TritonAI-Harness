@@ -135,6 +135,7 @@ describe("promptStashStore", () => {
     ]);
   });
 
+  // regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
   it("requires durable storage before replacing the live draft", () => {
     const store = usePromptStashStore.getState();
     store.stashEntry(makeEntry({ id: "retained" }));

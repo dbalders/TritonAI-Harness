@@ -445,7 +445,6 @@ describe("scoped run evidence", () => {
     { reason: "a run started before tracking", change: { startedAt: STARTED_AT } },
     // Failed and cancelled provider outcomes both normalize to succeeded: false.
     { reason: "a failed run with partial answer text", change: { succeeded: false } },
-    { reason: "a cancelled run with partial answer text", change: { succeeded: false } },
     { reason: "a successful run without an answer", change: { hasAnswer: false } },
     { reason: "another thread's successful run", change: { threadId: OTHER_THREAD } },
     {
@@ -722,7 +721,6 @@ describe("conversation practice", () => {
 
   it.each([
     { reason: "failed", change: { succeeded: false } },
-    { reason: "cancelled", change: { succeeded: false } },
     { reason: "answerless", change: { hasAnswer: false } },
     { reason: "historical", change: { startedAt: STARTED_AT } },
     { reason: "another thread's", change: { threadId: OTHER_THREAD } },

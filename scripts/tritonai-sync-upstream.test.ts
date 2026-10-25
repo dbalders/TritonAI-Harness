@@ -203,6 +203,7 @@ function runSync(
   });
 }
 
+// regression: 61d94a564b fix(tooling): isolate merged sync install
 it("installs a clean merged worktree before checks and review", () => {
   const fixture = createFixture();
   try {
@@ -277,6 +278,7 @@ describe.each(Array.from(["squash", "rebase"], (scenario) => ({ scenario })))(
   },
 );
 
+// regression: 61d94a564b fix(tooling): isolate merged sync install
 it("fails closed before checks and review when the merged worktree install fails", () => {
   const fixture = createFixture();
   try {

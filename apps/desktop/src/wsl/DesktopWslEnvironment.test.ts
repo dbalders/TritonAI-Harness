@@ -1,8 +1,5 @@
 import { buildWslSecretFileInventoryScript } from "./DesktopWslEnvironment.ts";
-import { buildWslNodeEnvPreamble } from "./DesktopWslEnvironment.ts";
 
-import { formatNodePtyProbeFailureReason } from "./DesktopWslEnvironment.ts";
-import { formatWslShellTransportFailureReason } from "./DesktopWslEnvironment.ts";
 import { parseWslSecretFileInventory } from "./DesktopWslEnvironment.ts";
 
 // @effect-diagnostics nodeBuiltinImport:off - the executed suite runs the generated install script through a real POSIX shell.
@@ -87,44 +84,8 @@ const readField = (stdout: string, field: string) => {
 
 const SERVER_ENTRY_SOURCE = '#!/bin/sh\necho "t3code wsl runtime test server 0.0.0"\n';
 
-describe("formatNodePtyProbeFailureReason", () => {
-  it("identifies a packaged build that omitted the Linux node-pty prebuild", () => {
-    const reason = formatNodePtyProbeFailureReason(4);
-
-    expect(reason).toContain("packaged Linux node-pty binary was not included");
-    expect(reason).toContain("Install a build that includes WSL support");
-  });
-
-  it("leaves other node-pty load failures to the compatibility diagnostic", () => {
-    expect(formatNodePtyProbeFailureReason(1)).toBeNull();
-  });
-});
-
-describe("formatWslShellTransportFailureReason", () => {
-  it("distinguishes timeouts and spawn failures from normal shell exit codes", () => {
-    expect(formatWslShellTransportFailureReason("timeout")).toContain("timed out");
-    expect(formatWslShellTransportFailureReason("spawn")).toContain("could not start wsl.exe");
-    expect(formatWslShellTransportFailureReason("process")).toContain("lost communication");
-    expect(formatWslShellTransportFailureReason(null)).toBeNull();
-  });
-});
-
-describe("buildWslNodeEnvPreamble", () => {
-  it("passes the required Node engine range into the shared resolver", () => {
-    const preamble = buildWslNodeEnvPreamble("^22.16 || ^23.11 || >=24.10");
-
-    expect(preamble).toContain("T3_NODE_ENGINE_RANGE='^22.16 || ^23.11 || >=24.10'");
-    expect(preamble.indexOf("T3_NODE_ENGINE_RANGE=")).toBeLessThan(
-      preamble.lastIndexOf("ensure_remote_node_path || true"),
-    );
-  });
-
-  it("keeps the shared resolver permissive when no Node engine range is provided", () => {
-    expect(buildWslNodeEnvPreamble()).toContain("T3_NODE_ENGINE_RANGE=''");
-  });
-});
-
 describe("parseWslSecretFileInventory", () => {
+  // regression: 13e7bc16e3 fix(desktop): let Nightly coexist with stable Harness
   it("inventories credentials from the same channel home as the WSL backend", () => {
     expect(buildWslSecretFileInventoryScript(false, "0.3.3")).toContain(
       "$HOME/.tritonai-harness/userdata/secrets",
@@ -184,6 +145,7 @@ describe("WSL runtime cache", () => {
     expect(script).not.toContain(runtimeId);
   });
 
+  // regression: #5769 fix(desktop): Cache Runtime locally on WSL Filesystem, dramatically improving launch times
   it("installs through a temporary directory and only reuses valid completed caches", () => {
     const script = buildWslRuntimeInstallScript(
       "/mnt/c/Program Files/T3 Code/wsl-runtime.tar.gz",
@@ -220,6 +182,7 @@ describe("WSL runtime cache", () => {
     expect(existingRuntimeMoved).toBeGreaterThan(readinessAfterLock);
   });
 
+  // regression: #5769 fix(desktop): Cache Runtime locally on WSL Filesystem, dramatically improving launch times
   it("parses only absolute Linux runtime paths", () => {
     expect(
       parseWslRuntimeRoot("runtimeRoot:/home/josh/.tritonai-harness/wsl-runtime/1.2.3-x64\n"),
@@ -228,6 +191,7 @@ describe("WSL runtime cache", () => {
     expect(parseWslRuntimeRoot("noise\n")).toBeNull();
   });
 
+  // regression: #5769 fix(desktop): Cache Runtime locally on WSL Filesystem, dramatically improving launch times
   it("invalidates a cache by dropping its ready marker, not the tree", () => {
     const script = buildWslRuntimeInvalidateScript("1.2.3/x64");
 

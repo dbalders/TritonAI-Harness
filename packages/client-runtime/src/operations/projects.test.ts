@@ -117,6 +117,7 @@ describe("add project shared logic", () => {
     expect(getReadyAddProjectProviderSources(readiness)).toEqual(["github"]);
   });
 
+  // regression: 3038299db4 fix(source-control): hide providers until setup is complete
   it.each([null, { versionControlSystems: [], sourceControlProviders: [] }])(
     "offers no provider shortcuts before setup or discovery completes: %s",
     (discovery) => {
@@ -126,6 +127,7 @@ describe("add project shared logic", () => {
     },
   );
 
+  // regression: 3038299db4 fix(source-control): hide providers until setup is complete
   it("only offers installed, authenticated hosts and updates after setup changes", () => {
     const provider = (
       kind: string,

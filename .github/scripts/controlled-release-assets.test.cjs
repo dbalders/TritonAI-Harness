@@ -188,12 +188,14 @@ function fixture(t) {
   return { root, version, mac, win, save };
 }
 
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("accepts complete Stable assets but blocks a corrupt updater ZIP", (t) => {
   const f = fixture(t);
   assert.equal(verifyControlledReleaseAssets(f.root, f.version), path.join(f.root, `${f.mac}.zip`));
   fs.appendFileSync(path.join(f.root, `${f.mac}.zip`), "corrupt");
   assert.throws(() => verifyControlledReleaseAssets(f.root, f.version), /size differs/);
 });
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("blocks missing platform assets", (t) => {
   const f = fixture(t);
   fs.unlinkSync(path.join(f.root, `${f.win}.exe`));
@@ -210,6 +212,7 @@ for (const staleAsset of [
     assert.throws(() => verifyControlledReleaseAssets(f.root, f.version), /exact expected set/);
   });
 }
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("blocks a feed pointing at another version or the Nightly track", (t) => {
   const f = fixture(t);
   assert.throws(
@@ -222,6 +225,7 @@ test("blocks a feed pointing at another version or the Nightly track", (t) => {
   f.save("latest-mac.yml", manifest);
   assert.throws(() => verifyControlledReleaseAssets(f.root, f.version), /wrong version/);
 });
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("controlled release verifies downloaded draft bytes before publishing", () => {
   const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
   const steps = workflow.jobs.release.steps;
@@ -241,6 +245,7 @@ test("controlled release verifies downloaded draft bytes before publishing", () 
   assert.match(steps[verify].run, /git rev-parse HEAD/);
 });
 
+// regression: #260 fix(release): leave controlled builds as drafts by default
 test("controlled releases publish only after an explicit manual opt-in", () => {
   const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
@@ -309,6 +314,7 @@ test("controlled releases publish only after an explicit manual opt-in", () => {
   assert.equal(verify.if, undefined);
 });
 
+// regression: #261 fix(release): build stable drafts on hosted signing runners
 test("stable drafts require both hosted platforms with matching configuration", () => {
   const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
   assert(workflow.jobs.release.needs.includes("mac"));
@@ -329,6 +335,7 @@ test("stable drafts require both hosted platforms with matching configuration", 
   assert.doesNotMatch(upload.with.path, /nightly-mac|harness-mac-verification/);
 });
 
+// regression: #264 fix: complete controlled draft asset uploads
 test("Windows release collection excludes build diagnostics", () => {
   const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
   const collect = workflow.jobs.build.steps.find((step) => step.name === "Collect release assets");

@@ -39,6 +39,7 @@ const withKeyStore = <A, E, R>(
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 describe("DesktopTritonAiApiKey", () => {
+  // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
   it("reports the normalized shared key suffix for both routes", () => {
     assert.deepEqual(
       DesktopTritonAiApiKey.credentialStatus({ sharedApiKey: " shared-key-aB12 \n" }),
@@ -53,6 +54,7 @@ describe("DesktopTritonAiApiKey", () => {
     );
   });
 
+  // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
   it("omits suffixes for missing keys and never reveals an entire short key", () => {
     for (const key of [undefined, "", "a", "abcd"]) {
       const status = DesktopTritonAiApiKey.credentialStatus(
@@ -96,6 +98,7 @@ describe("DesktopTritonAiApiKey", () => {
     );
   });
 
+  // regression: #154 fix(settings): route TritonAI keys per connection
   it("binds a replacement to the requested route even when the key covers both", () => {
     const access = { onPrem: true, frontier: true };
     const candidate = "all-access-key";
@@ -129,6 +132,7 @@ describe("DesktopTritonAiApiKey", () => {
     );
   });
 
+  // regression: #154 fix(settings): route TritonAI keys per connection
   it("removes only the selected route, including from a shared key", () => {
     assert.deepEqual(
       DesktopTritonAiApiKey.credentialBundleWithoutRoute({ sharedApiKey: "shared-key" }, "on-prem"),
@@ -143,6 +147,7 @@ describe("DesktopTritonAiApiKey", () => {
     );
   });
 
+  // regression: #154 fix(settings): route TritonAI keys per connection
   it.effect(
     "persists an empty override so removing the last route does not reveal installer keys",
     () =>

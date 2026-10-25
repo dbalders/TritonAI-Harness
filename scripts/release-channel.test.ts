@@ -43,6 +43,7 @@ it.layer(NodeServices.layer)("release workflow channel", (it) => {
     }),
   );
 
+  // regression: #236 fix(desktop): harden macOS updates and release validation
   it.effect("accepts controlled stable dispatches and rejects every nightly version", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

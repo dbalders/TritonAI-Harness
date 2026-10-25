@@ -64,6 +64,7 @@ function setup() {
   state.prepare.mockReset().mockResolvedValue("https://host.test/api/assets/signed/deck.pptx");
 }
 
+// regression: #433 fix(files): offer open and download actions for unsupported files
 it("uses the same fallback for office files, archives and unknown binary formats", async () => {
   setup();
   await using screen = await render(<UnsupportedFilePreview {...props} />);
@@ -82,6 +83,7 @@ it("uses the same fallback for office files, archives and unknown binary formats
   await expect.element(screen.getByRole("button", { name: "Show in File Explorer" })).toBeVisible();
 });
 
+// regression: #433 fix(files): offer open and download actions for unsupported files
 it("prevents duplicate local launches and switches to download when shell access is lost", async () => {
   setup();
   let finish!: () => void;
@@ -111,6 +113,7 @@ it("prevents duplicate local launches and switches to download when shell access
   await expect.element(screen.getByRole("button", { name: "Download" })).toBeVisible();
 });
 
+// regression: #433 fix(files): offer open and download actions for unsupported files
 it("opens absolute host-file links and reports a failed OS launch", async () => {
   setup();
   await using screen = await render(
@@ -132,6 +135,7 @@ it("opens absolute host-file links and reports a failed OS launch", async () => 
     .toHaveTextContent("No app is available to open this file.");
 });
 
+// regression: #433 fix(files): offer open and download actions for unsupported files
 it.each(["remote-links", "remote-unavailable"])(
   "downloads original bytes without launching on a %s host",
   async (mode) => {
@@ -172,6 +176,7 @@ it.each(["remote-links", "remote-unavailable"])(
   },
 );
 
+// regression: #433 fix(files): offer open and download actions for unsupported files
 it("allows retry after download failure and blocks actions without file access", async () => {
   setup();
   state.mode = "remote-unavailable";

@@ -366,6 +366,7 @@ describe("DesktopUpdates", () => {
     );
   });
 
+  // regression: #153 fix(release): unpack mac plugin runtime dependencies
   it.effect("stages macOS updates for native installation before downloading", () => {
     const harness = makeHarness();
 
@@ -772,6 +773,7 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
+  // regression: #236 fix(desktop): harden macOS updates and release validation
   it.effect("keeps the staged macOS installer intact across manual and scheduled checks", () => {
     const harness = makeHarness();
     return Effect.scoped(
@@ -854,6 +856,7 @@ describe("DesktopUpdates", () => {
     );
   });
 
+  // regression: #236 fix(desktop): harden macOS updates and release validation
   it.effect("accepts an older Nightly offered by its own feed", () => {
     const olderVersion = "0.3.4-nightly.20260915.17";
     let installs = 0;
@@ -1068,6 +1071,7 @@ describe("describeUpdateErrorCause", () => {
     assert.equal(DesktopUpdates.describeUpdateErrorCause(unreadable), "UnknownError");
   });
 
+  // regression: #18864 fix(desktop): preserve updater failure causes in diagnostics
   it.effect("logs the redacted cause of an updater error event", () => {
     const harness = makeHarness();
     const cause = Object.assign(new Error("404 Not Found\nHeaders: authorization=secret"), {

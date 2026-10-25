@@ -56,6 +56,7 @@ describe("ElectronUpdater", () => {
     nativeUpdaterMock.removeAllListeners();
   });
 
+  // regression: #236 fix(desktop): harden macOS updates and release validation
   it.effect("keeps macOS download pending until native validation succeeds", () =>
     Effect.gen(function* () {
       Object.setPrototypeOf(autoUpdaterMock, MacUpdaterMock.prototype);
@@ -89,6 +90,7 @@ describe("ElectronUpdater", () => {
     }).pipe(Effect.provide(ElectronUpdater.layer)),
   );
 
+  // regression: #236 fix(desktop): harden macOS updates and release validation
   it.effect("rejects a ZIP that native validation rejects after transfer", () =>
     Effect.gen(function* () {
       Object.setPrototypeOf(autoUpdaterMock, MacUpdaterMock.prototype);
@@ -105,6 +107,7 @@ describe("ElectronUpdater", () => {
     }).pipe(Effect.provide(ElectronUpdater.layer)),
   );
 
+  // regression: #236 fix(desktop): harden macOS updates and release validation
   it.effect("announces macOS readiness only after Squirrel validates the matching transfer", () =>
     Effect.gen(function* () {
       Object.setPrototypeOf(autoUpdaterMock, MacUpdaterMock.prototype);

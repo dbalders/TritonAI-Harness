@@ -103,6 +103,7 @@ function fixture(t, { lsof = true } = {}) {
 }
 
 const posix = { skip: os.platform() === "win32" };
+// regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test("starts and stops only its owned group using lsof from PATH", posix, async (t) => {
   const f = fixture(t);
   const started = await f.start();
@@ -116,6 +117,7 @@ test("starts and stops only its owned group using lsof from PATH", posix, async 
   assert.equal(JSON.parse(stopped.stdout).running, false);
 });
 
+// regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test("a reused PID is not running and is never stopped", posix, async (t) => {
   const f = fixture(t);
   const unrelated = f.foreign();
@@ -130,6 +132,7 @@ test("a reused PID is not running and is never stopped", posix, async (t) => {
   process.kill(unrelated.pid, 0);
 });
 
+// regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test("missing lsof fails closed without signaling the recorded process", posix, (t) => {
   const f = fixture(t, { lsof: false });
   const unrelated = f.foreign();
@@ -141,6 +144,7 @@ test("missing lsof fails closed without signaling the recorded process", posix, 
   }
 });
 
+// regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test("a different selected checkout cannot read or mutate this checkout", posix, (t) => {
   const f = fixture(t);
   for (const command of ["--check-checkout", "status", "start", "stop", "restart"]) {
@@ -151,6 +155,7 @@ test("a different selected checkout cannot read or mutate this checkout", posix,
   assert.equal(fs.existsSync(path.join(f.home, "launcher.json")), false);
 });
 
+// regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test("an orphan owned backend prevents a duplicate start and can be stopped", posix, async (t) => {
   const f = fixture(t);
   const backend = f.foreign(path.join(f.root, "apps/server/dist/bin.mjs"), "--bootstrap-fd");

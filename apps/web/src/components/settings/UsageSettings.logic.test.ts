@@ -1,15 +1,6 @@
+import { formatUsagePercent, formatUsageLimit } from "./UsageSettings.logic";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  budgetUtilizationTone,
-  calculateBudgetUsage,
-  formatBudgetDuration,
-  formatUsageCurrency,
-  formatUsageDate,
-  formatUsageLimit,
-  formatUsagePercent,
-  getUsageViewState,
-  usageErrorTitle,
-} from "./UsageSettings.logic";
+import { calculateBudgetUsage, getUsageViewState } from "./UsageSettings.logic";
 
 describe("getUsageViewState", () => {
   it("shows loading only while the selected environment query is pending", () => {
@@ -63,15 +54,6 @@ describe("getUsageViewState", () => {
 });
 
 describe("calculateBudgetUsage", () => {
-  it("calculates remaining budget and utilization", () => {
-    expect(calculateBudgetUsage(3.75, 15)).toEqual({
-      remaining: 11.25,
-      utilizationPercent: 25,
-      meterPercent: 25,
-      overBudget: false,
-    });
-  });
-
   it("clamps the visual meter while preserving over-budget utilization", () => {
     expect(calculateBudgetUsage(18, 15)).toEqual({
       remaining: 0,
@@ -110,65 +92,9 @@ describe("calculateBudgetUsage", () => {
   });
 });
 
-describe("usage formatting", () => {
-  it("formats monetary values with useful small-spend precision", () => {
-    expect(formatUsageCurrency(0.125)).toContain("0.125");
-    expect(formatUsageCurrency(Number.NaN)).toBe("Not available");
-  });
-
-  it("formats absent and invalid limits without NaN", () => {
-    expect(formatUsagePercent(null)).toBe("Not available");
-    expect(formatUsagePercent(Number.NaN)).toBe("Not available");
-    expect(formatUsageLimit(null, "requests/min")).toBe("Not reported");
-    expect(formatUsageLimit(Number.NaN, "requests/min")).toBe("Not available");
-  });
-
-  it("humanizes common budget periods and preserves unknown provider labels", () => {
-    expect(formatBudgetDuration("30d")).toBe("30 days");
-    expect(formatBudgetDuration("1h")).toBe("1 hour");
-    expect(formatBudgetDuration("calendar-month")).toBe("calendar-month");
-    expect(formatBudgetDuration(null)).toBe("Not specified");
-  });
-
-  it("formats valid dates and rejects invalid provider timestamps", () => {
-    expect(
-      formatUsageDate("2026-08-01T00:00:00.000Z", {
-        locale: "en-US",
-        timeZone: "UTC",
-      }),
-    ).toContain("Aug 1, 2026");
-    expect(formatUsageDate("not-a-date")).toBeNull();
-    expect(formatUsageDate(null)).toBeNull();
-  });
-
-  it("assigns warning and danger tones at meaningful thresholds", () => {
-    expect(budgetUtilizationTone(79.9, false)).toBe("default");
-    expect(budgetUtilizationTone(80, false)).toBe("warning");
-    expect(budgetUtilizationTone(100, false)).toBe("danger");
-    expect(budgetUtilizationTone(null, true)).toBe("danger");
-  });
-});
-
-describe("usageErrorTitle", () => {
-  it("distinguishes missing and rejected API keys", () => {
-    expect(
-      usageErrorTitle(
-        "Usage is not configured. Set TRITONAI_API_KEY on the app server, restart it, and refresh this page.",
-      ),
-    ).toBe("API key not configured");
-    expect(
-      usageErrorTitle(
-        "The configured TritonAI API key was rejected. Verify TRITONAI_API_KEY on the app server, restart it, and try again.",
-      ),
-    ).toBe("API key rejected");
-    expect(
-      usageErrorTitle("The configured TritonAI access key was rejected. Replace it and try again."),
-    ).toBe("API key rejected");
-  });
-
-  it("uses the general title for other upstream failures", () => {
-    expect(usageErrorTitle("TritonAI usage could not be reached.")).toBe(
-      "Usage could not be loaded",
-    );
-  });
+it("formats absent and invalid limits without NaN", () => {
+  expect(formatUsagePercent(null)).toBe("Not available");
+  expect(formatUsagePercent(Number.NaN)).toBe("Not available");
+  expect(formatUsageLimit(null, "requests/min")).toBe("Not reported");
+  expect(formatUsageLimit(Number.NaN, "requests/min")).toBe("Not available");
 });

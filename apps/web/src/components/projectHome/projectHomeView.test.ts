@@ -65,6 +65,7 @@ describe("project home", () => {
     expect(projectHomeHeadline(projectHomeThreads([]), true)).toBe("No threads yet");
   });
 
+  // regression: #412 fix(web): keep project overview working rows stable
   it("keeps working rows in a fixed order as progress updates arrive", () => {
     const running = (id: string, createdAt: string, updatedAt: string) =>
       makeThreadFixture({
@@ -99,6 +100,7 @@ describe("project home", () => {
     expect(view.recent[0]).toBe(progressed);
   });
 
+  // regression: #412 fix(web): keep project overview working rows stable
   it("breaks working-row ties consistently and moves completed work into latest updates", () => {
     const first = makeThreadFixture({
       id: ThreadId.make("a"),

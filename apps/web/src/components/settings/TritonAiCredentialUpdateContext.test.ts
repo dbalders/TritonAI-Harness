@@ -56,6 +56,7 @@ describe("TritonAI credential reconnect", () => {
     vi.unstubAllGlobals();
   });
 
+  // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
   it("waits through the backend restart and client reconnect before clearing progress", async () => {
     let resolveResponse!: (result: DesktopTritonAiCredentialsUpdateResult) => void;
     const response = new Promise<DesktopTritonAiCredentialsUpdateResult>((resolve) => {
@@ -80,6 +81,7 @@ describe("TritonAI credential reconnect", () => {
     expect(render(update, true).phase).toBe("idle");
   });
 
+  // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
   it("surfaces a prolonged reconnect and recovers when the client eventually connects", async () => {
     const update = vi.fn(async () => saved);
     await render(update, true).updateCredentials({ route: "frontier", remove: true });
@@ -90,6 +92,7 @@ describe("TritonAI credential reconnect", () => {
     expect(render(update, true).phase).toBe("idle");
   });
 
+  // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
   it("does not hide a rejected key behind a reconnect wait", async () => {
     const rejected = { status: "error", message: "Key rejected" } as const;
     const update = vi.fn(async () => rejected);
@@ -102,6 +105,7 @@ describe("TritonAI credential reconnect", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
   it("clears progress when the desktop request fails", async () => {
     const update = vi.fn(async () => {
       throw new Error("IPC failed");

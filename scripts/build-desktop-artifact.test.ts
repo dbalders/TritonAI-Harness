@@ -242,6 +242,7 @@ function mockProcess(exitCode: number, stdout = "") {
   });
 }
 
+// regression: #145 fix(desktop): harden packaged runtime releases
 it("validates every managed plugin configuration and closes loaded providers", async () => {
   const events: string[] = [];
   const composition = {
@@ -294,6 +295,7 @@ it("validates every managed plugin configuration and closes loaded providers", a
   ]);
 });
 
+// regression: #151 fix(release): embed frozen plugin build inputs
 it("builds the server from the frozen managed plugin snapshot and validated configuration", () => {
   const environment = createDesktopSourceBuildEnvironment(
     {
@@ -323,6 +325,7 @@ it("builds the server from the frozen managed plugin snapshot and validated conf
   assert.equal(environment.KEEP_ME, "yes");
 });
 
+// regression: #151 fix(release): embed frozen plugin build inputs
 it("removes ambient managed plugin inputs from builds without a frozen composition", () => {
   const environment = createDesktopSourceBuildEnvironment(
     {
@@ -732,6 +735,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
+  // regression: #155 fix(release): require packaged updater config
   it.effect(
     "fails before macOS and Windows packaging when updater publishing is unconfigured",
     () =>
@@ -752,6 +756,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  // regression: #155 fix(release): require packaged updater config
   it.effect("allows explicit production, mock-update, and Linux packaging modes", () =>
     Effect.gen(function* () {
       yield* assertDesktopUpdatePublishConfiguration({
@@ -867,6 +872,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  // regression: #391 fix(build): align executable and desktop runtime packaging
   it.effect("keeps the checked-in desktop runtime manifest aligned with the packaged runtime", () =>
     Effect.gen(function* () {
       const { catalog = {} } = yield* readWorkspaceConfig();
@@ -1714,6 +1720,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  // regression: #224 fix(windows): restore managed plugins in packaged builds
   it.effect("requires the matching plugin host runtime in the final Windows archive", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1978,6 +1985,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     },
   );
 
+  // regression: #8206 fix(desktop): sign Windows native addons
   it.effect("configures Windows executable metadata and native signing extensions", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig(
@@ -2369,6 +2377,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it("resolves the assembled macOS app and native DMG names for every architecture", () => {
     assert.equal(resolveMacAppBundleDirectoryName("arm64"), "mac-arm64");
     assert.equal(resolveMacAppBundleDirectoryName("x64"), "mac");
@@ -2387,6 +2396,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(missingApp.message, "/tmp/mac-arm64/TritonAI Harness.app");
   });
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it.effect("stages DMGs through ditto and hdiutil without a mounted-volume copy", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2417,6 +2427,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it.effect("fails closed when Electron Builder did not assemble the expected macOS app", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2437,6 +2448,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it.effect("creates a real native DMG from a staged macOS app", () =>
     Effect.gen(function* () {
       const hostPlatform = yield* HostProcess.Platform;
@@ -2672,6 +2684,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  // regression: #193 fix(desktop): retain microphone entitlements in release stages
   it.effect("keeps microphone entitlements in unsigned macOS release stages", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig("mac", "dmg", "1.2.3", false, false, undefined, {
@@ -2797,6 +2810,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it("promotes exact target ffi-rs native packages to direct staged dependencies", () => {
     assert.deepStrictEqual(resolveFfiRsNativeDependencies("mac", "arm64", "1.3.2"), {
       "@yuuang/ffi-rs-darwin-arm64": "1.3.2",
@@ -2833,6 +2847,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
   });
 
+  // regression: #279 fix(desktop): keep the CUA asar loader patch in Windows packages
   it("keeps the asar-unpacked Cua Driver loader patch in staged installs", () => {
     const workspacePatches = {
       "@ubjs/node@0.31.0-3": "patches/@ubjs__node@0.31.0-3.patch",
@@ -2845,6 +2860,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
   });
 
+  // regression: #394 fix(release): preserve staged dependencies and align nightly checks
   it.effect("keeps deployed dependencies intact during the packager workspace probe in CI", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2909,6 +2925,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  // regression: #394 fix(release): preserve staged dependencies and align nightly checks
   it.effect("validates Windows FFI without requiring packed Linux addons to be unpacked", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2947,6 +2964,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it.effect("fails closed when an assembled app omits an ffi-rs native binary", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2970,6 +2988,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  // regression: #155 fix(release): require packaged updater config
   it.effect("fails closed when assembled macOS and Windows apps omit updater config", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2996,6 +3015,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  // regression: #155 fix(release): require packaged updater config
   it.effect("accepts updater config in assembled macOS and Windows apps", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -3247,6 +3267,7 @@ it.effect.skipIf(!symlinksSupported)("rebases packaged links into the isolated t
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+// regression: #206 fix(release): unblock Windows builds and managed plugin startup
 it.effect("enables Windows native deployment from either Mac host architecture", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -3274,6 +3295,7 @@ it.effect("enables Windows native deployment from either Mac host architecture",
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+// regression: #134 fix: inherit macOS microphone entitlement
 it("keeps hardened-runtime audio capabilities aligned for the main app and helpers", () => {
   const configuration = resolveMacPasskeySigningConfiguration({
     T3CODE_APPLE_TEAM_ID: "ABC1234567",

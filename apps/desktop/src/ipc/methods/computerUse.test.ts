@@ -118,6 +118,7 @@ describe("computer use IPC", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it.effect("restarts an already-enabled driver after the missing grants are supplied", () => {
     const relaunches: Array<{ reason: string; waitForIpcResponse: boolean }> = [];
     return Effect.gen(function* () {

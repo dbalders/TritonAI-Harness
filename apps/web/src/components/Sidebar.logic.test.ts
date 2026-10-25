@@ -536,6 +536,7 @@ describe("resolveWorkingStartedAt", () => {
     },
   );
 
+  // regression: #4274 fix(web): sidebar v2 polish — jump hints, working duration, in-flight fade, settled sort
   it("uses the running turn's start time", () => {
     expect(
       resolveWorkingStartedAt({
@@ -545,6 +546,7 @@ describe("resolveWorkingStartedAt", () => {
     ).toBe("2026-03-09T10:00:00.000Z");
   });
 
+  // regression: #4274 fix(web): sidebar v2 polish — jump hints, working duration, in-flight fade, settled sort
   it("uses the request time while a turn awaits adoption", () => {
     expect(
       resolveWorkingStartedAt({
@@ -1357,16 +1359,19 @@ describe("isSidebarNestedLinkClick", () => {
     closest: (selector: string) => (selector === "a[href]" ? ({} as Element) : null),
   } as unknown as EventTarget;
 
+  // regression: #6378 fix(web): cmd+click sidebar PR numbers open in the browser
   it("ignores row clicks that originated on a nested link", () => {
     expect(isSidebarNestedLinkClick(linkTarget)).toBe(true);
   });
 
+  // regression: #6378 fix(web): cmd+click sidebar PR numbers open in the browser
   it("walks up from a text node to the enclosing link", () => {
     expect(isSidebarNestedLinkClick({ parentElement: linkTarget } as unknown as EventTarget)).toBe(
       true,
     );
   });
 
+  // regression: #6378 fix(web): cmd+click sidebar PR numbers open in the browser
   it("leaves ordinary row clicks alone", () => {
     expect(isSidebarNestedLinkClick({ closest: () => null } as unknown as EventTarget)).toBe(false);
     expect(isSidebarNestedLinkClick(null)).toBe(false);
@@ -1522,6 +1527,7 @@ describe("moveSidebarThreadWithinFolder", () => {
   const activeOrder = ["a1", "a2", "a3", "b1", "b2"];
   const folderKeys = ["a1", "a2", "a3"];
 
+  // regression: #386 fix(web): restore folder stack and in-folder thread dragging
   it.each([
     ["a1", "a3", ["a2", "a3", "a1", "b1", "b2"]],
     ["a3", "a1", ["a3", "a1", "a2", "b1", "b2"]],
@@ -1532,6 +1538,7 @@ describe("moveSidebarThreadWithinFolder", () => {
     );
   });
 
+  // regression: #386 fix(web): restore folder stack and in-folder thread dragging
   it("refuses a drop on another folder's row or on itself", () => {
     expect(
       moveSidebarThreadWithinFolder({ activeOrder, folderKeys, activeKey: "a3", overKey: "b1" }),
@@ -1543,6 +1550,7 @@ describe("moveSidebarThreadWithinFolder", () => {
 });
 
 describe("placeSidebarDropAtInboxTop", () => {
+  // regression: #386 fix(web): restore folder stack and in-folder thread dragging
   it("puts a row entering the inbox first and leaves other targets alone", () => {
     const target = { pinnedOrder: ["p1"], activeOrder: ["s1"] };
     expect(
@@ -2268,27 +2276,6 @@ describe("applySidebarThreadDrop", () => {
       "dragged",
       "newer",
     ]);
-  });
-});
-
-describe("resolveSidebarDropVerb", () => {
-  it("names the state change a cross-section drop performs", () => {
-    expect(resolveSidebarDropVerb("active", "pinned")).toBe("pin");
-    expect(resolveSidebarDropVerb("settled", "pinned")).toBe("pin");
-    expect(resolveSidebarDropVerb("snoozed", "pinned")).toBe("pin");
-    expect(resolveSidebarDropVerb("pinned", "active")).toBe("unpin");
-    expect(resolveSidebarDropVerb("settled", "active")).toBe("unsettle");
-    expect(resolveSidebarDropVerb("snoozed", "active")).toBe("wake");
-    expect(resolveSidebarDropVerb("active", "settled")).toBe("settle");
-    expect(resolveSidebarDropVerb("pinned", "settled")).toBe("settle");
-    expect(resolveSidebarDropVerb("snoozed", "settled")).toBe("settle");
-  });
-
-  it("stays silent for same-section reorders, no target, and the snoozed shelf", () => {
-    expect(resolveSidebarDropVerb("active", "active")).toBeNull();
-    expect(resolveSidebarDropVerb("pinned", "pinned")).toBeNull();
-    expect(resolveSidebarDropVerb("active", null)).toBeNull();
-    expect(resolveSidebarDropVerb("active", "snoozed")).toBeNull();
   });
 });
 

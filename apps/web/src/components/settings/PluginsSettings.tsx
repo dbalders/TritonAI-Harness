@@ -133,7 +133,7 @@ export function reconcileConnectionAttentionForIntegration(
     : clearOwnedConnectionAttention(current, integrationId);
 }
 
-export function IntegrationConnectionActionCallout({
+function IntegrationConnectionActionCallout({
   integrationName,
 }: {
   readonly integrationName: string;
@@ -145,7 +145,7 @@ export function IntegrationConnectionActionCallout({
   );
 }
 
-export function integrationConnectAriaLabel(integrationName: string): string {
+function integrationConnectAriaLabel(integrationName: string): string {
   return `Connect ${integrationName}`;
 }
 
@@ -306,7 +306,7 @@ function keyedSetupInstructions(instructions: ReadonlyArray<string>) {
   });
 }
 
-export function IntegrationAuthorizationFlow({
+function IntegrationAuthorizationFlow({
   integrationName,
   flow,
   busy,

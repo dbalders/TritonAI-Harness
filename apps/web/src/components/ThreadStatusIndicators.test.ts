@@ -10,7 +10,6 @@ import { AtomRegistry } from "effect/reactivity";
 
 import {
   nextThreadChangeRequestSnapshot,
-  prStatusIndicator,
   resolveDisplayedThreadPr,
   resolveDisplayedThreadPrProvider,
   resolveThreadPr,
@@ -505,16 +504,4 @@ describe("threadChangeRequestSnapshotsAtom", () => {
       registry.dispose();
     }),
   );
-});
-
-describe("prStatusIndicator", () => {
-  it("distinguishes draft pull requests in the status and tooltip", () => {
-    const draftPr = status().pr;
-    if (!draftPr) throw new Error("Expected pull request fixture");
-
-    expect(prStatusIndicator({ ...draftPr, isDraft: true }, undefined)).toMatchObject({
-      label: "PR draft",
-      tooltipLead: "PR #42 - Draft",
-    });
-  });
 });

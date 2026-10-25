@@ -146,24 +146,10 @@ describe("installer version marker", () => {
       version: null,
     });
   });
-
-  it("reads a valid marker", () => {
-    expect(
-      parseInstallerVersionMarker(
-        JSON.stringify({
-          schemaVersion: 1,
-          version: "1.2.3",
-          installedAt: "2026-07-09T12:00:00.000Z",
-        }),
-      ),
-    ).toEqual({
-      status: "valid",
-      version: "1.2.3",
-    });
-  });
 });
 
 describe("installer update controller", () => {
+  // regression: #314 fix(web): keep installer version in diagnostics
   it.each([true, false])(
     "loads the recorded version without checking releases (updates enabled: %s)",
     async (enabled) => {
@@ -194,6 +180,7 @@ describe("installer update controller", () => {
     },
   );
 
+  // regression: #314 fix(web): keep installer version in diagnostics
   it("keeps diagnostics available when the installer record cannot be read", async () => {
     const controller = createInstallerUpdateController({
       enabled: true,

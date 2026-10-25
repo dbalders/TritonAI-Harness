@@ -57,6 +57,7 @@ describe("DesktopEarlyElectronStartup", () => {
     assert.equal(preference, "auto");
   });
 
+  // regression: #2916 fix(desktop): Niri/Hyprland - Linux secret storage backend
   it("preserves absolute root paths when resolving early settings", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: { T3CODE_HOME: "/" },
@@ -72,6 +73,7 @@ describe("DesktopEarlyElectronStartup", () => {
     assert.equal(preference, "kwallet6");
   });
 
+  // regression: #2916 fix(desktop): Niri/Hyprland - Linux secret storage backend
   it("resolves the early linux Electron switches", () => {
     const options = resolveEarlyLinuxElectronOptions({
       env: {
@@ -96,6 +98,7 @@ describe("DesktopEarlyElectronStartup", () => {
     });
   });
 
+  // regression: 6a3b33f4c3 fix(desktop): use channel identity during early Linux startup
   it("keeps implicit development state under ~/.tritonai-harness/dev when T3CODE_HOME is unset", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: {
@@ -113,6 +116,7 @@ describe("DesktopEarlyElectronStartup", () => {
     assert.equal(preference, "kwallet");
   });
 
+  // regression: #2916 fix(desktop): Niri/Hyprland - Linux secret storage backend
   it("treats whitespace-only T3CODE_HOME as unconfigured in development", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: {

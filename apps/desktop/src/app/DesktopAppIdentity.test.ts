@@ -169,6 +169,7 @@ describe("DesktopAppIdentity", () => {
     ),
   );
 
+  // regression: 13e7bc16e3 fix(desktop): let Nightly coexist with stable Harness
   it.effect("never adopts the stable legacy profile for Nightly", () =>
     withIdentity(
       Effect.gen(function* () {
@@ -254,6 +255,7 @@ describe("DesktopAppIdentity", () => {
     );
   });
 
+  // regression: #208 fix(desktop): restore the circular icon in packaged macOS apps
   it.effect("also sets the dock icon when running unpackaged", () => {
     const calls: ElectronAppCalls = {
       setAboutPanelOptions: [],

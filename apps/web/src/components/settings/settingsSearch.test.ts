@@ -77,6 +77,7 @@ describe("searchSettings", () => {
     ).toEqual(["network-access", "connections-environment"]);
   });
 
+  // regression: #355 fix(web): hide usage provider settings
   it.each([
     "usage providers",
     "CLIProxyAPI",
@@ -175,6 +176,7 @@ describe("searchSettings", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  // regression: 663a67370e fix(usage): consolidate TritonAI reporting
   it("does not expose the legacy Settings usage destination", () => {
     expect(SETTINGS_SECTION_LABELS).not.toHaveProperty("/settings/usage");
   });

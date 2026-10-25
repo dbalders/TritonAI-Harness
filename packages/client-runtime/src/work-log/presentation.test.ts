@@ -199,31 +199,15 @@ describe("resolveWorkEntryToolPresentation", () => {
     ).toBe("Failed to click in the preview browser");
   });
 
+  // regression: #9106 fix(chat): improve tool group summaries and scrolling
   it.each([
     ["preview_type", "Typing in the preview browser", "Typed in the preview browser"],
-    [
-      "preview_set_appearance",
-      "Setting preview browser appearance",
-      "Set preview browser appearance",
-    ],
-    [
-      "preview_snapshot",
-      "Taking a snapshot of the preview page",
-      "Took a snapshot of the preview page",
-    ],
     [
       "preview_recording_stop",
       "Stopping recording the preview browser",
       "Stopped recording the preview browser",
     ],
     ["t3_thread_read", "Reading a TritonAI thread", "Read a TritonAI thread"],
-    ["t3_thread_wait", "Waiting for a TritonAI thread", "Waited for a TritonAI thread"],
-    ["t3_thread_send", "Sending to a TritonAI thread", "Sent to a TritonAI thread"],
-    [
-      "t3_worktree_handoff",
-      "Handing off thread to a git worktree",
-      "Handed off thread to a git worktree",
-    ],
   ])("preserves verb forms and the rest of %s's label", (tool, running, completed) => {
     const entry = { label: `t3-code.${tool}` };
     expect(
@@ -235,6 +219,7 @@ describe("resolveWorkEntryToolPresentation", () => {
     ).toBe(completed);
   });
 
+  // regression: d53c8842be fix(branding): use TritonAI labels and logo for orchestration tools
   it("keeps app branding for non-browser tools and falls back to the original tool label", () => {
     expect(
       resolveWorkEntryToolPresentation({

@@ -104,6 +104,7 @@ function makeEnvironmentLayer(homeDirectory: string) {
 }
 
 describe("TritonAI credential IPC", () => {
+  // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
   it.effect("reports only the last four characters of each configured key", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -191,6 +192,7 @@ describe("TritonAI credential IPC", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
   it.effect("keeps saved keys when runtime readiness times out", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -276,6 +278,7 @@ describe("TritonAI credential IPC", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  // regression: #154 fix(settings): route TritonAI keys per connection
   it.effect("changes only the selected route when the new key covers both routes", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -348,6 +351,7 @@ describe("TritonAI credential IPC", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  // regression: #154 fix(settings): route TritonAI keys per connection
   it.effect("rejects a route-specific key that cannot access the selected route", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -379,6 +383,7 @@ describe("TritonAI credential IPC", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  // regression: #154 fix(settings): route TritonAI keys per connection
   it.effect("removes only the selected route and preserves the other route", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -423,6 +428,7 @@ describe("TritonAI credential IPC", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  // regression: #142 fix(desktop): apply TritonAI API keys without relaunch
   it.effect("does not start a backend that was already stopped", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

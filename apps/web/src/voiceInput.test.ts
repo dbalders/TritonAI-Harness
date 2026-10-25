@@ -103,6 +103,7 @@ describe("encodeAudioBufferAsWav", () => {
 });
 
 describe("transcribeVoiceBlob", () => {
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("uploads speech on both sides of a long pause without the thirty-second gap", async () => {
     const samples = new Float32Array(34 * RATE);
     samples.fill(0.08, 1 * RATE, 2 * RATE);
@@ -127,6 +128,7 @@ describe("transcribeVoiceBlob", () => {
     expect(wav.sampleAt(3.2)).toBeLessThan(-2_000);
   });
 
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("mixes a stereo recording to mono before detecting speech", async () => {
     installDecodedRecording(new Float32Array(RATE).fill(0.2), new Float32Array(RATE).fill(0.1));
     let uploaded: ServerVoiceTranscribeInput | undefined;
@@ -186,6 +188,7 @@ describe("transcribeVoiceBlob", () => {
     });
   });
 
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("rejects a muted recording without loading the speech detector", async () => {
     installDecodedRecording(new Float32Array(RATE));
     const transcribe = vi.fn();
@@ -197,6 +200,7 @@ describe("transcribeVoiceBlob", () => {
     expect(transcribe).not.toHaveBeenCalled();
   });
 
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("does not upload room noise when the speech detector finds no speech", async () => {
     installDecodedRecording(speechLikeSamples());
     vi.mocked(detectVoiceSpeech).mockResolvedValue([]);
@@ -208,6 +212,7 @@ describe("transcribeVoiceBlob", () => {
     expect(transcribe).not.toHaveBeenCalled();
   });
 
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("uploads quiet speech the detector recognizes regardless of its overall volume", async () => {
     const samples = new Float32Array(10 * RATE);
     samples.fill(0.001, 1 * RATE, 2 * RATE);
@@ -221,6 +226,7 @@ describe("transcribeVoiceBlob", () => {
     expect(transcribe).toHaveBeenCalledOnce();
   });
 
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("does not upload untreated audio if speech detection fails", async () => {
     installDecodedRecording(speechLikeSamples());
     const detectorError = new Error("no available backend found");
@@ -236,6 +242,7 @@ describe("transcribeVoiceBlob", () => {
     expect(transcribe).not.toHaveBeenCalled();
   });
 
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("does not upload a recording canceled while speech detection was running", async () => {
     installDecodedRecording(speechLikeSamples());
     const abort = new AbortController();

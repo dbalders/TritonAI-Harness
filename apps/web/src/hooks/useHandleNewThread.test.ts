@@ -215,6 +215,7 @@ describe.each([
     },
   ],
 ])("useNewThreadHandler with a %s draft", (_, draft) => {
+  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
     "remembers the last %s composer choice when opening a new thread",
     async (runtimeMode) => {
@@ -237,6 +238,7 @@ describe.each([
     },
   );
 
+  // regression: #374 fix(permissions): default to Supervised and remember composer choices
   it("uses the latest composer choice when opening waits for project defaults", async () => {
     testState.reset(draft);
     const pendingOpen = useNewThreadHandler()({
@@ -256,6 +258,7 @@ describe.each([
   });
 
   if (draft) {
+    // regression: #374 fix(permissions): default to Supervised and remember composer choices
     it("preserves a reused draft's own composer mode", async () => {
       testState.reset(draft);
       testState.draftStore.stickyRuntimeMode = "auto";

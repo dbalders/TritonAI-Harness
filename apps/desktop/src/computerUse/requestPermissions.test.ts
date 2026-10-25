@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { requestComputerUsePermissions } from "./requestPermissions.ts";
 
 describe("computer use permission onboarding", () => {
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("requests screen capture when the SDK only grants Accessibility", async () => {
     let granted = false;
     const requestScreenCapture = vi.fn(async () => {
@@ -16,6 +17,7 @@ describe("computer use permission onboarding", () => {
     expect(status).toEqual({ accessibility: true, screenRecording: true });
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("keeps a denied capture actionable without failing opt-in", async () => {
     const status = await requestComputerUsePermissions({
       requestNativePermissions: () => ({ accessibility: true, screenRecording: false }),
@@ -27,6 +29,7 @@ describe("computer use permission onboarding", () => {
     expect(status.screenRecording).toBe(false);
   });
 
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("does not capture the screen when access is already granted", async () => {
     const requestScreenCapture = vi.fn();
     await requestComputerUsePermissions({

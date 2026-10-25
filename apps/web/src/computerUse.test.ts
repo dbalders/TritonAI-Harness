@@ -9,11 +9,13 @@ import {
 import { computerUseActivity } from "./components/chat/computerUseActivity";
 
 describe("computer use requests", () => {
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("recognizes bare commands consistently", () => {
     expect(isBareComputerUseRequest(" /COMPUTER-USE ")).toBe(true);
     expect(isBareComputerUseRequest("/computer-use open Notes")).toBe(false);
     expect(isBareComputerUseRequest("/computer-useful")).toBe(false);
   });
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("recognizes deliberate commands without blocking discussion of the feature", () => {
     expect(isComputerUseRequest("/computer-use open Notes")).toBe(true);
     expect(isComputerUseRequest("Please use computer use to open Notes")).toBe(true);
@@ -22,6 +24,7 @@ describe("computer use requests", () => {
     expect(isComputerUseRequest("Fix the computer use setting")).toBe(false);
     expect(computerUsePrompt("/computer-use open Notes")).toBe("Use computer use to open Notes");
   });
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("highlights actual driver calls, not text that merely mentions computer use", () => {
     expect(
       computerUseActivity({
@@ -49,6 +52,7 @@ describe("computer use requests", () => {
 });
 
 describe("computer-use readiness deadline", () => {
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("releases a stalled check and permits a subsequent successful check", async () => {
     vi.useFakeTimers();
     try {
@@ -64,6 +68,7 @@ describe("computer-use readiness deadline", () => {
       vi.useRealTimers();
     }
   });
+  // regression: #215 fix(desktop): make computer-use setup and activity visible
   it("preserves IPC errors and removes the deadline", async () => {
     vi.useFakeTimers();
     try {
@@ -85,6 +90,7 @@ describe("computer-use stale observations", () => {
       toolData: { server: "cua-driver", tool: "click", status: "failed", error: null, ...data },
     });
 
+  // regression: #256 fix(web): treat stale computer-use references as normal steps
   it.each([stale, [{ type: "text", text: stale }]])(
     "recognizes the driver's stale reference response: %j",
     (content) => {
@@ -92,6 +98,7 @@ describe("computer-use stale observations", () => {
     },
   );
 
+  // regression: #256 fix(web): treat stale computer-use references as normal steps
   it.each(["image", "resource", "resource_link"])(
     "preserves failures that include a stale message and a %s block",
     (type) => {
@@ -101,6 +108,7 @@ describe("computer-use stale observations", () => {
     },
   );
 
+  // regression: #256 fix(web): treat stale computer-use references as normal steps
   it("preserves real failures and does not infer refreshes from input or successful output", () => {
     expect(
       activity({ result: { content: "Accessibility permission denied" } })?.refreshNeeded,

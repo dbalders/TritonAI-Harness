@@ -1687,6 +1687,7 @@ describe("composerDraftStore sticky composer settings", () => {
     resetComposerDraftStore();
   });
 
+  // regression: #246 fix(models): remember explicit model choices for new tasks
   it("keeps the manual choice when opening an old thread or seeding a project override", () => {
     const store = useComposerDraftStore.getState();
     const remembered = modelSelection(CODEX_DRIVER, "flash", { reasoningEffort: "high" });

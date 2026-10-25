@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { Route } from "./settings.usage";
 
 describe("legacy settings usage route", () => {
+  // regression: 663a67370e fix(usage): consolidate TritonAI reporting
   it("replaces old bookmarks with the canonical usage page", async () => {
     let thrown: unknown;
 

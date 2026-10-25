@@ -262,6 +262,7 @@ describe("DesktopSettings", () => {
     ),
   );
 
+  // regression: #2916 fix(desktop): Niri/Hyprland - Linux secret storage backend
   it.effect(
     "normalizes unsupported linux password-store values without dropping other settings",
     () =>

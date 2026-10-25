@@ -108,12 +108,14 @@ beforeEach(() => {
 });
 
 describe("new task model intent", () => {
+  // regression: #246 fix(models): remember explicit model choices for new tasks
   it("starts on Flash after opening a saved GLM task, including its reasoning choice", async () => {
     const result = await useNewThreadHandler()(PROJECT);
     expect(result).not.toBeNull();
     expect(selectedModel(result!.draftId)).toEqual(FLASH);
   });
 
+  // regression: #311 fix: refresh Cloud models and reset legacy defaults to Flash
   it("uses the app's Flash default ahead of a remembered GLM selection", async () => {
     harness.appDefault = FLASH;
     useComposerDraftStore.getState().setStickyModelSelection(GLM);
@@ -124,6 +126,7 @@ describe("new task model intent", () => {
     );
   });
 
+  // regression: #246 fix(models): remember explicit model choices for new tasks
   it("ignores a GLM composer override on an older task", async () => {
     useComposerDraftStore
       .getState()
@@ -134,6 +137,7 @@ describe("new task model intent", () => {
     expect(selectedModel(result!.draftId)).toEqual(FLASH);
   });
 
+  // regression: #246 fix(models): remember explicit model choices for new tasks
   it("refreshes an empty reused draft from the remembered choice", async () => {
     const open = useNewThreadHandler();
     const first = await open(PROJECT);
@@ -143,6 +147,7 @@ describe("new task model intent", () => {
     expect(selectedModel(second!.draftId)).toEqual(FLASH);
   });
 
+  // regression: #246 fix(models): remember explicit model choices for new tasks
   it("preserves an explicit pick in an unsent draft", async () => {
     const open = useNewThreadHandler();
     const first = await open(PROJECT);
@@ -153,6 +158,7 @@ describe("new task model intent", () => {
     expect(selectedModel(second!.draftId)).toEqual(GLM);
   });
 
+  // regression: #246 fix(models): remember explicit model choices for new tasks
   it("applies a project override without replacing the remembered model, then follows reset", async () => {
     harness.projectDefault = GLM;
     const pinned = await useNewThreadHandler()(PROJECT);

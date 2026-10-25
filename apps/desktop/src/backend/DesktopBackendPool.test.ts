@@ -178,6 +178,7 @@ describe("DesktopBackendPool", () => {
     ),
   );
 
+  // regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
   it.effect("quits after acknowledging three pre-server failures and completes cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

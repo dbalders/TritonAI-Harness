@@ -309,6 +309,7 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it.effect("terminates a child that stays alive past the readiness timeout", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -358,6 +359,7 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  // regression: #323 fix(runtime): remove history scans and bound startup recovery
   it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
     "force-kills a backend that ignores termination after readiness fails",
     () =>
@@ -724,6 +726,7 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it.effect("surfaces and stops a backend that repeatedly exits before readiness", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -768,6 +771,7 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it.effect("surfaces and stops repeated configuration failures from the initial start", () =>
     Effect.scoped(
       Effect.gen(function* () {

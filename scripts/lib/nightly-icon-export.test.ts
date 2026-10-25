@@ -56,6 +56,7 @@ it.layer(NodeServices.layer)("development artwork", (it) => {
 });
 
 it.layer(NodeServices.layer)("square iOS artwork", (it) => {
+  // regression: #322 fix(branding): use square main and nightly icons at standard Dock size
   it.effect("ships full-bleed main and Preview masters with matching opaque fallback icons", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

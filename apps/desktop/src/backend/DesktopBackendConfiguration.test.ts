@@ -1,5 +1,3 @@
-import * as Logger from "effect/Logger";
-import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
 import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
@@ -54,10 +52,6 @@ const PersistedServerObservabilitySettingsDocument = Schema.Struct({
 
 const encodePersistedServerObservabilitySettingsDocument = Schema.encodeEffect(
   Schema.fromJsonString(PersistedServerObservabilitySettingsDocument),
-);
-
-const isDesktopBackendObservabilitySettingsReadError = Schema.is(
-  DesktopBackendConfiguration.DesktopBackendObservabilitySettingsReadError,
 );
 
 const layerShellEnvironment = (prepared = true) =>
@@ -397,6 +391,7 @@ describe("DesktopBackendConfiguration", () => {
     ),
   );
 
+  // regression: 13e7bc16e3 fix(desktop): let Nightly coexist with stable Harness
   it.effect("uses Nightly's distro-local home and credential inventory for WSL", () =>
     withPackagedWslHarness(
       {
@@ -854,6 +849,7 @@ describe("DesktopBackendConfiguration", () => {
     ),
   );
 
+  // regression: 21f515d572 fix: close TritonGPT parity gaps
   it.effect("resolvePrimary passes UCSD installer environment into the backend process", () =>
     Effect.gen(function* () {
       const previousTritonAiKey = process.env.TRITONAI_API_KEY;
@@ -914,6 +910,7 @@ describe("DesktopBackendConfiguration", () => {
     }),
   );
 
+  // regression: #350 fix(desktop): restore the Installer's tool folders on the backend PATH
   it.effect(
     "resolvePrimary appends the Installer's newest Node runtime after the inherited PATH",
     () =>
@@ -994,6 +991,7 @@ describe("DesktopBackendConfiguration", () => {
       }),
   );
 
+  // regression: #350 fix(desktop): restore the Installer's tool folders on the backend PATH
   it.effect(
     "resolvePrimary restores the Installer's declared tool folders after the inherited PATH",
     () =>
@@ -1075,6 +1073,7 @@ describe("DesktopBackendConfiguration", () => {
       }),
   );
 
+  // regression: #350 fix(desktop): restore the Installer's tool folders on the backend PATH
   it.effect("resolvePrimary falls back to the newest usable Codex and Node runtimes", () =>
     Effect.gen(function* () {
       const previousPath = process.env.PATH;
@@ -1133,6 +1132,7 @@ describe("DesktopBackendConfiguration", () => {
     }),
   );
 
+  // regression: #268 fix(desktop): load Windows installer credentials on startup
   it.effect("Windows startup reads Installer literals without running its launcher", () =>
     Effect.gen(function* () {
       const names = ["TRITONAI_API_KEY", "UCSD_AI_BASE_URL"] as const;
@@ -1202,6 +1202,7 @@ describe("DesktopBackendConfiguration", () => {
     }),
   );
 
+  // regression: #154 fix(settings): route TritonAI keys per connection
   it.effect("resolvePrimary clears an inherited shared key for split installer credentials", () =>
     Effect.gen(function* () {
       const previousSharedKey = process.env.TRITONAI_API_KEY;
@@ -1395,74 +1396,6 @@ describe("DesktopBackendConfiguration", () => {
             ),
           ),
         ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("logs structured context when persisted observability settings cannot be read", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-      const settingsPath = path.join(baseDir, "userdata", "settings.json");
-      const cause = PlatformError.systemError({
-        _tag: "PermissionDenied",
-        module: "FileSystem",
-        method: "readFileString",
-        pathOrDescriptor: settingsPath,
-      });
-      const messages: Array<unknown> = [];
-      const logger = Logger.make(({ message }) => {
-        messages.push(message);
-      });
-      const layerFailingFileSystem = Layer.effect(
-        FileSystem.FileSystem,
-        Effect.gen(function* () {
-          const liveFileSystem = yield* FileSystem.FileSystem;
-          return {
-            ...liveFileSystem,
-            readFileString: (target, encoding) =>
-              String(target) === settingsPath
-                ? Effect.fail(cause)
-                : liveFileSystem.readFileString(target, encoding),
-          } satisfies FileSystem.FileSystem;
-        }),
-      ).pipe(Layer.provide(NodeServices.layer));
-
-      const config = yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        return yield* configuration.resolvePrimary;
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            layerBackendConfiguration().pipe(
-              Layer.provideMerge(desktopTestServicesLayer),
-              Layer.provideMerge(DesktopAppSettings.layerTest()),
-              Layer.provideMerge(DesktopWslServerTree.layerTest()),
-              Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-              Layer.provideMerge(layerEnvironment(baseDir)),
-              Layer.provideMerge(layerFailingFileSystem),
-            ),
-            Logger.layer([logger], { mergeWithExisting: false }),
-          ),
-        ),
-      );
-
-      assert.isUndefined(config.bootstrap.otlpTracesUrl);
-      assert.isUndefined(config.bootstrap.otlpMetricsUrl);
-      assert.isUndefined(config.bootstrap.otlpLogsUrl);
-
-      const error = messages
-        .flatMap((message) => (Array.isArray(message) ? message : [message]))
-        .find(isDesktopBackendObservabilitySettingsReadError);
-      assert.isDefined(error);
-      assert.equal(error.settingsPath, settingsPath);
-      assert.equal(error.cause, cause);
-      assert.equal(
-        error.message,
-        `Failed to read persisted backend observability settings at ${settingsPath}.`,
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

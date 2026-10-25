@@ -25,9 +25,11 @@ function check(needs) {
   });
 }
 
+// regression: 6982c17f64 fix(ci): classify preview releases and verify native skips
 test("accepts successful required jobs", posix, () => {
   assert.equal(check(results()).status, 0);
 });
+// regression: 6982c17f64 fix(ci): classify preview releases and verify native skips
 test("accepts static analysis skipped by a successful clean native gate", posix, () => {
   const needs = results("false");
   needs.mobile_native_static_analysis.result = "skipped";

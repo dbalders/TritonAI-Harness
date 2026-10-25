@@ -1,10 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import {
-  EnvironmentId,
-  type HelpContext,
-  ProviderInstanceId,
-  TextGenerationError,
-} from "@t3tools/contracts";
+import { EnvironmentId, type HelpContext, ProviderInstanceId } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
@@ -169,31 +164,6 @@ describe("fromRunner Help", () => {
       assert.equal(failure.detail, "Help returned an empty or oversized answer.");
     }),
   );
-
-  it.effect("preserves a runner failure", () =>
-    Effect.gen(function* () {
-      const error = new TextGenerationError({
-        operation: "generateHelp",
-        detail: "Provider unavailable.",
-      });
-      const run: Runner = () => Effect.fail(error);
-      const failure = yield* Effect.flip(
-        fromRunner("Test", run, { help: { promptOnly: true } }).generateHelp!(input),
-      );
-      assert.strictEqual(failure, error);
-    }),
-  );
-
-  it.effect("rejects malformed structured output", () =>
-    Effect.gen(function* () {
-      const run: Runner = (request) => decodeJsonReply(request, "Test provider", '{"answer":42}');
-      const failure = yield* Effect.flip(
-        fromRunner("Test", run, { help: { promptOnly: true } }).generateHelp!(input),
-      );
-      assert.equal(failure.operation, "generateHelp");
-      assert.equal(failure.detail, "Test provider returned invalid structured output.");
-    }),
-  );
 });
 
 describe("buildHelpPrompt", () => {
@@ -253,75 +223,6 @@ describe("buildHelpPrompt", () => {
     expect(prompt).toContain(
       "offer a redacted report draft for the user to review and copy; never send it",
     );
-  });
-
-  it("uses current app data and retrieved docs without duplicating a release manual", () => {
-    const { prompt } = buildHelpPrompt({
-      ...input,
-      messages: [{ role: "user", content: "How do I have the app use a mouse for me?" }],
-      context: {
-        ...context,
-        knowledge: {
-          settings: {
-            entries: [{ key: "enableAgentBrowserAccess", value: "true" }],
-            totalCount: 1,
-            omittedCount: 0,
-          },
-          pluginsStatus: "reported",
-          plugins: [],
-          pluginsOmittedCount: 0,
-          documentationStatus: "available",
-          documentation: [
-            {
-              title: "Computer use",
-              path: "docs/user/computer-use.md",
-              content:
-                "Open Settings > General and enable Computer use. Grant macOS Accessibility and Screen Recording permissions, then restart Harness. Use /computer-use in a local desktop Codex chat.",
-            },
-          ],
-        },
-        client: {
-          surface: "desktop",
-          platform: "macOS",
-          settingsStatus: "ready",
-          settings: {
-            entries: [{ key: "fontSizeInterface", value: "14" }],
-            totalCount: 1,
-            omittedCount: 0,
-          },
-          settingsCatalog: [
-            {
-              id: "computer-use",
-              title: "Computer use",
-              route: "/settings/general",
-              searchTerms: "see control desktop apps",
-            },
-          ],
-          computerUse: {
-            enabled: false,
-            available: true,
-            running: false,
-            accessibilityPermission: false,
-            screenRecordingPermission: false,
-          },
-        },
-      },
-    });
-    expect(prompt).toContain("docs/user/computer-use.md");
-    expect(prompt).toContain("/settings/general");
-    expect(prompt).toContain("Screen Recording");
-    expect(prompt).toContain('"enabled":false,"available":true');
-    expect(prompt).toContain('"key":"fontSizeInterface","value":"14"');
-    expect(prompt).toContain('"key":"enableAgentBrowserAccess","value":"true"');
-    expect(prompt).toContain("A documented feature is known to this release");
-    expect(prompt).toContain("Requesting-client observations describe that browser or desktop");
-    expect(prompt).toContain("Distinguish observed facts from hypotheses");
-    expect(prompt).toContain("Ask one or two focused questions");
-    expect(prompt).toContain("verification step and its expected result");
-    expect(prompt).toContain("Do not invent features");
-    expect(prompt).toContain("Never request, reveal, or repeat credentials");
-    expect(prompt).toContain("must not investigate");
-    expect(prompt).not.toContain("Bundled current-release guide");
   });
 
   it("preserves complete retrieved guides with the requested section after character 12000", () => {

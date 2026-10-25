@@ -15,6 +15,7 @@ const browserJobs = [
 ] as const;
 
 it.layer(NodeServices.layer)("browser test workflow prerequisites", (it) => {
+  // regression: #441 fix(ci): provision Chromium for nightly web tests
   it.effect.each(
     browserJobs.map(([workflowName, jobName, dependency, workspace]) => ({
       workflowName,
@@ -50,6 +51,7 @@ it.layer(NodeServices.layer)("browser test workflow prerequisites", (it) => {
       }),
   );
 
+  // regression: #442 fix(ci): budget nightly browser setup and tests consistently
   it.effect.each(["test", "test_server"] as const)(
     "Nightly %s has at least the regular CI browser setup and test budget",
     (jobName) =>
