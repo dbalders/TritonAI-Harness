@@ -4,9 +4,17 @@ import { makeVideoSourceRenewal } from "./videoSourceRenewal";
 
 function fixture() {
   const sources: VideoSource[] = [];
+  let rate = 1;
   const player = {
     currentTime: 0,
-    playbackRate: 1,
+    get playbackRate() {
+      return rate;
+    },
+    set playbackRate(value: number) {
+      rate = value;
+      // The installed iOS Expo bridge writes AVPlayer.rate from this setter.
+      player.playing = value !== 0;
+    },
     playing: false,
     pause: vi.fn(() => {
       player.playing = false;
@@ -111,3 +119,16 @@ it("does not resume after dismissal or when the app becomes inactive during repl
   expect(player.playing).toBe(false);
   expect(await loader.replace("signed:too-late", options)).toBe(false);
 });
+
+it.each([false, true])(
+  "keeps Android requested playing=%s through a buffering/range failure",
+  async (requested) => {
+    const { player, loader, options } = fixture();
+    await loader.replace("signed:first", options);
+    player.currentTime = 73;
+    player.playing = false;
+    await loader.replace("signed:recovered", { ...options, playingIntent: () => requested });
+    expect(player.currentTime).toBe(73);
+    expect(player.playing).toBe(requested);
+  },
+);

@@ -2,7 +2,7 @@ import { useIsFocused } from "@react-navigation/native";
 import { useEvent } from "expo";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { AppState, Pressable, View } from "react-native";
+import { AppState, Platform, Pressable, View } from "react-native";
 import { AppActivityIndicator } from "./ui/AppActivityIndicator";
 import { AppText } from "./ui/AppText";
 import { SymbolView } from "./ui/AppSymbol";
@@ -47,6 +47,13 @@ function LoadedMediaVideo(props: {
       return loader.replace(uri, {
         signal,
         playInitially,
+        playingIntent: () => {
+          if (Platform.OS !== "android") return player.playing;
+          // ExoPlayer.isPlaying is false during buffering; playWhenReady keeps user intent.
+          if (player.playbackRequested === undefined)
+            throw new Error("This native client needs the video playback update.");
+          return player.playbackRequested;
+        },
         canPlay: () => active.current || (fullscreen.current && focused && !paused),
       });
     },

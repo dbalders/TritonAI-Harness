@@ -9,6 +9,15 @@ import { Button } from "../ui/button";
 import { OpenMediaLink } from "./OpenMediaLink";
 import { MediaActions, type MediaActionSource } from "./MediaActions";
 
+function mayPlayVideo(video: HTMLVideoElement): boolean {
+  // Native fullscreen can hide the inline page while the video stays visible.
+  return (
+    !document.hidden ||
+    document.fullscreenElement?.contains(video) === true ||
+    ("webkitDisplayingFullscreen" in video && video.webkitDisplayingFullscreen === true)
+  );
+}
+
 interface MediaVideoPlayerProps {
   readonly src: string | null;
   readonly label: string;
@@ -111,11 +120,9 @@ export function MediaVideoPlayer({
   useEffect(() => {
     if (!video) return;
     const pauseWhenHidden = () => {
-      // Native fullscreen can hide the inline page while this video is still visible.
-      const fullscreen =
-        document.fullscreenElement?.contains(video) ||
-        ("webkitDisplayingFullscreen" in video && video.webkitDisplayingFullscreen === true);
-      if (document.hidden && !fullscreen) video.pause();
+      if (mayPlayVideo(video)) return;
+      video.pause();
+      setResume((current) => (current === null ? null : { ...current, playing: false }));
     };
     document.addEventListener("visibilitychange", pauseWhenHidden);
     document.addEventListener("fullscreenchange", pauseWhenHidden);
@@ -212,7 +219,9 @@ export function MediaVideoPlayer({
             }
             element.currentTime = Number.isFinite(pending.time) ? pending.time : 0;
             element.playbackRate = pending.rate;
-            if (pending.playing) void element.play().catch(() => undefined);
+            if (pending.playing && mayPlayVideo(element))
+              void element.play().catch(() => undefined);
+            else element.pause();
           }}
           onPlay={(event) => {
             setPlayingVideo(event.currentTarget);

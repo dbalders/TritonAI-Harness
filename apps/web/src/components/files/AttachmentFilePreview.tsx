@@ -10,7 +10,7 @@ import { ChevronRightIcon, DownloadIcon, Trash2Icon, WrapTextIcon, XIcon } from 
 import { Check, Code2, Copy, Eye, Table2 } from "lucide";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
-import { useAssetUrlRefresh } from "~/assets/assetUrls";
+import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { MorphIcon } from "~/components/MorphIcon";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -82,6 +82,10 @@ export function AttachmentFilePreview(props: {
     props.file ? null : (props.asset?.environmentId ?? null),
     props.file ? null : resource,
   );
+  const videoAsset = useAssetUrlState(
+    !props.file && kind === "video" ? (props.asset?.environmentId ?? null) : null,
+    !props.file && kind === "video" ? resource : null,
+  );
   const prepareDownload = useAssetUrlRefresh(props.asset?.environmentId ?? null, downloadResource);
   const [saving, setSaving] = useState(false);
   const [localUrl, setLocalUrl] = useState<string | null>(null);
@@ -100,7 +104,7 @@ export function AttachmentFilePreview(props: {
     return () => URL.revokeObjectURL(url);
   }, [props.file]);
   useEffect(() => {
-    if (props.file) return;
+    if (props.file || kind === "video") return;
     let cancelled = false;
     // oxlint-disable-next-line react/set-state-in-effect -- A new preview request clears its previous URL and error.
     setRemoteUrl(null);
@@ -120,8 +124,14 @@ export function AttachmentFilePreview(props: {
       cancelled = true;
     };
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry must reauthorize the remote file.
-  }, [props.file, refresh, revision]);
-  const url = props.file ? localUrl : remoteUrl;
+  }, [props.file, refresh, revision, kind]);
+  const url = props.file
+    ? localUrl
+    : kind === "video"
+      ? videoAsset._tag === "Success"
+        ? videoAsset.url
+        : null
+      : remoteUrl;
   const needsText = kind === "text" || kind === "markdown" || (kind === "html" && !rendered);
   useEffect(() => {
     if (!needsText || !url) return;
@@ -158,7 +168,13 @@ export function AttachmentFilePreview(props: {
     });
     return () => controller.abort();
   }, [url, needsText, revision, props.sizeBytes, props.file, refresh]);
-  const failure = error ?? (needsText ? contentError : null);
+  const failure =
+    error ??
+    (!props.file && kind === "video" && videoAsset._tag === "Failure"
+      ? "The video is unavailable. Reconnect and try again."
+      : needsText
+        ? contentError
+        : null);
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
   const showsRawText =
     failure === null &&
@@ -206,6 +222,8 @@ export function AttachmentFilePreview(props: {
       onRetry={() => {
         setError(null);
         setRevision((value) => value + 1);
+        if (!props.file && kind === "video")
+          void refresh().catch(() => setError("The video is unavailable."));
       }}
     />
   ) : !url || (needsText && !content) ? (

@@ -94,3 +94,34 @@ it("stops automatic renewal for an unplayable resource until the user retries", 
   await expect.element(screen.getByRole("alert")).toBeVisible();
   expect(renewed).toHaveBeenCalledTimes(3);
 });
+
+it("stays paused when the page becomes hidden while a renewed source loads", async () => {
+  const bytes = Uint8Array.from(atob(renewalVideoBase64), (value) => value.charCodeAt(0));
+  const urls = [0, 1].map(() => URL.createObjectURL(new Blob([bytes], { type: "video/webm" })));
+  using _urls = { [Symbol.dispose]: () => urls.forEach((url) => URL.revokeObjectURL(url)) };
+  await using screen = await render(
+    <MediaVideoPlayer src={urls[0]!} label="Hidden renewal clip" />,
+  );
+  const video = screen.container.querySelector("video")!;
+  await metadataReady(video);
+  await screen.getByLabelText("Hidden renewal clip").click();
+  await video.play();
+  let hidden = false;
+  using _hidden = vi.spyOn(document, "hidden", "get").mockImplementation(() => hidden);
+  const metadata = new Promise<void>((resolve) =>
+    video.addEventListener("loadedmetadata", () => resolve(), { once: true }),
+  );
+  video.addEventListener(
+    "loadstart",
+    () => {
+      hidden = true;
+      document.dispatchEvent(new Event("visibilitychange"));
+    },
+    { once: true },
+  );
+  await screen.rerender(<MediaVideoPlayer src={urls[1]!} label="Hidden renewal clip" />);
+  await metadata;
+  await seekFinished(video);
+  expect(document.hidden).toBe(true);
+  expect(video.paused).toBe(true);
+});
