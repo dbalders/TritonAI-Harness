@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   AuthSourceControlWriteScope,
   AuthOrchestrationOperateScope,
+  AuthStandardClientScopes,
   ProjectId,
   PullRequestOperationError,
   WS_METHODS,
@@ -2208,7 +2209,7 @@ it.effect("publishes the accepted guide run before the follow-up read finishes",
         grantedSessions(target.environmentId),
         AsyncResult.map((session) => ({
           ...session,
-          scopes: [...(session.scopes ?? []), AuthOrchestrationOperateScope],
+          scopes: AuthStandardClientScopes,
         })),
       );
       const query = atoms.reviewGuide(target);

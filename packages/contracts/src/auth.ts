@@ -128,11 +128,7 @@ export function sessionGrantsScope(
   scope: AuthEnvironmentScope,
 ): boolean {
   if (!session.authenticated) return false;
-  if (session.permissions !== undefined) {
-    return scope === AuthOrchestrationOperateScope || scope === AuthTerminalOperateScope
-      ? AuthStandardClientScopes.every((required) => session.permissions!.includes(required))
-      : session.permissions.includes(scope);
-  }
+  if (session.permissions !== undefined) return session.permissions.includes(scope);
   if (session.scopes?.includes(scope)) return true;
   if (session.auth?.serverUpdateScope !== undefined) return false;
   const parent = legacyParents[scope];

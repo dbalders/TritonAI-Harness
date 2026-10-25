@@ -1,6 +1,5 @@
 import {
   AuthOrchestrationOperateScope,
-  AuthStandardClientScopes,
   EnvironmentId,
   type AuthSessionState,
 } from "@t3tools/contracts";
@@ -106,12 +105,6 @@ it("uses exact new-server permissions and keeps old-server grants usable", () =>
   appAtomRegistry.set(
     source(primary),
     AsyncResult.success({ ...session(false), permissions: [AuthOrchestrationOperateScope] }),
-  );
-  expect(useEnvironmentScope(primary, AuthOrchestrationOperateScope)).toBe(false);
-  expect(readEnvironmentScope(primary, AuthOrchestrationOperateScope)).toBe(false);
-  appAtomRegistry.set(
-    source(primary),
-    AsyncResult.success({ ...session(false), permissions: AuthStandardClientScopes }),
   );
   expect(useEnvironmentScope(primary, AuthOrchestrationOperateScope)).toBe(true);
   expect(readEnvironmentScope(primary, AuthOrchestrationOperateScope)).toBe(true);

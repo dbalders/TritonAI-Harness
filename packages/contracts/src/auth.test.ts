@@ -153,18 +153,3 @@ describe("legacy permission notice", () => {
     }
   });
 });
-
-it("withholds task controls from narrowed current-server sessions in every client", () => {
-  for (const missing of AuthStandardClientScopes) {
-    const permissions = AuthStandardClientScopes.filter((scope) => scope !== missing);
-    expect(sessionGrantsScope({ authenticated: true, permissions }, "orchestration:operate")).toBe(
-      false,
-    );
-  }
-  expect(
-    sessionGrantsScope(
-      { authenticated: true, permissions: AuthStandardClientScopes },
-      "orchestration:operate",
-    ),
-  ).toBe(true);
-});
