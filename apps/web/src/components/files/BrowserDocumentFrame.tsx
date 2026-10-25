@@ -25,6 +25,7 @@ import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "re
 import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "~/components/chat/ExpandedImagePreview";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
+import { usePreviewBlobUrl } from "~/hooks/usePreviewBlobUrl";
 import { shortcutConflictKey } from "~/keybindings";
 import { cn } from "~/lib/utils";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
@@ -71,13 +72,7 @@ export function BrowserDocumentFrame(props: {
 }) {
   const key = props.documentKey ?? props.src;
   return props.pdf ? (
-    <embed
-      key={props.src}
-      src={props.src}
-      type="application/pdf"
-      title={props.title}
-      className="min-h-0 w-full flex-1 border-0"
-    />
+    <PdfDocument key={key} src={props.src} title={props.title} />
   ) : props.htmlRender ? (
     <HtmlRenderDocument
       key={key}
@@ -88,6 +83,23 @@ export function BrowserDocumentFrame(props: {
     />
   ) : (
     <FileDocument key={key} src={props.src} title={props.title} />
+  );
+}
+
+function PdfDocument(props: { readonly src: string; readonly title: string }) {
+  const [source] = useState(props.src);
+  const preview = usePreviewBlobUrl(source);
+  if (preview.failed)
+    return <p role="alert">Unable to load PDF preview. Reopen the file to try again.</p>;
+  return preview.url === null ? (
+    <p role="status">Loading PDF…</p>
+  ) : (
+    <embed
+      src={`${preview.url}${source.includes("#") ? source.slice(source.indexOf("#")) : ""}`}
+      type="application/pdf"
+      title={props.title}
+      className="min-h-0 w-full flex-1 border-0"
+    />
   );
 }
 

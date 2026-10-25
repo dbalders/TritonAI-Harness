@@ -6,9 +6,14 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
   let identifier: String
   private let controller = AVPlayerViewController()
   private let completion: (Error?) -> Void
+  private let requestRefresh: (() -> Void)?
+  private var refreshTimeout: DispatchWorkItem?
+  private var refreshAttempts = 0
+  private var failedPosition: CMTime?
   private var itemObservation: NSKeyValueObservation?
   private var backgroundObserver: NSObjectProtocol?
   private var playbackError: Error?
+  private var restoredReplacement: AVPlayerItem?
   private var presented = false
   private var dismissRequested = false
   private var finished = false
@@ -27,9 +32,10 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
   private weak var fullScreenController: UIViewController?
   private var embedded = false
 
-  init(identifier: String, url: URL, title: String, completion: @escaping (Error?) -> Void) {
+  init(identifier: String, url: URL, title: String, requestRefresh: (() -> Void)?, completion: @escaping (Error?) -> Void) {
     self.identifier = identifier
     self.completion = completion
+    self.requestRefresh = requestRefresh
     super.init()
 
     let item = AVPlayerItem(url: url)
@@ -46,17 +52,60 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
       guard item.status == .failed else { return }
       DispatchQueue.main.async {
         guard let self else { return }
-        self.playbackError = item.error ?? NSError(
-          domain: "T3NativeVideo",
-          code: 1,
-          userInfo: [NSLocalizedDescriptionKey: "This video couldn't be played on this device."]
-        )
-        self.dismiss()
+        guard self.controller.player?.currentItem === item else { return }
+        self.handleFailure(item.error ?? URLError(.cannotLoadFromNetwork))
       }
     }
     backgroundObserver = NotificationCenter.default.addObserver(
       forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
     ) { [weak self] _ in self?.controller.player?.pause() }
+  }
+
+  private func handleFailure(_ error: Error) {
+    playbackError = error
+    guard let requestRefresh, refreshAttempts < 1 else { dismiss(); return }
+    refreshAttempts += 1
+    failedPosition = controller.player?.currentTime()
+    let timeout = DispatchWorkItem { [weak self] in self?.dismiss() }
+    refreshTimeout = timeout
+    DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: timeout)
+    requestRefresh()
+  }
+
+  func replaceURL(_ url: URL) {
+    guard !finished, let player = controller.player,
+      (player.currentItem?.asset as? AVURLAsset)?.url != url else { return }
+    refreshTimeout?.cancel()
+    refreshTimeout = nil
+    let position = failedPosition ?? player.currentTime()
+    failedPosition = nil
+    let shouldPlay = player.rate > 0
+    let rate = player.rate
+    let metadata = player.currentItem?.externalMetadata ?? []
+    let item = AVPlayerItem(url: url)
+    item.externalMetadata = metadata
+    itemObservation = nil
+    player.replaceCurrentItem(with: item)
+    itemObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+      DispatchQueue.main.async {
+        guard let self, !self.finished, player.currentItem === item else { return }
+        if item.status == .failed {
+          self.handleFailure(item.error ?? URLError(.cannotLoadFromNetwork))
+        } else if item.status == .readyToPlay && self.restoredReplacement !== item {
+          self.restoredReplacement = item
+          self.playbackError = nil
+          self.refreshAttempts = 0
+          let target = position.isNumeric && position.seconds >= 0 ? position : .zero
+          player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { complete in
+            DispatchQueue.main.async {
+              guard complete, player.currentItem === item, shouldPlay,
+                UIApplication.shared.applicationState == .active else { return }
+              player.playImmediately(atRate: rate)
+            }
+          }
+        }
+      }
+    }
   }
 
   func present(from presenter: UIViewController, sources: T3PresentationSources, sourceIdentifier: String) {
@@ -141,6 +190,8 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
   private func finish() {
     guard !finished else { return }
     finished = true
+    refreshTimeout?.cancel()
+    refreshTimeout = nil
     controller.player?.pause()
     if embedded {
       controller.willMove(toParent: nil)

@@ -1,7 +1,7 @@
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import { PlayIcon, RotateCwIcon, TriangleAlertIcon } from "lucide-react";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { cn } from "../../lib/utils";
 import { prepareVideoFirstFrame } from "../../lib/videoFirstFrame";
@@ -55,6 +55,10 @@ export function MediaVideoPlayer({
   const [retrying, setRetrying] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [preloadedSrc, setPreloadedSrc] = useState<string | null>(null);
+  const [resume, setResume] = useState<{ time: number; playing: boolean; rate: number } | null>(
+    null,
+  );
+  const automaticRetries = useRef(new Set<string>());
   const src = playbackSource?.src ?? latestSrc;
   const sourceRevision = playbackSource === null ? revision : playbackSource.revision;
   const failed = src !== null ? failedSrc === src : sourceFailed;
@@ -67,6 +71,17 @@ export function MediaVideoPlayer({
     (video === null || playingVideo !== video)
   ) {
     setPlaybackSource(null);
+  }
+
+  if (
+    video &&
+    latestSrc &&
+    playbackSource !== null &&
+    playbackSource.revision === revision &&
+    playbackSource.src !== latestSrc
+  ) {
+    setResume({ time: video.currentTime, playing: !video.paused, rate: video.playbackRate });
+    setPlaybackSource({ src: latestSrc, revision });
   }
 
   useEffect(() => {
@@ -110,6 +125,12 @@ export function MediaVideoPlayer({
   const retry = async () => {
     if (retrying) return;
     setRetrying(true);
+    if (video)
+      setResume({
+        time: video.currentTime,
+        playing: playingVideo === video,
+        rate: video.playbackRate,
+      });
     const result = await settlePromise(async () => {
       await onRetry?.();
     });
@@ -174,7 +195,19 @@ export function MediaVideoPlayer({
             videoClassName,
           )}
           style={style}
-          onLoadedMetadata={(event) => prepareVideoFirstFrame(event.currentTarget)}
+          onLoadedMetadata={(event) => {
+            const element = event.currentTarget;
+            automaticRetries.current.clear();
+            const pending = resume;
+            setResume(null);
+            if (pending === null) {
+              prepareVideoFirstFrame(element);
+              return;
+            }
+            element.currentTime = Number.isFinite(pending.time) ? pending.time : 0;
+            element.playbackRate = pending.rate;
+            if (pending.playing) void element.play().catch(() => undefined);
+          }}
           onPlay={(event) => {
             setPlayingVideo(event.currentTarget);
             setPlaybackSource({ src, revision: sourceRevision });
@@ -182,9 +215,22 @@ export function MediaVideoPlayer({
           onPause={() => setPlayingVideo(null)}
           onEnded={() => setPlayingVideo(null)}
           onError={() => {
-            setPlayingVideo(null);
-            if (latestSrc !== null && src !== latestSrc) setPlaybackSource(null);
-            else setFailedSrc(src);
+            if (latestSrc !== null && src !== latestSrc) {
+              if (video)
+                setResume({
+                  time: video.currentTime,
+                  playing: playingVideo === video,
+                  rate: video.playbackRate,
+                });
+              setPlaybackSource(null);
+              setPlayingVideo(null);
+            } else if (src !== null && onRetry && !automaticRetries.current.has(src)) {
+              automaticRetries.current.add(src);
+              void retry();
+            } else {
+              setPlayingVideo(null);
+              setFailedSrc(src);
+            }
           }}
         />
       ) : (

@@ -19,7 +19,13 @@ const NativeControls = requireNativeModule<{
     title: string,
     sourceIdentifier: string,
     identifier: string,
+    renewable: boolean,
   ): Promise<void>;
+  addListener(
+    event: "videoRefreshRequired",
+    listener: (event: { identifier: string }) => void,
+  ): { remove(): void };
+  updateVideo(uri: string, identifier: string): Promise<void>;
   dismissVideo(identifier: string): Promise<void>;
 }>("T3NativeControls");
 
@@ -68,6 +74,21 @@ function NativeVideoPreview(props: {
   }, [loadError]);
 
   useEffect(() => {
+    if (resource === null) return;
+    const subscription = NativeControls.addListener("videoRefreshRequired", (event) => {
+      if (event.identifier !== identifier) return;
+      void refreshAssetUrl()
+        .then((url) =>
+          url === null
+            ? NativeControls.dismissVideo(identifier)
+            : NativeControls.updateVideo(url, identifier),
+        )
+        .catch(() => NativeControls.dismissVideo(identifier));
+    });
+    return () => subscription.remove();
+  }, [identifier, resource]);
+
+  useEffect(() => {
     if (localAttachment === null && playbackUrl === null) return;
     const controller = new AbortController();
     let ready = false;
@@ -88,6 +109,7 @@ function NativeVideoPreview(props: {
           name,
           source.sourceIdentifier ?? "",
           identifier,
+          resource !== null,
         ),
       );
       // Native completion follows dismissal, so local playback keeps its file lease.
@@ -112,7 +134,12 @@ function NativeVideoPreview(props: {
       controller.abort();
       void NativeControls.dismissVideo(identifier).catch(() => undefined);
     };
-  }, [localAttachment, name, source.sourceIdentifier, playbackUrl, identifier]);
+  }, [localAttachment, name, source.sourceIdentifier, playbackUrl, identifier, resource]);
+
+  useEffect(() => {
+    if (resolvedUrl === null || playbackUrl === null || resolvedUrl === playbackUrl) return;
+    void NativeControls.updateVideo(resolvedUrl, identifier).catch(() => undefined);
+  }, [resolvedUrl, playbackUrl, identifier]);
 
   return null;
 }

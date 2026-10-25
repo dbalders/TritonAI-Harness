@@ -164,20 +164,32 @@ export function createAssetEnvironmentAtoms<R, E>(
       .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, () => error))));
     return { ...asset, relativeUrl: new URL(asset.relativeUrl, local.httpBaseUrl).href };
   });
-  const createUrlFamily = (favicon: boolean) =>
+  const createUrlFamily = (kind: "favicon" | "video" | "static") =>
     createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:assets:create-url",
       execute,
-      staleTimeMs: favicon ? ASSET_URL_STALE_TIME_MS : 15_000,
+      staleTimeMs: kind === "favicon" ? ASSET_URL_STALE_TIME_MS : 15_000,
       idleTtlMs: ASSET_URL_IDLE_TTL_MS,
-      refreshIntervalMs: favicon ? ASSET_URL_REFRESH_INTERVAL_MS : 90_000,
+      ...(kind === "static"
+        ? {}
+        : { refreshIntervalMs: kind === "favicon" ? ASSET_URL_REFRESH_INTERVAL_MS : 90_000 }),
       refreshTrigger: ({ input }) =>
         input.resource._tag === "media-file" ? localMediaEnvironment : undefined,
     });
-  const sensitiveUrls = createUrlFamily(false);
-  const faviconUrls = createUrlFamily(true);
-  const createUrl = (target: Parameters<typeof sensitiveUrls>[0]) =>
-    target.input.resource._tag === "project-favicon" ? faviconUrls(target) : sensitiveUrls(target);
+  const staticUrls = createUrlFamily("static");
+  const videoUrls = createUrlFamily("video");
+  const faviconUrls = createUrlFamily("favicon");
+  const createUrl = (target: Parameters<typeof staticUrls>[0]) => {
+    const resource = target.input.resource;
+    if (resource._tag === "project-favicon") return faviconUrls(target);
+    const mimeType =
+      "path" in resource
+        ? mediaMimeTypeFromExtension(resource.path.slice(resource.path.lastIndexOf(".")))
+        : resource._tag === "attachment"
+          ? resource.mimeType
+          : null;
+    return mimeType?.startsWith("video/") ? videoUrls(target) : staticUrls(target);
+  };
   const createUrlsFamily = Atom.family((key: string) => {
     const [environmentId, resources] = parseAssetCollectionKey(key);
     return Atom.make((get) =>

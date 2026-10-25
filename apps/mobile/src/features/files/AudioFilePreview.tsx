@@ -11,7 +11,7 @@ function timestamp(seconds: number) {
 }
 
 export function AudioFilePreview(props: { uri: string; onRetry: () => void }) {
-  const player = useAudioPlayer({ uri: props.uri }, { updateInterval: 500 });
+  const player = useAudioPlayer({ uri: props.uri }, { updateInterval: 500, downloadFirst: true });
   const status = useAudioPlayerStatus(player);
   const [seekError, setSeekError] = useState(false);
   // Video teardown deactivates the shared iOS session, which would stop this player.
