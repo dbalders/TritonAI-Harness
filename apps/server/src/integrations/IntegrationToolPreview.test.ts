@@ -1,52 +1,81 @@
+// @effect-diagnostics globalDate:off -- Date objects are intentional non-JSON rejection cases.
 import { describe, expect, it } from "@effect/vitest";
-
 import { describeToolCallForApproval } from "./IntegrationToolPreview.ts";
+import { snapshotIntegrationInput } from "./IntegrationWriteApproval.ts";
 
-describe("describeToolCallForApproval", () => {
-  it("lists the call's actual arguments under the tool name", () => {
-    expect(
-      describeToolCallForApproval("microsoft365.chat.message.send", {
-        chatId: "19:abc",
-        content: "Lunch\n  at noon?",
-        importance: null,
-        mentions: [{ id: "u1" }],
-        urgent: false,
-      }),
-    ).toBe(
-      [
-        "microsoft365.chat.message.send",
-        'chatId: "19:abc"',
-        'content: "Lunch at noon?"',
-        "importance: null",
-        'mentions: [{"id":"u1"}]',
-        "urgent: false",
-      ].join("\n"),
+describe("plugin payload review", () => {
+  it("retains long code, nested files and the tail even when a summary is supplied", () => {
+    const code = `${"first line\n".repeat(400)}dangerous tail`;
+    const detail = describeToolCallForApproval("n8n.update", {
+      summary: "Only a small change",
+      files: [{ name: "workflow.ts", code }],
+      ...Object.fromEntries(Array.from({ length: 12 }, (_, index) => [`field${index}`, index])),
+    });
+    const payload = JSON.parse(detail.slice(detail.indexOf("\n") + 1));
+    expect(payload.files[0].code).toBe(code);
+    expect(payload.summary).toBe("Only a small change");
+    expect(payload.field11).toBe(11);
+  });
+
+  it("recursively redacts credential fields without redacting the bytes used for binding", () => {
+    const input = { destination: "test", nested: [{ apiKey: "synthetic-one", code: "complete" }] };
+    const displayed = describeToolCallForApproval("tool", input);
+    expect(displayed).not.toContain("synthetic-one");
+    expect(displayed).toContain("complete");
+    expect(snapshotIntegrationInput(input).digest).not.toBe(
+      snapshotIntegrationInput({
+        ...input,
+        nested: [{ apiKey: "synthetic-two", code: "complete" }],
+      }).digest,
     );
   });
 
-  it("bounds long values and long argument lists, and hides secret-looking arguments", () => {
-    const detail = describeToolCallForApproval("tool", {
-      body: "x".repeat(500),
-      apiKey: "sk-live-123",
-      ...Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`field${index}`, index])),
-    });
-    const lines = detail.split("\n");
-    expect(lines[1]).toBe(`body: "${"x".repeat(120)}"… (500 characters)`);
-    expect(lines[2]).toBe("apiKey: [hidden]");
-    expect(lines).toHaveLength(10);
-    expect(lines.at(-1)).toBe("+4 more");
-    expect(detail).not.toContain("sk-live");
+  it("detaches and freezes a canonical snapshot before the caller can change it", () => {
+    const input = { b: [1, { target: "one" }], a: "body\nlast line" };
+    const snapshot = snapshotIntegrationInput(input);
+    input.b[1] = { target: "two" };
+    expect(snapshot.canonical).toBe('{"a":"body\\nlast line","b":[1,{"target":"one"}]}');
+    expect(Object.isFrozen(snapshot.value)).toBe(true);
+    expect(snapshot.digest).toBe(
+      snapshotIntegrationInput({ a: "body\nlast line", b: [1, { target: "one" }] }).digest,
+    );
+    expect(snapshot.digest).not.toBe(snapshotIntegrationInput(input).digest);
   });
 
-  it("shows a validated change summary alone, and falls back to the name when nothing is readable", () => {
-    expect(
-      describeToolCallForApproval("jira_changes_apply", {
-        planId: "plan",
-        previewHash: "hash",
-        summary: 'Comment on ITS-1:\n"Replaced the toner."',
-      }),
-    ).toBe('jira_changes_apply\nComment on ITS-1: "Replaced the toner."');
-    expect(describeToolCallForApproval("tool", { summary: "   ", empty: "" })).toBe("tool");
+  it("rejects unsupported values and accessors without executing them", () => {
+    let getterCalls = 0;
+    const getter = {
+      get value() {
+        getterCalls += 1;
+        return "hidden";
+      },
+    };
+    const sparse = [1];
+    sparse.length = 2;
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    for (const input of [
+      getter,
+      cyclic,
+      { value: undefined },
+      { value: NaN },
+      { value: Infinity },
+      { value: 1n },
+      new Date(),
+      new Proxy({}, {}),
+      sparse,
+    ])
+      expect(() => snapshotIntegrationInput(input)).toThrow();
+    expect(getterCalls).toBe(0);
+  });
+
+  it("rejects an oversized or deeply nested call instead of presenting a shortened payload", () => {
+    expect(() =>
+      describeToolCallForApproval("tool", { code: "x".repeat(4 * 1024 * 1024) }),
+    ).toThrow();
+    let input: unknown = "tail";
+    for (let index = 0; index < 65; index += 1) input = { child: input };
+    expect(() => snapshotIntegrationInput(input)).toThrow();
     expect(describeToolCallForApproval("tool", undefined)).toBe("tool");
   });
 });

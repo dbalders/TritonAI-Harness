@@ -1,4 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off cryptoRandomUUID:off
+import { beforeEach, onTestFinished } from "vite-plus/test";
+import {
+  installApprovedIntegrationWriteFixture,
+  integrationWriteTestOwner,
+} from "./IntegrationWriteApproval.testkit.ts";
+
+beforeEach(() => {
+  const presenter = installApprovedIntegrationWriteFixture();
+  onTestFinished(() => presenter[Symbol.dispose]());
+});
+
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Logger from "effect/Logger";
@@ -495,6 +506,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).rejects.toMatchObject({ code: "capability_required" });
@@ -512,6 +524,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).resolves.toMatchObject({ toolName: "fixture.records.write" });
@@ -589,6 +602,7 @@ describe("IntegrationRegistry lifecycle", () => {
         {
           signal: new AbortController().signal,
           writeApproved: true,
+          approvalOwner: integrationWriteTestOwner,
         },
       );
       await writeInvocationStarted;
@@ -605,6 +619,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).rejects.toMatchObject({ code: "capability_required" });
@@ -796,6 +811,7 @@ describe("IntegrationRegistry lifecycle", () => {
         {
           signal: controller.signal,
           writeApproved: true,
+          approvalOwner: integrationWriteTestOwner,
         },
       );
       await commitAdmitted;
@@ -881,6 +897,7 @@ describe("IntegrationRegistry lifecycle", () => {
     const invocationContext = {
       signal: new AbortController().signal,
       writeApproved: true,
+      approvalOwner: integrationWriteTestOwner,
     } as const;
     try {
       await registry.install(manifest.id);
@@ -996,6 +1013,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).rejects.toMatchObject({ code: "operation_failed" });
@@ -1011,6 +1029,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).rejects.toMatchObject({ code: "operation_failed" });
@@ -1031,6 +1050,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).rejects.toMatchObject({ code: "operation_failed" });
@@ -1109,7 +1129,11 @@ describe("IntegrationRegistry lifecycle", () => {
         .invokeTool(
           "test.fixture.write",
           {},
-          { signal: new AbortController().signal, writeApproved: true },
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
+          },
         )
         .then(
           () => expect.unreachable("an admitted rejected write must fail"),
@@ -1196,7 +1220,11 @@ describe("IntegrationRegistry lifecycle", () => {
         .invokeTool(
           "test.fixture.write",
           {},
-          { signal: new AbortController().signal, writeApproved: true },
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
+          },
         )
         .then(
           () => expect.unreachable("a refused write must fail"),
@@ -1218,7 +1246,11 @@ describe("IntegrationRegistry lifecycle", () => {
         registry.invokeTool(
           "test.fixture.write",
           {},
-          { signal: new AbortController().signal, writeApproved: true },
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
+          },
         ),
       ).resolves.toEqual({ written: true });
       await registry.close();
@@ -1489,6 +1521,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).resolves.toMatchObject({ toolName: "test.records.list" });

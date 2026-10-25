@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { isIntegrationId } from "./manifest.ts";
+import { invalidateIntegrationCredentials } from "./IntegrationWriteApproval.ts";
 
 const SAFE_SECRET_SUFFIX = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
 const MAX_SECRET_NAME_LENGTH = 200;
@@ -63,13 +64,22 @@ export function scopeIntegrationSecretStore(
           ),
       ),
     );
+  const invalidate = Effect.sync(() => invalidateIntegrationCredentials(integrationId));
 
   return {
     get,
     set: (suffix, value) =>
-      scopedName(suffix).pipe(Effect.flatMap(({ canonical }) => store.set(canonical, value))),
+      scopedName(suffix).pipe(
+        Effect.flatMap(({ canonical }) =>
+          invalidate.pipe(Effect.andThen(store.set(canonical, value))),
+        ),
+      ),
     create: (suffix, value) =>
-      scopedName(suffix).pipe(Effect.flatMap(({ canonical }) => store.create(canonical, value))),
+      scopedName(suffix).pipe(
+        Effect.flatMap(({ canonical }) =>
+          invalidate.pipe(Effect.andThen(store.create(canonical, value))),
+        ),
+      ),
     getOrCreateRandom: (suffix, bytes) =>
       get(suffix).pipe(
         Effect.flatMap(
@@ -77,7 +87,9 @@ export function scopeIntegrationSecretStore(
             onSome: Effect.succeed,
             onNone: () =>
               scopedName(suffix).pipe(
-                Effect.flatMap(({ canonical }) => store.getOrCreateRandom(canonical, bytes)),
+                Effect.flatMap(({ canonical }) =>
+                  invalidate.pipe(Effect.andThen(store.getOrCreateRandom(canonical, bytes))),
+                ),
               ),
           }),
         ),
@@ -85,8 +97,8 @@ export function scopeIntegrationSecretStore(
     remove: (suffix) =>
       scopedName(suffix).pipe(
         Effect.flatMap(({ canonical, legacy }) =>
-          store
-            .remove(canonical)
+          invalidate
+            .pipe(Effect.andThen(store.remove(canonical)))
             .pipe(Effect.andThen(legacy === null ? Effect.void : store.remove(legacy))),
         ),
       ),

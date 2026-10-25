@@ -62,6 +62,7 @@ function safeFailure(cause: unknown): TritonAiCommonsToolResult {
 }
 
 export async function invokeTritonAiCommonsTool(input: {
+  readonly approvalOwner?: McpInvocationContext.McpThreadCaller;
   readonly arguments: unknown;
   readonly providerInstanceId: McpInvocationContext.McpThreadCaller["providerInstanceId"];
   readonly signal: AbortSignal;
@@ -112,6 +113,7 @@ export async function invokeTritonAiCommonsTool(input: {
         ...(payload.skillName ? { skillName: payload.skillName } : {}),
         ...(payload.skillPath ? { skillPath: payload.skillPath } : {}),
         confirmedPublicShare: true,
+        ...(input.approvalOwner ? { approvalOwner: input.approvalOwner } : {}),
       },
       input.signal,
     );

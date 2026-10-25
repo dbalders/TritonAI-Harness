@@ -199,14 +199,18 @@ it.effect("registers write-capable tools with conservative MCP annotations", () 
   ),
 );
 
-it("treats the provider runtime as the MCP write approval boundary", () => {
+it("carries verified caller identity without manufacturing approval", () => {
   const controller = new AbortController();
   expect(integrationToolInvocationContext(fixtureTool, controller.signal)).toEqual({
     signal: controller.signal,
   });
+  const owner = invocation(new Set()).thread;
+  expect(integrationToolInvocationContext(writeFixtureTool, controller.signal, owner)).toEqual({
+    signal: controller.signal,
+    approvalOwner: owner,
+  });
   expect(integrationToolInvocationContext(writeFixtureTool, controller.signal)).toEqual({
     signal: controller.signal,
-    writeApproved: true,
   });
 });
 
@@ -475,42 +479,45 @@ it.effect("hides and rejects an unavailable tool despite read authorization", ()
   );
 });
 
-it.effect.each(["read-only", "approval-required", "auto-accept-edits", "auto"] as const)(
-  "denies an outside plugin write without full-access approval: %s",
-  (access) => {
-    const invokeTool = vi
-      .fn<Integrations.RegistryRuntime["invokeTool"]>()
-      .mockResolvedValue({ ok: true });
-    const registrySpy = vi
-      .spyOn(Integrations, "getIntegrationRegistry")
-      .mockReturnValue({ invokeTool } as unknown as Integrations.RegistryRuntime);
-    const scope: McpInvocationContext.McpInvocationScope = {
-      ...invocation(new Set(["integrations.invoke"])),
-      thread: undefined,
-      client: { sessionId: "outside-read", label: "fixture", access },
-    };
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const server = yield* McpServer.McpServer;
-        const result = yield* server
-          .callTool({ name: writeFixtureTool.name, arguments: {} })
-          .pipe(
-            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-            Effect.provideService(McpSchema.McpServerClient, client),
-          );
-        expect(result.isError).toBe(true);
-        expect(result.structuredContent).toEqual({ error: "capability_denied" });
-        expect(invokeTool).not.toHaveBeenCalled();
-      }).pipe(
-        Effect.provide(
-          registrationLayerFor([writeFixtureTool], () => true).pipe(
-            Layer.provideMerge(Layer.mergeAll(McpServer.McpServer.layer, liveThreadsLayer)),
-          ),
+it.effect.each([
+  "read-only",
+  "approval-required",
+  "auto-accept-edits",
+  "auto",
+  "full-access",
+] as const)("denies an outside plugin write without a host presenter: %s", (access) => {
+  const invokeTool = vi
+    .fn<Integrations.RegistryRuntime["invokeTool"]>()
+    .mockResolvedValue({ ok: true });
+  const registrySpy = vi
+    .spyOn(Integrations, "getIntegrationRegistry")
+    .mockReturnValue({ invokeTool } as unknown as Integrations.RegistryRuntime);
+  const scope: McpInvocationContext.McpInvocationScope = {
+    ...invocation(new Set(["integrations.invoke"])),
+    thread: undefined,
+    client: { sessionId: "outside-read", label: "fixture", access },
+  };
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({ name: writeFixtureTool.name, arguments: {} })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toEqual({ error: "capability_denied" });
+      expect(invokeTool).not.toHaveBeenCalled();
+    }).pipe(
+      Effect.provide(
+        registrationLayerFor([writeFixtureTool], () => true).pipe(
+          Layer.provideMerge(Layer.mergeAll(McpServer.McpServer.layer, liveThreadsLayer)),
         ),
       ),
-    ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
-  },
-);
+    ),
+  ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
+});
 
 it.effect.each([true, false])(
   "permits a plugin write only while the provider owns a live run: %s",
@@ -540,7 +547,7 @@ it.effect.each([true, false])(
           expect(invokeTool).toHaveBeenCalledWith(
             writeFixtureTool.name,
             {},
-            expect.objectContaining({ writeApproved: true }),
+            expect.objectContaining({ approvalOwner: scope.thread }),
           );
         else {
           expect(result.structuredContent).toEqual({ error: "parent_not_active" });

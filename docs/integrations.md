@@ -39,17 +39,24 @@ Provider-authorized capabilities require a provider with a complete connect and 
 lifecycle; stateless and skills-only packages cannot declare them.
 
 Every tool also declares `effect: "read" | "write"`, which must agree with the provider's executable
-metadata. Write tools follow the task's selected runtime mode: supervised modes request approval,
-while Full access preauthorizes them.
+metadata. A declared write requires one explicit host decision for each invocation, including in
+Full access and Auto. Tool-name grants and native runtime permission decisions do not authorize it.
+The current presenter belongs to an active managed Codex turn; other adapters and outside MCP
+clients fail closed for writes when no presenter is available. Read tools retain their access rules.
 
-Codex and Claude approval prompts for a Harness tool show its name and the call's actual
-arguments, one bounded line each, with secret-looking arguments hidden
-([formatter](../apps/server/src/integrations/IntegrationToolPreview.ts)). A call with a non-empty
-string `summary` argument shows that summary alone instead, so a write tool that accepts `summary`
-must reject any value that does not exactly match the change it will make, typically a summary the
-provider generated in an earlier preview. ACP providers (Cursor, Grok, Antigravity) and OpenCode
-still show their own permission titles, because their requests do not reliably identify a Harness
-tool. Choosing **Always allow this session** or Full access skips later prompts for that tool.
+The registry detaches JSON before awaiting readiness, decodes that snapshot, and presents the
+complete effective payload with recursively redacted credential fields. A `summary` is an ordinary
+argument and cannot replace the remaining payload. Encoded JSON larger than 4 MiB, excessive nesting,
+accessors and non-JSON values are rejected rather than shown as a shortened review. The decision
+binds the original and effective SHA-256 digests, tool, thread/session/turn, registry incarnation,
+connection authorization generation and five-minute expiry. It cannot be transferred to another call.
+Connection changes, credential mutations, presenter disposal and owner-session replacement invalidate
+pending authority, including while the commit journal is being written.
+
+Provider prepare/apply flows must still validate their plan identifiers, hashes and exact summaries;
+host approval does not replace those checks. An opaque provider plan is not an independently verified
+semantic diff: displaying its identifier and supplied summary does not prove the hidden planned
+operation. Full semantic review of such plans requires the separate provider contract work.
 
 The Registry passes that approval only to declared write tools and runs each write through the same
 bounded commit-admission machinery used by provider lifecycle mutations. A write provider must call
@@ -132,11 +139,10 @@ supported; they are not rejected merely because they can modify data.
 An authenticated MCP provider session receives one coarse `integrations.invoke` transport scope.
 It lets the session enter the integration subsystem, and its credential does not need to be reissued
 when an included plugin is toggled. It is not a user permission, package access level, approval
-boundary, or read/write policy. The managed provider runtime is the approval host: Harness selects
-its task mode, publishes truthful tool annotations, and treats an authenticated call reaching the
-MCP handler as having crossed that runtime's approval boundary. The bearer remains host-managed and
-is not exposed in model input or tool results. Preview-only or future limited MCP credentials can
-omit the transport scope entirely.
+boundary, or read/write policy. Both direct Codex tools and MCP enter the same registry-owned
+payload review and commit-admission gate. The bearer supplies caller identity, never approval.
+It remains host-managed and is not exposed in model input or tool results. Preview-only or future
+limited MCP credentials can omit the transport scope entirely.
 
 A tool declares one executable Effect input schema. Harness derives the MCP and Codex JSON Schema
 from it, requires an object-shaped contract, and decodes with exact-property checking before calling

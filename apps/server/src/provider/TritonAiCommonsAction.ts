@@ -14,7 +14,10 @@ import * as CodexManagement from "./CodexManagement.ts";
 import { submitProviderSkillToTritonAiCommons } from "./tritonAiCommons.ts";
 import { recordTritonAiCommonsSubmissionReceipt } from "./tritonAiCommonsReceipts.ts";
 
+import type { IntegrationApprovalOwner } from "../integrations/IntegrationWriteApproval.ts";
+
 export interface TritonAiCommonsSkillSelection {
+  readonly approvalOwner?: IntegrationApprovalOwner;
   readonly instanceId: ProviderInstanceId;
   readonly skillPath?: string;
   readonly skillName?: string;
@@ -41,7 +44,13 @@ export function submitInstalledProviderSkillToTritonAiCommons(
           );
         }
         return Effect.tryPromise({
-          try: (signal) => submitProviderSkillToTritonAiCommons({ bundle, registry, signal }),
+          try: (signal) =>
+            submitProviderSkillToTritonAiCommons({
+              bundle,
+              registry,
+              signal,
+              ...(input.approvalOwner ? { approvalOwner: input.approvalOwner } : {}),
+            }),
           catch: (error) =>
             isCommonsError(error)
               ? error

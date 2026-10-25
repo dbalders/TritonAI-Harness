@@ -22,6 +22,7 @@ import {
   resolveManagedCodexLaunchPath,
 } from "../../provider/managedCodexRuntime.ts";
 import { registerBrowserNavigationGate } from "../../preview/BrowserNavigationGate.ts";
+import { registerIntegrationWriteGate } from "../../integrations/IntegrationWriteApproval.ts";
 import {
   UCSD_AI_BASE_URL_ENV,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -1325,6 +1326,7 @@ type PendingCodexRuntimeRequest =
       readonly requestId: RuntimeRequestId;
       readonly requestKind: ProviderRequestKind;
       readonly decision: Deferred.Deferred<ProviderApprovalDecision, never>;
+      readonly onceOnly?: boolean;
     }
   | {
       readonly type: "user_input";
@@ -5497,6 +5499,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             readonly runtimeMode: RuntimeMode;
             readonly approval: DynamicToolApprovalPlan;
             readonly nativeItemId: string;
+            readonly onceOnly?: boolean;
           }) {
             const { approval, runtimeMode } = input;
             let approvals = flatToolApprovals.get(input.grantThreadId);
@@ -5505,7 +5508,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               flatToolApprovals.set(input.grantThreadId, approvals);
             }
             const granted = approvals.names.has(approval.grantKey);
-            if (!dynamicToolApprovalRequired(approval.requiresApproval, granted, runtimeMode))
+            if (
+              !input.onceOnly &&
+              !dynamicToolApprovalRequired(approval.requiresApproval, granted, runtimeMode)
+            )
               return runtimeMode === "full-access" || granted ? ("accept" as const) : undefined;
             const artifacts = yield* buildApprovalRequestArtifacts({
               context: input.context,
@@ -5513,6 +5519,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeRequestId: input.nativeItemId,
               requestKind: "permission",
               prompt: approval.prompt,
+              ...(input.onceOnly
+                ? {
+                    options: [
+                      { decision: "accept" as const, label: "Approve once" },
+                      { decision: "decline" as const, label: "Decline" },
+                      { decision: "cancel" as const, label: "Cancel" },
+                    ],
+                  }
+                : {}),
             });
             const deferred = yield* Deferred.make<ProviderApprovalDecision>();
             yield* Ref.update(pendingRuntimeRequests, (current) =>
@@ -5521,6 +5536,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 requestId: artifacts.request.id,
                 requestKind: "permission",
                 decision: deferred,
+                ...(input.onceOnly ? { onceOnly: true } : {}),
               }),
             );
             yield* emitProviderEvent({
@@ -5548,10 +5564,69 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }),
               ),
             );
-            if (decision === "acceptForSession") approvals.names.add(approval.grantKey);
+            if (!input.onceOnly && decision === "acceptForSession")
+              approvals.names.add(approval.grantKey);
             return decision;
           },
         );
+
+        yield* registerIntegrationWriteGate(adapterOptions.instanceId, (review) =>
+          Effect.gen(function* () {
+            let owner: ActiveCodexTurnContext | undefined;
+            for (const context of (yield* Ref.get(activeTurns)).values()) {
+              const candidate = approvalOwnerCodexTurn(context).owner;
+              if (candidate.projectionThreadId === review.owner.threadId) owner = candidate;
+            }
+            if (owner === undefined) return undefined;
+            const expectedTurn = owner.providerTurnId;
+            const approvalClock = yield* Clock.Clock;
+            // These stores are Ref-backed; a synchronous check closes the journal-I/O race.
+            const isCurrent = () => {
+              try {
+                const credential = Effect.runSync(mcpSessions.read(review.owner.threadId));
+                return (
+                  credential?.providerSessionId === review.owner.providerSessionId &&
+                  (credential.expiresAt === undefined ||
+                    approvalClock.currentTimeMillisUnsafe() < credential.expiresAt) &&
+                  [...Effect.runSync(Ref.get(activeTurns)).values()].some((context) => {
+                    const candidate = approvalOwnerCodexTurn(context).owner;
+                    return (
+                      candidate.projectionThreadId === review.owner.threadId &&
+                      candidate.providerTurnId === expectedTurn
+                    );
+                  })
+                );
+              } catch {
+                return false;
+              }
+            };
+            if (!isCurrent()) return { approved: false } as const;
+            const decision = yield* decideToolApproval({
+              context: owner,
+              grantThreadId: review.owner.threadId,
+              runtimeMode: owner.input.runtimePolicy.runtimeMode,
+              onceOnly: true,
+              nativeItemId: `plugin-write:${review.requestId}`,
+              approval: {
+                requiresApproval: true,
+                grantKey: review.requestId,
+                prompt: [
+                  `Plugin write: ${review.integrationName} / ${review.toolName}`,
+                  // @effect-diagnostics-next-line preferSchemaOverJson:off -- Escape an untrusted display label so it cannot forge prompt lines.
+                  `Reported connected account: ${JSON.stringify(review.accountLabel)}`,
+                  `Connection: ${review.connection}`,
+                  `Submitted SHA-256: ${review.submittedDigest}`,
+                  `Effective SHA-256: ${review.effectiveDigest}`,
+                  "Approve only this effective JSON payload. Credential fields are redacted; remaining text is complete.",
+                  review.payload,
+                ].join("\n"),
+              },
+            });
+            return decision === "accept" && isCurrent()
+              ? ({ approved: true, isCurrent } as const)
+              : ({ approved: false } as const);
+          }).pipe(Effect.catch(() => Effect.succeed({ approved: false } as const))),
+        ).pipe(Effect.provideService(Scope.Scope, scope));
 
         // Codex also reaches the browser through the Harness MCP server, where Codex approves the
         // call itself (in Auto, with its automatic reviewer) and standard models have no direct
@@ -8160,6 +8235,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   requestId: requestInput.requestId,
                   cause: toProtocolError(
                     `Codex ${pending.requestKind} request ${requestInput.requestId} requires an approval decision.`,
+                  ),
+                });
+              }
+              if (
+                pending.onceOnly &&
+                requestInput.decision !== "accept" &&
+                requestInput.decision !== "decline" &&
+                requestInput.decision !== "cancel"
+              ) {
+                return yield* new ProviderAdapter.ProviderAdapterRuntimeRequestResponseError({
+                  driver: CODEX_PROVIDER,
+                  requestId: requestInput.requestId,
+                  cause: toProtocolError(
+                    "Plugin writes accept only a one-time approval, decline or cancel.",
                   ),
                 });
               }

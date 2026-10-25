@@ -8,6 +8,8 @@ import {
 import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
 
+import type { IntegrationApprovalOwner } from "../integrations/IntegrationWriteApproval.ts";
+
 const COMMONS_OWNER = "dbalders";
 const COMMONS_REPOSITORY = "UCSD-Skills-Library";
 const MAX_SKILL_BYTES = 65_536;
@@ -75,7 +77,7 @@ export interface CommonsIntegrationRegistry {
   invokeTool(
     name: string,
     input: unknown,
-    context: { readonly signal: AbortSignal; readonly writeApproved?: boolean },
+    context: { readonly signal: AbortSignal; readonly approvalOwner?: IntegrationApprovalOwner },
   ): Promise<unknown>;
 }
 
@@ -433,7 +435,7 @@ async function invokeWrite(
   name: string,
   input: unknown,
 ): Promise<unknown> {
-  return registry.invokeTool(name, input, { signal, writeApproved: true });
+  return registry.invokeTool(name, input, { signal });
 }
 
 async function repositoryMetadata(
@@ -782,11 +784,23 @@ async function findExistingSubmissionPullRequest(input: {
   return reviewUrl;
 }
 
-export async function submitProviderSkillToTritonAiCommons(input: {
+export async function submitProviderSkillToTritonAiCommons(options: {
   readonly bundle: ServerProviderSkillBundle;
   readonly registry: CommonsIntegrationRegistry;
   readonly signal: AbortSignal;
+  readonly approvalOwner?: IntegrationApprovalOwner;
 }): Promise<ServerSubmitProviderSkillToTritonAiCommonsResult> {
+  const input = {
+    ...options,
+    registry: {
+      getAvailableToolDefinitionsSync: () => options.registry.getAvailableToolDefinitionsSync(),
+      invokeTool: (name: string, payload: unknown, context: { readonly signal: AbortSignal }) =>
+        options.registry.invokeTool(name, payload, {
+          ...context,
+          ...(options.approvalOwner ? { approvalOwner: options.approvalOwner } : {}),
+        }),
+    },
+  };
   try {
     ensureToolsAvailable(input.registry);
     const identityValue = await invokeRead(input.registry, input.signal, "github.identity.get", {});

@@ -2386,289 +2386,323 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       };
     });
 
-  it.live.each(["approved", "declined", "revoked", "expired", "replaced", "undisclosed"] as const)(
-    "enforces live V2 plugin dispatch at the %s boundary",
-    (scenario) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const root = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
-          const toolName = "fixture.records.write";
-          const dynamicName = IntegrationRegistry.codexDynamicIntegrationToolName(toolName);
-          const manifest: IntegrationManifest = {
-            apiVersion: "tritonai.harness/v2",
-            kind: "IntegrationPlugin",
-            manifestVersion: 2,
-            id: "v2-dispatch-fixture",
-            name: "V2 dispatch fixture",
-            description: "Local synthetic provider.",
-            version: "1.0.0",
-            provider: "v2-dispatch-fixture",
-            capabilities: [
-              {
-                id: "records.write",
-                displayName: "Write",
-                description: "Write fixture.",
-                access: "opt-in",
-              },
-            ],
-            tools: [
-              {
-                name: toolName,
-                displayName: "Write",
-                description: "Write fixture.",
-                capabilities: ["records.write"],
-                effect: "write",
-              },
-            ],
-            skills: [],
-          };
-          let invocations = 0;
-          const registry = yield* Effect.acquireRelease(
-            Effect.sync(
-              () =>
-                new IntegrationRegistry.RegistryRuntime(root, [
-                  {
-                    manifest,
-                    bundledFiles: { ".tritonai-plugin/plugin.json": JSON.stringify(manifest) },
-                    provider: {
-                      id: "v2-dispatch-fixture",
-                      tools: [
-                        {
-                          name: toolName,
-                          description: "Write fixture.",
-                          input: EmptyIntegrationToolInput,
-                          readOnly: false,
-                          openWorld: false,
-                        },
-                      ],
-                      status: async () => ({
-                        state: "connected",
-                        accountLabel: "Fixture",
-                        grantedCapabilities: ["records.write"],
-                        message: null,
-                      }),
-                      connect: async () => ({
-                        kind: "connected",
-                        flowId: "fixture",
-                        message: "Connected.",
-                      }),
-                      disconnect: async () => undefined,
-                      invoke: async (_name, _args, context) => {
-                        assert.isTrue(context?.writeApproved);
-                        await context?.beginCommit?.();
-                        invocations++;
-                        return { changed: true };
+  it.live.each([
+    "approved",
+    "approved-auto",
+    "approved-full-access",
+    "session-grant-rejected",
+    "declined",
+    "revoked",
+    "expired",
+    "replaced",
+    "undisclosed",
+  ] as const)("enforces live V2 plugin dispatch at the %s boundary", (scenario) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const approved = scenario.startsWith("approved");
+        const root = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+        const toolName = "fixture.records.write";
+        const dynamicName = IntegrationRegistry.codexDynamicIntegrationToolName(toolName);
+        const manifest: IntegrationManifest = {
+          apiVersion: "tritonai.harness/v2",
+          kind: "IntegrationPlugin",
+          manifestVersion: 2,
+          id: "v2-dispatch-fixture",
+          name: "V2 dispatch fixture",
+          description: "Local synthetic provider.",
+          version: "1.0.0",
+          provider: "v2-dispatch-fixture",
+          capabilities: [
+            {
+              id: "records.write",
+              displayName: "Write",
+              description: "Write fixture.",
+              access: "opt-in",
+            },
+          ],
+          tools: [
+            {
+              name: toolName,
+              displayName: "Write",
+              description: "Write fixture.",
+              capabilities: ["records.write"],
+              effect: "write",
+            },
+          ],
+          skills: [],
+        };
+        let invocations = 0;
+        const registry = yield* Effect.acquireRelease(
+          Effect.sync(
+            () =>
+              new IntegrationRegistry.RegistryRuntime(root, [
+                {
+                  manifest,
+                  bundledFiles: { ".tritonai-plugin/plugin.json": JSON.stringify(manifest) },
+                  provider: {
+                    id: "v2-dispatch-fixture",
+                    tools: [
+                      {
+                        name: toolName,
+                        description: "Write fixture.",
+                        input: EmptyIntegrationToolInput,
+                        readOnly: false,
+                        openWorld: false,
                       },
+                    ],
+                    status: async () => ({
+                      state: "connected",
+                      accountLabel: "Fixture",
+                      grantedCapabilities: ["records.write"],
+                      message: null,
+                    }),
+                    connect: async () => ({
+                      kind: "connected",
+                      flowId: "fixture",
+                      message: "Connected.",
+                    }),
+                    disconnect: async () => undefined,
+                    invoke: async (_name, _args, context) => {
+                      assert.isTrue(context?.writeApproved);
+                      await context?.beginCommit?.();
+                      invocations++;
+                      return { changed: true };
                     },
                   },
-                ]),
-            ),
-            (value) => Effect.promise(() => value.close()),
-          );
-          yield* Effect.promise(async () => {
-            await registry.install(manifest.id);
-            if (scenario !== "undisclosed")
-              await registry.setCapabilityEnabled(manifest.id, "records.write", true);
-          });
-          yield* Effect.acquireRelease(
-            Effect.sync(() =>
-              vi
-                .spyOn(IntegrationRegistry, "getIntegrationRegistryOptional")
-                .mockReturnValue(registry),
-            ),
-            (spy) => Effect.sync(() => spy.mockRestore()),
-          );
-          const name = `plugin-dispatch-${scenario}`;
-          const nativeThreadId = `native-${name}`;
-          const nativeTurnId = `turn-${name}`;
-          const threadId = ThreadId.make(`thread-${name}`);
-          const sessions = yield* McpProviderSessions.McpProviderSessions;
-          const credential = {
-            environmentId: EnvironmentId.make("fixture-environment"),
-            threadId,
-            providerSessionId: `provider-session-${name}`,
-            providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
-            endpoint: "http://127.0.0.1:1234/mcp",
-            authorizationHeader: "Bearer synthetic-fixture-token",
-            browserToolsAvailable: false,
-            // The production grant, so dropping plugin access from it fails this test.
-            capabilities: McpSessionRegistry.providerSessionCapabilities({ browser: false }),
-            expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
-          };
-          yield* sessions.set(credential);
-          const preamble = codexReplayPreamble({
-            nativeThreadId,
-            nativeTurnId,
-            prompt: "Use the fixture.",
-          }).map((entry) => {
-            if (entry.type !== "expect_outbound") return entry;
-            if (entry.label === "thread/start")
-              return {
-                ...entry,
-                frame: {
-                  id: 2,
-                  method: "thread/start",
-                  params: {
-                    config: CodexAdapterV2.CODEX_THREAD_CONFIG,
-                    dynamicTools: [
-                      tritonAiCommonsDynamicToolDefinition,
-                      ...(scenario === "undisclosed"
-                        ? []
-                        : [
-                            {
-                              name: dynamicName,
-                              description:
-                                "Write fixture. Integration plugin tool: fixture.records.write.",
-                              inputSchema: { type: "object", additionalProperties: false },
-                            },
-                          ]),
-                    ].map(({ name, description, inputSchema }) => ({
-                      name,
-                      description,
-                      inputSchema,
-                    })),
-                  },
                 },
-              };
-            if (entry.label !== "turn/start") return entry;
+              ]),
+          ),
+          (value) => Effect.promise(() => value.close()),
+        );
+        yield* Effect.promise(async () => {
+          await registry.install(manifest.id);
+          if (scenario !== "undisclosed")
+            await registry.setCapabilityEnabled(manifest.id, "records.write", true);
+        });
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            vi
+              .spyOn(IntegrationRegistry, "getIntegrationRegistryOptional")
+              .mockReturnValue(registry),
+          ),
+          (spy) => Effect.sync(() => spy.mockRestore()),
+        );
+        const name = `plugin-dispatch-${scenario}`;
+        const nativeThreadId = `native-${name}`;
+        const nativeTurnId = `turn-${name}`;
+        const threadId = ThreadId.make(`thread-${name}`);
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const credential = {
+          environmentId: EnvironmentId.make("fixture-environment"),
+          threadId,
+          providerSessionId: `provider-session-${name}`,
+          providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+          endpoint: "http://127.0.0.1:1234/mcp",
+          authorizationHeader: "Bearer synthetic-fixture-token",
+          browserToolsAvailable: false,
+          // The production grant, so dropping plugin access from it fails this test.
+          capabilities: McpSessionRegistry.providerSessionCapabilities({ browser: false }),
+          expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
+        };
+        yield* sessions.set(credential);
+        const preamble = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId,
+          prompt: "Use the fixture.",
+        }).map((entry) => {
+          if (entry.type !== "expect_outbound") return entry;
+          if (entry.label === "thread/start")
             return {
               ...entry,
               frame: {
-                id: 3,
-                method: "turn/start",
+                id: 2,
+                method: "thread/start",
                 params: {
-                  threadId: nativeThreadId,
-                  input: [{ type: "text", text: "Use the fixture." }],
-                  cwd: "/workspace",
-                  model: "gpt-5.4",
-                  approvalPolicy: "untrusted",
-                  approvalsReviewer: "user",
-                  sandboxPolicy: { type: "readOnly" },
-                  summary: "detailed",
+                  config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+                  dynamicTools: [
+                    tritonAiCommonsDynamicToolDefinition,
+                    ...(scenario === "undisclosed"
+                      ? []
+                      : [
+                          {
+                            name: dynamicName,
+                            description:
+                              "Write fixture. Integration plugin tool: fixture.records.write.",
+                            inputSchema: { type: "object", additionalProperties: false },
+                          },
+                        ]),
+                  ].map(({ name, description, inputSchema }) => ({
+                    name,
+                    description,
+                    inputSchema,
+                  })),
                 },
               },
             };
-          });
-          const transcript = makeCodexReplayTranscript({
-            scenario: name,
-            entries: [
-              ...preamble,
-              {
-                type: "emit_inbound",
-                label: "fixture-tool",
-                frame: {
-                  id: 100,
-                  method: "item/tool/call",
-                  params: {
-                    threadId: nativeThreadId,
-                    turnId: nativeTurnId,
-                    callId: "fixture-call",
-                    tool: dynamicName,
-                    arguments: {},
-                  },
+          if (entry.label !== "turn/start") return entry;
+          return {
+            ...entry,
+            frame: {
+              id: 3,
+              method: "turn/start",
+              params: {
+                threadId: nativeThreadId,
+                input: [{ type: "text", text: "Use the fixture." }],
+                cwd: "/workspace",
+                model: "gpt-5.4",
+                approvalPolicy: "untrusted",
+                approvalsReviewer: "user",
+                sandboxPolicy: { type: "readOnly" },
+                summary: "detailed",
+              },
+            },
+          };
+        });
+        const transcript = makeCodexReplayTranscript({
+          scenario: name,
+          entries: [
+            ...preamble,
+            {
+              type: "emit_inbound",
+              label: "fixture-tool",
+              frame: {
+                id: 100,
+                method: "item/tool/call",
+                params: {
+                  threadId: nativeThreadId,
+                  turnId: nativeTurnId,
+                  callId: "fixture-call",
+                  tool: dynamicName,
+                  arguments: {},
                 },
               },
-              {
-                type: "expect_outbound",
-                label: "fixture-result",
-                frame: { id: 100, result: { success: scenario === "approved" } },
-              },
-              {
-                type: "emit_inbound",
-                label: "complete",
-                frame: {
-                  method: "turn/completed",
-                  params: {
-                    threadId: nativeThreadId,
-                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
-                  },
+            },
+            {
+              type: "expect_outbound",
+              label: "fixture-result",
+              frame: { id: 100, result: { success: approved } },
+            },
+            {
+              type: "emit_inbound",
+              label: "complete",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
                 },
               },
-            ],
-          });
-          const pending =
-            yield* Deferred.make<
-              Extract<
-                ProviderAdapter.ProviderAdapterV2Event,
-                { type: "runtime_request.updated" }
-              >["runtimeRequest"]
-            >();
-          let toolResult: unknown;
-          const harness = yield* makeCodexReplayHarness(
-            transcript,
-            (event) =>
-              event.type === "runtime_request.updated"
-                ? Deferred.succeed(pending, event.runtimeRequest)
-                : Effect.void,
-            (method, params) =>
-              Effect.sync(() => {
-                // This fixture exercises dispatch, not the orchestration instruction text.
-                if (method !== "turn/start") return;
-                const expected = preamble.find(
-                  (entry) => entry.type === "expect_outbound" && entry.label === "turn/start",
-                );
-                if (expected?.type === "expect_outbound" && Predicate.isObject(expected.frame))
-                  Object.assign(expected.frame, { params });
-              }),
-            undefined,
-            {},
-            (result) =>
-              Effect.sync(() => {
-                toolResult = result;
-                const response = transcript.entries.find(
-                  (entry) => entry.type === "expect_outbound" && entry.label === "fixture-result",
-                );
-                if (response?.type === "expect_outbound" && Predicate.isObject(response.frame))
-                  Object.assign(response.frame, { result });
-              }),
-          );
-          assert.equal(
-            harness.providerThread.dynamicToolNames?.includes(dynamicName),
-            scenario !== "undisclosed",
-          );
-          if (scenario === "undisclosed")
-            yield* Effect.promise(() =>
-              registry.setCapabilityEnabled(manifest.id, "records.write", true),
-            );
-          yield* harness.runtime.startTurn({
-            ...makeCodexTestTurnInput({
-              threadId,
-              providerThread: harness.providerThread,
-              now: yield* DateTime.now,
-              attemptId: RunAttemptId.make(`attempt-${name}`),
-              text: "Use the fixture.",
-            }),
-            runtimePolicy: { ...CODEX_TEST_RUNTIME_POLICY, runtimeMode: "approval-required" },
-          });
-          if (scenario !== "undisclosed") {
-            const request = yield* Deferred.await(pending);
-            assert.equal(invocations, 0, "a supervised write must wait for user consent");
-            if (scenario === "revoked")
-              yield* Effect.promise(() =>
-                registry.setCapabilityEnabled(manifest.id, "records.write", false),
+            },
+          ],
+        });
+        const pending =
+          yield* Deferred.make<
+            Extract<
+              ProviderAdapter.ProviderAdapterV2Event,
+              { type: "runtime_request.updated" }
+            >["runtimeRequest"]
+          >();
+        let toolResult: unknown;
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          (event) =>
+            event.type === "runtime_request.updated"
+              ? Deferred.succeed(pending, event.runtimeRequest)
+              : Effect.void,
+          (method, params) =>
+            Effect.sync(() => {
+              // This fixture exercises dispatch, not the orchestration instruction text.
+              if (method !== "turn/start") return;
+              const expected = preamble.find(
+                (entry) => entry.type === "expect_outbound" && entry.label === "turn/start",
               );
-            if (scenario === "expired")
-              yield* sessions.set({ ...credential, expiresAt: yield* Clock.currentTimeMillis });
-            if (scenario === "replaced")
-              yield* sessions.set({ ...credential, providerSessionId: "different-session" });
+              if (expected?.type === "expect_outbound" && Predicate.isObject(expected.frame))
+                Object.assign(expected.frame, { params });
+            }),
+          undefined,
+          {},
+          (result) =>
+            Effect.sync(() => {
+              toolResult = result;
+              const response = transcript.entries.find(
+                (entry) => entry.type === "expect_outbound" && entry.label === "fixture-result",
+              );
+              if (response?.type === "expect_outbound" && Predicate.isObject(response.frame))
+                Object.assign(response.frame, { result });
+            }),
+        );
+        assert.equal(
+          harness.providerThread.dynamicToolNames?.includes(dynamicName),
+          scenario !== "undisclosed",
+        );
+        if (scenario === "undisclosed")
+          yield* Effect.promise(() =>
+            registry.setCapabilityEnabled(manifest.id, "records.write", true),
+          );
+        yield* harness.runtime.startTurn({
+          ...makeCodexTestTurnInput({
+            threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-${name}`),
+            text: "Use the fixture.",
+          }),
+          runtimePolicy: {
+            ...CODEX_TEST_RUNTIME_POLICY,
+            runtimeMode:
+              scenario === "approved-auto"
+                ? "auto"
+                : scenario === "approved-full-access"
+                  ? "full-access"
+                  : "approval-required",
+          },
+        });
+        if (scenario !== "undisclosed") {
+          const request = yield* Deferred.await(pending);
+          assert.equal(invocations, 0, "every plugin write must wait for user consent");
+          const displayed = harness.events
+            .flatMap((event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "approval_request"
+                ? [event.turnItem]
+                : [],
+            )
+            .find((item) => item.requestId === request.id);
+          assert.deepEqual(
+            displayed?.options?.map((option) => option.decision),
+            ["accept", "decline", "cancel"],
+          );
+          if (scenario === "session-grant-rejected") {
+            yield* harness.runtime
+              .respondToRuntimeRequest({ requestId: request.id, decision: "acceptForSession" })
+              .pipe(Effect.flip);
+          }
+          if (scenario === "revoked")
+            yield* Effect.promise(() =>
+              registry.setCapabilityEnabled(manifest.id, "records.write", false),
+            );
+          if (scenario === "expired")
+            yield* sessions.set({ ...credential, expiresAt: yield* Clock.currentTimeMillis });
+          if (scenario === "replaced")
+            yield* sessions.set({ ...credential, providerSessionId: "different-session" });
+          if (scenario !== "revoked")
             yield* harness.runtime.respondToRuntimeRequest({
               requestId: request.id,
-              decision: scenario === "declined" ? "decline" : "accept",
+              decision:
+                scenario === "declined" || scenario === "session-grant-rejected"
+                  ? "decline"
+                  : "accept",
             });
-          }
-          yield* harness.firstTerminal;
-          assert.equal(
-            Predicate.isObject(toolResult) && toolResult.success,
-            scenario === "approved",
-          );
-          assert.equal(invocations, scenario === "approved" ? 1 : 0);
-          assert.equal(harness.terminalEvents()[0]?.status, "completed");
-        }),
-      ).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
+        }
+        yield* harness.firstTerminal;
+        assert.equal(Predicate.isObject(toolResult) && toolResult.success, approved);
+        assert.equal(invocations, approved ? 1 : 0);
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
       ),
+    ),
   );
 
   // A long, email-style destination: the approval must show all of it, not a 120-character cut.

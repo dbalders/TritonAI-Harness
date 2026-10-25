@@ -55,6 +55,13 @@ import {
   type DocumentTextResult,
   type IntegrationDocumentTextExtractor,
 } from "./IntegrationDocumentText.ts";
+import {
+  integrationCredentialGeneration,
+  requestIntegrationWriteApproval,
+  reviewIntegrationInput,
+  snapshotIntegrationInput,
+  type IntegrationApprovalOwner,
+} from "./IntegrationWriteApproval.ts";
 
 export type { IntegrationProviderTool } from "./IntegrationTool.ts";
 
@@ -67,8 +74,9 @@ export interface IntegrationProviderStatus {
 
 export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
-  /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
+  /** Provider-facing compatibility only; this boolean does not authorize registry writes. */
   readonly writeApproved?: boolean;
+  readonly approvalOwner?: IntegrationApprovalOwner;
   /**
    * Present for read invocations. Extracts bounded text from PDF or DOCX bytes in an isolated,
    * time- and memory-limited process bound to this invocation's signal, so a provider never has
@@ -888,6 +896,8 @@ async function packageTreeDigest(root: string): Promise<string> {
 }
 
 export class RegistryRuntime {
+  readonly #authorizationIncarnation = NodeCrypto.randomUUID();
+  readonly #authorizationGenerations = new Map<string, number>();
   readonly #root: string;
   readonly #statePath: string;
   readonly #commitJournalRoot: string;
@@ -1515,6 +1525,7 @@ export class RegistryRuntime {
     readonly ready: Promise<void>;
     readonly finish: () => void;
   } {
+    this.#authorizationGenerations.set(id, (this.#authorizationGenerations.get(id) ?? 0) + 1);
     if (this.#catalog.has(id)) {
       this.#summaryGenerations.set(id, (this.#summaryGenerations.get(id) ?? 0) + 1);
     }
@@ -1565,6 +1576,10 @@ export class RegistryRuntime {
     readonly ready: Promise<void>;
     readonly finish: () => void;
   } {
+    this.#authorizationGenerations.set(
+      manifest.id,
+      (this.#authorizationGenerations.get(manifest.id) ?? 0) + 1,
+    );
     const remainingCapabilities = new Set(selectedCapabilityIds(manifest, installed));
     remainingCapabilities.delete(capability);
     const alreadyRevoking = this.#capabilityRevocations.get(manifest.id);
@@ -1833,7 +1848,11 @@ export class RegistryRuntime {
   async #providerOperation<A>(
     provider: IntegrationProvider,
     operation: (context: IntegrationLifecycleContext) => Promise<A>,
-    options: { readonly allowFaulted?: boolean; readonly signal?: AbortSignal } = {},
+    options: {
+      readonly allowFaulted?: boolean;
+      readonly signal?: AbortSignal;
+      readonly validateAdmission?: () => void;
+    } = {},
   ): Promise<A> {
     if (this.#closing) {
       throw new Error("The integration provider operation was cancelled.");
@@ -1899,6 +1918,7 @@ export class RegistryRuntime {
       if (controller.signal.aborted || this.#closing) {
         throw new Error("The integration provider operation was cancelled.");
       }
+      options.validateAdmission?.();
       return operation({
         signal: controller.signal,
         beginCommit: () => {
@@ -1907,6 +1927,7 @@ export class RegistryRuntime {
             return Promise.reject(new Error("The integration provider operation was cancelled."));
           }
           commitAdmission = (async () => {
+            options.validateAdmission?.();
             const preserveJournal = await this.#providerCommitJournalExists(
               integration.manifest.id,
             );
@@ -1914,6 +1935,7 @@ export class RegistryRuntime {
               preAdmissionCancelled = true;
               throw new Error("The integration provider operation was cancelled.");
             }
+            options.validateAdmission?.();
             try {
               await this.#writeProviderCommitJournal(integration.manifest.id, provider.id);
             } catch (error) {
@@ -1931,7 +1953,13 @@ export class RegistryRuntime {
                 cause: error,
               });
             }
-            if (controller.signal.aborted || this.#closing) {
+            let authorityError: unknown;
+            try {
+              options.validateAdmission?.();
+            } catch (error) {
+              authorityError = error;
+            }
+            if (controller.signal.aborted || this.#closing || authorityError !== undefined) {
               if (!preserveJournal) {
                 try {
                   await this.#clearProviderCommitJournal(integration.manifest.id);
@@ -1941,6 +1969,7 @@ export class RegistryRuntime {
                 }
               }
               preAdmissionCancelled = true;
+              if (authorityError !== undefined) throw authorityError;
               throw new Error("The integration provider operation was cancelled.");
             }
             commitStarted = true;
@@ -3425,6 +3454,19 @@ export class RegistryRuntime {
     input: unknown,
     context?: IntegrationInvocationContext,
   ): Promise<Record<string, unknown>> {
+    let submitted;
+    try {
+      submitted = snapshotIntegrationInput(input === undefined ? {} : input);
+    } catch {
+      throw operationError(
+        "invalid_input",
+        "Plugin input must be bounded, finite JSON without accessors or cycles.",
+      );
+    }
+    const approvalOwner =
+      context?.approvalOwner === undefined
+        ? undefined
+        : Object.freeze({ ...context.approvalOwner });
     if (this.#closing) throw operationError("disabled", "Integration registry is closing.");
     await this.#ready;
     if (this.#closing) throw operationError("disabled", "Integration registry is closing.");
@@ -3449,10 +3491,10 @@ export class RegistryRuntime {
       if (!installed?.enabled) {
         throw operationError("disabled", `${manifest.name} is not enabled.`);
       }
-      if (tool.effect === "write" && context?.writeApproved !== true) {
+      if (tool.effect === "write" && approvalOwner === undefined) {
         throw operationError(
           "operation_failed",
-          `${tool.displayName} requires task access approval before it can run.`,
+          `${tool.displayName} requires a managed thread with a live per-call approval presenter.`,
         );
       }
       assertCurrentPackageVersion(manifest, installed.version);
@@ -3534,13 +3576,63 @@ export class RegistryRuntime {
         }
         let decodedInput: unknown;
         try {
-          decodedInput = await decodeIntegrationToolInput(definition, input);
+          decodedInput = await decodeIntegrationToolInput(definition, submitted.value);
         } catch (error) {
           const issues = describeIntegrationToolInputIssues(error);
           throw operationError(
             "invalid_input",
             `Input for integration tool ${name} did not match its declared schema${issues ? `: ${issues}` : "."}`,
           );
+        }
+        let validateAdmission: (() => void) | undefined;
+        if (tool.effect === "write") {
+          const effective = snapshotIntegrationInput(decodedInput);
+          decodedInput = effective.value;
+          const generation = this.#authorizationGenerations.get(manifest.id) ?? 0;
+          const credentialGeneration = integrationCredentialGeneration(manifest.id);
+          const expiresAt = Date.now() + 5 * 60_000;
+          const review = Object.freeze({
+            owner: approvalOwner!,
+            requestId: NodeCrypto.randomUUID(),
+            integrationId: manifest.id,
+            integrationName: manifest.name,
+            accountLabel: status.accountLabel,
+            connection: `${this.#authorizationIncarnation}:${generation}:${credentialGeneration}`,
+            toolName: name,
+            submittedDigest: submitted.digest,
+            effectiveDigest: effective.digest,
+            payload: reviewIntegrationInput(effective.value),
+            expiresAt,
+          });
+          const decision = await Effect.runPromise(requestIntegrationWriteApproval(review), {
+            signal,
+          });
+          if (!decision.approved)
+            throw operationError(
+              "operation_failed",
+              "The plugin write was not approved. No external change was admitted.",
+            );
+          validateAdmission = () => {
+            const selected = ownRecordValue(this.#state.installed, manifest.id);
+            if (
+              signal.aborted ||
+              this.#closing ||
+              Date.now() >= expiresAt ||
+              !decision.isCurrent() ||
+              (this.#authorizationGenerations.get(manifest.id) ?? 0) !== generation ||
+              integrationCredentialGeneration(manifest.id) !== credentialGeneration ||
+              this.#catalog.get(manifest.id)?.provider !== provider ||
+              !selected?.enabled ||
+              selected.version !== installed.version ||
+              !selectedCapabilityIds(manifest, selected).has(authorizedCapability) ||
+              this.#isSurfaceRevoking(manifest, toolCapabilities)
+            )
+              throw operationError(
+                "operation_failed",
+                "The plugin approval expired or its connection changed. Review a fresh call.",
+              );
+          };
+          validateAdmission();
         }
         const invokeProvider = (providerContext?: IntegrationLifecycleContext) => {
           if (this.#faultedProviders.has(provider)) throw new ProviderFaultedError();
@@ -3574,7 +3666,10 @@ export class RegistryRuntime {
         };
         const invocationWork = Promise.resolve().then(() =>
           tool.effect === "write"
-            ? this.#providerOperation(provider, invokeProvider, { signal })
+            ? this.#providerOperation(provider, invokeProvider, {
+                signal,
+                ...(validateAdmission ? { validateAdmission } : {}),
+              })
             : invokeProvider(),
         );
         this.#activeInvocationWork.add(invocationWork);

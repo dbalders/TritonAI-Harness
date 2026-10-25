@@ -78,7 +78,8 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
               name: dynamicName,
               description: `${definition.description} Integration plugin tool: ${definition.name}.`,
               inputSchema: integrationToolJsonSchema(definition),
-              requiresApproval: registry.toolRequiresApprovalSync?.(definition.name) ?? false,
+              // The registry presents the effective payload and enforces a per-call decision.
+              requiresApproval: false,
             },
           ];
         })
@@ -159,6 +160,11 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
           providerInstanceId: input.instanceId,
           signal,
           writeApproved: writeApproved === true,
+          approvalOwner: {
+            threadId: input.threadId,
+            providerSessionId: current.providerSessionId,
+            providerInstanceId: input.instanceId,
+          },
         });
       }
       if (isCodexPreviewDynamicTool(name) && input.broker && session) {
@@ -186,7 +192,11 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
         });
       return registry.invokeTool(canonicalName, args, {
         signal,
-        ...(writeApproved ? { writeApproved: true } : {}),
+        approvalOwner: {
+          threadId: input.threadId,
+          providerSessionId: current.providerSessionId,
+          providerInstanceId: input.instanceId,
+        },
       });
     },
   };
