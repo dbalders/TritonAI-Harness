@@ -217,6 +217,7 @@ export function MediaVideoPlayer({
           style={style}
           onLoadedMetadata={(event) => {
             const element = event.currentTarget;
+            setPlaybackSource({ src, revision: sourceRevision, resourceKey: sourceResourceKey });
             const pending = resume;
             setResume(null);
             if (pending === null) {

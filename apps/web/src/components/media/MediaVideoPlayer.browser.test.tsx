@@ -17,6 +17,33 @@ const seekFinished = (video: HTMLVideoElement) =>
         video.addEventListener("seeked", () => resolve(), { once: true }),
       );
 
+it("keeps a paused playhead across renewals before the first play", async () => {
+  const bytes = Uint8Array.from(atob(renewalVideoBase64), (value) => value.charCodeAt(0));
+  const urls = [0, 1, 2].map(() => URL.createObjectURL(new Blob([bytes], { type: "video/webm" })));
+  using _urls = { [Symbol.dispose]: () => urls.forEach((url) => URL.revokeObjectURL(url)) };
+  const player = (src: string) => (
+    <MediaVideoPlayer src={src} label="Paused first clip" preload="metadata" />
+  );
+  await using screen = await render(player(urls[0]!));
+  const video = screen.container.querySelector("video")!;
+  await metadataReady(video);
+  video.currentTime = 7;
+  await seekFinished(video);
+  video.playbackRate = 1.25;
+  for (const url of urls.slice(1)) {
+    const metadata = new Promise<void>((resolve) =>
+      video.addEventListener("loadedmetadata", () => resolve(), { once: true }),
+    );
+    await screen.rerender(player(url));
+    await metadata;
+    await seekFinished(video);
+    expect(video.src).toBe(url);
+    expect(video.currentTime).toBeCloseTo(7, 0);
+    expect(video.playbackRate).toBe(1.25);
+    expect(video.paused).toBe(true);
+  }
+});
+
 it("keeps paused position and playing position when the signed source renews", async () => {
   const bytes = Uint8Array.from(atob(renewalVideoBase64), (value) => value.charCodeAt(0));
   const urls = [0, 1, 2].map(() => URL.createObjectURL(new Blob([bytes], { type: "video/webm" })));
@@ -211,4 +238,60 @@ it("keeps the pending playhead when a renewed source fails before loading", asyn
   expect(recovered.currentTime).toBeGreaterThanOrEqual(position - 0.25);
   expect(recovered.playbackRate).toBe(1.25);
   expect(recovered.paused).toBe(false);
+});
+
+it("keeps a recovered paused playhead on the next periodic renewal", async () => {
+  const bytes = Uint8Array.from(atob(renewalVideoBase64), (value) => value.charCodeAt(0));
+  const urls = [
+    new Blob([bytes], { type: "video/webm" }),
+    new Blob(["invalid replacement"], { type: "video/webm" }),
+    new Blob([bytes], { type: "video/webm" }),
+    new Blob([bytes], { type: "video/webm" }),
+  ].map((blob) => URL.createObjectURL(blob));
+  using _urls = { [Symbol.dispose]: () => urls.forEach((url) => URL.revokeObjectURL(url)) };
+  const refresh = vi.fn();
+  function Player(props: { readonly broken?: boolean; readonly renewed?: boolean }) {
+    const [recovered, setRecovered] = useState(false);
+    return (
+      <MediaVideoPlayer
+        src={urls[props.renewed ? 3 : recovered ? 2 : props.broken ? 1 : 0]!}
+        label="Paused recovered clip"
+        preload="metadata"
+        onRetry={async () => {
+          refresh();
+          setRecovered(true);
+        }}
+      />
+    );
+  }
+  await using screen = await render(<Player />);
+  const initial = screen.container.querySelector("video")!;
+  await metadataReady(initial);
+  await screen.getByLabelText("Paused recovered clip").click();
+  await initial.play();
+  initial.pause();
+  initial.currentTime = 7;
+  await seekFinished(initial);
+  initial.playbackRate = 1.25;
+  await screen.rerender(<Player broken />);
+  await vi.waitFor(() => {
+    const recovered = screen.container.querySelector("video");
+    expect(recovered?.src).toBe(urls[2]);
+    expect(recovered?.readyState).toBeGreaterThanOrEqual(1);
+  });
+  const recovered = screen.container.querySelector("video")!;
+  await seekFinished(recovered);
+  expect(recovered.currentTime).toBeCloseTo(7, 0);
+  expect(recovered.paused).toBe(true);
+  const metadata = new Promise<void>((resolve) =>
+    recovered.addEventListener("loadedmetadata", () => resolve(), { once: true }),
+  );
+  await screen.rerender(<Player broken renewed />);
+  await metadata;
+  await seekFinished(recovered);
+  expect(recovered.src).toBe(urls[3]);
+  expect(recovered.currentTime).toBeCloseTo(7, 0);
+  expect(recovered.playbackRate).toBe(1.25);
+  expect(recovered.paused).toBe(true);
+  expect(refresh).toHaveBeenCalledTimes(1);
 });

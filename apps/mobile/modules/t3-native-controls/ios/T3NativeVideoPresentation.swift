@@ -108,13 +108,15 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
             ? playback.position : .zero
           player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { complete in
             DispatchQueue.main.async {
-              guard complete, !self.finished, !self.dismissRequested,
-                player.currentItem === item else { return }
+              guard !self.finished, !self.dismissRequested,
+                player.currentItem === item, item.status == .readyToPlay else { return }
               let shouldPlay = self.pendingPlayback?.shouldPlay == true
               self.pendingPlayback = nil
               self.playbackError = nil
               self.refreshTimeout?.cancel()
               self.refreshTimeout = nil
+              // A newer user seek interrupts this seek; keep the user's current playback state.
+              guard complete else { return }
               if shouldPlay && UIApplication.shared.applicationState == .active {
                 player.playImmediately(atRate: playback.rate)
               } else {

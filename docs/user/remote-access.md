@@ -379,9 +379,11 @@ settings.
 ### File preview links
 
 Links to attachments, generated HTML, and host files expire within two minutes
-and are tied to the session that requested them. Signing out or revoking that
-session invalidates subsequent requests immediately; another active session can
-request its own links. Reopen the file in Harness if a copied link has expired.
+and are tied to the session that requested them. Revoking that client session
+invalidates subsequent requests immediately; another active session can request
+its own links. Signing out of an account or connection without revoking the
+client session leaves copied links valid until their two-minute expiry. Reopen
+the file in Harness if a copied link has expired.
 Sensitive responses are not cached. An already loaded document or an admitted
 download cannot be recalled from the receiving device. Existing cached or saved
 copies also remain on that device. Project favicons retain their longer,
