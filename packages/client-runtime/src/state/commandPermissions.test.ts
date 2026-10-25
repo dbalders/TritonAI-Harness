@@ -8,6 +8,9 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
+  AuthOrchestrationReadScope,
+  AuthFilesystemReadScope,
+  AuthPreviewOperateScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   ThreadId,
@@ -25,6 +28,7 @@ import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentRpcCommand } from "./runtime.ts";
+import { createShellEnvironmentAtoms } from "./shellCommands.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -59,6 +63,72 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("hides OS file actions and rejects launch after the destination grant is lost", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const command = createShellEnvironmentAtoms(runtime).openInEditor;
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        registry.set(
+          sessions(other),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthOrchestrationReadScope],
+            permissions: [AuthFilesystemReadScope],
+          }),
+        );
+        expect(registry.get(command.permissionAtom(env))).toBe(true);
+        expect(registry.get(command.permissionAtom(other))).toBe(false);
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        expect(registry.get(command.permissionAtom(env))).toBe(false);
+        for (const environmentId of [env, other]) {
+          for (const reveal of [false, true]) {
+            const result = yield* Effect.promise(() =>
+              command.run(registry, {
+                environmentId,
+                input: { cwd: "/repo/deck.pptx", editor: "file-manager", reveal },
+              }),
+            );
+            if (result._tag !== "Failure") throw new Error("Expected file launch to be denied");
+            expect(Cause.squash(result.cause)).toMatchObject({
+              _tag: "EnvironmentAuthorizationError",
+              requiredPermission: AuthOrchestrationOperateScope,
+            });
+          }
+        }
+      }),
+    ),
+  );
+
+  it.effect("requires the destination preview grant to close a browser tab", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const close = createCommandPermissions(runtime, WS_METHODS.previewClose);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(close.permissionAtom(env))).toBe(false);
+        expect((yield* close.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthPreviewOperateScope],
+            permissions: [AuthPreviewOperateScope],
+          }),
+        );
+        expect(registry.get(close.permissionAtom(env))).toBe(true);
+        yield* close.authorize(registry, env);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(close.permissionAtom(other))).toBe(false);
+        expect((yield* close.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+      }),
+    ),
+  );
+
   it.effect("requires the destination settings grant to run storage cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -250,6 +320,46 @@ it.effect(
         );
         expect(registry.get(prepare.permissionAtom(env, input))).toBe(true);
         yield* prepare.authorize(registry, env, input);
+      }),
+    ),
+);
+
+it.effect.each(["commit", "push", "commit_push", "create_pr", "commit_push_pr"] as const)(
+  "%s needs thread read permission only when generating a PR from a thread",
+  (action) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const command = createCommandPermissions(runtime, WS_METHODS.gitRunStackedAction);
+        const input = { actionId: "action", cwd: "/repo", action };
+        const withThread = { ...input, threadId: ThreadId.make("thread") };
+        const session = {
+          ...grant(false),
+          scopes: [AuthSourceControlWriteScope],
+          permissions: [AuthSourceControlWriteScope],
+        };
+        registry.set(sessions(env), AsyncResult.success(session));
+        expect(registry.get(command.permissionAtom(env, input))).toBe(true);
+        yield* command.authorize(registry, env, input);
+        const readsThread = action === "create_pr" || action === "commit_push_pr";
+        expect(registry.get(command.permissionAtom(env, withThread))).toBe(!readsThread);
+        if (readsThread) {
+          expect(
+            yield* command.authorize(registry, env, withThread).pipe(Effect.flip),
+          ).toMatchObject({ requiredPermission: AuthOrchestrationReadScope });
+        } else {
+          yield* command.authorize(registry, env, withThread);
+        }
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...session,
+            scopes: [AuthSourceControlWriteScope, AuthOrchestrationReadScope],
+            permissions: [AuthSourceControlWriteScope, AuthOrchestrationReadScope],
+          }),
+        );
+        expect(registry.get(command.permissionAtom(env, withThread))).toBe(true);
+        yield* command.authorize(registry, env, withThread);
       }),
     ),
 );

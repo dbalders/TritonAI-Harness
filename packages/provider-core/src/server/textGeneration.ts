@@ -1,6 +1,7 @@
 import type {
   BranchNamingOptions,
   ChatAttachment,
+  HelpContext,
   ModelSelection,
   PullRequestReviewGuide,
   TextGenerationError,
@@ -14,17 +15,14 @@ export interface CommitMessageGenerationInput {
   branch: string | null;
   stagedSummary: string;
   stagedPatch: string;
-  /** When true, the model also returns a semantic branch name for the change. */
   includeBranch?: boolean;
   policy?: TextGenerationPolicy | undefined;
-  /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
 }
 
 export interface CommitMessageGenerationResult {
   subject: string;
   body: string;
-  /** Only present when `includeBranch` was set on the input. */
   branch?: string | undefined;
 }
 
@@ -36,8 +34,8 @@ export interface PrContentGenerationInput {
   diffSummary: string;
   diffPatch: string;
   changeRequestTemplate?: string | undefined;
+  threadContext?: string | undefined;
   policy?: TextGenerationPolicy | undefined;
-  /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
 }
 
@@ -51,7 +49,6 @@ export interface BranchNameGenerationInput {
   cwd: string;
   message: string;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
-  /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
 }
 
@@ -63,10 +60,8 @@ export interface ThreadTitleGenerationInput {
   linkedContext?: string | undefined;
   cwd: string;
   message: string;
-  /** Present when replacing an existing title from the current thread history. */
   previousTitle?: string | undefined;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
-  /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
 }
 
@@ -78,45 +73,30 @@ export interface ThreadTitleGenerationResult {
 export interface ReviewGuideStackLayer {
   readonly number: number;
   readonly title: string | null;
-  /** The layer's head in the checkout, null where it could not be fetched. */
   readonly headSha: string | null;
   readonly state: "open" | "closed" | "merged";
 }
 
 export interface ReviewGuideGenerationInput {
-  /** A disposable checkout of the change's head. The model investigates it read-only. */
   cwd: string;
   number: number;
   title: string;
-  /** The author's own description, which states intent the diff cannot. */
   description: string;
   baseBranch: string;
-  /** The commit the change is measured from, present in `cwd`. */
   baseCommit: string;
-  /**
-   * What review already settled: resolved conversations, reduced to who raised what. The guide
-   * leaves these alone rather than raising them again.
-   */
   settledReview: string;
-  /** The maintainer's preferences for guides (tone, emphasis, ordering). Empty for none. */
   instructions?: string | undefined;
-  /**
-   * The stack the change is a layer of, bottom first, when it is in one. Another layer's head is
-   * fetched into `cwd` where the host served it, so the model can read across a seam.
-   */
   stack?: ReadonlyArray<ReviewGuideStackLayer> | undefined;
-  /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
 }
 
-/** A guide as the model wrote it, before the server holds it to the change. */
 export type ReviewGuideGenerationResult = Omit<
   PullRequestReviewGuide,
   "headSha" | "generatedAt" | "modelSelection"
 >;
 
 export interface DailyMemoryGenerationInput {
-  /** Working directory for the generation process. Nothing in it is read. */
+  /** Working directory for an opted-in prompt-only adapter. It must not read from it. */
   cwd: string;
   /** The local day being summarized, `YYYY-MM-DD`. */
   day: string;
@@ -170,8 +150,28 @@ export interface IdeasGenerationResult {
   description?: string;
 }
 
-/** Commit, change request, branch, and title generation backed by one provider instance. */
+export interface HelpGenerationInput {
+  /** Working directory for the generation process. Nothing in it is read. */
+  cwd: string;
+  modelSelection: ModelSelection;
+  /** Conversation content has already been redacted by the Help service. */
+  messages: ReadonlyArray<{ readonly role: "user" | "assistant"; readonly content: string }>;
+  context: HelpContext;
+}
+
+export interface HelpGenerationResult {
+  answer: string;
+}
+
+/** Text generation backed by one provider instance. */
 export interface ProviderTextGeneration {
+  /**
+   * Explain the current release using only supplied context. Present only when the
+   * adapter guarantees no tools and no implicit filesystem or instruction context.
+   */
+  readonly generateHelp?: (
+    input: HelpGenerationInput,
+  ) => Effect.Effect<HelpGenerationResult, TextGenerationError>;
   /** Summarize an opt-in memory day; supplied by Codex. */
   readonly generateDailyMemory?: (
     input: DailyMemoryGenerationInput,
@@ -187,26 +187,18 @@ export interface ProviderTextGeneration {
     input: CommitMessageGenerationInput,
   ) => Effect.Effect<CommitMessageGenerationResult, TextGenerationError>;
 
-  /**
-   * Generate change request title/body from branch and diff context.
-   */
   readonly generatePrContent: (
     input: PrContentGenerationInput,
   ) => Effect.Effect<PrContentGenerationResult, TextGenerationError>;
 
-  /**
-   * Generate a concise branch name from a user message.
-   */
   readonly generateBranchName: (
     input: BranchNameGenerationInput,
   ) => Effect.Effect<BranchNameGenerationResult, TextGenerationError>;
 
-  /** Generate a concise thread title from a first message or thread history. */
   readonly generateThreadTitle: (
     input: ThreadTitleGenerationInput,
   ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
 
-  /** Explain a change request to the maintainer deciding whether it lands. */
   readonly generateReviewGuide: (
     input: ReviewGuideGenerationInput,
   ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;

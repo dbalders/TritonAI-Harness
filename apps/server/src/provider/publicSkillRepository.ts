@@ -26,7 +26,6 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
-
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import * as ServerConfig from "../config.ts";
 
@@ -208,19 +207,19 @@ function rateLimitCooldownUntil(
   );
 }
 
-function fetchPublicSkillText<E>(
-  runtime: PublicSkillFetchRuntime,
-  input: {
-    readonly url: string;
-    readonly api: boolean;
-    readonly accept: string;
-    readonly maxBytes: number;
-    readonly failureMessage: string;
-    readonly tooLargeMessage: string;
-    readonly errorFactory: (message: string, cause?: unknown) => E;
-  },
-): Effect.Effect<string, E> {
-  return Effect.gen(function* () {
+const fetchPublicSkillText = Effect.fn("publicSkillRepository.fetchPublicSkillText")(
+  function* <E>(
+    runtime: PublicSkillFetchRuntime,
+    input: {
+      readonly url: string;
+      readonly api: boolean;
+      readonly accept: string;
+      readonly maxBytes: number;
+      readonly failureMessage: string;
+      readonly tooLargeMessage: string;
+      readonly errorFactory: (message: string, cause?: unknown) => E;
+    },
+  ): Effect.fn.Return<string, E> {
     const now = yield* Clock.currentTimeMillis;
     if (input.api && (yield* Ref.get(runtime.cooldownUntil)) > now) {
       return yield* Effect.fail(
@@ -261,83 +260,81 @@ function fetchPublicSkillText<E>(
       input.failureMessage,
       input.tooLargeMessage,
     );
-  }).pipe(
-    Effect.timeoutOrElse({
-      duration: PUBLIC_SKILLS_REQUEST_TIMEOUT,
-      orElse: () =>
-        Effect.fail(
-          input.errorFactory(
-            `${input.failureMessage} Request timed out.`,
-            new Error("The GitHub request timed out."),
+  },
+  (effect, runtime, input) =>
+    effect.pipe(
+      Effect.timeoutOrElse({
+        duration: PUBLIC_SKILLS_REQUEST_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            input.errorFactory(
+              `${input.failureMessage} Request timed out.`,
+              new Error("The GitHub request timed out."),
+            ),
           ),
-        ),
-    }),
-  );
-}
+      }),
+    ),
+);
 
-function resolveRevision<E>(
+const resolveRevision = Effect.fn("publicSkillRepository.resolveRevision")(function* <E>(
   runtime: PublicSkillFetchRuntime,
   revision: string,
   errorFactory: (message: string, cause?: unknown) => E,
-): Effect.Effect<ResolvedRevision, E> {
-  return Effect.gen(function* () {
-    const raw = yield* fetchPublicSkillText(runtime, {
-      url: `${PUBLIC_SKILLS_API_URL}/commits/${encodeURIComponent(revision)}`,
-      api: true,
-      accept: "application/vnd.github+json",
-      maxBytes: 256 * 1024,
-      failureMessage: "The TritonAI Commons repository could not be reached.",
-      tooLargeMessage: "The TritonAI Commons repository revision response was too large.",
-      errorFactory,
-    });
-    const response = yield* decodeGitHubCommitResponse(raw).pipe(
-      Effect.mapError((cause) =>
-        errorFactory("The TritonAI Commons repository returned invalid revision metadata.", cause),
-      ),
-    );
-    const resolvedRevision = response.sha.toLowerCase();
-    const tree = response.commit.tree.sha.toLowerCase();
-    if (!GIT_SHA_PATTERN.test(resolvedRevision) || !GIT_SHA_PATTERN.test(tree)) {
-      return yield* Effect.fail(
-        errorFactory("The TritonAI Commons repository returned an invalid revision."),
-      );
-    }
-    return { revision: resolvedRevision, tree };
+): Effect.fn.Return<ResolvedRevision, E> {
+  const raw = yield* fetchPublicSkillText(runtime, {
+    url: `${PUBLIC_SKILLS_API_URL}/commits/${encodeURIComponent(revision)}`,
+    api: true,
+    accept: "application/vnd.github+json",
+    maxBytes: 256 * 1024,
+    failureMessage: "The TritonAI Commons repository could not be reached.",
+    tooLargeMessage: "The TritonAI Commons repository revision response was too large.",
+    errorFactory,
   });
-}
+  const response = yield* decodeGitHubCommitResponse(raw).pipe(
+    Effect.mapError((cause) =>
+      errorFactory("The TritonAI Commons repository returned invalid revision metadata.", cause),
+    ),
+  );
+  const resolvedRevision = response.sha.toLowerCase();
+  const tree = response.commit.tree.sha.toLowerCase();
+  if (!GIT_SHA_PATTERN.test(resolvedRevision) || !GIT_SHA_PATTERN.test(tree)) {
+    return yield* Effect.fail(
+      errorFactory("The TritonAI Commons repository returned an invalid revision."),
+    );
+  }
+  return { revision: resolvedRevision, tree };
+});
 
-function loadTree<E>(
+const loadTree = Effect.fn("publicSkillRepository.loadTree")(function* <E>(
   runtime: PublicSkillFetchRuntime,
   treeSha: string,
   revision: string,
   errorFactory: (message: string, cause?: unknown) => E,
-): Effect.Effect<GitHubTree, E> {
-  return Effect.gen(function* () {
-    const raw = yield* fetchPublicSkillText(runtime, {
-      url: `${PUBLIC_SKILLS_API_URL}/git/trees/${treeSha}?recursive=1`,
-      api: true,
-      accept: "application/vnd.github+json",
-      maxBytes: MAX_GITHUB_METADATA_BYTES,
-      failureMessage: `Public skills revision ${revision.slice(0, 12)} could not be inspected.`,
-      tooLargeMessage: `Public skills revision ${revision.slice(0, 12)} returned an oversized tree.`,
-      errorFactory,
-    });
-    const response = yield* decodeGitHubTreeResponse(raw).pipe(
-      Effect.mapError((cause) =>
-        errorFactory(
-          `Public skills revision ${revision.slice(0, 12)} returned malformed tree data.`,
-          cause,
-        ),
-      ),
-    );
-    if (response.truncated) {
-      return yield* Effect.fail(
-        errorFactory(`Public skills revision ${revision.slice(0, 12)} returned a truncated tree.`),
-      );
-    }
-    return response;
+): Effect.fn.Return<GitHubTree, E> {
+  const raw = yield* fetchPublicSkillText(runtime, {
+    url: `${PUBLIC_SKILLS_API_URL}/git/trees/${treeSha}?recursive=1`,
+    api: true,
+    accept: "application/vnd.github+json",
+    maxBytes: MAX_GITHUB_METADATA_BYTES,
+    failureMessage: `Public skills revision ${revision.slice(0, 12)} could not be inspected.`,
+    tooLargeMessage: `Public skills revision ${revision.slice(0, 12)} returned an oversized tree.`,
+    errorFactory,
   });
-}
+  const response = yield* decodeGitHubTreeResponse(raw).pipe(
+    Effect.mapError((cause) =>
+      errorFactory(
+        `Public skills revision ${revision.slice(0, 12)} returned malformed tree data.`,
+        cause,
+      ),
+    ),
+  );
+  if (response.truncated) {
+    return yield* Effect.fail(
+      errorFactory(`Public skills revision ${revision.slice(0, 12)} returned a truncated tree.`),
+    );
+  }
+  return response;
+});
 
 function selectTreeEntries<E>(
   response: GitHubTree,
@@ -373,39 +370,37 @@ function selectTreeEntries<E>(
   return Effect.succeed(entries);
 }
 
-function readRepositoryFile<E>(
+const readRepositoryFile = Effect.fn("publicSkillRepository.readRepositoryFile")(function* <E>(
   runtime: PublicSkillFetchRuntime,
   revision: string,
   filePath: string,
   expectedBytes: number,
   errorFactory: (message: string, cause?: unknown) => E,
-): Effect.Effect<string, E> {
-  return Effect.gen(function* () {
-    const segments = filePath.split("/");
-    if (
-      segments.length === 0 ||
-      segments.some((segment) => !segment || segment === "." || segment === "..")
-    ) {
-      return yield* Effect.fail(errorFactory("A public skill file path was unsafe."));
-    }
-    const encodedPath = segments.map(encodeURIComponent).join("/");
-    const content = yield* fetchPublicSkillText(runtime, {
-      url: `${PUBLIC_SKILLS_RAW_URL}/${revision}/${encodedPath}`,
-      api: false,
-      accept: "text/plain",
-      maxBytes: Math.min(MAX_SKILL_BYTES, expectedBytes + 1),
-      failureMessage: "A public skill file could not be read.",
-      tooLargeMessage: "A public skill file exceeded its tree metadata size.",
-      errorFactory,
-    });
-    if (Buffer.byteLength(content) !== expectedBytes || content.includes("\0")) {
-      return yield* Effect.fail(
-        errorFactory("A public skill file did not match its Git tree metadata."),
-      );
-    }
-    return content;
+): Effect.fn.Return<string, E> {
+  const segments = filePath.split("/");
+  if (
+    segments.length === 0 ||
+    segments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    return yield* Effect.fail(errorFactory("A public skill file path was unsafe."));
+  }
+  const encodedPath = segments.map(encodeURIComponent).join("/");
+  const content = yield* fetchPublicSkillText(runtime, {
+    url: `${PUBLIC_SKILLS_RAW_URL}/${revision}/${encodedPath}`,
+    api: false,
+    accept: "text/plain",
+    maxBytes: Math.min(MAX_SKILL_BYTES, expectedBytes + 1),
+    failureMessage: "A public skill file could not be read.",
+    tooLargeMessage: "A public skill file exceeded its tree metadata size.",
+    errorFactory,
   });
-}
+  if (Buffer.byteLength(content) !== expectedBytes || content.includes("\0")) {
+    return yield* Effect.fail(
+      errorFactory("A public skill file did not match its Git tree metadata."),
+    );
+  }
+  return content;
+});
 
 function extractFrontmatterBlock(content: string): string | null {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/u);
@@ -729,27 +724,28 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
     yield* Effect.forkIn(discoverCatalog.pipe(Effect.ignoreCause({ log: true })), serviceScope);
     return { catalog: latest.catalog, stale: true };
   });
-  const refreshCatalog: PublicSkillRepository["Service"]["refreshCatalog"] = (refreshOptions) =>
-    Effect.gen(function* () {
-      yield* ensureSnapshotLoaded;
-      if (refreshOptions?.force) {
-        // The branch's commit is cached for the TTL too; drop both so GitHub is asked again.
-        yield* Cache.invalidate(commitCache, PUBLIC_SKILLS_DEFAULT_BRANCH);
-        yield* Cache.invalidate(catalogCache, PUBLIC_SKILLS_DEFAULT_BRANCH);
-      }
-      return yield* discoverCatalog.pipe(
-        Effect.map((catalog) => ({ catalog, stale: false })),
-        Effect.catch((error) =>
-          Ref.get(latestCatalog).pipe(
-            Effect.flatMap((latest) =>
-              latest === null
-                ? Effect.fail(error)
-                : Effect.succeed({ catalog: latest.catalog, stale: true }),
-            ),
+  const refreshCatalog: PublicSkillRepository["Service"]["refreshCatalog"] = Effect.fn(
+    "publicSkillRepository.refreshCatalog",
+  )(function* (refreshOptions) {
+    yield* ensureSnapshotLoaded;
+    if (refreshOptions?.force) {
+      // The branch's commit is cached for the TTL too; drop both so GitHub is asked again.
+      yield* Cache.invalidate(commitCache, PUBLIC_SKILLS_DEFAULT_BRANCH);
+      yield* Cache.invalidate(catalogCache, PUBLIC_SKILLS_DEFAULT_BRANCH);
+    }
+    return yield* discoverCatalog.pipe(
+      Effect.map((catalog) => ({ catalog, stale: false })),
+      Effect.catch((error) =>
+        Ref.get(latestCatalog).pipe(
+          Effect.flatMap((latest) =>
+            latest === null
+              ? Effect.fail(error)
+              : Effect.succeed({ catalog: latest.catalog, stale: true }),
           ),
         ),
-      );
-    });
+      ),
+    );
+  });
   const loadBundle: PublicSkillRepository["Service"]["loadBundle"] = Effect.fn(
     "PublicSkillRepository.loadBundle",
   )(function* (input) {

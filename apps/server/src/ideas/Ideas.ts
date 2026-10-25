@@ -20,7 +20,6 @@
  * message from it is sent, which is detected here from the thread messages.
  */
 import * as NodeCrypto from "node:crypto";
-
 import {
   type Idea,
   IdeaAction,
@@ -49,7 +48,6 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
-
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { listEnabledIntegrations } from "../integrations/IntegrationRegistry.ts";
@@ -525,9 +523,7 @@ export const make = Effect.gen(function* () {
     } satisfies IdeasSnapshot;
   });
 
-  // ---------------------------------------------------------------------------
   // Context
-  // ---------------------------------------------------------------------------
 
   const loadProjects = sql<ContextProject & { readonly workspaceRoot: string }>`
     SELECT
@@ -641,37 +637,40 @@ export const make = Effect.gen(function* () {
     const found: Array<ContextFile & { readonly modifiedMs: number }> = [];
     // A large folder must not hold up a request for ideas.
     let budget = PROJECT_SCAN_LIMIT;
-    const walk = (directory: string, relative: string, depth: number): Effect.Effect<void> =>
-      Effect.gen(function* () {
-        const names = yield* fs
-          .readDirectory(directory)
-          .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-        for (const name of names.slice(0, DIRECTORY_ENTRY_LIMIT)) {
-          if (budget <= 0) return;
-          if (name.startsWith(".")) continue;
-          budget--;
-          const filePath = path.join(directory, name);
-          const info = yield* fs.stat(filePath).pipe(Effect.option);
-          if (Option.isNone(info)) continue;
-          const childRelative = relative.length > 0 ? `${relative}/${name}` : name;
-          if (info.value.type === "Directory") {
-            if (depth < 2 && !SKIPPED_DIRECTORIES.has(name)) {
-              yield* walk(filePath, childRelative, depth + 1);
-            }
-            continue;
+    const walk = Effect.fn("Ideas.walk")(function* (
+      directory: string,
+      relative: string,
+      depth: number,
+    ): Effect.fn.Return<void> {
+      const names = yield* fs
+        .readDirectory(directory)
+        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+      for (const name of names.slice(0, DIRECTORY_ENTRY_LIMIT)) {
+        if (budget <= 0) return;
+        if (name.startsWith(".")) continue;
+        budget--;
+        const filePath = path.join(directory, name);
+        const info = yield* fs.stat(filePath).pipe(Effect.option);
+        if (Option.isNone(info)) continue;
+        const childRelative = relative.length > 0 ? `${relative}/${name}` : name;
+        if (info.value.type === "Directory") {
+          if (depth < 2 && !SKIPPED_DIRECTORIES.has(name)) {
+            yield* walk(filePath, childRelative, depth + 1);
           }
-          if (info.value.type !== "File") continue;
-          if (!DOCUMENT_EXTENSIONS.has(path.extname(name).toLowerCase())) continue;
-          const modifiedMs = Option.isSome(info.value.mtime) ? info.value.mtime.value.getTime() : 0;
-          if (nowMs - modifiedMs > FILE_WINDOW_MS) continue;
-          found.push({
-            projectId: project.id,
-            path: childRelative,
-            modifiedAt: toIso(modifiedMs),
-            modifiedMs,
-          });
+          continue;
         }
-      });
+        if (info.value.type !== "File") continue;
+        if (!DOCUMENT_EXTENSIONS.has(path.extname(name).toLowerCase())) continue;
+        const modifiedMs = Option.isSome(info.value.mtime) ? info.value.mtime.value.getTime() : 0;
+        if (nowMs - modifiedMs > FILE_WINDOW_MS) continue;
+        found.push({
+          projectId: project.id,
+          path: childRelative,
+          modifiedAt: toIso(modifiedMs),
+          modifiedMs,
+        });
+      }
+    });
     yield* walk(project.workspaceRoot, "", 0);
     return found
       .toSorted((left, right) => right.modifiedMs - left.modifiedMs)

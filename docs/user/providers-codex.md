@@ -100,29 +100,18 @@ attachment. Stop cancels image analysis as well as the pending message.
 
 ## Work Toward A Persistent Goal
 
-In a Codex thread, type `/goal` and choose the Goal command. The composer enters Goal mode, shows a
-removable Goal chip, and prompts you to describe the objective. Enter the objective and send it:
+In a Codex thread, send `/goal` followed by what "done" means:
 
 ```text
-Finish the migration, preserve behavior, and pass the test suite
+/goal Finish the migration, preserve behavior, and pass the test suite
 ```
 
-The goal rail above the composer shows the current objective, status, token use, elapsed time, and
-last update. Codex can keep pursuing the objective across turns until the goal is paused, completed,
-limited, stalled, or cleared.
+Codex keeps working across turns until it judges the goal met. The thread shows the goal and its
+progress. Stopping a Codex goal pauses it.
 
-You can also type raw commands without choosing the command-menu item:
-
-```text
-/goal                 Show the current goal
-/goal pause           Pause it
-/goal resume          Resume it
-/goal clear           Clear it
-/goal set <objective> Replace it, including objectives named pause, resume, or clear
-```
-
-Goal creation is currently available for Codex providers. Goals are text-only because Codex's native
-goal API does not accept attachments or composer context cards.
+Send `/goal` alone to view it, `/goal pause` to pause it, `/goal resume` to continue it, or `/goal clear`
+to remove it. These commands must start the message. See [Goals](composer.md#goals) for Claude's
+behavior.
 
 ## Use multiple accounts
 

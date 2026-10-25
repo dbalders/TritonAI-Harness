@@ -8,7 +8,7 @@ may instead make an ability part of its own sign-in consent flow.
 
 Production connector source and compiled provider entrypoints remain in TritonAI-Plugins. A
 release-only, digest-verified composition is the explicit package allowlist; Harness does not carry
-provider-specific package IDs or discover arbitrary packages at runtime. Harness verifies and
+provider-specific implementations or discover arbitrary packages at runtime. Harness verifies and
 packages the prebuilt bytes supplied by that composition—it does not compile provider code.
 Development fixtures still prove the same host supports both a skills-only package and a
 credential-backed package with tools.
@@ -84,7 +84,20 @@ The current Harness build is canonical for included package contents and version
 registry transactionally reconciles installed included packages with their current build copies
 while preserving enablement and capability selections. It repairs both version changes and
 same-version asset drift, and removes crash-orphaned package trees that were never committed to
-state. Packages no longer included by the build have no runtime surface and their managed Codex
+state. The reviewed `ucsd-assistant` package is the sole activation default: when first included in
+a profile's catalog, it is installed and enabled with its manifest's default abilities. Its
+stateless public-source tools require no sign-in. Existing disabled plugins and capability
+selections are preserved. Explicit removal is remembered, including interrupted removal recovery,
+so restarting, upgrading, or removing and reintroducing the package in the catalog cannot reinstall
+it automatically; an explicit install can restore it. Other included plugins remain opt-in. This
+policy changes neither provider authorization nor external access.
+
+Legacy state did not record uninstall history. For the new `ucsd-assistant` package ID,
+an absent installed record and absent removal marker are treated as first appearance,
+including in an existing profile. A removal made with an older experimental host cannot
+be recovered from that state; removals recorded by this host persist as described above.
+
+Packages no longer included by the build have no runtime surface and their managed Codex
 skills are pruned; their state and files are retained until an explicit, provider-aware retirement
 migration can also remove credentials safely. This is bundled-package reconciliation, not a network
 marketplace or arbitrary package update mechanism. The build must assemble the complete catalog

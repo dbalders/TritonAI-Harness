@@ -77,6 +77,8 @@ const fixture = Effect.fn("managedCodexRuntime.test.fixture")(function* (
       path.join(packageRoot, "package.json"),
       encodePackage({ name, version }),
     );
+    yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+    yield* fs.writeFileString(binaryPath, "managed launcher fixture");
     versions.set(binaryPath, output(version));
     return { binaryPath, packageRoot };
   });
@@ -86,6 +88,69 @@ const fixture = Effect.fn("managedCodexRuntime.test.fixture")(function* (
 });
 
 it.layer(NodeServices.layer)("managed Codex runtime discovery", (it) => {
+  it.effect.each([false, true])(
+    "restores a retained backup on startup (configured: %s)",
+    (configured) =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const installed = yield* f.install("0.146.0");
+        const backup = yield* f.fs.makeTempDirectory({
+          directory: f.runtimeRoot,
+          prefix: ".tritonai-codex-backup.",
+        });
+        yield* f.fs.rename(
+          f.path.dirname(f.path.dirname(installed.binaryPath)),
+          f.path.join(backup, "openai-codex-0.146.0"),
+        );
+        assert.isFalse(yield* f.fs.exists(installed.binaryPath));
+        assert.equal(
+          yield* f.resolve(configured ? installed.binaryPath : "codex"),
+          installed.binaryPath,
+        );
+        assert.isTrue(yield* f.fs.exists(installed.binaryPath));
+        assert.isFalse(yield* f.fs.exists(backup));
+        assert.deepEqual(f.environment, {
+          PATH: "/usr/bin:/bin",
+          CODEX_HOME: f.path.join(f.homeDirectory, "nightly", "codex"),
+        });
+      }),
+  );
+  it.effect("retains the only backup when recovery verification fails", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const installed = yield* f.install("0.146.0");
+      const backup = yield* f.fs.makeTempDirectory({
+        directory: f.runtimeRoot,
+        prefix: ".tritonai-codex-backup.",
+      });
+      const backupRoot = f.path.join(backup, "openai-codex-0.146.0");
+      yield* f.fs.rename(f.path.dirname(f.path.dirname(installed.binaryPath)), backupRoot);
+      f.versions.delete(installed.binaryPath);
+      yield* Effect.flip(f.resolve(installed.binaryPath));
+      assert.isTrue(yield* f.fs.exists(f.path.join(backupRoot, "bin", "codex")));
+      assert.isFalse(yield* f.fs.exists(installed.binaryPath));
+    }),
+  );
+  it.effect("finds a healthy installation when an unrelated backup cannot recover", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const healthy = yield* f.install("0.146.0");
+      const broken = yield* f.install("0.150.0");
+      const backup = yield* f.fs.makeTempDirectory({
+        directory: f.runtimeRoot,
+        prefix: ".tritonai-codex-backup.",
+      });
+      yield* f.fs.rename(
+        f.path.dirname(f.path.dirname(broken.binaryPath)),
+        f.path.join(backup, "openai-codex-0.150.0"),
+      );
+      f.versions.delete(broken.binaryPath);
+      assert.equal(yield* f.resolve(), healthy.binaryPath);
+      assert.isTrue(
+        yield* f.fs.exists(f.path.join(backup, "openai-codex-0.150.0", "bin", "codex")),
+      );
+    }),
+  );
   it.effect("boots a fresh profile with no settings and no codex on PATH", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

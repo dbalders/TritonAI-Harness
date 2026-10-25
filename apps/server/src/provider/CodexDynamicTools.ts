@@ -148,18 +148,18 @@ export type CodexDynamicToolGate =
  * Transient unavailability is waited out once (bounded by the callback) before refusing. Every
  * refusal is traced and tells the agent which tool failed and why.
  */
-export const gateDynamicToolCall = (input: {
-  readonly options: Pick<
-    CodexDynamicToolOptions,
-    | "threadId"
-    | "dynamicTools"
-    | "dynamicToolAvailability"
-    | "awaitDynamicToolAvailability"
-    | "invokeDynamicTool"
-  >;
-  readonly payload: Pick<EffectCodexSchema.DynamicToolCallParams, "tool" | "namespace">;
-}): Effect.Effect<CodexDynamicToolGate> =>
-  Effect.gen(function* () {
+export const gateDynamicToolCall = Effect.fn("CodexDynamicTools.gateDynamicToolCall")(
+  function* (input: {
+    readonly options: Pick<
+      CodexDynamicToolOptions,
+      | "threadId"
+      | "dynamicTools"
+      | "dynamicToolAvailability"
+      | "awaitDynamicToolAvailability"
+      | "invokeDynamicTool"
+    >;
+    readonly payload: Pick<EffectCodexSchema.DynamicToolCallParams, "tool" | "namespace">;
+  }): Effect.fn.Return<CodexDynamicToolGate> {
     const { options, payload } = input;
     const definition = options.dynamicTools?.find((tool) => tool.name === payload.tool);
     if (payload.namespace || !definition || !options.invokeDynamicTool) {
@@ -213,7 +213,8 @@ export const gateDynamicToolCall = (input: {
       } as const;
     }
     return { allowed: true, definition } as const;
-  });
+  },
+);
 
 function normalizeDynamicToolNames(
   dynamicTools: ReadonlyArray<CodexDynamicToolDefinition> | undefined,
@@ -425,23 +426,23 @@ function samePluginSkillAvailability(
   );
 }
 
-export function reconcilePluginSkillAvailability<E, R>(
+export const reconcilePluginSkillAvailability = Effect.fn(
+  "CodexDynamicTools.reconcilePluginSkillAvailability",
+)(function* <E, R>(
   input: PluginSkillAvailabilityInput,
   setExtraRoots: (extraRoots: ReadonlyArray<string>) => Effect.Effect<unknown, E, R>,
-): Effect.Effect<PluginSkillAvailability, E, R> {
-  return Effect.gen(function* () {
-    if (!input.pluginSkills?.length) return resolvePluginSkillAvailability(input);
-    let candidate = resolvePluginSkillAvailability(input);
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      yield* setExtraRoots(candidate.extraRoots);
-      const current = resolvePluginSkillAvailability(input);
-      if (samePluginSkillAvailability(candidate, current)) return current;
-      candidate = current;
-    }
-    yield* setExtraRoots([]);
-    return { skills: [], extraRoots: [] };
-  });
-}
+): Effect.fn.Return<PluginSkillAvailability, E, R> {
+  if (!input.pluginSkills?.length) return resolvePluginSkillAvailability(input);
+  let candidate = resolvePluginSkillAvailability(input);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    yield* setExtraRoots(candidate.extraRoots);
+    const current = resolvePluginSkillAvailability(input);
+    if (samePluginSkillAvailability(candidate, current)) return current;
+    candidate = current;
+  }
+  yield* setExtraRoots([]);
+  return { skills: [], extraRoots: [] };
+});
 
 export function withPluginSkillLease<A, E, R>(
   lease: CodexPluginSkillLease | null,

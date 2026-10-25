@@ -2,7 +2,6 @@ import { MessagesSquareIcon } from "lucide-react";
 import { createPortal } from "react-dom";
 import { useThreadContextDragGhost } from "./threadContextDrag";
 
-/** Follows the pointer while a sidebar thread is dragged toward a composer. */
 export function ThreadContextDragGhost() {
   const ghost = useThreadContextDragGhost();
   if (ghost === null) return null;

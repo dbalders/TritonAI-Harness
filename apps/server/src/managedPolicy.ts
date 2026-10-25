@@ -2,7 +2,6 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-
 import {
   DEFAULT_SERVER_SETTINGS,
   CodexSettings,
@@ -23,7 +22,6 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-
 import developmentManagedConfig from "../../../config/tritonai-managed-config.json" with { type: "json" };
 import packageJson from "../package.json" with { type: "json" };
 

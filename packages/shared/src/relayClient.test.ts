@@ -25,6 +25,7 @@ const layerHostRuntime = (env: Record<string, string> = {}, platform: NodeJS.Pla
   Layer.mergeAll(
     Layer.succeed(HostProcess.Platform, platform),
     Layer.succeed(HostProcess.Architecture, "x64"),
+    Layer.succeed(HostProcess.Environment, env),
     ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
   );
 
@@ -55,7 +56,6 @@ const layerHttpClient = (bytes: Uint8Array) =>
     ),
   );
 
-// Records each request and never responds, simulating a wedged endpoint.
 const layerStalledHttpClient = (requests: Array<unknown>) =>
   Layer.succeed(
     HttpClient.HttpClient,
@@ -65,8 +65,6 @@ const layerStalledHttpClient = (requests: Array<unknown>) =>
     }),
   );
 
-// Answers `cloudflared version` with the version recorded for that path, which
-// defaults to the pinned release; tests change it to simulate other binaries.
 const layerSpawner = (commands: Array<string>, versions: Record<string, string> = {}) =>
   Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
@@ -115,10 +113,6 @@ const renameError = (code: string, path: string) =>
 
 type InstallRename = "staging" | "activation";
 
-/**
- * Fails the first `failures` staging or activation renames with `code`, as Windows does while
- * another process holds the file. Staging moves the binary to a `.tmp` name beside its final path.
- */
 const makeLockedRenames = (
   fileSystem: FileSystem.FileSystem,
   input: { readonly rename: InstallRename; readonly failures: number; readonly code: string },
@@ -449,8 +443,6 @@ describe("RelayClient", () => {
         concurrency: "unbounded",
       });
       expect(second).toEqual(first);
-      // The first install validates the download once; the second, after waiting
-      // its turn, probes the activated binary and reuses it instead of downloading.
       expect(commands).toHaveLength(2);
     }).pipe(
       Effect.scoped,
@@ -465,50 +457,77 @@ describe("RelayClient", () => {
     );
   });
 
-  it.effect.skipIf(windowsHost)(
-    "observes PATH changes after the manager has been constructed",
-    () => {
-      const env = { PATH: "" };
-      return Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-cloudflared-test-",
-        });
-        const binDir = `${baseDir}/bin`;
-        const executablePath = `${binDir}/cloudflared`;
-        const manager = yield* RelayClient.makeCloudflaredRelayClient({
-          baseDir,
-        });
+  it.effect("observes hydrated PATH changes after the manager has been constructed", () => {
+    const platform = windowsHost ? "win32" : "linux";
+    const executableName = windowsHost ? "cloudflared.exe" : "cloudflared";
+    const configEnv = { PATH: "" };
+    const hostEnv = { PATH: "" };
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-cloudflared-test-",
+      });
+      const binDir = `${baseDir}/bin`;
+      const executablePath = `${binDir}/${executableName}`;
+      const resolvedExecutablePath = windowsHost
+        ? executablePath.replaceAll("/", "\\")
+        : executablePath;
+      const manager = yield* RelayClient.makeCloudflaredRelayClient({
+        baseDir,
+      });
 
-        expect(yield* manager.resolve).toEqual({
-          status: "missing",
-          version: RelayClient.CLOUDFLARED_VERSION,
-        });
-
-        yield* fileSystem.makeDirectory(binDir);
-        yield* fileSystem.writeFileString(executablePath, "cloudflared");
-        yield* fileSystem.chmod(executablePath, 0o755);
-        env.PATH = binDir;
-
-        expect(yield* manager.resolve).toEqual({
-          status: "available",
-          executablePath,
-          source: "path",
-          version: RelayClient.CLOUDFLARED_VERSION,
-        });
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          Layer.mergeAll(
-            NodeServices.layer,
-            layerHttpClient(new Uint8Array()),
-            layerSpawner([]),
-            layerHostRuntime(env),
-          ),
+      const resolveWithStaleConfig = manager.resolve.pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({ env: configEnv }),
         ),
+        Effect.provideService(HostProcess.Environment, hostEnv),
       );
-    },
-  );
+
+      expect(yield* resolveWithStaleConfig).toEqual({
+        status: "missing",
+        version: RelayClient.CLOUDFLARED_VERSION,
+      });
+
+      yield* fileSystem.makeDirectory(binDir);
+      yield* fileSystem.writeFileString(executablePath, "cloudflared");
+      if (!windowsHost) yield* fileSystem.chmod(executablePath, 0o755);
+      hostEnv.PATH = binDir;
+
+      expect(yield* resolveWithStaleConfig).toEqual({
+        status: "available",
+        executablePath: resolvedExecutablePath,
+        source: "path",
+        version: RelayClient.CLOUDFLARED_VERSION,
+      });
+
+      const resolveWithOverride = manager.resolve.pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnv({
+            env: { PATH: "", T3CODE_CLOUDFLARED_PATH: executablePath },
+          }),
+        ),
+        Effect.provideService(HostProcess.Environment, { PATH: "" }),
+      );
+      expect(yield* resolveWithOverride).toEqual({
+        status: "available",
+        executablePath,
+        source: "override",
+        version: RelayClient.CLOUDFLARED_VERSION,
+      });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          layerHttpClient(new Uint8Array()),
+          layerSpawner([]),
+          layerHostRuntime(configEnv, platform),
+        ),
+      ),
+    );
+  });
 
   describe("version selection", () => {
     const run = <A, E>(
@@ -552,6 +571,7 @@ describe("RelayClient", () => {
                   ConfigProvider.ConfigProvider,
                   ConfigProvider.fromEnv({ env }),
                 ),
+                Effect.provideService(HostProcess.Environment, env),
               ),
             ).toEqual({
               status: "available",
@@ -601,7 +621,6 @@ describe("RelayClient", () => {
               const older = managedPathFor(baseDir, "2025.9.0");
               const newer = managedPathFor(baseDir, "2026.1.0");
               const pinned = managedPathFor(baseDir, RelayClient.CLOUDFLARED_VERSION);
-              // A newer server sharing this base dir owns this folder.
               const newerServer = managedPathFor(baseDir, "2099.1.0");
               versions[newerServer] = "2099.1.0";
               yield* writeExecutable(newerServer);
@@ -617,6 +636,7 @@ describe("RelayClient", () => {
                   ConfigProvider.ConfigProvider,
                   ConfigProvider.fromEnv({ env: { PATH: `${baseDir}/bin` } }),
                 ),
+                Effect.provideService(HostProcess.Environment, { PATH: `${baseDir}/bin` }),
               );
 
               expect(yield* resolveWith).toMatchObject({ source: "managed", version: "2026.1.0" });
@@ -633,7 +653,6 @@ describe("RelayClient", () => {
                 (yield* fileSystem.readDirectory(`${baseDir}/tools/cloudflared`)).sort(),
               ).toEqual(["2026.1.0", RelayClient.CLOUDFLARED_VERSION, "2099.1.0"]);
 
-              // The kept older release still outranks PATH; PATH is the last resort.
               yield* fileSystem.remove(pinned);
               expect(yield* resolveWith).toMatchObject({ source: "managed", version: "2026.1.0" });
               yield* fileSystem.remove(`${baseDir}/tools/cloudflared/2026.1.0`, {
@@ -745,7 +764,6 @@ describe("RelayClient", () => {
 
       expect(error.message).toBe(message);
       expect(renames.attempts).toBe(41);
-      // Nothing is installed, and the staged copy, download folder, and install lock are gone.
       expect(yield* fileSystem.readDirectory(managedDirectory(baseDir, "win32"))).toEqual([]);
     }).pipe(Effect.scoped, Effect.provide(layerInstallRuntime("win32"))),
   );
@@ -798,7 +816,6 @@ describe("RelayClient", () => {
       while (requests.length === 0) {
         yield* Effect.yieldNow;
       }
-      // The download timeout is 10 minutes; advance past it.
       yield* TestClock.adjust("11 minutes");
       const error = yield* Fiber.join(child).pipe(Effect.flip);
       expect(error).toBeInstanceOf(RelayClient.RelayClientInstallError);

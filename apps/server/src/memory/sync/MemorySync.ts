@@ -28,7 +28,6 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-
 import * as ServerConfig from "../../config.ts";
 import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -196,15 +195,18 @@ export const make = Effect.gen(function* () {
     );
 
   /** Writes next to the target, then renames, so readers never see half a file. */
-  const writeBytesAtomically = (filePath: string, bytes: Uint8Array) =>
-    Effect.gen(function* () {
+  const writeBytesAtomically = Effect.fn("MemorySync.writeBytesAtomically")(
+    function* (filePath: string, bytes: Uint8Array) {
       yield* fs.makeDirectory(path.dirname(filePath), { recursive: true });
       const temporary = `${filePath}.sync.tmp`;
       yield* fs.writeFile(temporary, bytes);
       yield* fs.rename(temporary, filePath);
-    }).pipe(
-      Effect.mapError(() => new MemorySyncFailure({ message: `Could not write ${filePath}.` })),
-    );
+    },
+    (effect, filePath, bytes) =>
+      effect.pipe(
+        Effect.mapError(() => new MemorySyncFailure({ message: `Could not write ${filePath}.` })),
+      ),
+  );
 
   const toLocalPath = (relativePath: string) => path.join(vault.root, ...relativePath.split("/"));
 
@@ -212,41 +214,43 @@ export const make = Effect.gen(function* () {
    * The current bytes at a vault path, or null when no file is there. Any
    * other read error fails: a file sync cannot read must never look deleted.
    */
-  const readLocal = (relativePath: string) =>
-    Effect.gen(function* () {
+  const readLocal = Effect.fn("MemorySync.readLocal")(
+    function* (relativePath: string) {
       const filePath = toLocalPath(relativePath);
       const info = yield* fs.stat(filePath);
       if (info.type !== "File") return null;
       return yield* fs.readFile(filePath);
-    }).pipe(
-      Effect.catchIf(isNotFound, () => Effect.succeed(null)),
-      Effect.mapError(
-        () =>
-          new MemorySyncFailure({
-            message: `Could not read ${relativePath} from the memory folder.`,
-          }),
+    },
+    (effect, relativePath) =>
+      effect.pipe(
+        Effect.catchIf(isNotFound, () => Effect.succeed(null)),
+        Effect.mapError(
+          () =>
+            new MemorySyncFailure({
+              message: `Could not read ${relativePath} from the memory folder.`,
+            }),
+        ),
       ),
-    );
+  );
 
   /** Every file the plan cares about, with its bytes and hash. */
-  const readLocalFiles = (device: MemoryDevice) =>
-    Effect.gen(function* () {
-      const entries = yield* fs.readDirectory(vault.root, { recursive: true }).pipe(
-        // No memory folder at all is an empty vault; sync restores it.
-        Effect.catchIf(isNotFound, () => Effect.succeed<ReadonlyArray<string>>([])),
-        Effect.mapError(
-          () => new MemorySyncFailure({ message: "Could not read the memory folder." }),
-        ),
-      );
-      const files = new Map<string, { readonly bytes: Uint8Array; readonly sha256: string }>();
-      for (const entry of entries) {
-        const relativePath = entry.split(path.sep).join("/");
-        if (classifyVaultPath(relativePath, device) === "ignored") continue;
-        const bytes = yield* readLocal(relativePath);
-        if (bytes !== null) files.set(relativePath, { bytes, sha256: sha256Bytes(bytes) });
-      }
-      return files;
-    });
+  const readLocalFiles = Effect.fn("MemorySync.readLocalFiles")(function* (device: MemoryDevice) {
+    const entries = yield* fs.readDirectory(vault.root, { recursive: true }).pipe(
+      // No memory folder at all is an empty vault; sync restores it.
+      Effect.catchIf(isNotFound, () => Effect.succeed<ReadonlyArray<string>>([])),
+      Effect.mapError(
+        () => new MemorySyncFailure({ message: "Could not read the memory folder." }),
+      ),
+    );
+    const files = new Map<string, { readonly bytes: Uint8Array; readonly sha256: string }>();
+    for (const entry of entries) {
+      const relativePath = entry.split(path.sep).join("/");
+      if (classifyVaultPath(relativePath, device) === "ignored") continue;
+      const bytes = yield* readLocal(relativePath);
+      if (bytes !== null) files.set(relativePath, { bytes, sha256: sha256Bytes(bytes) });
+    }
+    return files;
+  });
 
   const readWritten = (device: MemoryDevice) =>
     fs.readFileString(path.join(vault.devices, device.id, "written.json")).pipe(

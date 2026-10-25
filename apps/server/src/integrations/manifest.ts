@@ -1,5 +1,4 @@
 export {
-  HARNESS_INTEGRATION_API_VERSION,
   type IntegrationManifest,
   type IntegrationManifestCapability,
   type IntegrationManifestSkill,

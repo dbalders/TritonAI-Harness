@@ -1,9 +1,15 @@
 import type { ClientSettings } from "@t3tools/contracts/settings";
-import type { AssistantCitation, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type {
+  AssistantCitation,
+  EnvironmentId,
+  ResolvedKeybindingsConfig,
+} from "@t3tools/contracts";
+import type { ComposerPathSearchTarget } from "@t3tools/client-runtime/state/threads";
 import {
   serializeAssistantCitation,
   withAssistantCitationComment,
 } from "@t3tools/shared/assistantCitations";
+import { isPathWord } from "@t3tools/shared/composerTrigger";
 import {
   splitPromptIntoComposerSegments,
   type ComposerPromptSegment,
@@ -11,20 +17,8 @@ import {
 import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
 
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
-export type ComposerSlashCommand =
-  | "model"
-  | "plan"
-  | "default"
-  | "goal"
-  | "computer-use"
-  | "record-skill";
+export type ComposerSlashCommand = "model" | "plan" | "default" | "computer-use" | "record-skill";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
-export type GoalComposerCommand =
-  | { readonly type: "view" }
-  | { readonly type: "pause" }
-  | { readonly type: "resume" }
-  | { readonly type: "clear" }
-  | { readonly type: "set"; readonly objective: string };
 
 export interface ComposerTrigger {
   kind: ComposerTriggerKind;
@@ -33,11 +27,25 @@ export interface ComposerTrigger {
   rangeEnd: number;
 }
 
+export function isPathSuggestionCurrent(
+  searchTarget: ComposerPathSearchTarget,
+  trigger: ComposerTrigger | null,
+  environmentId: EnvironmentId | null,
+  cwd: string | null,
+) {
+  return (
+    trigger?.kind === "path" &&
+    searchTarget.environmentId === environmentId &&
+    searchTarget.cwd === cwd &&
+    searchTarget.query === trigger.query.trim()
+  );
+}
+
 export function formatAssistantCitationForComposer(citation: AssistantCitation, comment = "") {
   return `${serializeAssistantCitation(withAssistantCitationComment(citation, comment))} `;
 }
 
-function composerRequiresModifier(
+export function composerRequiresModifier(
   sendShortcut: ClientSettings["sendShortcut"] | undefined,
   prompt: string,
 ) {
@@ -51,14 +59,15 @@ export function composerSubmissionIntentForKey(input: {
   event: ShortcutEventLike & { isComposing?: boolean; keyCode?: number; repeat?: boolean };
   keybindings: ResolvedKeybindingsConfig;
   platform?: string;
-  isMobileViewport: boolean;
+  isSoftwareKeyboardOpen: boolean;
   isDraftThread: boolean;
   isRunning?: boolean;
   sendShortcut?: ClientSettings["sendShortcut"];
   prompt?: string;
 }): ComposerSubmissionIntent | null {
   const { event } = input;
-  if (input.isMobileViewport || event.isComposing || event.keyCode === 229 || event.repeat)
+  if (event.isComposing || event.keyCode === 229 || event.repeat) return null;
+  if (input.isSoftwareKeyboardOpen && event.key === "Enter" && !event.metaKey && !event.ctrlKey)
     return null;
   const command = resolveShortcutCommand(event, input.keybindings, {
     ...(input.platform === undefined ? {} : { platform: input.platform }),
@@ -66,6 +75,7 @@ export function composerSubmissionIntentForKey(input: {
       composerFocus: true,
       draftThreadRoute: input.isDraftThread,
       turnRunning: input.isRunning === true,
+      composerRequiresModifier: composerRequiresModifier(input.sendShortcut, input.prompt ?? ""),
     },
   });
   if (command === "composer.sendAlternate" && input.isRunning) return "alternate";
@@ -272,6 +282,7 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
   const tokenStart = tokenStartForCursor(text, cursor);
   const token = text.slice(tokenStart, cursor);
   if (token.startsWith("/")) {
+    if (isPathWord(text, tokenStart, cursor, isWhitespace)) return null;
     return {
       kind: "slash-command",
       query: token.slice(1),
@@ -309,12 +320,6 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
   };
 }
 
-/**
- * Length of the leading part of `pasted` that continues an `@` path query
- * typed at the end of `lineBefore`, the line's plain text up to the caret. A
- * chip must read there as one non-space character, so it never passes for a
- * typed `@path`.
- */
 export function pastedPathQueryLength(
   lineBefore: string,
   pasted: string,
@@ -325,7 +330,6 @@ export function pastedPathQueryLength(
   return /^\S*/.exec(pasted)![0].length;
 }
 
-/** Caret and trigger after replacing composer text and continuing at the end. */
 export function composerStateAtPromptEnd(
   text: string,
   literalText = false,
@@ -350,42 +354,6 @@ export function parseStandaloneComposerSlashCommand(text: string): "plan" | "def
   const command = match[1]?.toLowerCase();
   if (command === "plan") return "plan";
   return "default";
-}
-
-export function parseGoalComposerSlashCommand(text: string): GoalComposerCommand | null {
-  const trimmed = text.trim();
-  if (!/^\/goal(?:\s|$)/i.test(trimmed)) {
-    return null;
-  }
-  const argument = trimmed.slice("/goal".length).trim();
-  if (argument.length === 0) return { type: "view" };
-  const explicitSetMatch = /^set\s+(.+)$/is.exec(argument);
-  if (explicitSetMatch) {
-    return { type: "set", objective: explicitSetMatch[1]!.trim() };
-  }
-  switch (argument.toLowerCase()) {
-    case "set":
-      return { type: "view" };
-    case "pause":
-      return { type: "pause" };
-    case "resume":
-      return { type: "resume" };
-    case "clear":
-      return { type: "clear" };
-    default:
-      return { type: "set", objective: argument };
-  }
-}
-
-export function resolveGoalComposerCommand(
-  text: string,
-  options: { readonly goalArmed: boolean },
-): GoalComposerCommand | null {
-  if (!options.goalArmed) {
-    return parseGoalComposerSlashCommand(text);
-  }
-  const objective = text.trim();
-  return objective.length > 0 ? { type: "set", objective } : null;
 }
 
 export function replaceTextRange(

@@ -1,4 +1,5 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import { getManagedCodexSettings } from "../managedPolicy.ts";
 import {
   CodexSettings,
@@ -20,7 +21,6 @@ import {
   ServerSetProviderSkillEnabledInput,
   ServerTritonAiCommonsError,
 } from "@t3tools/contracts";
-import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -32,14 +32,14 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import type * as CodexSchema from "effect-codex-app-server/schema";
-
 import * as ServerConfig from "../config.ts";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProcessRunner from "../processRunner.ts";
-import { resolveManagedCodexBinary } from "./managedCodexRuntime.ts";
+import { resolveManagedCodexBinary, leaseManagedCodexRuntime } from "./managedCodexRuntime.ts";
 import { materializeCodexShadowHome, resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
 import { makeTritonAiCodexConfigArgs } from "./Drivers/TritonAiCodexConfig.ts";
+import * as TritonAiRequestAnalytics from "../telemetry/TritonAiRequestAnalytics.ts";
 import { resolveCodexAppServerCommand } from "./Drivers/CodexAppServerCommand.ts";
 import { mergeCodexProviderEnvironment } from "./CodexEnvironment.ts";
 import {
@@ -312,82 +312,96 @@ function remotePluginCatalogAuthLoadError(): ServerPluginsListResult["marketplac
   };
 }
 
-function withCodexClient<A>(
+const withCodexClient = Effect.fn("CodexManagement.withCodexClient")(function* <A>(
   target: CodexManagementTarget,
   operation: string,
   useClient: (
     client: CodexClient.CodexAppServerClient["Service"],
   ) => Effect.Effect<A, CodexErrors.CodexAppServerError>,
-): Effect.Effect<
+): Effect.fn.Return<
   A,
   ServerPluginOperationError,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path | Scope.Scope
 > {
-  return Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const resolvedHomePath = expandHomePath(
-      target.effectiveHomePath,
-      yield* HostProcess.HomeDirectory,
-    );
-    const environment = {
-      ...target.environment,
-      CODEX_HOME: resolvedHomePath,
-    };
-    const processRunner = yield* ProcessRunner.make();
-    const binaryPath = yield* resolveManagedCodexBinary({
-      binaryPath: expandHomePath(target.binaryPath, yield* HostProcess.HomeDirectory),
-      homeDirectory: yield* HostProcess.HomeDirectory,
-      platform: yield* HostProcessPlatform,
-      environment,
-      run: processRunner.run,
-    }).pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
-    const spawnCommand = yield* resolveCodexAppServerCommand(
-      binaryPath,
-      ["app-server", ...makeTritonAiCodexConfigArgs(environment)],
-      {
-        env: environment,
-        extendEnv: false,
-      },
-    ).pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
-    const child = yield* spawner
-      .spawn(
-        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-          cwd: target.cwd,
-          env: spawnCommand.environment,
-          extendEnv: spawnCommand.extendEnv,
-          forceKillAfter: CODEX_APP_SERVER_MANAGEMENT_FORCE_KILL_AFTER,
-          shell: spawnCommand.shell,
-        }),
-      )
-      .pipe(
-        Effect.mapError((cause) =>
-          codexOperationError(
-            operation,
-            new CodexErrors.CodexAppServerSpawnError({
-              command: `${target.binaryPath} app-server`,
-              cause,
-            }),
-          ),
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const resolvedHomePath = expandHomePath(
+    target.effectiveHomePath,
+    yield* HostProcess.HomeDirectory,
+  );
+  const environment = {
+    ...target.environment,
+    CODEX_HOME: resolvedHomePath,
+  };
+  const processRunner = yield* ProcessRunner.make();
+  const binaryPath = yield* resolveManagedCodexBinary({
+    binaryPath: expandHomePath(target.binaryPath, yield* HostProcess.HomeDirectory),
+    homeDirectory: yield* HostProcess.HomeDirectory,
+    platform: yield* HostProcessPlatform,
+    environment,
+    run: processRunner.run,
+  }).pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
+  const runtimeScope = yield* Scope.fork(yield* Scope.Scope, "sequential");
+  const runtimeLease = yield* leaseManagedCodexRuntime(binaryPath, processRunner.run).pipe(
+    Effect.provideService(Scope.Scope, runtimeScope),
+    Effect.mapError((cause) => codexOperationError(operation, cause)),
+  );
+  const spawnCommand = yield* resolveCodexAppServerCommand(
+    binaryPath,
+    [
+      "app-server",
+      ...makeTritonAiCodexConfigArgs(
+        environment,
+        (yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics).headers("management"),
+      ),
+    ],
+    {
+      env: environment,
+      extendEnv: false,
+    },
+  ).pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
+  const child = yield* spawner
+    .spawn(
+      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        cwd: target.cwd,
+        env: spawnCommand.environment,
+        extendEnv: spawnCommand.extendEnv,
+        forceKillAfter: CODEX_APP_SERVER_MANAGEMENT_FORCE_KILL_AFTER,
+        shell: spawnCommand.shell,
+      }),
+    )
+    .pipe(
+      Effect.provideService(Scope.Scope, runtimeScope),
+      Effect.mapError((cause) =>
+        codexOperationError(
+          operation,
+          new CodexErrors.CodexAppServerSpawnError({
+            command: `${target.binaryPath} app-server`,
+            cause,
+          }),
         ),
-      );
-    const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child)).pipe(
-      Effect.mapError((cause) => codexOperationError(operation, cause)),
+      ),
     );
-    const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
-      Effect.provide(clientContext),
-    );
+  if (runtimeLease)
+    yield* runtimeLease
+      .bindChild(Number(child.pid))
+      .pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
+  const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child)).pipe(
+    Effect.mapError((cause) => codexOperationError(operation, cause)),
+  );
+  const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+    Effect.provide(clientContext),
+  );
 
-    yield* client
-      .request("initialize", buildCodexInitializeParams())
-      .pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
-    yield* client
-      .notify("initialized", undefined)
-      .pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
-    return yield* useClient(client).pipe(
-      Effect.mapError((cause) => codexOperationError(operation, cause)),
-    );
-  });
-}
+  yield* client
+    .request("initialize", buildCodexInitializeParams())
+    .pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
+  yield* client
+    .notify("initialized", undefined)
+    .pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
+  return yield* useClient(client).pipe(
+    Effect.mapError((cause) => codexOperationError(operation, cause)),
+  );
+});
 
 export const listCodexPlugins = Effect.fn("listCodexPlugins")(function* (input?: {
   readonly includeRemote?: boolean;

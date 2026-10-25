@@ -73,11 +73,10 @@ const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
 const PROJECT_FAVICON_TOKEN_BUCKET_MS = 30 * 60 * 1000;
 const HTML_ATTACHMENT_TOKEN_BUCKET_MS = 30 * 60 * 1000;
 const PROJECT_FAVICON_VERSION_PREFIX = "v";
-// Clients draw project icons from a 96px thumbnail at most.
 const PROJECT_FAVICON_ICNS_MIN_SIZE = 96;
 const INLINE_VIDEO_MIME_TYPE_PATTERN = /^video\/[\w!#$&^.+-]+$/i;
-// Extensions a document viewer or audio player may request inline. The extension comes from
-// the attachment id the server assigned, never from the client's mime type.
+// The extension comes from the attachment id the server assigned, never from
+// the client's mime type.
 const INLINE_PREVIEW_MIME_TYPES: Record<string, string> = {
   pdf: "application/pdf",
   html: "text/html",
@@ -118,17 +117,14 @@ const AssetClaimsSchema = Schema.Union([
     filePath: Schema.String,
     device: Schema.String,
     inode: Schema.String,
+    downloadName: Schema.optionalKey(Schema.String),
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("attachment"),
     attachmentId: Schema.String,
-    /** Decided at mint time. Absent tokens (from before this field) serve
-        inline, which is only ever the image case. */
     download: Schema.optionalKey(Schema.Boolean),
-    /** Display name and mime the caller supplied at mint time; drive the
-        download filename and Content-Type. */
     fileName: Schema.optionalKey(Schema.String),
     mimeType: Schema.optionalKey(Schema.String),
     renderIntent: Schema.optionalKey(Schema.Literal("mcp-app")),
@@ -206,8 +202,6 @@ export type ResolvedAsset =
       readonly kind: "github-media";
       readonly url: string;
       readonly cwd: string;
-      /** When the signed URL that granted this stops working, which bounds how long a client
-          may keep the bytes it fetched with it. */
       readonly expiresAt: number;
     };
 
@@ -238,7 +232,6 @@ const optionOnNotFound = <A, R>(
     }),
   );
 
-/** Reads a stored MCP HTML snapshot; null means it exceeds the preview limit. */
 export const readMcpAppHtml = Effect.fn("AssetAccess.readMcpAppHtml")(function* (filePath: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   // Stored snapshots also contain a bounded CSP meta tag (up to 32 domains
@@ -256,10 +249,6 @@ export const readMcpAppHtml = Effect.fn("AssetAccess.readMcpAppHtml")(function* 
   return bytes;
 });
 
-/**
- * Decodes one image a tool returned inline; null when the stored item has no
- * such image, or it is larger than a provider turn accepts.
- */
 const readToolOutputImage = Effect.fn("AssetAccess.readToolOutputImage")(function* (input: {
   readonly threadId: ThreadId;
   readonly itemId: TurnItemId;
@@ -347,12 +336,6 @@ const resolveCanonicalWorkspaceFileForRequest = (input: {
     Effect.orElseSucceed(() => null),
   );
 
-/**
- * Reads pixel dimensions from an image's header so clients can reserve the
- * exact box before the bytes arrive. Best effort: an unreadable or unsupported
- * file just leaves the field out, and the client measures after decode. Only
- * formats the parser understands are opened; SVG and the rest are skipped.
- */
 const HEADER_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 
 /** From the identity-checked, non-blocking handle the caller already holds. */
@@ -375,11 +358,45 @@ const readImageDimensionsFromHeader = (filePath: string) =>
     Effect.orElseSucceed((): ImageDimensions | null => null),
   );
 
+const finalizeFileDownload = Effect.fn("AssetAccess.finalizeFileDownload")(function* (input: {
+  readonly canonicalFile: string;
+  readonly fileName: string;
+  readonly resource: AssetResource;
+  readonly expiresAt: number;
+}) {
+  const identity = yield* openMediaFile(input.canonicalFile).pipe(
+    Effect.map((file) =>
+      file === null ? null : { device: file.info.dev.toString(), inode: file.info.ino.toString() },
+    ),
+    Effect.scoped,
+    Effect.mapError(
+      (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+    ),
+  );
+  if (identity === null) {
+    return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+  }
+  // Downloads grant one file, never the directory-relative access HTML previews need.
+  return {
+    claims: {
+      version: 1 as const,
+      kind: "media-file-exact" as const,
+      filePath: input.canonicalFile,
+      ...identity,
+      downloadName: input.fileName,
+      expiresAt: input.expiresAt,
+    },
+    fileName: input.fileName,
+    imageDimensions: null,
+  };
+});
+
 const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMediaFileAsset")(
   function* (input: {
     readonly requestedPath: string;
     readonly resource: AssetResource;
     readonly expiresAt: number;
+    readonly download?: boolean;
   }) {
     const path = yield* Path.Path;
     const canonicalFile = yield* resolveCanonicalFile(input.requestedPath).pipe(
@@ -388,7 +405,18 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
       ),
     );
     if (!canonicalFile) {
-      return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+      return yield* new AssetWorkspaceAssetNotFoundError({
+        resource: input.resource,
+        checkedPath: input.requestedPath,
+      });
+    }
+    if (input.download) {
+      return yield* finalizeFileDownload({
+        canonicalFile,
+        fileName: path.basename(input.requestedPath),
+        resource: input.resource,
+        expiresAt: input.expiresAt,
+      });
     }
     if (hostPreviewMimeTypeFromExtension(path.extname(canonicalFile)) === null) {
       return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
@@ -414,7 +442,10 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
       ),
     );
     if (!opened) {
-      return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+      return yield* new AssetWorkspaceAssetNotFoundError({
+        resource: input.resource,
+        checkedPath: input.requestedPath,
+      });
     }
     return {
       claims: {
@@ -436,6 +467,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
     readonly requestedPath: string;
     readonly resource: AssetResource;
     readonly expiresAt: number;
+    readonly download?: boolean;
   }) {
     const path = yield* Path.Path;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -454,7 +486,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
             }),
         ),
       );
-    if (!isWorkspacePreviewEntryPath(resolved.relativePath)) {
+    if (!input.download && !isWorkspacePreviewEntryPath(resolved.relativePath)) {
       return yield* new AssetPreviewTypeValidationError({
         resource: input.resource,
       });
@@ -474,6 +506,14 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
     if (!canonicalFile) {
       return yield* new AssetWorkspaceAssetNotFoundError({
         resource: input.resource,
+      });
+    }
+    if (input.download) {
+      return yield* finalizeFileDownload({
+        canonicalFile,
+        fileName: path.basename(resolved.relativePath),
+        resource: input.resource,
+        expiresAt: input.expiresAt,
       });
     }
     const canonicalWorkspaceRoot = yield* fileSystem.realPath(input.workspaceRoot).pipe(
@@ -518,8 +558,8 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   readonly attachmentDisposition?: "inline" | "attachment";
   readonly attachmentFileName?: string;
   readonly projectFaviconPath?: string;
-  /** The project's clone has not landed, so its icon is reported missing without a lookup. */
-  readonly projectCheckoutPending?: boolean;
+  /** Where a cloned project's checkout stands, while the clone tracker still knows it. */
+  readonly projectCheckout?: "pending" | "cloned";
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -551,6 +591,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         requestedPath,
         resource: input.resource,
         expiresAt,
+        download: input.resource.disposition === "attachment",
       });
       claims = finalized.claims;
       fileName = finalized.fileName;
@@ -577,6 +618,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         requestedPath: input.resource.path,
         resource: input.resource,
         expiresAt,
+        download: input.resource.disposition === "attachment",
       });
       claims = finalized.claims;
       fileName = finalized.fileName;
@@ -584,15 +626,16 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       break;
     }
     case "draft-workspace-file": {
-      // The draft names its workspace root in the resource itself; an explicit
-      // root only overrides it.
       const draftWorkspaceRoot = input.workspaceRoot ?? input.resource.cwd;
-      if (path.isAbsolute(input.resource.path)) {
-        // An absolute draft path serves exactly like an absolute media path.
+      const hostPath = input.resource.path.startsWith("~/")
+        ? expandHomePath(input.resource.path, yield* HostProcess.HomeDirectory)
+        : input.resource.path;
+      if (path.isAbsolute(hostPath)) {
         const finalized = yield* finalizeAbsoluteMediaFileAsset({
-          requestedPath: input.resource.path,
+          requestedPath: hostPath,
           resource: input.resource,
           expiresAt,
+          download: input.resource.disposition === "attachment",
         });
         claims = finalized.claims;
         fileName = finalized.fileName;
@@ -613,6 +656,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         requestedPath: input.resource.path,
         resource: input.resource,
         expiresAt,
+        download: input.resource.disposition === "attachment",
       });
       claims = finalized.claims;
       fileName = finalized.fileName;
@@ -630,10 +674,6 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           resource: input.resource,
         });
       }
-      // Generic files carry their extension inside the attachment id (that
-      // shape resolves the on-disk path); images do not. Videos and images
-      // render inline. Other generic files download unless a viewer requests
-      // a supported document or audio format inline.
       const extension = parseAttachmentFileExtension(input.resource.attachmentId);
       const isGenericFile = extension !== null;
       const videoMimeType = input.resource.mimeType?.split(";", 1)[0]?.trim() ?? "";
@@ -683,19 +723,22 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       );
       const faviconResolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
       // A lookup in a half-cloned checkout would cache a miss that outlives the clone.
-      const faviconPath = input.projectCheckoutPending
-        ? null
-        : yield* faviconResolver
-            .resolvePath(workspaceRoot, input.projectFaviconPath ?? undefined)
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new AssetProjectFaviconResolutionError({
-                    resource: input.resource,
-                    cause,
-                  }),
-              ),
-            );
+      // Once it lands, a miss cached before (by enrichment) is stale too.
+      if (input.projectCheckout === "cloned") yield* faviconResolver.invalidate(workspaceRoot);
+      const faviconPath =
+        input.projectCheckout === "pending"
+          ? null
+          : yield* faviconResolver
+              .resolvePath(workspaceRoot, input.projectFaviconPath ?? undefined)
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AssetProjectFaviconResolutionError({
+                      resource: input.resource,
+                      cause,
+                    }),
+                ),
+              );
       const isExternalOverride =
         faviconPath !== null &&
         input.projectFaviconPath !== undefined &&
@@ -795,7 +838,6 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         index: input.resource.index,
         expiresAt,
       };
-      // The allowed types are all `image/<extension>`.
       fileName = `image-${input.resource.index + 1}.${image.mimeType.slice("image/".length)}`;
       imageDimensions = readImageDimensions(image.bytes);
       break;
@@ -983,7 +1025,7 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
   if (decodedPath === null) return null;
   const path = yield* Path.Path;
   if (claims.kind === "media-file-exact") {
-    if (decodedPath !== path.basename(claims.filePath)) return null;
+    if (decodedPath !== (claims.downloadName ?? path.basename(claims.filePath))) return null;
     const canonicalFile = yield* resolveCanonicalFile(claims.filePath).pipe(
       Effect.tapError((cause) =>
         Effect.logError("Failed to resolve canonical media path.", {
@@ -994,7 +1036,10 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       Effect.orElseSucceed(() => null),
     );
     if (canonicalFile !== claims.filePath) return null;
-    const mimeType = hostPreviewMimeTypeFromExtension(path.extname(canonicalFile));
+    const mimeType =
+      claims.downloadName === undefined
+        ? hostPreviewMimeTypeFromExtension(path.extname(canonicalFile))
+        : "application/octet-stream";
     if (!mimeType) return null;
     const file = yield* openMediaFile(canonicalFile, claims).pipe(
       Effect.tapError((cause) =>
@@ -1003,7 +1048,18 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       Effect.orElseSucceed(() => null),
     );
     return file
-      ? ({ kind: "file", path: canonicalFile, mimeType, file } satisfies ResolvedAsset)
+      ? ({
+          kind: "file",
+          path: canonicalFile,
+          mimeType,
+          file,
+          ...(claims.downloadName === undefined
+            ? {}
+            : {
+                disposition: "attachment" as const,
+                downloadName: claims.downloadName,
+              }),
+        } satisfies ResolvedAsset)
       : null;
   }
   if (claims.kind === "workspace-file-exact") {
