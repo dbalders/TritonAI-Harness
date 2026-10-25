@@ -303,7 +303,18 @@ export function AttachmentFilePreview(props: {
           <FileSurfaceAction
             label={renderedToggleLabel(renderedMode, rendered)}
             pressed={rendered}
-            onPress={() => setRendered((value) => !value)}
+            onPress={() => {
+              if (
+                kind === "html" &&
+                !rendered &&
+                !props.file &&
+                Date.now() - authorizedAt.current > STALE_URL_MS
+              ) {
+                setRemoteUrl(null);
+                setRevision((value) => value + 1);
+              }
+              setRendered((value) => !value);
+            }}
           >
             <MorphIcon
               className="size-3.5"

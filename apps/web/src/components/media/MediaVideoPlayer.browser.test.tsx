@@ -167,3 +167,48 @@ it("retains the original playhead while a second renewal replaces a loading sour
   expect(video.playbackRate).toBe(1.25);
   expect(video.paused).toBe(false);
 });
+
+it("keeps the pending playhead when a renewed source fails before loading", async () => {
+  const bytes = Uint8Array.from(atob(renewalVideoBase64), (value) => value.charCodeAt(0));
+  const urls = [
+    URL.createObjectURL(new Blob([bytes], { type: "video/webm" })),
+    URL.createObjectURL(new Blob(["invalid replacement"], { type: "video/webm" })),
+    URL.createObjectURL(new Blob([bytes], { type: "video/webm" })),
+  ];
+  using _urls = { [Symbol.dispose]: () => urls.forEach((url) => URL.revokeObjectURL(url)) };
+  const refresh = vi.fn();
+  function Player(props: { readonly broken?: boolean }) {
+    const [recovered, setRecovered] = useState(false);
+    return (
+      <MediaVideoPlayer
+        src={urls[recovered ? 2 : props.broken ? 1 : 0]!}
+        label="Recovered renewal clip"
+        onRetry={async () => {
+          refresh();
+          setRecovered(true);
+        }}
+      />
+    );
+  }
+  await using screen = await render(<Player />);
+  const initial = screen.container.querySelector("video")!;
+  await metadataReady(initial);
+  await screen.getByLabelText("Recovered renewal clip").click();
+  initial.currentTime = 7;
+  await seekFinished(initial);
+  initial.playbackRate = 1.25;
+  await initial.play();
+  const position = initial.currentTime;
+  await screen.rerender(<Player broken />);
+  await vi.waitFor(() => {
+    const recovered = screen.container.querySelector("video");
+    expect(recovered?.src).toBe(urls[2]);
+    expect(recovered?.readyState).toBeGreaterThanOrEqual(1);
+  });
+  const recovered = screen.container.querySelector("video")!;
+  await seekFinished(recovered);
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(recovered.currentTime).toBeGreaterThanOrEqual(position - 0.25);
+  expect(recovered.playbackRate).toBe(1.25);
+  expect(recovered.paused).toBe(false);
+});

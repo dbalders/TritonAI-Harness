@@ -143,11 +143,14 @@ export function MediaVideoPlayer({
     if (manual) automaticRecovery.current = { resourceKey, used: true };
     setRetrying(true);
     if (video)
-      setResume({
-        time: video.currentTime,
-        playing: playingVideo === video,
-        rate: video.playbackRate,
-      });
+      setResume(
+        (current) =>
+          current ?? {
+            time: video.currentTime,
+            playing: playingVideo === video,
+            rate: video.playbackRate,
+          },
+      );
     const result = await settlePromise(async () => {
       await onRetry?.();
     });
@@ -244,11 +247,14 @@ export function MediaVideoPlayer({
             automaticRecovery.current.used = true;
             if (latestSrc !== null && src !== latestSrc) {
               if (video)
-                setResume({
-                  time: video.currentTime,
-                  playing: playingVideo === video,
-                  rate: video.playbackRate,
-                });
+                setResume(
+                  (current) =>
+                    current ?? {
+                      time: video.currentTime,
+                      playing: playingVideo === video,
+                      rate: video.playbackRate,
+                    },
+                );
               setPlaybackSource(null);
               setPlayingVideo(null);
             } else if (src !== null && onRetry) {

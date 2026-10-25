@@ -125,6 +125,34 @@ describe("attachment HTML preview recovery", () => {
     expect(alert(screen)).toBeNull();
     expect(screen.container.querySelector("iframe")?.title).toBe("document.html");
   });
+
+  it("reauthorizes before rendering after a long source-reading session", async () => {
+    setup();
+    let now = 0;
+    using _now = vi.spyOn(Date, "now").mockImplementation(() => now);
+    using _fetch = stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<p>Captured HTML</p>")),
+    );
+    await using screen = await openRemote();
+    await toggleMode(screen, "Show HTML source");
+    await vi.waitFor(() =>
+      expect(screen.container.querySelector("pre")?.textContent).toBe("<p>Captured HTML</p>"),
+    );
+    expect(refresh).toHaveBeenCalledTimes(1);
+    now = 121_000;
+    let completeRenewal!: (value: string | null) => void;
+    const renewing = new Promise<string | null>((resolve) => {
+      completeRenewal = resolve;
+    });
+    refresh.mockReturnValueOnce(renewing);
+    await toggleMode(screen, "Show rendered page");
+    expect(screen.container.querySelector("iframe")).toBeNull();
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await act(() => completeRenewal(renewedUrl));
+    expect(screen.container.querySelector("iframe")?.getAttribute("src")).toBe(renewedUrl);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 it("renews an open attachment video for each mounted asset query update", async () => {
