@@ -49,4 +49,26 @@ it.layer(NodeServices.layer)("browser test workflow prerequisites", (it) => {
         assert.isUndefined(steps[browserSetup]?.if, "a cold runner always needs Chromium");
       }),
   );
+
+  it.effect.each(["test", "test_server"] as const)(
+    "Nightly %s has at least the regular CI browser setup and test budget",
+    (jobName) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const ciPath = yield* path.fromFileUrl(
+          new URL("../.github/workflows/ci.yml", import.meta.url),
+        );
+        const nightlyPath = yield* path.fromFileUrl(
+          new URL("../.github/workflows/nightly.yml", import.meta.url),
+        );
+        const ci = parse(yield* fs.readFileString(ciPath));
+        const nightly = parse(yield* fs.readFileString(nightlyPath));
+        assert.isAtLeast(
+          nightly.jobs[jobName]["timeout-minutes"],
+          ci.jobs[jobName]["timeout-minutes"],
+          "Nightly must budget for browser installation and the full test suite",
+        );
+      }),
+  );
 });

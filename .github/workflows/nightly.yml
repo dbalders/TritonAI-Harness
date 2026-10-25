@@ -711,7 +711,8 @@ jobs:
       - preflight
     if: needs.preflight.outputs.build == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Include browser/native setup and the expanded workspace suite, as CI does.
+    timeout-minutes: 25
     steps:
       - *a2
       - *a3
@@ -729,7 +730,8 @@ jobs:
       - preflight
     if: needs.preflight.outputs.build == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Browser dependency setup can consume several minutes before tests start.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
