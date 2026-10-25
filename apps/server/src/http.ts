@@ -172,36 +172,40 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
 ) {
   const headers = assetResponseHeaders(asset.path, asset);
   if (!asset.download && headers["Content-Type"] === "text/html; charset=utf-8") {
-    const bytes = yield* readMcpAppHtml(
+    const load = readMcpAppHtml(
       asset.path,
       asset.file,
       asset.renderIntent === "mcp-app" ? undefined : HTML_RENDER_MAX_PAGE_BYTES + 128 * 1024,
+    ).pipe(
+      Effect.flatMap((bytes) =>
+        bytes === null
+          ? Effect.fail(new HtmlPreview.HtmlPreviewError({ reason: "too_large" }))
+          : Effect.succeed(new TextDecoder().decode(bytes)),
+      ),
     );
-    if (bytes === null) {
-      return HttpServerResponse.text(
-        "HTML is too large to preview. Download the file to inspect it.",
-        {
-          status: 413,
-          headers: { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" },
-        },
-      );
-    }
-    const preview = yield* (yield* HtmlPreview.HtmlPreview)
-      .render(new TextDecoder().decode(bytes))
-      .pipe(Effect.catchTags({ HtmlPreviewError: () => Effect.succeed(null) }));
-    if (preview === null)
-      return HttpServerResponse.text(
-        "HTML preview is temporarily unavailable. Download the file to inspect it.",
-        {
-          status: 503,
-          headers: { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" },
-        },
-      );
-    const body = new TextEncoder().encode(preview.html);
-    Object.assign(headers, preview.headers, { "Content-Length": String(body.byteLength) });
-    return method === "HEAD"
-      ? HttpServerResponse.empty({ status: 200, headers })
-      : HttpServerResponse.uint8Array(body, { headers });
+    return yield* (yield* HtmlPreview.HtmlPreview).render(load).pipe(
+      Effect.map((preview) => {
+        const body = new TextEncoder().encode(preview.html);
+        Object.assign(headers, preview.headers, { "Content-Length": String(body.byteLength) });
+        return method === "HEAD"
+          ? HttpServerResponse.empty({ status: 200, headers })
+          : HttpServerResponse.uint8Array(body, { headers });
+      }),
+      Effect.catchTags({
+        HtmlPreviewError: (error) =>
+          Effect.succeed(
+            HttpServerResponse.text(
+              error.reason === "too_large"
+                ? "HTML is too large to preview. Download the file to inspect it."
+                : "HTML preview is temporarily unavailable. Download the file to inspect it.",
+              {
+                status: error.reason === "too_large" ? 413 : 503,
+                headers: { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" },
+              },
+            ),
+          ),
+      }),
+    );
   }
   const mediaFile = asset.file;
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;

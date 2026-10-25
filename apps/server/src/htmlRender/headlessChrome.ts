@@ -69,7 +69,7 @@ interface PageContent {
   readonly headers: ReadonlyArray<{ readonly name: string; readonly value: string }>;
 }
 const pageBody = Effect.fn("headlessChrome.pageBody")(function* (html: string) {
-  const preview = yield* (yield* HtmlPreview.HtmlPreview).render(html).pipe(
+  const preview = yield* (yield* HtmlPreview.HtmlPreview).render(Effect.succeed(html)).pipe(
     Effect.mapError(
       (cause) =>
         new HtmlRenderBrowserError({

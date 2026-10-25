@@ -17,6 +17,7 @@ import * as Tracer from "effect/Tracer";
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServerResponse } from "effect/http";
 import { openMediaFile } from "./assets/MediaFile.ts";
 import * as HtmlPreviewTestkit from "./assets/HtmlPreview.testkit.ts";
+import * as HtmlPreview from "./assets/HtmlPreview.ts";
 
 import { injectMcpAppCsp, MCP_APP_MAX_HTML_BYTES } from "@t3tools/shared/mcpApp";
 import { ORCHESTRATION_PROTOCOL_HEADER } from "@t3tools/contracts";
@@ -34,6 +35,34 @@ import {
 import * as ServerHttp from "./http.ts";
 
 describe("MCP app asset responses", () => {
+  it.effect("rejects busy GET and HEAD previews before reading their HTML descriptor", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-html-admission-" });
+      const filePath = yield* fs
+        .realPath(directory)
+        .pipe(Effect.map((root) => path.join(root, "report.html")));
+      yield* fs.writeFileString(filePath, `<p>${"x".repeat(1024 * 1024)}</p>`);
+      const file = yield* openMediaFile(filePath);
+      if (file === null) throw new Error("Expected a validated descriptor");
+      using reads = vi.spyOn(file.handle, "read");
+      for (const method of ["GET", "HEAD"] as const) {
+        const response = HttpServerResponse.toWeb(
+          yield* assetFileResponse({ path: filePath, file }, undefined, undefined, method).pipe(
+            Effect.provideService(
+              HtmlPreview.HtmlPreview,
+              HtmlPreview.HtmlPreview.of({
+                render: () => Effect.fail(new HtmlPreview.HtmlPreviewError({ reason: "busy" })),
+              }),
+            ),
+          ),
+        );
+        expect(response.status).toBe(503);
+      }
+      expect(reads).not.toHaveBeenCalled();
+    }).pipe(Effect.scoped, Effect.provide(layerFileResponse)),
+  );
   it.effect("applies the offline policy even when a caller requests MCP app intent", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

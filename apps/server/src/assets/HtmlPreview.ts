@@ -20,17 +20,19 @@ const Headers = Schema.Record(Schema.String, Schema.String);
 const decodeHeaders = Schema.decodeEffect(Schema.fromJsonString(Headers));
 
 export class HtmlPreviewError extends Schema.TaggedError<HtmlPreviewError>()("HtmlPreviewError", {
-  reason: Schema.String,
+  reason: Schema.Literals(["unavailable", "too_large", "busy", "processing"]),
 }) {}
+const isHtmlPreviewError = Schema.is(HtmlPreviewError);
 
 export class HtmlPreview extends Context.Service<
   HtmlPreview,
   {
-    readonly render: (
-      html: string,
+    readonly render: <E, R>(
+      load: Effect.Effect<string, E, R>,
     ) => Effect.Effect<
       { readonly html: string; readonly headers: typeof Headers.Type },
-      HtmlPreviewError
+      HtmlPreviewError,
+      R
     >;
   }
 >()("t3/assets/HtmlPreview") {}
@@ -39,17 +41,16 @@ const make = Effect.fn("HtmlPreview.make")(function* (command: ServerWorkerComma
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const slots = yield* Semaphore.make(2);
   let admitted = 0;
-  const render = Effect.fn("HtmlPreview.render")((html: string) =>
+  const render = Effect.fn("HtmlPreview.render")(<E, R>(load: Effect.Effect<string, E, R>) =>
     Effect.suspend(() => {
-      if (!command)
-        return Effect.fail(new HtmlPreviewError({ reason: "Preview worker unavailable" }));
-      if (Buffer.byteLength(html) > HTML_PREVIEW_MAX_INPUT_BYTES) {
-        return Effect.fail(new HtmlPreviewError({ reason: "HTML is too large to preview" }));
-      }
-      if (admitted >= 4)
-        return Effect.fail(new HtmlPreviewError({ reason: "Preview worker busy" }));
+      if (!command) return Effect.fail(new HtmlPreviewError({ reason: "unavailable" }));
+      if (admitted >= 4) return Effect.fail(new HtmlPreviewError({ reason: "busy" }));
       admitted += 1;
       return Effect.gen(function* () {
+        const html = yield* load;
+        if (Buffer.byteLength(html) > HTML_PREVIEW_MAX_INPUT_BYTES) {
+          return yield* new HtmlPreviewError({ reason: "too_large" });
+        }
         const flags = [
           `--max-old-space-size=${HEAP_MB}`,
           "--disallow-code-generation-from-strings",
@@ -82,9 +83,7 @@ const make = Effect.fn("HtmlPreview.make")(function* (command: ServerWorkerComma
               Stream.runForEach((chunk) => {
                 size += chunk.byteLength;
                 if (size > MAX_OUTPUT_BYTES)
-                  return Effect.fail(
-                    new HtmlPreviewError({ reason: "Preview output exceeded its limit" }),
-                  );
+                  return Effect.fail(new HtmlPreviewError({ reason: "processing" }));
                 chunks.push(chunk);
                 return Effect.void;
               }),
@@ -95,20 +94,20 @@ const make = Effect.fn("HtmlPreview.make")(function* (command: ServerWorkerComma
         );
         if (code !== 0)
           return yield* new HtmlPreviewError({
-            reason: "Preview exceeded its processing limits",
+            reason: "processing",
           });
         const output = Buffer.concat(chunks);
         const headerEnd = output.indexOf(10);
         if (headerEnd < 0 || headerEnd > 4096)
-          return yield* new HtmlPreviewError({ reason: "Invalid preview worker response" });
+          return yield* new HtmlPreviewError({ reason: "processing" });
         const headers = yield* decodeHeaders(output.subarray(0, headerEnd).toString("utf8"));
         return { html: output.subarray(headerEnd + 1).toString("utf8"), headers };
       }).pipe(
         Effect.scoped,
         slots.withPermit,
         Effect.timeout("15 seconds"),
-        Effect.mapError(
-          () => new HtmlPreviewError({ reason: "Preview could not be processed safely" }),
+        Effect.mapError((cause) =>
+          isHtmlPreviewError(cause) ? cause : new HtmlPreviewError({ reason: "processing" }),
         ),
         Effect.ensuring(
           Effect.sync(() => {

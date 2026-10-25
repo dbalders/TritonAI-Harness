@@ -15,7 +15,7 @@ it.effect("sanitizes UTF-8 through the bounded server worker", () =>
   Effect.gen(function* () {
     const preview = yield* HtmlPreview.HtmlPreview;
     const result = yield* preview.render(
-      '<p>Résumé ☃</p><script>throw new Error("author script")</script>',
+      Effect.succeed('<p>Résumé ☃</p><script>throw new Error("author script")</script>'),
     );
     expect(result.html).toContain("Résumé ☃");
     expect(result.html).not.toContain("author script");
@@ -46,7 +46,9 @@ it.effect("kills a synchronous parser when the request is cancelled", () =>
     }).pipe(Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, observedSpawner)));
     yield* Effect.gen(function* () {
       const preview = yield* HtmlPreview.HtmlPreview;
-      const request = yield* preview.render("<p>Synthetic</p>").pipe(Effect.forkScoped);
+      const request = yield* preview
+        .render(Effect.succeed("<p>Synthetic</p>"))
+        .pipe(Effect.forkScoped);
       const pid = yield* Deferred.await(started);
       // This continuation runs while the child remains in its synchronous loop.
       expect(() => process.kill(pid, 0)).not.toThrow();
@@ -59,8 +61,8 @@ it.effect("kills a synchronous parser when the request is cancelled", () =>
 it.effect("refuses HTML when the runtime cannot resolve a worker", () =>
   Effect.gen(function* () {
     const preview = yield* HtmlPreview.HtmlPreview;
-    const error = yield* preview.render("<p>Synthetic</p>").pipe(Effect.flip);
-    expect(error.reason).toBe("Preview worker unavailable");
+    const error = yield* preview.render(Effect.succeed("<p>Synthetic</p>")).pipe(Effect.flip);
+    expect(error.reason).toBe("unavailable");
   }).pipe(
     Effect.provide(HtmlPreview.layerWithCommand(null).pipe(Layer.provide(NodeServices.layer))),
   ),
