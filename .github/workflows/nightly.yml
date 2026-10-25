@@ -711,7 +711,8 @@ jobs:
       - preflight
     if: needs.preflight.outputs.build == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Include browser/native setup and the expanded workspace suite, as CI does.
+    timeout-minutes: 25
     steps:
       - *a2
       - *a3
@@ -719,6 +720,8 @@ jobs:
         run: vp run --filter @t3tools/desktop ensure:electron
       - name: Install browser secret helper build libraries
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - name: Install Chromium for web browser tests
+        run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
       - name: Test
         run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
   test_server:
@@ -727,7 +730,8 @@ jobs:
       - preflight
     if: needs.preflight.outputs.build == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Browser dependency setup can consume several minutes before tests start.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
