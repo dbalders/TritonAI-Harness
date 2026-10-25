@@ -4,11 +4,10 @@ import type {
   ProviderApprovalOption,
   RuntimeRequestId,
 } from "@t3tools/contracts";
-import { ScrollView, View } from "react-native";
+import { Modal, ScrollView, View } from "react-native";
 import { useState } from "react";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { Sheet } from "../../components/ui/Sheet";
-import { SourceFileSurface } from "../files/SourceFileSurface";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { REVIEW_MONO_FONT_FAMILY } from "../review/reviewDiffRendering";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import type { PendingApproval } from "../../lib/threadActivity";
@@ -117,22 +116,34 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
         </Text>
       ) : null}
       {reviewOpen && props.approval.detail ? (
-        <Sheet
+        <Modal
           key={props.approval.requestId}
-          title="Approval request"
-          onClose={() => setReviewOpenFor(null)}
+          visible
+          animationType="slide"
+          presentationStyle="fullScreen"
+          onRequestClose={() => setReviewOpenFor(null)}
         >
-          <View className="flex-1">
-            <SourceFileSurface
-              contents={props.approval.detail}
-              path={`approval-${props.approval.requestId}.txt`}
-              selectable
-            />
-            <SafeAreaView edges={["bottom"]} className="border-t border-border bg-card-alt p-4">
-              {actions}
-            </SafeAreaView>
-          </View>
-        </Sheet>
+          <SafeAreaProvider>
+            <View className="flex-1 bg-sheet">
+              <SafeAreaView style={{ flex: 1 }}>
+                <View className="flex-row items-center justify-between border-b border-border p-4">
+                  <Text className="font-t3-bold text-lg text-foreground">Approval request</Text>
+                  <Button label="Close" tone="text" onPress={() => setReviewOpenFor(null)} />
+                </View>
+                <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
+                  <Text
+                    selectable
+                    className="text-sm leading-6 text-foreground"
+                    style={{ fontFamily: REVIEW_MONO_FONT_FAMILY }}
+                  >
+                    {props.approval.detail}
+                  </Text>
+                </ScrollView>
+                <View className="border-t border-border bg-card-alt p-4">{actions}</View>
+              </SafeAreaView>
+            </View>
+          </SafeAreaProvider>
+        </Modal>
       ) : null}
     </View>
   );
