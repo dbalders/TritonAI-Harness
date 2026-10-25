@@ -166,16 +166,6 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })))(
   },
 );
 
-it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })))(
-  "migration upgrade from 033",
-  (it) => {},
-);
-
-it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })))(
-  "migration upgrade from 034",
-  (it) => {},
-);
-
 // Upgrade the database shape already shipped by Harness before appending upstream IDs.
 it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
   "migration upgrade from shipped Harness 046",
@@ -228,10 +218,4 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
       }),
     );
   },
-);
-
-// Upgrade the database shape shipped by Harness through the v0.0.42 integration.
-it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
-  "migration upgrade from shipped Harness 055",
-  (it) => {},
 );
