@@ -4,12 +4,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import {
-  HTML_RENDER_MEASURE_FONTS,
-  HTML_RENDER_MEASURE_WIDTHS,
-  htmlRenderTheme,
-} from "@t3tools/shared/htmlRender";
-import { T3_CODE_DARK_THEME_COLORS } from "@t3tools/shared/themePalettes";
+import { HTML_RENDER_MEASURE_WIDTHS } from "@t3tools/shared/htmlRender";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Base64 from "effect/encoding/Base64";
@@ -352,7 +347,7 @@ describe("HtmlRender", () => {
   );
 
   it.live(
-    "screenshots the page in headless Chrome with the requested theme and every console level",
+    "screenshots offline markup without executing page-authored scripts",
     (ctx) =>
       Effect.gen(function* () {
         const executable = (yield* HostProcess.Environment)[TEST_BROWSER_ENV];
@@ -386,23 +381,11 @@ describe("HtmlRender", () => {
             capturedHeight: 300,
             missingImages: ["/nonexistent/t3-missing.png"],
           });
-          // Headless Chrome prefers light, so a dark background proves the theme fragment applied.
-          expect(preview.consoleMessages).toEqual(
-            expect.arrayContaining([
-              { level: "log", text: "ready 3" },
-              { level: "log", text: "focus 2px -2px 400 400" },
-              { level: "info", text: HTML_RENDER_MEASURE_FONTS.sans },
-              {
-                level: "warning",
-                text: htmlRenderTheme(T3_CODE_DARK_THEME_COLORS, "dark").variables["--background"],
-              },
-              { level: "error", text: "boom" },
-              {
-                level: "error",
-                text: expect.stringMatching(/^Error: broken chart\n\s+at page\.html:1:\d+$/),
-              },
-            ]),
-          );
+          expect(
+            preview.consoleMessages.some((message) =>
+              /ready 3|boom|broken chart/.test(message.text),
+            ),
+          ).toBe(false);
         }).pipe(Effect.provide(layerHtmlRender(executable)));
       }),
     30_000,
@@ -432,7 +415,7 @@ describe("HtmlRender", () => {
           });
 
           const texts = preview.consoleMessages.map((message) => message.text);
-          expect(texts).toContain("secret: none");
+          expect(texts).not.toContain("frame loaded");
           expect(texts.join(" ")).not.toContain("abc123");
         }).pipe(Effect.scoped, Effect.provide(layerHtmlRender(executable)));
       }),
@@ -504,7 +487,7 @@ describe("HtmlRender", () => {
           const htmlRender = yield* HtmlRender.HtmlRender;
           const reference = yield* htmlRender.publish({
             threadId: ThreadId.make("thread-html-measure"),
-            html: '<div id="chart" style="background:#888"></div><script>document.getElementById("chart").style.height = innerWidth / 2 + "px";</script>',
+            html: '<div id="chart" style="background:#888; aspect-ratio:2 / 1"></div>',
             title: "Chart",
             height: 600,
           });

@@ -405,7 +405,7 @@ describe("AssetAccess", () => {
         const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-mcp-html-" });
         const error = yield* readMcpAppHtml(path.join(directory, "missing.html")).pipe(Effect.flip);
         expect(error._tag).toBe("PlatformError");
-        expect(error.reason._tag).toBe("NotFound");
+        if (error._tag === "PlatformError") expect(error.reason._tag).toBe("NotFound");
       }).pipe(Effect.provide(NodeServices.layer)),
     );
   });

@@ -11,11 +11,9 @@ import {
   htmlRenderShortcutsMessage,
   htmlRenderThemeFragment,
   htmlRenderThemeMessage,
-  htmlRenderResult,
   readHtmlRenderContentHeight,
   readHtmlRenderImageRequest,
   readHtmlRenderKeyDown,
-  readHtmlRenderLinkRequest,
 } from "@t3tools/shared/htmlRender";
 import {
   isMacPlatform,
@@ -24,13 +22,10 @@ import {
 } from "@t3tools/shared/keybindings";
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 
-import { useOpenLink } from "~/browser/useOpenLink";
 import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "~/components/chat/ExpandedImagePreview";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
 import { shortcutConflictKey } from "~/keybindings";
-import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
-import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 
@@ -104,7 +99,8 @@ function FileDocument(props: { readonly src: string; readonly title: string }) {
       src={src}
       title={props.title}
       className="min-h-0 flex-1 border-0 bg-white"
-      sandbox="allow-scripts allow-forms allow-popups allow-downloads"
+      referrerPolicy="no-referrer"
+      sandbox="allow-scripts"
     />
   );
 }
@@ -185,51 +181,6 @@ export function HtmlRenderDocument(props: {
       );
     },
   );
-  const openChangeRequestLink = useOpenChangeRequestLink(props.threadRef);
-  const openLink = useOpenLink(props.threadRef);
-  const open = useEffectEvent((url: string, modifiers: { metaKey: boolean; ctrlKey: boolean }) => {
-    if (modifiers.metaKey || modifiers.ctrlKey) {
-      void readLocalApi()
-        ?.shell.openExternal(url)
-        .catch((cause: unknown) => console.error(cause));
-      return;
-    }
-    if (
-      props.threadRef !== undefined &&
-      openChangeRequestLink(
-        { ...modifiers, preventDefault: () => undefined, stopPropagation: () => undefined },
-        url,
-        undefined,
-        props.threadRef.environmentId,
-      )
-    ) {
-      return;
-    }
-    void openLink(url, { event: modifiers }).catch((cause: unknown) => console.error(cause));
-  });
-  // It asks the client, which opens the link only while this frame has focus
-  // and the reader has just used the app. A page can take focus by script, so
-  // this stops opens on load, not a page that waits for the reader's next click
-  // or key.
-  useEffect(() => {
-    const openLink = (event: MessageEvent) => {
-      const frame = frameRef.current;
-      const request = readHtmlRenderLinkRequest(event.data);
-      if (
-        request === undefined ||
-        frame === null ||
-        event.source !== frame.contentWindow ||
-        document.activeElement !== frame ||
-        navigator.userActivation?.isActive === false
-      ) {
-        return;
-      }
-      open(request.url, request);
-      frame.contentWindow?.postMessage(htmlRenderResult(request.id), "*");
-    };
-    window.addEventListener("message", openLink);
-    return () => window.removeEventListener("message", openLink);
-  }, []);
   useEffect(() => {
     const replayKey = (event: MessageEvent) => {
       const frame = frameRef.current;
@@ -297,7 +248,8 @@ export function HtmlRenderDocument(props: {
         src={src}
         title={props.title}
         // Never allow-same-origin: the opaque origin keeps the page out of the app's session.
-        sandbox="allow-scripts allow-forms"
+        referrerPolicy="no-referrer"
+        sandbox="allow-scripts"
         loading="lazy"
         onLoad={() => {
           setLoaded(true);

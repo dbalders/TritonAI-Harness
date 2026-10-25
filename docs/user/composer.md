@@ -337,7 +337,9 @@ styles, or images from neighboring files.
 
 On web and desktop, HTML and PDF files open as rendered pages. Switch an HTML
 file to source view to read its markup; a link to a specific line opens source
-automatically. HTML previews cannot access your TritonAI Harness session.
+automatically. HTML previews stay offline and cannot access your TritonAI Harness session.
+Page scripts, external resources, and external navigation are disabled; download
+the original file to inspect code that the safe preview does not run.
 
 The file viewer recognizes images, HTML, and PDF files by their filename extension,
 including filenames or folders containing `#` or `?`.

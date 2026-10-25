@@ -11,6 +11,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { publicProxy } from "./publicProxy.ts";
+import { offlineHtmlPreview } from "../assets/HtmlPreviewPolicy.ts";
 
 export class HtmlRenderBrowserError extends Schema.TaggedError<HtmlRenderBrowserError>()(
   "HtmlRenderBrowserError",
@@ -63,8 +64,19 @@ const textEncoder = new TextEncoder();
 /**
  * Node's encoder, since pages run to 25 MiB.
  */
-const pageBody = (html: string) =>
-  Buffer.from(Buffer.from(html, "utf8").toString("base64"), "latin1");
+interface PageContent {
+  readonly body: Uint8Array;
+  readonly headers: ReadonlyArray<{ readonly name: string; readonly value: string }>;
+}
+const pageBody = (html: string): PageContent => {
+  const preview = offlineHtmlPreview(html);
+  return {
+    body: Buffer.from(Buffer.from(preview.html, "utf8").toString("base64"), "latin1"),
+    headers: Object.entries({ "Content-Type": "text/html; charset=utf-8", ...preview.headers }).map(
+      ([name, value]) => ({ name, value }),
+    ),
+  };
+};
 
 const CdpMessage = Schema.fromJsonString(
   Schema.Struct({
@@ -168,7 +180,7 @@ const EXIT_SIGNAL = /signal: '(SIG[A-Z0-9]+)'/;
 
 interface PageEvents {
   readonly mainFrameId: string;
-  body: Uint8Array | undefined;
+  body: PageContent | undefined;
   loaded: Deferred.Deferred<void, BrowserFailure> | undefined;
   readonly consoleMessages: Array<ConsoleMessage>;
   omittedConsoleMessages: number;
@@ -262,12 +274,12 @@ const launchBrowser = Effect.fnUntraced(function* (input: {
   // Serves the page. Its body is shared bytes between two small JSON halves,
   // queued together, so loading a page of up to 25 MiB at several widths never
   // copies it on this side.
-  const fulfillPage = (sessionId: string, requestId: string, body: Uint8Array) =>
+  const fulfillPage = (sessionId: string, requestId: string, body: PageContent) =>
     Queue.offerAll(outgoing, [
       textEncoder.encode(
-        `{"id":${++nextId},"sessionId":${JSON.stringify(sessionId)},"method":"Fetch.fulfillRequest","params":{"requestId":${JSON.stringify(requestId)},"responseCode":200,"responseHeaders":[{"name":"Content-Type","value":"text/html; charset=utf-8"}],"body":"`,
+        `{"id":${++nextId},"sessionId":${JSON.stringify(sessionId)},"method":"Fetch.fulfillRequest","params":{"requestId":${JSON.stringify(requestId)},"responseCode":200,"responseHeaders":${JSON.stringify(body.headers)},"body":"`,
       ),
-      body,
+      body.body,
       textEncoder.encode('"}}\0'),
     ]).pipe(Effect.asVoid);
 
@@ -460,7 +472,7 @@ const launchBrowser = Effect.fnUntraced(function* (input: {
       sessionId,
     );
 
-    const load = Effect.fnUntraced(function* (body: Uint8Array, urlFragment: string) {
+    const load = Effect.fnUntraced(function* (body: PageContent, urlFragment: string) {
       const loaded = yield* Deferred.make<void, BrowserFailure>();
       events.body = body;
       events.loaded = loaded;
