@@ -16,13 +16,17 @@ import {
 export const HTML_PREVIEW_MAX_INPUT_BYTES = HTML_RENDER_MAX_PAGE_BYTES + 128 * 1024;
 const MAX_OUTPUT_BYTES = HTML_PREVIEW_MAX_INPUT_BYTES * 2;
 const HEAP_MB = 256;
+const MAX_QUEUED_PREVIEWS = 64;
 const Headers = Schema.Record(Schema.String, Schema.String);
 const decodeHeaders = Schema.decodeEffect(Schema.fromJsonString(Headers));
 
 export class HtmlPreviewError extends Schema.TaggedError<HtmlPreviewError>()("HtmlPreviewError", {
   reason: Schema.Literals(["unavailable", "too_large", "busy", "processing"]),
+  cause: Schema.optional(Schema.Defect()),
 }) {}
 const isHtmlPreviewError = Schema.is(HtmlPreviewError);
+const processingError = (cause: unknown) =>
+  isHtmlPreviewError(cause) ? cause : new HtmlPreviewError({ reason: "processing", cause });
 
 export class HtmlPreview extends Context.Service<
   HtmlPreview,
@@ -44,10 +48,11 @@ const make = Effect.fn("HtmlPreview.make")(function* (command: ServerWorkerComma
   const render = Effect.fn("HtmlPreview.render")(<E, R>(load: Effect.Effect<string, E, R>) =>
     Effect.suspend(() => {
       if (!command) return Effect.fail(new HtmlPreviewError({ reason: "unavailable" }));
-      if (admitted >= 4) return Effect.fail(new HtmlPreviewError({ reason: "busy" }));
+      if (admitted >= 2 + MAX_QUEUED_PREVIEWS)
+        return Effect.fail(new HtmlPreviewError({ reason: "busy" }));
       admitted += 1;
       return Effect.gen(function* () {
-        const html = yield* load;
+        const html = yield* load.pipe(Effect.mapError(processingError));
         if (Buffer.byteLength(html) > HTML_PREVIEW_MAX_INPUT_BYTES) {
           return yield* new HtmlPreviewError({ reason: "too_large" });
         }
@@ -62,19 +67,21 @@ const make = Effect.fn("HtmlPreview.make")(function* (command: ServerWorkerComma
         }
         const viaEnvironment = command.limitsVia === "environment";
         if (viaEnvironment) environment.NODE_OPTIONS = flags.join(" ");
-        const child = yield* spawner.spawn(
-          ChildProcess.make(
-            command.command,
-            [...(viaEnvironment ? [] : flags), ...command.args, String(HEAP_MB)],
-            {
-              env: environment,
-              extendEnv: false,
-              stdin: { stream: Stream.make(Buffer.from(html)) },
-              stderr: "ignore",
-              killSignal: "SIGKILL",
-            },
-          ),
-        );
+        const child = yield* spawner
+          .spawn(
+            ChildProcess.make(
+              command.command,
+              [...(viaEnvironment ? [] : flags), ...command.args, String(HEAP_MB)],
+              {
+                env: environment,
+                extendEnv: false,
+                stdin: { stream: Stream.make(Buffer.from(html)) },
+                stderr: "ignore",
+                killSignal: "SIGKILL",
+              },
+            ),
+          )
+          .pipe(Effect.mapError(processingError));
         const chunks: Array<Uint8Array> = [];
         let size = 0;
         const [, code] = yield* Effect.all(
@@ -100,15 +107,15 @@ const make = Effect.fn("HtmlPreview.make")(function* (command: ServerWorkerComma
         const headerEnd = output.indexOf(10);
         if (headerEnd < 0 || headerEnd > 4096)
           return yield* new HtmlPreviewError({ reason: "processing" });
-        const headers = yield* decodeHeaders(output.subarray(0, headerEnd).toString("utf8"));
+        const headers = yield* decodeHeaders(output.subarray(0, headerEnd).toString("utf8")).pipe(
+          Effect.mapError(processingError),
+        );
         return { html: output.subarray(headerEnd + 1).toString("utf8"), headers };
       }).pipe(
         Effect.scoped,
         slots.withPermit,
         Effect.timeout("15 seconds"),
-        Effect.mapError((cause) =>
-          isHtmlPreviewError(cause) ? cause : new HtmlPreviewError({ reason: "processing" }),
-        ),
+        Effect.mapError(processingError),
         Effect.ensuring(
           Effect.sync(() => {
             admitted -= 1;

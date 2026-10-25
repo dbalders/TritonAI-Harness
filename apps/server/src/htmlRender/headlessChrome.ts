@@ -564,6 +564,7 @@ export const captureHtmlScreenshot = Effect.fn("headlessChrome.captureHtmlScreen
     readonly width: number;
     readonly urlFragment: string;
   }) {
+    const body = yield* pageBody(input.html);
     const path = yield* Path.Path;
     const directory = yield* scratchDirectory;
     const browser = yield* launchBrowser({
@@ -572,7 +573,6 @@ export const captureHtmlScreenshot = Effect.fn("headlessChrome.captureHtmlScreen
       profileDirectory: path.join(directory, "profile"),
     });
     const page = yield* browser.openPage(input.width);
-    const body = yield* pageBody(input.html);
     const contentHeight = yield* page.load(body, input.urlFragment);
     const capturedHeight = Math.max(1, Math.min(contentHeight, MAX_CAPTURE_HEIGHT));
     const png = yield* page.screenshot(capturedHeight);
@@ -601,6 +601,7 @@ export const measureHtmlHeights = Effect.fn("headlessChrome.measureHtmlHeights")
   readonly widths: ReadonlyArray<number>;
   readonly urlFragment: string;
 }) {
+  const body = yield* pageBody(input.html);
   const path = yield* Path.Path;
   const directory = yield* scratchDirectory;
   const browser = yield* launchBrowser({
@@ -608,7 +609,6 @@ export const measureHtmlHeights = Effect.fn("headlessChrome.measureHtmlHeights")
     noSandbox: input.noSandbox,
     profileDirectory: path.join(directory, "profile"),
   });
-  const body = yield* pageBody(input.html);
   return yield* Effect.forEach(
     input.widths,
     (width) =>

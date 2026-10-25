@@ -11,6 +11,31 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HtmlPreview from "./HtmlPreview.ts";
 import * as HtmlPreviewTestkit from "./HtmlPreview.testkit.ts";
 
+it.effect("retains a failed input's diagnostic cause", () =>
+  Effect.gen(function* () {
+    const preview = yield* HtmlPreview.HtmlPreview;
+    const cause = new Error("Synthetic descriptor read failure");
+    const error = yield* preview.render(Effect.fail(cause)).pipe(Effect.flip);
+    expect(error.reason).toBe("processing");
+    expect(error.cause).toBe(cause);
+  }).pipe(Effect.provide(HtmlPreviewTestkit.layer.pipe(Layer.provide(NodeServices.layer)))),
+);
+
+it.effect("loads eight visible previews concurrently without busy responses", () =>
+  Effect.gen(function* () {
+    const preview = yield* HtmlPreview.HtmlPreview;
+    const results = yield* Effect.forEach(
+      Array.from({ length: 8 }, (_, i) => i),
+      (i) => preview.render(Effect.succeed(`<p>Synthetic concurrent report ${i}</p>`)),
+      { concurrency: "unbounded" },
+    );
+    for (const [i, result] of results.entries()) {
+      expect(result.html).toContain(`Synthetic concurrent report ${i}`);
+      expect(result.headers["Content-Security-Policy"]).toContain("connect-src 'none'");
+    }
+  }).pipe(Effect.provide(HtmlPreviewTestkit.layer.pipe(Layer.provide(NodeServices.layer)))),
+);
+
 it.effect("sanitizes UTF-8 through the bounded server worker", () =>
   Effect.gen(function* () {
     const preview = yield* HtmlPreview.HtmlPreview;
