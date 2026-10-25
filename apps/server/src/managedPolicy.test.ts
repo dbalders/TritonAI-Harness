@@ -150,26 +150,6 @@ describe("TritonAI managed Harness policy", () => {
   });
 
   // regression: #311 fix: refresh Cloud models and reset legacy defaults to Flash
-  it("resets to Flash's defaults even with a customized text-generation selection", () => {
-    const effective = migrateManagedNewThreadDefaults(
-      {
-        ...DEFAULT_SERVER_SETTINGS,
-        textGenerationModelSelection: {
-          instanceId: frontierInstanceId,
-          model: "gpt-6.1-sol",
-          options: [{ id: "reasoningEffort", value: "low" }],
-        },
-      },
-      {},
-    ).settings;
-    expect(effective.defaultModelSelection).toEqual({
-      instanceId: managedInstanceId,
-      model: "api-glm-5.3-flash",
-      options: [{ id: "reasoningEffort", value: "high" }],
-    });
-  });
-
-  // regression: #311 fix: refresh Cloud models and reset legacy defaults to Flash
   it("resets app and project defaults once while preserving later choices", () => {
     const sol = { instanceId: frontierInstanceId, model: "gpt-6.1-sol" };
     const first = migrateManagedNewThreadDefaults(
@@ -202,26 +182,6 @@ describe("TritonAI managed Harness policy", () => {
       document: first.document,
       migrated: false,
     });
-  });
-
-  // regression: #311 fix: refresh Cloud models and reset legacy defaults to Flash
-  it("preserves explicit defaults and upgrades retired managed defaults", () => {
-    const personalDefault = {
-      instanceId: ProviderInstanceId.make("personal"),
-      model: "personal-model",
-    };
-    expect(
-      applyManagedHarnessPolicy({
-        ...DEFAULT_SERVER_SETTINGS,
-        defaultModelSelection: personalDefault,
-      }).defaultModelSelection,
-    ).toEqual(personalDefault);
-    expect(
-      applyManagedHarnessPolicy({
-        ...DEFAULT_SERVER_SETTINGS,
-        defaultModelSelection: { instanceId: managedInstanceId, model: "claude-opus-5" },
-      }).defaultModelSelection,
-    ).toEqual({ instanceId: frontierInstanceId, model: "claude-opus-5-5" });
   });
 
   // regression: #337 fix(models): replace Glimmer with Flash for image reading

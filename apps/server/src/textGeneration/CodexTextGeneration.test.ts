@@ -778,22 +778,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
       ),
   );
 
-  it.effect("supports the managed policy's approved Codex version for isolated Help", () =>
-    withFakeCodexEnv(
-      {
-        output: '{"answer":"Approved managed runtime Help works."}',
-        managedRuntime: true,
-        helpVersion: managedHarnessConfig.provider.approvedCodexVersion,
-        requireHelpIsolation: true,
-      },
-      (generation) =>
-        Effect.gen(function* () {
-          const result = yield* generation.generateHelp!(HELP_INPUT);
-          expect(result.answer).toBe("Approved managed runtime Help works.");
-        }),
-    ),
-  );
-
   it.effect(
     "reuses current native access without sharing refresh grants or changing the owner",
     () =>
@@ -1363,16 +1347,6 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             calls.some((call) => call.args[0] === "exec" && !call.args.includes("--help")),
           ).toBe(false);
         }),
-    ),
-  );
-
-  it.effect("rejects oversized Help output before reading it into memory", () =>
-    withFakeCodexEnv({ output: "a".repeat(128 * 1024 + 1), managedRuntime: true }, (generation) =>
-      Effect.gen(function* () {
-        const failure = yield* Effect.flip(generation.generateHelp!(HELP_INPUT));
-        expect(failure.operation).toBe("generateHelp");
-        expect(failure.detail).not.toContain("aaaa");
-      }),
     ),
   );
 

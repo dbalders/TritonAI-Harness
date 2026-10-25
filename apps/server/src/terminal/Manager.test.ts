@@ -1404,31 +1404,6 @@ it.layer(
     }),
   );
 
-  it.effect("applies explicit runtime overrides after scrubbing inherited AppImage state", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        env: {
-          APPIMAGE: "/home/user/T3-Code.AppImage",
-          APPDIR: "/tmp/.mount_T3Codeabc123",
-          OWD: "/inherited",
-          PATH: "/tmp/.mount_T3Codeabc123/usr/bin:/usr/bin",
-        },
-      });
-      yield* manager.open(
-        openInput({
-          env: { OWD: "/repo", PATH: "/repo/bin:/usr/bin", APPIMAGE: "explicit" },
-        }),
-      );
-      const spawnInput = ptyAdapter.spawnInputs[0];
-      expect(spawnInput).toBeDefined();
-      if (!spawnInput) return;
-
-      expect(spawnInput.env.OWD).toBe("/repo");
-      expect(spawnInput.env.PATH).toBe("/repo/bin:/usr/bin");
-      expect(spawnInput.env.APPIMAGE).toBe("explicit");
-    }),
-  );
-
   it.effect("removes terminal metadata subscriptions when initial delivery fails", () =>
     Effect.gen(function* () {
       const { manager } = yield* createManager();

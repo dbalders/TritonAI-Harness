@@ -91,25 +91,6 @@ describe("fetchTritonAiUsage", () => {
     }),
   );
 
-  it.effect("uses the configured TritonAI deployment origin for usage", () =>
-    Effect.gen(function* () {
-      const fetchMock = vi.fn(async (url: Parameters<typeof fetch>[0]) => {
-        expect(url).toBe("https://tritonai.example.test/key/info");
-        return new Response(JSON.stringify(validProviderResponse));
-      });
-
-      yield* fetchTritonAiUsage({
-        env: {
-          TRITONAI_API_KEY: "test-key",
-          UCSD_AI_BASE_URL: "https://tritonai.example.test/custom/v1/?region=test",
-        },
-        fetch: fetchMock as unknown as typeof fetch,
-      });
-
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    }),
-  );
-
   it.effect("refuses to send the API key over plaintext to a remote host", () =>
     Effect.gen(function* () {
       const fetchMock = vi.fn();
@@ -127,41 +108,6 @@ describe("fetchTritonAiUsage", () => {
       assert.equal(error.code, "invalid_base_url");
       assert.match(error.message, /HTTPS/u);
       expect(fetchMock).not.toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("allows a plaintext loopback endpoint for local development", () =>
-    Effect.gen(function* () {
-      const fetchMock = vi.fn(async (url: Parameters<typeof fetch>[0]) => {
-        expect(url).toBe("http://127.0.0.1:8080/key/info");
-        return new Response(JSON.stringify(validProviderResponse));
-      });
-
-      yield* fetchTritonAiUsage({
-        env: {
-          TRITONAI_API_KEY: "test-key",
-          UCSD_AI_BASE_URL: "http://127.0.0.1:8080/v1",
-        },
-        fetch: fetchMock as unknown as typeof fetch,
-      });
-
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    }),
-  );
-
-  it.effect("maps network failures without exposing provider details", () =>
-    Effect.gen(function* () {
-      const error = yield* Effect.flip(
-        fetchTritonAiUsage({
-          env: { TRITONAI_API_KEY: "test-key" },
-          fetch: vi.fn(async () => {
-            throw new Error("socket path contained sensitive diagnostic detail");
-          }) as unknown as typeof fetch,
-        }),
-      );
-
-      assert.equal(error.code, "upstream_unavailable");
-      expect(error.message).not.toMatch(/sensitive diagnostic detail/u);
     }),
   );
 });

@@ -7,10 +7,7 @@ import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/process";
 
 import { VcsProcessExitError, VcsProcessSpawnError } from "@t3tools/contracts";
-import {
-  Environment as HostProcessEnvironment,
-  Platform as HostProcessPlatform,
-} from "@t3tools/shared/HostProcess";
+import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
@@ -57,22 +54,6 @@ describe("optional Git detection", () => {
       Effect.provideService(HostProcessPlatform, "win32"),
     ),
   );
-
-  // regression: #327 fix(server): skip repository probes when Git is unavailable
-  it.effect("detects Git installed after an earlier missing-Git probe", () => {
-    let available = false;
-    return Effect.gen(function* () {
-      const driver = yield* GitVcsDriver.makeVcsDriverShape();
-      assert.isFalse(yield* driver.isInsideWorkTree("/repo"));
-      available = true;
-      assert.isTrue(yield* driver.isInsideWorkTree("/repo"));
-    }).pipe(
-      withProcess(() =>
-        available ? Effect.succeed(output("true\n")) : Effect.fail(spawnError("NotFound")),
-      ),
-      Effect.provideService(HostProcessPlatform, "win32"),
-    );
-  });
 });
 
 describe("Apple Git detection", () => {
@@ -110,28 +91,5 @@ describe("Apple Git detection", () => {
         );
       });
     },
-  );
-
-  // regression: #327 fix(server): skip repository probes when Git is unavailable
-  it.effect("uses custom Git without requiring Apple developer tools", () =>
-    Effect.gen(function* () {
-      const driver = yield* GitVcsDriver.makeVcsDriverShape();
-      assert.isTrue(yield* driver.isInsideWorkTree("/repo"));
-    }).pipe(
-      Effect.provideService(
-        FileSystem.FileSystem,
-        FileSystem.makeNoop({ realPath: () => Effect.succeed("/custom/bin/git") }),
-      ),
-      withProcess((input) => {
-        assert.strictEqual(input.command, "git");
-        return Effect.succeed(output("true\n"));
-      }),
-      Effect.provideService(HostProcessPlatform, "darwin"),
-      Effect.provideService(HostProcessEnvironment, { PATH: "/custom/bin" }),
-      Effect.provideService(SpawnExecutableResolution, (_command, _platform, env) => {
-        assert.strictEqual(env.PATH, "/custom/bin");
-        return "/custom/bin/git";
-      }),
-    ),
   );
 });

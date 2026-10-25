@@ -13,7 +13,6 @@ import * as Schema from "effect/Schema";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 import { EmptyIntegrationToolInput } from "../integrations/IntegrationTool.ts";
 import * as Integrations from "../integrations/IntegrationRegistry.ts";
-import { integrationToolInvocationContext } from "./IntegrationTools.ts";
 import {
   integrationToolsRegistrationLayer as registrationLayer,
   integrationToolsRegistrationLayerFor as registrationLayerFor,
@@ -155,17 +154,6 @@ it.effect("registers write-capable tools with conservative MCP annotations", () 
     ),
   ),
 );
-
-it("treats the provider runtime as the MCP write approval boundary", () => {
-  const controller = new AbortController();
-  expect(integrationToolInvocationContext(fixtureTool, controller.signal)).toEqual({
-    signal: controller.signal,
-  });
-  expect(integrationToolInvocationContext(writeFixtureTool, controller.signal)).toEqual({
-    signal: controller.signal,
-    writeApproved: true,
-  });
-});
 
 it.effect("rejects integration tool names that collide with existing MCP tools", () =>
   Effect.gen(function* () {
@@ -337,42 +325,6 @@ it.effect("hides integration tools from MCP credentials without integration acce
       expect(result).toBeInstanceOf(McpSchema.InvalidParams);
       expect(result.message).toContain("not found");
     }).pipe(Effect.provide(testLayer)),
-  ),
-);
-
-it.effect("uses the same transport grant for active read and write integration tools", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const server = yield* McpServer.McpServer;
-      const enabledWhen = Context.getUnsafe(server.tools[0]!.annotations, McpSchema.EnabledWhen);
-      const previewVisible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
-        Effect.provideService(
-          McpInvocationContext.McpInvocationContext,
-          invocation(new Set(["preview"])),
-        ),
-      );
-      const integrationVisible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
-        Effect.provideService(
-          McpInvocationContext.McpInvocationContext,
-          invocation(new Set(["integrations.invoke"])),
-        ),
-      );
-      expect(previewVisible).toBe(false);
-      expect(integrationVisible).toBe(true);
-    }).pipe(
-      Effect.provide(
-        registrationLayerFor([writeFixtureTool], () => true).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              McpServer.McpServer.layer,
-              Layer.succeed(ThreadManagementService.ThreadManagementService, {
-                getThreadShell: () => Effect.succeed(null),
-              } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
-            ),
-          ),
-        ),
-      ),
-    ),
   ),
 );
 

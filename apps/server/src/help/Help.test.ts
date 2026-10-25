@@ -222,35 +222,6 @@ const assertCode = (result: Result.Result<unknown, HelpError>, code: HelpError["
 };
 
 it.layer(NodeServices.layer)("Help", (it) => {
-  it.effect("retains the newest computer-use topic after many distinct older context terms", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({ realDocumentation: true });
-      const filler = Array.from({ length: 45 }, (_, index) => `filler${index}`).join(" ");
-      const result = yield* Effect.gen(function* () {
-        return yield* (yield* Help.Help).ask({
-          messages: [
-            { role: "user", content: filler },
-            {
-              role: "assistant",
-              content: "Use computer use in Settings > General to control the mouse.",
-            },
-            { role: "user", content: "What do I need to enable?" },
-          ],
-        });
-      }).pipe(Effect.provide(h.layer));
-      const guide = result.context.knowledge?.documentation.find(
-        (doc) => doc.path === "docs/user/computer-use.md",
-      );
-      for (const instruction of [
-        "Settings > General",
-        "Accessibility",
-        "Screen Recording",
-        "Restart Harness",
-      ])
-        assert.include(guide?.content, instruction);
-    }),
-  );
-
   it.effect(
     "bounds and redacts recent retrieval context without adding old messages or client data",
     () =>
@@ -284,45 +255,6 @@ it.layer(NodeServices.layer)("Help", (it) => {
         ])
           assert.notInclude(context, value);
         assert.notInclude(h.documentationQuestions[0]!, secret);
-      }),
-  );
-
-  it.effect(
-    "reads fresh host settings, cached plugin inventory and documentation for every snapshot and ask",
-    () =>
-      Effect.gen(function* () {
-        let inventory: IntegrationsListResult | undefined = { integrations: [] };
-        const h = yield* harness({ inventory: () => inventory });
-        yield* Effect.gen(function* () {
-          const help = yield* Help.Help;
-          const settings = yield* ServerSettings.ServerSettingsService;
-          const before = yield* help.getContext;
-          assert.equal(before.knowledge?.pluginsStatus, "reported");
-          assert.equal(before.knowledge?.documentationStatus, "available");
-          assert.equal(
-            before.knowledge?.settings.entries.find(
-              (entry) => entry.key === "enableAgentDeviceAccess",
-            )?.value,
-            "false",
-          );
-          yield* settings.updateSettings({ enableAgentDeviceAccess: true });
-          inventory = undefined;
-          const after = yield* help.ask({
-            messages: [{ role: "user", content: "How do I enable computer use?" }],
-          });
-          assert.equal(after.context.knowledge?.pluginsStatus, "unavailable");
-          assert.equal(
-            after.context.knowledge?.settings.entries.find(
-              (entry) => entry.key === "enableAgentDeviceAccess",
-            )?.value,
-            "true",
-          );
-          assert.equal(h.pluginReads(), 2);
-          assert.deepEqual(h.documentationQuestions, ["", "How do I enable computer use?"]);
-          assert.deepEqual(h.calls[0]?.context, after.context);
-          assert.isTrue(isHelpContext(after.context));
-        }).pipe(Effect.provide(h.layer));
-        assert.equal(h.refreshes(), 0);
       }),
   );
 

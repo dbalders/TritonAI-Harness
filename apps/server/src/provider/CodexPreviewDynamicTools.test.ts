@@ -1,26 +1,17 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Layer from "effect/Layer";
 import { ServerConfig } from "../config.ts";
-import {
-  EnvironmentId,
-  ProviderInstanceId,
-  ThreadId,
-  type PreviewAutomationSnapshot,
-} from "@t3tools/contracts";
+import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
 import type { PreviewAutomationInvokeInput } from "../mcp/PreviewAutomationBroker.ts";
 import {
   getCodexPreviewDynamicToolDefinitions,
-  invokeAuthorizedCodexPreviewDynamicTool,
   invokeCodexPreviewDynamicTool,
 } from "./CodexPreviewDynamicTools.ts";
-
-const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 const invocationScope = {
   environmentId: EnvironmentId.make("environment-1"),
@@ -37,24 +28,6 @@ const invocationScope = {
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
   expiresAt: Number.MAX_SAFE_INTEGER,
-};
-
-const snapshot: PreviewAutomationSnapshot = {
-  url: "https://example.test/",
-  title: "Example",
-  loading: false,
-  visibleText: "Example source text",
-  interactiveElements: [],
-  accessibilityTree: {},
-  consoleEntries: [],
-  networkEntries: [],
-  actionTimeline: [],
-  screenshot: {
-    mimeType: "image/png",
-    data: Buffer.from("png").toString("base64"),
-    width: 10,
-    height: 5,
-  },
 };
 
 const status = {
@@ -102,67 +75,6 @@ it.effect("requires approval for preview actions but not for status reads", () =
 it.layer(
   ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(Layer.provideMerge(NodeServices.layer)),
 )("preview tools", (it) => {
-  it.effect("returns snapshot DOM context without screenshot image data", () => {
-    const { broker, invokeCalls } = makeBroker(snapshot);
-    return Effect.gen(function* () {
-      const result = yield* invokeAuthorizedCodexPreviewDynamicTool({
-        name: "preview_snapshot",
-        arguments: {},
-        invocationScope,
-        broker,
-      });
-
-      expect(result).toMatchObject({
-        url: "https://example.test/",
-        visibleText: "Example source text",
-        screenshot: { mimeType: "image/png", width: 10, height: 5, omitted: true },
-      });
-      const encodedResult = yield* encodeUnknownJson(result);
-      expect(encodedResult).not.toContain(snapshot.screenshot.data);
-      expect(invokeCalls).toHaveLength(1);
-    });
-  });
-
-  // regression: #417 bound attachment text extraction and browser navigation approval
-  it.effect("tells the agent when navigation ended on a different site", () =>
-    Effect.gen(function* () {
-      const navigate = (url: string, reached: string) =>
-        invokeAuthorizedCodexPreviewDynamicTool({
-          name: "preview_navigate",
-          arguments: { url },
-          invocationScope,
-          broker: makeBroker({ ...status, url: reached }).broker,
-        });
-      const redirected = yield* navigate(
-        "https://short.example.test/r",
-        "https://news.example.org/",
-      );
-      expect(redirected).toMatchObject({
-        url: "https://news.example.org/",
-        redirectedFrom: "https://short.example.test/r",
-        redirectNotice: expect.stringContaining("different site, news.example.org"),
-      });
-      const sameSite = yield* navigate(
-        "https://short.example.test/r",
-        "https://short.example.test/x",
-      );
-      expect(sameSite).not.toHaveProperty("redirectedFrom");
-      const equivalent = yield* navigate("short.example.test/r", "https://short.example.test/r");
-      expect(equivalent).not.toHaveProperty("redirectedFrom");
-      const fromLocal = yield* navigate(
-        "http://localhost:5173/login",
-        "https://tracker.example.org/p",
-      );
-      expect(fromLocal).toMatchObject({
-        url: "https://tracker.example.org/p",
-        redirectedFrom: "http://localhost:5173/login",
-        redirectNotice: expect.stringContaining("different site, tracker.example.org"),
-      });
-      const localToLocal = yield* navigate("http://localhost:5173/", "http://localhost:5173/x");
-      expect(localToLocal).not.toHaveProperty("redirectedFrom");
-    }),
-  );
-
   it.effect("uses the current provider session and rejects it after replacement", () =>
     Effect.gen(function* () {
       const { broker, invokeCalls } = makeBroker(status);

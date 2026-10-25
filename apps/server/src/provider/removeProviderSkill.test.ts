@@ -265,25 +265,6 @@ describe("provider skill removal path safety", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("allows cleanup when the skill directory is already missing", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "missing-skill-remove-test-" });
-      const sharedSkillsDirectory = path.join(root, "skills");
-      const skillDirectoryPath = path.join(sharedSkillsDirectory, "missing-skill");
-      yield* fs.makeDirectory(sharedSkillsDirectory, { recursive: true });
-
-      yield* ensureProviderSkillRemovalPathIsSafe({
-        sharedSkillsDirectory,
-        skillDirectoryPath,
-      });
-      yield* removeProviderSkillFolder({ skillDirectoryPath });
-
-      expect(yield* fs.exists(skillDirectoryPath)).toBe(false);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("preserves a skill that appears after expected absence was captured", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

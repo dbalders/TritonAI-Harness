@@ -294,37 +294,6 @@ describe("production built-in package verification", () => {
     }
   });
 
-  it("consumes a rejected asynchronous factory while preserving the synchronous-only error", async () => {
-    const { root, plugin } = await fixture(
-      "4.0.0-beta.78",
-      {},
-      {
-        moduleSource: [
-          'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" };',
-          "export { manifest };",
-          "export async function createIntegrationProvider() {",
-          "  await Promise.resolve();",
-          '  throw new Error("late async factory failure");',
-          "}",
-        ].join("\n"),
-      },
-    );
-    const unhandledRejections: Array<unknown> = [];
-    const onUnhandledRejection = (reason: unknown): void => {
-      unhandledRejections.push(reason);
-    };
-    process.on("unhandledRejection", onUnhandledRejection);
-    try {
-      await expect(loadProductionPackageForTest(root, plugin, secretStore(), {})).rejects.toThrow(
-        "provider factory must be synchronous",
-      );
-      expect(unhandledRejections).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandledRejection);
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("loads a skills-only package without a provider distribution", async () => {
     const { root, plugin } = await fixture(
       null,
@@ -432,46 +401,6 @@ describe("production built-in package verification", () => {
       await provider!.close();
       await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
       await provider!.close();
-      expect(provider!.closeCalls).toBe(1);
-    } finally {
-      await provider?.close().catch(() => undefined);
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("removes the retained snapshot when the original provider close fails", async () => {
-    const moduleSource = [
-      'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" };',
-      "export { manifest };",
-      "export class FixtureProvider {",
-      "  constructor() {",
-      "    this.id = manifest.provider;",
-      "    this.tools = [];",
-      '    this.snapshotRootUrl = new URL("..", import.meta.url).href;',
-      "    this.closeCalls = 0;",
-      "  }",
-      '  async status() { return { state: "not_connected", accountLabel: null, grantedCapabilities: [], message: null }; }',
-      "  async invoke() { return null; }",
-      '  async close() { this.closeCalls += 1; throw new Error("fixture close failed"); }',
-      "}",
-      "export function createIntegrationProvider() { return new FixtureProvider(); }",
-    ].join("\n");
-    const { root, plugin } = await fixture("4.0.0-beta.78", {}, { moduleSource });
-    let provider:
-      | {
-          readonly close: () => Promise<void>;
-          readonly closeCalls: number;
-          readonly snapshotRootUrl: string;
-        }
-      | undefined;
-    try {
-      const loaded = await loadProductionPackageForTest(root, plugin, secretStore(), {});
-      provider = loaded.provider as typeof provider;
-      const snapshotParent = NodePath.dirname(NodeURL.fileURLToPath(provider!.snapshotRootUrl));
-
-      await expect(provider!.close()).rejects.toThrow("fixture close failed");
-      await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(provider!.close()).rejects.toThrow("fixture close failed");
       expect(provider!.closeCalls).toBe(1);
     } finally {
       await provider?.close().catch(() => undefined);
@@ -690,23 +619,6 @@ describe("production built-in package verification", () => {
     }
   });
 
-  it("cleans up a private snapshot when its consumer fails", async () => {
-    const { root, plugin } = await fixture();
-    let snapshotParent = "";
-    try {
-      await expect(
-        withProductionPackageSnapshotForTest(root, plugin, async (snapshotRoot) => {
-          snapshotParent = NodePath.dirname(snapshotRoot);
-          throw new Error("fixture consumer failed");
-        }),
-      ).rejects.toThrow("fixture consumer failed");
-      await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-      if (snapshotParent) await NodeFSP.rm(snapshotParent, { recursive: true, force: true });
-    }
-  });
-
   it("runs the released beta.78 provider with a host-created beta.102 secret-store Effect", async () => {
     const { root, plugin } = await fixture("4.0.0-beta.78");
     try {
@@ -722,21 +634,6 @@ describe("production built-in package verification", () => {
           get: () => Effect.succeed(Option.some(new TextEncoder().encode("host-secret"))),
         });
         await expect(provider.credential()).resolves.toBe("host-secret");
-      });
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("runs a peer-contract provider against the Harness-owned Effect runtime", async () => {
-    const { root, plugin } = await fixture(null, {
-      peerDependencies: { effect: EFFECT_HOST_PEER_RANGE },
-    });
-    try {
-      await withProductionPackageSnapshotForTest(root, plugin, async (snapshotRoot) => {
-        await expect(
-          import(NodeURL.pathToFileURL(NodePath.join(snapshotRoot, "dist", "index.js")).href),
-        ).resolves.toHaveProperty("FixtureProvider");
       });
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });

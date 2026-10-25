@@ -99,7 +99,7 @@ function sanitizePreviewToolResult(encodedResult: unknown): unknown {
   };
 }
 
-export const invokeAuthorizedCodexPreviewDynamicTool = Effect.fn(
+const invokeAuthorizedCodexPreviewDynamicTool = Effect.fn(
   "invokeAuthorizedCodexPreviewDynamicTool",
 )(function* (input: {
   readonly name: string;

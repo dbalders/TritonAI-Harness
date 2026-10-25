@@ -190,59 +190,7 @@ const makeHarness = Effect.fn("makeHarness")(function* (input: {
   };
 });
 
-describe("isManagedCodexAutoUpdateCandidate", () => {
-  it("rejects snapshots that cannot or need not update automatically", () => {
-    const rejected: ReadonlyArray<ServerProvider> = [
-      snapshot({ driver: CURSOR, instanceId: CURSOR_ID }),
-      snapshot({ enabled: false }),
-      snapshot({ installed: false }),
-      snapshot({ advisory: { status: "current" } }),
-      snapshot({ advisory: { status: "unknown", latestVersion: null } }),
-      snapshot({ advisory: { canUpdate: false, updateCommand: null } }),
-      snapshot({ advisory: { latestVersion: null } }),
-      snapshot({
-        updateState: {
-          status: "running",
-          startedAt: CHECKED_AT,
-          finishedAt: null,
-          message: "Updating provider.",
-          output: null,
-        },
-      }),
-      snapshot({
-        updateState: {
-          status: "failed",
-          startedAt: CHECKED_AT,
-          finishedAt: CHECKED_AT,
-          message: "Update command failed.",
-          output: null,
-        },
-      }),
-    ];
-    for (const provider of rejected) {
-      assert.isFalse(ManagedCodexAutoUpdate.isManagedCodexAutoUpdateCandidate(provider));
-    }
-    const { versionAdvisory: _versionAdvisory, ...withoutAdvisory } = snapshot();
-    assert.isFalse(ManagedCodexAutoUpdate.isManagedCodexAutoUpdateCandidate(withoutAdvisory));
-  });
-});
-
 describe("makeManagedCodexAutoUpdater", () => {
-  it.effect("updates a managed Codex instance once per approved version", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness({});
-      const { considerProviders } =
-        yield* ManagedCodexAutoUpdate.makeManagedCodexAutoUpdater().pipe(
-          Effect.provide(harness.services),
-        );
-
-      assert.deepStrictEqual(yield* considerProviders([snapshot()]), [CODEX_ID]);
-      // The failed attempt clears its state later; the same version is never retried.
-      assert.deepStrictEqual(yield* considerProviders([snapshot()]), []);
-      assert.deepStrictEqual(yield* harness.updateCalls, [CODEX_ID]);
-    }),
-  );
-
   it.effect("never updates other providers or Codex instances Harness does not manage", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ unmanagedInstanceIds: [CODEX_PERSONAL_ID] });

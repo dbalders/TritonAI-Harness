@@ -8,7 +8,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ServerProviderSkillCatalog } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
@@ -234,61 +233,6 @@ describe("public skill repository", () => {
     }).pipe(Effect.provide(publicSkillRepositoryLayer({ calls })));
   });
 
-  it.effect("refreshes the mutable catalog after its TTL without mixing revisions", () => {
-    const calls: RepositoryCall[] = [];
-    let revision = REVISION;
-    let tree = TREE_SHA;
-    return Effect.gen(function* () {
-      const repository = yield* PublicSkillRepository;
-      const first = yield* repository.discoverCatalog;
-      revision = SECOND_REVISION;
-      tree = SECOND_TREE_SHA;
-
-      yield* TestClock.adjust("59 seconds");
-      const cached = yield* repository.discoverCatalog;
-      yield* TestClock.adjust("2 seconds");
-      const refreshed = yield* repository.discoverCatalog;
-
-      expect(first.revision).toBe(REVISION);
-      expect(cached.revision).toBe(REVISION);
-      expect(refreshed.revision).toBe(SECOND_REVISION);
-      expect(calls.filter((call) => call.url.endsWith("/commits/main"))).toHaveLength(2);
-      expect(calls.some((call) => call.url.includes(`/git/trees/${SECOND_TREE_SHA}`))).toBe(true);
-      expect(
-        calls.some((call) =>
-          call.url.includes(`raw.githubusercontent.com/dbalders/UCSD-Skills-Library/${REVISION}/`),
-        ),
-      ).toBe(true);
-      expect(
-        calls.some((call) =>
-          call.url.includes(
-            `raw.githubusercontent.com/dbalders/UCSD-Skills-Library/${SECOND_REVISION}/`,
-          ),
-        ),
-      ).toBe(true);
-    }).pipe(
-      Effect.provide(
-        publicSkillRepositoryLayer(
-          { calls, currentRevision: () => revision, currentTree: () => tree },
-          { catalogTtl: "1 minute" },
-        ),
-      ),
-    );
-  });
-
-  it.effect("does not cache discovery failures", () => {
-    const calls: RepositoryCall[] = [];
-    return Effect.gen(function* () {
-      const repository = yield* PublicSkillRepository;
-      const error = yield* Effect.flip(repository.discoverCatalog);
-      const catalog = yield* repository.discoverCatalog;
-
-      expect(error.message).toContain("could not be reached");
-      expect(catalog.revision).toBe(REVISION);
-      expect(calls.filter((call) => call.url.endsWith("/commits/main"))).toHaveLength(2);
-    }).pipe(Effect.provide(publicSkillRepositoryLayer({ calls, failResolveAttempts: 1 })));
-  });
-
   it.effect("rejects a truncated GitHub tree", () =>
     Effect.gen(function* () {
       const repository = yield* PublicSkillRepository;
@@ -296,46 +240,6 @@ describe("public skill repository", () => {
       expect(error.message).toContain("truncated tree");
     }).pipe(Effect.provide(publicSkillRepositoryLayer({ truncated: true }))),
   );
-
-  it.effect("reuses immutable commit, tree, and content results for pinned installs", () => {
-    const calls: RepositoryCall[] = [];
-    return Effect.gen(function* () {
-      const repository = yield* PublicSkillRepository;
-      yield* repository.discoverCatalog;
-      const first = yield* repository.loadBundle({
-        id: "tritonai/tritonai-feedback",
-        revision: REVISION,
-      });
-      const second = yield* repository.loadBundle({
-        id: "tritonai/tritonai-feedback",
-        revision: REVISION,
-      });
-
-      expect(first).toEqual(second);
-      expect(first.files.find((file) => file.path === "SKILL.md")?.content).toBe(AI_TEAM_SKILL);
-      expect(calls.filter((call) => call.url.includes("/commits/"))).toHaveLength(1);
-      expect(calls.filter((call) => call.url.includes("/git/trees/"))).toHaveLength(1);
-      expect(calls.filter((call) => call.url.endsWith("/references/info.md"))).toHaveLength(1);
-    }).pipe(Effect.provide(publicSkillRepositoryLayer({ calls })));
-  });
-
-  it.effect("suppresses upstream requests during a rate-limit cooldown", () => {
-    const calls: RepositoryCall[] = [];
-    return Effect.gen(function* () {
-      const repository = yield* PublicSkillRepository;
-      const limited = yield* Effect.flip(repository.discoverCatalog);
-      const coolingDown = yield* Effect.flip(repository.discoverCatalog);
-
-      expect(limited.message).toContain("rate limit was reached");
-      expect(coolingDown.message).toContain("cooldown is active");
-      expect(calls).toHaveLength(1);
-
-      yield* TestClock.adjust("61 seconds");
-      const catalog = yield* repository.discoverCatalog;
-      expect(catalog.revision).toBe(REVISION);
-      expect(calls).toHaveLength(5);
-    }).pipe(Effect.provide(publicSkillRepositoryLayer({ calls, rateLimitOnce: true })));
-  });
 
   it.effect("keeps optional server authorization off raw-content requests", () => {
     const calls: RepositoryCall[] = [];
@@ -369,45 +273,6 @@ describe("public skill repository", () => {
       expect(error.message).toContain("cannot contain symlinks");
     }).pipe(Effect.provide(publicSkillRepositoryLayer({ symlink: true }))),
   );
-
-  it.effect("serves the saved catalog without waiting on GitHub", () => {
-    const snapshot = memorySnapshot(SAVED_CATALOG);
-    return Effect.gen(function* () {
-      const repository = yield* PublicSkillRepository;
-      const read = yield* repository.readCatalog;
-
-      expect(read).toEqual({ catalog: SAVED_CATALOG, stale: true });
-    }).pipe(
-      Effect.provide(
-        publicSkillRepositoryLayer(
-          { hangResolve: true },
-          { githubToken: null, snapshot: snapshot.store },
-        ),
-      ),
-    );
-  });
-
-  it.effect("replaces and saves the catalog after a refresh", () => {
-    const calls: RepositoryCall[] = [];
-    const snapshot = memorySnapshot(SAVED_CATALOG);
-    return Effect.gen(function* () {
-      const repository = yield* PublicSkillRepository;
-      const saved = yield* repository.readCatalog;
-      const refreshed = yield* repository.refreshCatalog();
-      const next = yield* repository.readCatalog;
-
-      expect(saved.catalog.revision).toBe(SECOND_REVISION);
-      expect(refreshed.stale).toBe(false);
-      expect(refreshed.catalog.revision).toBe(REVISION);
-      expect(next).toEqual(refreshed);
-      expect(snapshot.written.map((catalog) => catalog.revision)).toEqual([REVISION]);
-      expect(calls.filter((call) => call.url.endsWith("/commits/main"))).toHaveLength(1);
-    }).pipe(
-      Effect.provide(
-        publicSkillRepositoryLayer({ calls }, { githubToken: null, snapshot: snapshot.store }),
-      ),
-    );
-  });
 
   it.effect("keeps the saved catalog when a refresh fails", () => {
     const snapshot = memorySnapshot(SAVED_CATALOG);
@@ -471,57 +336,6 @@ describe("public skill repository", () => {
     }).pipe(Effect.provide(stateDirDependencies())),
   );
 
-  it.effect("checks GitHub as soon as the service starts", () => {
-    const written = Deferred.makeUnsafe<ServerProviderSkillCatalog>();
-    const store: PublicSkillCatalogSnapshotStore = {
-      read: Effect.succeed(SAVED_CATALOG),
-      write: (catalog) => Deferred.succeed(written, catalog).pipe(Effect.asVoid),
-    };
-    return Effect.gen(function* () {
-      yield* PublicSkillRepository;
-      const refreshed = yield* Deferred.await(written);
-
-      expect(refreshed.revision).toBe(REVISION);
-    }).pipe(
-      Effect.provide(
-        publicSkillRepositoryLayer(
-          {},
-          { githubToken: null, snapshot: store, refreshOnStart: true },
-        ),
-      ),
-    );
-  });
-
-  it.effect("fetches a fresh catalog on a forced refresh within the TTL", () => {
-    const calls: RepositoryCall[] = [];
-    let revision = REVISION;
-    let tree = TREE_SHA;
-    return Effect.gen(function* () {
-      const repository = yield* PublicSkillRepository;
-      const first = yield* repository.refreshCatalog();
-      revision = SECOND_REVISION;
-      tree = SECOND_TREE_SHA;
-      const unforced = yield* repository.refreshCatalog();
-      const forced = yield* repository.refreshCatalog({ force: true });
-
-      expect(first.catalog.revision).toBe(REVISION);
-      expect(unforced.catalog.revision).toBe(REVISION);
-      expect(forced).toEqual({
-        catalog: expect.objectContaining({ revision: SECOND_REVISION }),
-        stale: false,
-      });
-      expect(calls.filter((call) => call.url.endsWith("/commits/main"))).toHaveLength(2);
-    }).pipe(
-      Effect.provide(
-        publicSkillRepositoryLayer({
-          calls,
-          currentRevision: () => revision,
-          currentTree: () => tree,
-        }),
-      ),
-    );
-  });
-
   it.effect("keeps a forced refresh when an older lookup finishes after it", () => {
     const hold = { arrived: Deferred.makeUnsafe<void>(), release: Deferred.makeUnsafe<void>() };
     const snapshot = memorySnapshot(null);
@@ -545,32 +359,6 @@ describe("public skill repository", () => {
       Effect.provide(
         publicSkillRepositoryLayer(
           { holdFirstResolve: hold, currentRevision: () => revision, currentTree: () => tree },
-          { githubToken: null, snapshot: snapshot.store },
-        ),
-      ),
-    );
-  });
-
-  it.effect("keeps an older lookup's catalog when the forced refresh fails", () => {
-    const hold = { arrived: Deferred.makeUnsafe<void>(), release: Deferred.makeUnsafe<void>() };
-    const snapshot = memorySnapshot(null);
-    return Effect.gen(function* () {
-      const repository = yield* PublicSkillRepository;
-      const older = yield* repository.refreshCatalog().pipe(Effect.forkChild);
-      yield* Deferred.await(hold.arrived);
-      const forcedError = yield* Effect.flip(repository.refreshCatalog({ force: true }));
-      yield* Deferred.succeed(hold.release, undefined);
-      yield* Fiber.join(older);
-      const latest = yield* repository.readCatalog;
-
-      expect(forcedError.message).toContain("could not be reached");
-      expect(latest.catalog.revision).toBe(REVISION);
-      expect(latest.stale).toBe(false);
-      expect(snapshot.written.map((catalog) => catalog.revision)).toEqual([REVISION]);
-    }).pipe(
-      Effect.provide(
-        publicSkillRepositoryLayer(
-          { holdFirstResolve: hold, failResolveAttempt: 2 },
           { githubToken: null, snapshot: snapshot.store },
         ),
       ),

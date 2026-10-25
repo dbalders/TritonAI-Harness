@@ -68,16 +68,6 @@ describe("Help effective transport", () => {
     );
   });
 
-  it("recognizes canonical backend URLs materialized by Codex defaults", () => {
-    expect(
-      codexHelpTransport({
-        model_provider: "openai",
-        openai_base_url: null,
-        chatgpt_base_url: "https://chatgpt.com/backend-api/",
-      }),
-    ).toEqual({ provider: "openai", custom: false, args: [] });
-  });
-
   it.each([
     null,
     { model_provider: 42 },

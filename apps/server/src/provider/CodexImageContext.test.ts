@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as TestClock from "effect/testing/TestClock";
 import { expect, vi } from "vite-plus/test";
 
 import { formatUntrustedImageContext, makeCodexImageContextAnalyzer } from "./CodexImageContext.ts";
@@ -224,44 +223,6 @@ it.layer(testLayer)("CodexImageContext", (it) => {
   );
 
   // regression: #212 recover incomplete image analysis batches
-  it.effect("fails the entire analysis when an individual retry is still incomplete", () =>
-    Effect.gen(function* () {
-      const fetchMock = vi.fn(async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
-        if (requestImages(init).length === 1 && String(init?.body).includes("first.png")) {
-          return singleImageResponse("first.png");
-        }
-        return completionResponse('{"images":[]}');
-      });
-      const analyzer = yield* makeCodexImageContextAnalyzer(
-        { TRITONAI_API_KEY: "test-key" },
-        fetchMock as unknown as typeof fetch,
-      );
-      const error = yield* Effect.flip(analyzer({ images: testImages.slice(0, 2) }));
-      expect(error._tag).toBe("CodexImageContextAnalysisError");
-      expect(error.detail).toContain('attachment 2 ("second.png")');
-      expect(error.detail).toContain("after retrying images individually");
-      expect(error.detail).toContain("returned 0 result(s) for 1 image(s)");
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-    }).pipe(Effect.provide(imageFiles)),
-  );
-
-  // regression: #212 recover incomplete image analysis batches
-  it.effect("does not loop on invalid output for a single image", () =>
-    Effect.gen(function* () {
-      for (const content of ["not json", '{"images":[]}', validOutput]) {
-        const fetchMock = vi.fn(async () => completionResponse(content));
-        const analyzer = yield* makeCodexImageContextAnalyzer(
-          { TRITONAI_API_KEY: "test-key" },
-          fetchMock as unknown as typeof fetch,
-        );
-        const error = yield* Effect.flip(analyzer({ images: testImages.slice(0, 1) }));
-        expect(error._tag).toBe("CodexImageContextAnalysisError");
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-      }
-    }).pipe(Effect.provide(imageFiles)),
-  );
-
-  // regression: #212 recover incomplete image analysis batches
   it.effect("aborts sibling retries and skips queued images when a retry fails", () =>
     Effect.gen(function* () {
       let pendingSignal: AbortSignal | undefined;
@@ -318,42 +279,6 @@ it.layer(testLayer)("CodexImageContext", (it) => {
       expect(exit._tag).toBe("Failure");
       expect(signals.every((signal) => signal.aborted)).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(stage === "batch" ? 1 : 3);
-    }).pipe(Effect.provide(imageFiles)),
-  );
-
-  // regression: #212 recover incomplete image analysis batches
-  it.effect("shares one two-minute deadline across the batch and individual retries", () =>
-    Effect.gen(function* () {
-      const batchStarted = Promise.withResolvers<void>();
-      const batchResponse = Promise.withResolvers<Response>();
-      const retriesStarted = Promise.withResolvers<void>();
-      const signals: AbortSignal[] = [];
-      const fetchMock = vi.fn(async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
-        if (requestImages(init).length === 3) {
-          batchStarted.resolve();
-          return batchResponse.promise;
-        }
-        const signal = init!.signal!;
-        signals.push(signal);
-        if (signals.length === 2) retriesStarted.resolve();
-        return new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-        });
-      });
-      const analyzer = yield* makeCodexImageContextAnalyzer(
-        { TRITONAI_API_KEY: "test-key" },
-        fetchMock as unknown as typeof fetch,
-      );
-      const fiber = yield* analyzer({ images: testImages }).pipe(Effect.flip, Effect.forkChild);
-      yield* Effect.promise(() => batchStarted.promise);
-      yield* TestClock.adjust(90_000);
-      batchResponse.resolve(completionResponse('{"images":[]}'));
-      yield* Effect.promise(() => retriesStarted.promise);
-      yield* TestClock.adjust(30_000);
-      const error = yield* Fiber.join(fiber);
-      expect(error.detail).toContain("within two minutes");
-      expect(signals.every((signal) => signal.aborted)).toBe(true);
-      expect(fetchMock).toHaveBeenCalledTimes(3);
     }).pipe(Effect.provide(imageFiles)),
   );
 

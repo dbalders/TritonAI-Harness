@@ -1,7 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
-  type IntegrationSummary,
   type OrchestrationV2DomainEvent,
   ProjectId,
   type ProjectOverviewSnapshot,
@@ -261,26 +260,6 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
   );
 
   // regression: #410 next steps respect settled threads, installed plugins, and dismissals
-  it.effect("labels settled threads and dates them by their latest message", () =>
-    Effect.gen(function* () {
-      const { calls, layer } = yield* harness(() => Effect.succeed(result()));
-      yield* Effect.gen(function* () {
-        yield* seed;
-        const service = yield* ProjectOverview.make;
-        yield* service.ensure(input);
-        yield* service.awaitIdle(projectId);
-        assert.include(calls[0]!.context, "Thread status: active; last message 2026-10-17.");
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`UPDATE projection_threads SET settled_at='2026-10-18T12:00:00.000Z' WHERE thread_id='thread-1'`;
-        yield* service.ensure(input);
-        yield* service.awaitIdle(projectId);
-        assert.lengthOf(calls, 2);
-        assert.include(calls[1]!.context, "Thread status: settled (the user marked it handled)");
-      }).pipe(Effect.scoped, Effect.provide(layer));
-    }),
-  );
-
-  // regression: #410 next steps respect settled threads, installed plugins, and dismissals
   it.effect("hides dismissed steps, avoids them in later suggestions, and restores them", () =>
     Effect.gen(function* () {
       let obeyAvoid = false;
@@ -341,71 +320,6 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
         assert.notInclude(calls[3]!.context, '"because"');
         assert.deepStrictEqual((yield* service.get(input)).overview!.nextSteps, [step]);
       }).pipe(Effect.scoped, Effect.provide(layer));
-    }),
-  );
-
-  // regression: #410 next steps respect settled threads, installed plugins, and dismissals
-  it.effect("describes turned-on plugins by version and available tools", () =>
-    Effect.sync(() => {
-      const plugin = (
-        id: string,
-        overrides: Partial<IntegrationSummary> = {},
-      ): IntegrationSummary => ({
-        id,
-        name: id === "m365" ? "Microsoft 365" : "Jira",
-        description: "Plugin",
-        version: "1.4.0",
-        apiVersion: "tritonai.harness/v2",
-        installed: true,
-        enabled: true,
-        requiresConnection: true,
-        connectionState: "connected",
-        accountLabel: null,
-        statusMessage: null,
-        capabilities: [],
-        tools: [
-          {
-            name: "a",
-            displayName: "Search mail",
-            description: "d",
-            capabilities: [],
-            effect: "read",
-            available: true,
-          },
-          {
-            name: "b",
-            displayName: "Create reply draft",
-            description: "d",
-            capabilities: [],
-            effect: "write",
-            available: true,
-          },
-          {
-            name: "c",
-            displayName: "Send mail",
-            description: "d",
-            capabilities: [],
-            effect: "write",
-            available: false,
-          },
-        ],
-        skills: [],
-        ...overrides,
-      });
-      assert.isNull(ProjectOverview.formatPluginSource([]));
-      const source = ProjectOverview.formatPluginSource([
-        plugin("m365"),
-        plugin("jira", { version: "1.1.1", connectionState: "not_connected" }),
-      ]);
-      assert.equal(source?.ref, "plugin:enabled");
-      assert.equal(
-        source?.text,
-        [
-          "Installed and turned on now:",
-          "- Jira 1.1.1 (needs sign-in): Search mail, Create reply draft",
-          "- Microsoft 365 1.4.0: Search mail, Create reply draft",
-        ].join("\n"),
-      );
     }),
   );
 

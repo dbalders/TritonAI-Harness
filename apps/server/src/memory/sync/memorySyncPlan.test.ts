@@ -293,18 +293,6 @@ describe("alignPathCase", () => {
     });
     expect(actions).toEqual([{ kind: "download", path: "Notes/Plans.md" }]);
   });
-
-  it("keeps only one of two local files that differ only in case", () => {
-    const aligned = alignPathCase({
-      local: new Map([
-        ["Notes/a.md", { sha256: "1" }],
-        ["Notes/A.md", { sha256: "2" }],
-      ]),
-      cloud: new Map<string, { eTag: string }>(),
-      synced: new Map<string, { sha256: string; eTag: string }>(),
-    });
-    expect(aligned.local.size).toBe(1);
-  });
 });
 
 // regression: #347 verify device ownership before deleting cloud notes

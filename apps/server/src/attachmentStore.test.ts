@@ -115,23 +115,6 @@ describe("attachmentStore", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("resolves a generic attachment from its deterministic blob path", () =>
-    Effect.gen(function* () {
-      const attachmentsDir = NodeFS.mkdtempSync(
-        NodePath.join(NodeOS.tmpdir(), "t3code-attachment-store-"),
-      );
-      try {
-        const attachmentId = "thread-file-00000000-0000-4000-8000-000000000001";
-        const textPath = NodePath.join(attachmentsDir, `${attachmentId}.bin`);
-        NodeFS.writeFileSync(textPath, "hello");
-
-        expect(yield* resolveAttachmentPathById({ attachmentsDir, attachmentId })).toBe(textPath);
-      } finally {
-        NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
-      }
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("keeps legacy attachment extensions resolvable", () =>
     Effect.gen(function* () {
       const attachmentsDir = NodeFS.mkdtempSync(

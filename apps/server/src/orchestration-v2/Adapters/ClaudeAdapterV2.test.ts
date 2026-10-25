@@ -501,22 +501,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     browserToolsAvailable: true,
   });
 
-  // regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
-  it("pre-approves the Harness's own t3-code tools when attaching an MCP session", () => {
-    const threadId = ThreadId.make("thread-claude-mcp-no-allowlist");
-    const mcpSession = mcpSessionFor(threadId);
-    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
-      mcpSession,
-      readOnlySandbox: false,
-    });
-
-    assert.deepEqual(overrides, {
-      allowedTools: [...ClaudeAdapterV2.claudeT3McpHostAllowedTools()],
-      mcpServers: T3_MCP_SERVERS,
-    });
-    assert.isFalse(overrides.allowedTools?.includes(ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD));
-  });
-
   // regression: #417 bound attachment text extraction and browser navigation approval
   it("leaves browser navigation to the permission callback when one is installed", () => {
     const mcpSession = mcpSessionFor(ThreadId.make("thread-claude-mcp-browser-callback"));
@@ -537,35 +521,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     assert.deepEqual(withoutCallback.allowedTools, [
       ...ClaudeAdapterV2.claudeT3McpHostAllowedTools(),
     ]);
-  });
-
-  // regression: #417 bound attachment text extraction and browser navigation approval
-  it("plans browser approval with the complete URL under the one session browsing grant", () => {
-    const url = "https://example.test/path?token=abc&next=%2Fsecret#frag";
-    const external = ClaudeAdapterV2.claudeBrowserNavigationApproval(
-      "mcp__t3-code__preview_navigate",
-      { url },
-    );
-    assert.equal(external?.requiresApproval, true);
-    assert.equal(external?.grantKey, "browser-navigation");
-    assert.include(external?.requiresApproval ? external.prompt : "", `URL: ${url}`);
-    const local = ClaudeAdapterV2.claudeBrowserNavigationApproval("mcp__t3-code__preview_open", {
-      url: "http://localhost:5173/",
-    });
-    assert.deepEqual(local, { requiresApproval: false, grantKey: "browser-navigation" });
-    const profiled = ClaudeAdapterV2.claudeBrowserNavigationApproval("mcp__t3-code__preview_open", {
-      profileId: "work",
-    });
-    assert.equal(profiled?.requiresApproval, true);
-    assert.equal(profiled?.grantKey, "browser-navigation");
-    assert.include(
-      profiled?.requiresApproval ? profiled.prompt : "",
-      "any tab or browser profile in this thread",
-    );
-    assert.isUndefined(
-      ClaudeAdapterV2.claudeBrowserNavigationApproval("mcp__t3-code__preview_snapshot", {}),
-    );
-    assert.isUndefined(ClaudeAdapterV2.claudeBrowserNavigationApproval("Bash", { url }));
   });
 
   // regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2

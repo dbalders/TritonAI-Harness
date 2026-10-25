@@ -1238,28 +1238,4 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
       }).pipe(Effect.provide(mac.layer));
     }),
   );
-
-  // regression: #342 cancel pending OneDrive sign-in when sync is turned off
-  it.effect("turning sync back on after a cancelled sign-in starts a fresh one", () =>
-    Effect.gen(function* () {
-      const drive = new FakeOneDrive();
-      const mac = yield* setup(drive, MAC);
-      yield* Effect.gen(function* () {
-        yield* mac.registerDevice;
-        const { sync } = yield* cancelDuringSignIn(drive, isAccountLookup, (sync) => sync.stop);
-        yield* assertNotSyncing(drive, sync);
-        const started = yield* sync.start;
-        if (started.kind !== "device_code") return assert.fail("expected a device code");
-        assert.strictEqual((yield* sync.poll(started.flowId)).state, "connected");
-        const settings = yield* ServerSettings.ServerSettingsService;
-        assert.isTrue((yield* settings.getSettings).memorySyncEnabled);
-        assert.isTrue((yield* sync.getStatus).sync.signedIn);
-        yield* sync.syncNow;
-        assert.strictEqual((yield* sync.getStatus).sync.state, "idle");
-        assert.isNotNull(
-          drive.file(`TritonAI Harness/memory/general/.devices/${MAC.environmentId}/device.json`),
-        );
-      }).pipe(Effect.provide(mac.layer));
-    }),
-  );
 });

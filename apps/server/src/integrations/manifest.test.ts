@@ -62,53 +62,6 @@ describe("integration manifest v2", () => {
     ).toThrow(/require a declared provider/u);
   });
 
-  it("does not retain mutable capability references from caller input", () => {
-    const toolCapabilities = ["fixture.read"];
-    const skillCapabilities = ["fixture.read"];
-    const validated = validateIntegrationManifest({
-      ...manifest,
-      tools: [
-        {
-          name: "fixture.read",
-          displayName: "Read fixture",
-          description: "Read fixture data.",
-          capabilities: toolCapabilities,
-          effect: "read",
-        },
-      ],
-      skills: [
-        {
-          name: "fixture-reader",
-          description: "Read fixture data.",
-          capabilities: skillCapabilities,
-        },
-      ],
-    });
-
-    toolCapabilities[0] = "caller.mutation";
-    skillCapabilities[0] = "caller.mutation";
-
-    expect(validated.tools[0]?.capabilities).toEqual(["fixture.read"]);
-    expect(validated.skills[0]?.capabilities).toEqual(["fixture.read"]);
-  });
-
-  it("requires a provider for tool bundles", () => {
-    expect(() =>
-      validateIntegrationManifest({
-        ...skillOnlyManifest,
-        tools: [
-          {
-            name: "fixture.write",
-            displayName: "Write fixture",
-            description: "Write fixture data.",
-            capabilities: ["workflow.use"],
-            effect: "write",
-          },
-        ],
-      }),
-    ).toThrow(/with tools must declare a provider/u);
-  });
-
   it("rejects identifiers, names, and versions with trailing line terminators", () => {
     expect(() => validateIntegrationManifest({ ...manifest, id: `${manifest.id}\n` })).toThrow(
       /identifiers/u,

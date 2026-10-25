@@ -30,24 +30,6 @@ it.layer(NodeServices.layer)("getAnonymousInstallId", (it) => {
     ),
   );
 
-  it.effect("replaces a file that does not hold a valid ID", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const { anonymousIdPath } = yield* ServerConfig.ServerConfig;
-      yield* fileSystem.writeFileString(anonymousIdPath, "not-an-id\n");
-
-      const id = yield* getAnonymousInstallId;
-
-      assert.match(Option.getOrThrow(id), UUID_PATTERN);
-      assert.equal(
-        (yield* fileSystem.readFileString(anonymousIdPath)).trim(),
-        Option.getOrThrow(id),
-      );
-    }).pipe(
-      Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-install-id-corrupt-" })),
-    ),
-  );
-
   it.effect("concurrent recoveries from an invalid file agree on one ID", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

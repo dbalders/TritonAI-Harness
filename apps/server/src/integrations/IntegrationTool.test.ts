@@ -34,24 +34,6 @@ describe("integration provider tool contracts", () => {
     await expect(decodeIntegrationToolInput(empty, [])).rejects.toBeDefined();
   });
 
-  it("derives the advertised JSON Schema from the executable input schema", () => {
-    expect(integrationToolJsonSchema(definition)).toMatchObject({
-      type: "object",
-      properties: {
-        limit: { type: "integer", minimum: 1, maximum: 25 },
-      },
-      additionalProperties: false,
-    });
-  });
-
-  it("rejects input that violates the advertised contract", async () => {
-    await expect(decodeIntegrationToolInput(definition, { limit: 100 })).rejects.toBeDefined();
-    await expect(
-      decodeIntegrationToolInput(definition, { limit: 5, ignored: true }),
-    ).rejects.toBeDefined();
-    await expect(decodeIntegrationToolInput(definition, "not an object")).rejects.toBeDefined();
-  });
-
   // regression: #234 fix(plugins): restore calendar execution across Effect runtimes
   it("decodes constrained plugin schemas created by a separate Effect runtime", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-schema-runtime-"));

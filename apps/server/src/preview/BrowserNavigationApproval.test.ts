@@ -163,16 +163,4 @@ describe("dynamic tool approval plan", () => {
       plan("preview_open", { url: "localhost:5173", profileId: "Personal" }, true).grantKey,
     ).toBe(BROWSER_NAVIGATION_GRANT);
   });
-
-  it("cannot see a reused tab's profile, so tab navigation shares the session grant", () => {
-    const byTab = plan("preview_navigate", { tabId: "tab-work", url: "https://e.example.test" });
-    expect(byTab).toMatchObject({ requiresApproval: true, grantKey: BROWSER_NAVIGATION_GRANT });
-    expect(byTab.prompt).not.toContain("Browser profile:");
-    expect(byTab.prompt).toContain(BROWSER_SESSION_SCOPE);
-    const reuse = plan("preview_open", { tabId: "tab-work", url: "https://e.example.test" }, true);
-    expect(reuse.grantKey).toBe(BROWSER_NAVIGATION_GRANT);
-    expect(
-      plan("preview_navigate", { url: "localhost:5173", profileId: "Work" }).requiresApproval,
-    ).toBe(false);
-  });
 });

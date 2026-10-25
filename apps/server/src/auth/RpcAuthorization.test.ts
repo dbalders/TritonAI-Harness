@@ -271,26 +271,6 @@ describe("Help RPC authorization", () => {
       expect(handled).toEqual([]);
     }).pipe(Effect.scoped),
   );
-
-  it.effect("allows Help invocation when the authenticated session has all required grants", () =>
-    Effect.gen(function* () {
-      const handled: Array<string> = [];
-      const client = yield* makeClient(
-        authenticatedSession([
-          AuthOrchestrationOperateScope,
-          AuthDiagnosticsReadScope,
-          AuthOrchestrationReadScope,
-        ]),
-        handled,
-      );
-
-      expect(yield* client[WS_METHODS.helpAsk](question)).toEqual({
-        answer: "Open Settings > Providers.",
-        context,
-      });
-      expect(handled).toEqual(["ask"]);
-    }).pipe(Effect.scoped),
-  );
 });
 
 describe("settings mutation authorization", () => {

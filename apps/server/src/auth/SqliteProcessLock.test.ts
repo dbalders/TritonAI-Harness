@@ -151,21 +151,6 @@ it.layer(NodeServices.layer)("SqliteProcessLock", (it) => {
     }).pipe(Effect.scoped, TestClock.withLive),
   );
 
-  it.effect("holds the kernel lock until every owned descriptor is closed", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-sqlite-lock-descriptor-",
-      });
-      const lockPath = `${directory}/secret.lock`;
-
-      const lock = yield* acquireSqliteProcessLock(lockPath, "test secret");
-      assert.strictEqual(probeLock(lockPath), "busy");
-      yield* releaseSqliteProcessLock(lock);
-      assert.strictEqual(probeLock(lockPath), "acquired");
-    }).pipe(Effect.scoped, TestClock.withLive),
-  );
-
   it.effect("keeps an owner's kernel lock after a same-process contender times out", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

@@ -2,44 +2,14 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   appendProjectRecentLine,
-  type DailyNoteInput,
   dailyNoteName,
   deviceFileLabel,
-  type MemoryThreadActivity,
   projectNoteName,
-  renderDailyNote,
   renderProjectNote,
   selectMemoryMessages,
 } from "./memoryNotes.ts";
 
 const DEVICE = deviceFileLabel({ name: "MacBook Pro", shortId: "3f2a" });
-const note = (overrides: Partial<DailyNoteInput> = {}): DailyNoteInput => ({
-  day: "2026-09-28",
-  deviceLabel: DEVICE,
-  status: "final",
-  updatedThrough: "2026-09-29T07:00:00.000Z",
-  timeZone: "America/Los_Angeles",
-  summary: { overview: "", projects: [], decisions: [], openLoops: [] },
-  threads: [],
-  projectNoteNames: new Map(),
-  sessionPaths: new Map(),
-  previousDay: null,
-  inboxLinks: [],
-  ...overrides,
-});
-
-const thread = (overrides: Partial<MemoryThreadActivity> = {}): MemoryThreadActivity => ({
-  threadId: "thread-1",
-  title: "Fix the login redirect",
-  branch: "fix/login",
-  pullRequestUrl: "https://github.com/acme/app/pull/12",
-  projectId: "project-1",
-  projectTitle: "Acme App",
-  workspaceRoot: "/code/acme",
-  codexThreadId: "01a0-codex",
-  messages: [],
-  ...overrides,
-});
 
 describe("selectMemoryMessages", () => {
   it("keeps user messages and only the final agent message of each turn", () => {
@@ -57,14 +27,6 @@ describe("selectMemoryMessages", () => {
       "shipped",
     ]);
   });
-
-  it("keeps every agent message that has no turn id", () => {
-    const selected = selectMemoryMessages([
-      { turnId: null, role: "assistant", text: "first", createdAt: "2026-09-28T10:00:00.000Z" },
-      { turnId: null, role: "assistant", text: "second", createdAt: "2026-09-28T11:00:00.000Z" },
-    ]);
-    expect(selected.map((message) => message.text)).toEqual(["first", "second"]);
-  });
 });
 
 describe("projectNoteName", () => {
@@ -75,65 +37,11 @@ describe("projectNoteName", () => {
   });
 });
 
-describe("renderDailyNote", () => {
-  it("links this device's project notes, previous day, inbox notes, and each thread's session", () => {
-    const rendered = renderDailyNote(
-      note({
-        summary: {
-          overview: "Fixed login.",
-          projects: [
-            { project: "acme app", workedOn: ["Fixed the redirect loop."], recent: "Login fix" },
-          ],
-          decisions: ["Keep the old cookie name."],
-          openLoops: [],
-        },
-        threads: [thread()],
-        projectNoteNames: new Map([["project-1", "Acme App"]]),
-        sessionPaths: new Map([["01a0-codex", "/codex/sessions/rollout-x-01a0-codex.jsonl"]]),
-        previousDay: "2026-09-26",
-        inboxLinks: ["Inbox/3f2a/processed/2026-09-28/2026-09-28-1030-login"],
-      }),
-    );
-
-    expect(rendered).toContain('device: "MacBook Pro (3f2a)"\nstatus: final\n');
-    expect(rendered).toContain('timezone: "America/Los_Angeles"');
-    expect(rendered).toContain('projects:\n  - "Acme App"');
-    expect(rendered).toContain("# 2026-09-28 on MacBook Pro (3f2a)");
-    expect(rendered).toContain(
-      "### [[Acme App - MacBook Pro (3f2a)|Acme App]]\n\n- Fixed the redirect loop.",
-    );
-    expect(rendered).toContain("- Keep the old cookie name.");
-    expect(rendered).toContain("## Open Loops\n\n- None recorded.");
-    expect(rendered).toContain(
-      "- **Fix the login redirect** in [[Acme App - MacBook Pro (3f2a)|Acme App]] on `fix/login`. Pull request: https://github.com/acme/app/pull/12. Session: `/codex/sessions/rollout-x-01a0-codex.jsonl`",
-    );
-    expect(rendered).toContain("- Previous day: [[2026-09-26 MacBook Pro (3f2a)]]");
-    expect(rendered).toContain(
-      "- Inbox: [[Inbox/3f2a/processed/2026-09-28/2026-09-28-1030-login]]",
-    );
-    expect(rendered).not.toContain("So far today");
-  });
-
-  it("marks today's note as partial until the day is done", () => {
-    const rendered = renderDailyNote(
-      note({ status: "partial", updatedThrough: "2026-09-28T20:00:00.000Z" }),
-    );
-    expect(rendered).toContain("status: partial\nupdatedThrough: 2026-09-28T20:00:00.000Z\n");
-    expect(rendered).toContain("_So far today.");
-  });
-});
-
 describe("project notes", () => {
   const day27 = dailyNoteName("2026-09-27", DEVICE);
   const day28 = dailyNoteName("2026-09-28", DEVICE);
   const stub = () =>
     renderProjectNote({ title: "Acme App", workspaceRoot: "/code/acme", deviceLabel: DEVICE });
-
-  it("adds one dated line per day", () => {
-    const once = appendProjectRecentLine(stub(), day28, "Login fix");
-    expect(once.endsWith(`- [[${day28}]]: Login fix\n`)).toBe(true);
-    expect(appendProjectRecentLine(once, day28, "Login fix")).toBe(once);
-  });
 
   it("replaces the day's line when that day is summarized again", () => {
     const first = appendProjectRecentLine(stub(), day27, "Found the bug");

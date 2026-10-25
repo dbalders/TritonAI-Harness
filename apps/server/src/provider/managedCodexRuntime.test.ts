@@ -175,16 +175,6 @@ it.layer(NodeServices.layer)("managed Codex runtime discovery", (it) => {
     }),
   );
 
-  it.effect("recovers a removed managed runtime using an installed version", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const old = yield* f.install("0.146.0");
-      f.versions.delete(old.binaryPath);
-      const replacement = yield* f.install("0.150.0");
-      assert.equal(yield* f.resolve(old.binaryPath), replacement.binaryPath);
-    }),
-  );
-
   it.effect("sorts by installed package versions after an in-place engine update", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

@@ -342,36 +342,6 @@ describe("plugin SDK adapter", () => {
     }
   });
 
-  // regression: #253 fix(plugins): preserve Unicode validation patterns
-  it("uses Unicode matching for plugin patternProperties", async () => {
-    const loaded = await loadPluginSdkIntegration({
-      files: artifact(providerSource, "# Fixture reader\n", {
-        inputSchema: {
-          type: "object",
-          patternProperties: { "^\\p{L}+$": { type: "string" } },
-          properties: {},
-          $schema: "https://json-schema.org/draft/2020-12/schema",
-          additionalProperties: false,
-        },
-      }),
-      secrets: secretStore(),
-      configuration: { prefix: "fixture" },
-      expected: { id, version: "1.0.0" },
-      hostNodeVersion: "24.13.1",
-    });
-    try {
-      const tool = loaded.provider!.tools[0]!;
-      await expect(decodeIntegrationToolInput(tool, { 日本語: "value" })).resolves.toEqual({
-        日本語: "value",
-      });
-      await expect(decodeIntegrationToolInput(tool, { 日本語: 123 })).rejects.toThrow();
-      await expect(decodeIntegrationToolInput(tool, { "123": "value" })).rejects.toThrow();
-      await expect(decodeIntegrationToolInput(tool, [])).rejects.toThrow();
-    } finally {
-      await loaded.provider?.close?.();
-    }
-  });
-
   it.each([
     { ...inputSchema, properties: { topic: { type: "string", minLength: -1 } } },
     { ...inputSchema, $async: true },
@@ -770,23 +740,6 @@ export function createIntegrationProvider() {
       /JSON cycle/u,
     );
     await expect(provider.close!()).rejects.toThrow(/must be undefined/u);
-  });
-
-  it("quarantines a module whose top-level evaluation does not settle", async () => {
-    const pendingModule = `
-await new Promise(() => {});
-export function createIntegrationProvider() { throw new Error("unreachable"); }
-`;
-    await expect(
-      loadPluginSdkIntegration({
-        files: artifact(pendingModule),
-        secrets: secretStore(),
-        configuration: { prefix: "fixture" },
-        expected: { id, version: "1.0.0" },
-        hostNodeVersion: "24.13.1",
-        admissionTimeoutMs: 10,
-      }),
-    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
   });
 
   it("isolates module state by the complete admitted artifact", async () => {

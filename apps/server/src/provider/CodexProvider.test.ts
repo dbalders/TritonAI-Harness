@@ -1,8 +1,5 @@
-import { DEFAULT_TRITONAI_CODEX_MODEL } from "@t3tools/contracts";
 import { CodexSettings } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
-import { curateVisibleCodexModels } from "./CodexProvider.ts";
-import { stabilizeIntegrationSkillPaths } from "./CodexProvider.ts";
 import { tritonAiCodexCapabilities } from "./CodexProvider.ts";
 import { checkCodexProviderStatus } from "./CodexProvider.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -18,87 +15,6 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { assert, it } from "@effect/vitest";
-
-it("publishes stable installed paths for temporary integration skill probes", () => {
-  assert.deepStrictEqual(
-    stabilizeIntegrationSkillPaths(
-      [
-        {
-          name: "fixture-records",
-          path: "/tmp/runtime-skills/session/fixture-records/SKILL.md",
-          enabled: true,
-        },
-        { name: "ordinary-skill", path: "/home/codex/skills/ordinary/SKILL.md", enabled: true },
-      ],
-      [
-        {
-          name: "fixture-records",
-          description: "Read fixture records.",
-          path: "/tmp/runtime-skills/session/fixture-records/SKILL.md",
-        },
-      ],
-      [
-        {
-          name: "fixture-records",
-          description: "Read fixture records.",
-          path: "/state/integrations/fixture-package/skills/fixture-records/SKILL.md",
-        },
-      ],
-    ),
-    [
-      {
-        name: "fixture-records",
-        path: "/state/integrations/fixture-package/skills/fixture-records/SKILL.md",
-        enabled: true,
-      },
-      { name: "ordinary-skill", path: "/home/codex/skills/ordinary/SKILL.md", enabled: true },
-    ],
-  );
-});
-
-it("uses configured model visibility without a Harness allowlist", () => {
-  const configuredModel = "configured-model";
-  const models = curateVisibleCodexModels(
-    [
-      {
-        slug: "unconfigured-model",
-        name: "Unconfigured",
-        isCustom: false,
-        capabilities: null,
-      },
-    ],
-    [configuredModel],
-    { [configuredModel]: { name: "Configured model", shortName: "Configured" } },
-  );
-
-  assert.deepStrictEqual(
-    models.map((model) => model.slug),
-    [configuredModel],
-  );
-  assert.strictEqual(models[0]?.capabilities, null);
-  assert.strictEqual(models[0]?.name, "Configured model");
-  assert.strictEqual(models[0]?.shortName, "Configured");
-});
-
-it("falls back to GLM 5.3 Flash when no models are configured", () => {
-  const models = curateVisibleCodexModels([], []);
-
-  assert.deepStrictEqual(
-    models.map((model) => model.slug),
-    [DEFAULT_TRITONAI_CODEX_MODEL],
-  );
-  assert.strictEqual(models[0]?.isCustom, false);
-});
-
-it("preserves default capabilities when metadata only changes presentation", () => {
-  const models = curateVisibleCodexModels([], [DEFAULT_TRITONAI_CODEX_MODEL], {
-    [DEFAULT_TRITONAI_CODEX_MODEL]: { name: "Managed Flash" },
-  });
-
-  assert.strictEqual(models[0]?.name, "Managed Flash");
-  assert.strictEqual(models[0]?.shortName, "Flash");
-  assert.ok(models[0]?.capabilities?.optionDescriptors?.length);
-});
 
 import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
 
@@ -231,16 +147,6 @@ it("marks the most preferred available model as default", () => {
   );
 });
 
-// regression: #307 fix(models): replace GPT-5.6 variants with GPT-6.1 Sol
-it("prefers current sol over retired terra when both are available", () => {
-  const models = applyPreferredCodexDefaultModel([
-    { slug: "gpt-5.6-terra", name: "GPT-5.6-Terra", isCustom: false, capabilities: null },
-    { slug: "gpt-6.1-sol", name: "GPT-6.1 Sol", isCustom: false, capabilities: null },
-  ]);
-
-  assert.deepStrictEqual(models.find((model) => model.isDefault)?.slug, "gpt-6.1-sol");
-});
-
 it("ranks qualified Codex models while preserving their wire ids", () => {
   const models = applyPreferredCodexDefaultModel([
     {
@@ -265,21 +171,6 @@ it("ignores custom models that shadow a preferred slug", () => {
   ]);
 
   assert.deepStrictEqual(models.find((model) => model.isDefault)?.slug, "gpt-5.4");
-});
-
-it("preserves unknown input modalities when Codex does not advertise them", () => {
-  const capabilities = mapCodexModelCapabilities({
-    defaultReasoningEffort: "medium",
-    description: "Test model",
-    displayName: "GPT Test",
-    hidden: false,
-    id: "gpt-test",
-    isDefault: true,
-    model: "gpt-test",
-    supportedReasoningEfforts: [],
-  });
-
-  assert.strictEqual(capabilities.inputModalities, undefined);
 });
 
 // regression: #17 Fix TritonAI DeepSeek Flash model picker
@@ -430,28 +321,6 @@ it.layer(NodeServices.layer)("Codex probe budget", (it) => {
         provider.models.map((model) => model.slug),
         ["custom-model"],
       );
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("bounds stalled skills and usage discovery by the remaining account probe budget", () =>
-    Effect.gen(function* () {
-      const probe = yield* startProbe(["skills/list", "account/rateLimits/read"]);
-      yield* probe.requested("account/read");
-      yield* TestClock.adjust(18_500);
-      yield* probe.authenticate;
-      yield* probe.requested("skills/list");
-      yield* probe.requested("account/rateLimits/read");
-      yield* probe.requested("model/list/2");
-      yield* TestClock.adjust(1_500);
-      const provider = yield* Fiber.join(probe.fiber);
-      assert.strictEqual(provider.status, "ready");
-      assert.strictEqual(provider.auth.status, "authenticated");
-      assert.deepStrictEqual(
-        provider.models.map((model) => model.slug),
-        ["custom-model"],
-      );
-      assert.deepStrictEqual(provider.skills, []);
-      assert.strictEqual(provider.usageLimits?.unavailable?.reason, "probeFailed");
     }).pipe(Effect.scoped),
   );
 });

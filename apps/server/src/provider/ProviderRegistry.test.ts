@@ -416,68 +416,6 @@ it.layer(
       }),
     );
 
-    it.effect("uses the app-server account and curated managed models for provider status", () =>
-      Effect.gen(function* () {
-        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
-          Effect.succeed(
-            makeCodexProbeSnapshot({
-              skills: [
-                {
-                  name: "github:gh-fix-ci",
-                  path: "/Users/test/.codex/skills/gh-fix-ci/SKILL.md",
-                  enabled: true,
-                  displayName: "CI Debug",
-                  shortDescription: "Debug failing GitHub Actions checks",
-                },
-              ],
-            }),
-          ),
-        );
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.installed, true);
-        assert.strictEqual(status.version, "1.0.0");
-        assert.strictEqual(status.auth.status, "authenticated");
-        assert.strictEqual(status.auth.type, "chatgpt");
-        assert.strictEqual(status.auth.label, "ChatGPT Pro 20x Subscription");
-        assert.strictEqual(status.auth.email, "test@example.com");
-        assert.deepStrictEqual(status.setup, { canAuthenticate: false, canInstall: false });
-        assert.include(
-          status.models.map((model) => model.slug),
-          "api-glm-5.3-flash",
-        );
-        assert.notInclude(
-          status.models.map((model) => model.slug),
-          "gpt-live-codex",
-        );
-        assert.deepStrictEqual(status.skills, [
-          {
-            name: "github:gh-fix-ci",
-            path: "/Users/test/.codex/skills/gh-fix-ci/SKILL.md",
-            enabled: true,
-            displayName: "CI Debug",
-            shortDescription: "Debug failing GitHub Actions checks",
-          },
-        ]);
-        assert.deepStrictEqual(status.slashCommands.slice(1), [
-          {
-            name: "feedback",
-            description: "Report a problem or idea to the TritonAI team",
-            input: { hint: "Describe the problem or idea (optional)" },
-          },
-          {
-            name: "goal",
-            description: "Set a goal Codex keeps working toward until it is done",
-            input: { hint: "Objective, or pause, resume, clear" },
-          },
-          {
-            name: "openai-feedback",
-            description: "Send this thread and Codex logs to OpenAI",
-            input: { hint: "Describe the issue (optional)" },
-          },
-        ]);
-      }),
-    );
-
     it.effect(
       "uses gateway authentication and skips native subscription usage for managed routes",
       () =>

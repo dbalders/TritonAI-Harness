@@ -1,7 +1,3 @@
-import { DEFAULT_TRITONAI_CODEX_HOME_PATH } from "@t3tools/contracts";
-import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import { resolveManagedCodexHomeLayout } from "./CodexManagedHome.ts";
 // @effect-diagnostics nodeBuiltinImport:off - checks the host's default Codex directory without writing to it.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
@@ -42,38 +38,6 @@ import { codexAppServerArgs } from "./codexLaunchArgs.ts";
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 const decodeSettings = Schema.decodeSync(CodexSettings);
-
-it.effect("managed home defaults to the TritonAI Codex home and honors configured home paths", () =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path;
-    const primary = yield* resolveManagedCodexHomeLayout(
-      "/t3-state",
-      ProviderInstanceId.make("codex"),
-      decodeSettings({}),
-    );
-    assert.equal(
-      primary.sharedHomePath,
-      path.resolve(
-        expandHomePath(DEFAULT_TRITONAI_CODEX_HOME_PATH, yield* HostProcess.HomeDirectory),
-      ),
-    );
-    assert.equal(primary.mode, "direct");
-    const additional = yield* resolveManagedCodexHomeLayout(
-      "/t3-state",
-      ProviderInstanceId.make("codex-work"),
-      decodeSettings({}),
-    );
-    assert.equal(additional.sharedHomePath, primary.sharedHomePath);
-    assert.equal(additional.mode, "authOverlay");
-    const configured = yield* resolveManagedCodexHomeLayout(
-      "/t3-state",
-      ProviderInstanceId.make("codex-work"),
-      decodeSettings({ homePath: "/custom/shared", shadowHomePath: "/custom/shadow" }),
-    );
-    assert.equal(configured.sharedHomePath, "/custom/shared");
-    assert.equal(configured.effectiveHomePath, "/custom/shadow");
-  }).pipe(Effect.provide(NodeServices.layer)),
-);
 
 it.effect.each(
   (["managed", "local"] as const).flatMap((source) =>

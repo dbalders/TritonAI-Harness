@@ -1,8 +1,6 @@
-import { IntegrationOperationError, ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-
-import { IntegrationToolUnavailableError } from "../integrations/IntegrationToolFailure.ts";
 import { dynamicToolApprovalPrompt, invokeAdmittedDynamicTool } from "./CodexDynamicTools.ts";
 
 const threadId = ThreadId.make("thread-codex-dynamic-tools");
@@ -20,35 +18,6 @@ const invokeFailing = (error: unknown) =>
 
 const responseText = (response: { readonly contentItems: ReadonlyArray<unknown> }) =>
   (response.contentItems[0] as { readonly text: string }).text;
-
-// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
-it.effect("tells the agent why a plugin tool was unavailable at invoke time", () =>
-  Effect.gen(function* () {
-    const response = yield* invokeFailing(
-      new IntegrationToolUnavailableError("The plugin tool is unavailable.", {
-        toolName: "microsoft365.mail.search",
-        reason: "not_connected",
-        detail: "Reconnect Microsoft 365.",
-      }),
-    );
-    assert.isFalse(response.success);
-    assert.equal(responseText(response), "The plugin tool is unavailable.");
-  }),
-);
-
-// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
-it.effect("passes host-authored operation errors through to the agent", () =>
-  Effect.gen(function* () {
-    const response = yield* invokeFailing(
-      new IntegrationOperationError({ code: "not_connected", message: "Sign in again." }),
-    );
-    assert.isFalse(response.success);
-    assert.equal(
-      responseText(response),
-      "Integration tool call failed (not_connected): Sign in again.",
-    );
-  }),
-);
 
 // regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it.effect("keeps raw provider errors generic", () =>

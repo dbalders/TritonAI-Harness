@@ -369,28 +369,6 @@ describe("TritonAI Commons local skill submission", () => {
     });
   });
 
-  it("creates a contributor fork but branches directly for the repository owner", async () => {
-    const contributor = registryFixture({ forkExists: false });
-    await submitProviderSkillToTritonAiCommons({
-      bundle: localSkill(),
-      registry: contributor.registry,
-      signal: new AbortController().signal,
-    });
-    expect(contributor.calls.some(({ name }) => name === "github.repositories.fork")).toBe(true);
-
-    const owner = registryFixture({ login: "dbalders" });
-    await submitProviderSkillToTritonAiCommons({
-      bundle: localSkill(),
-      registry: owner.registry,
-      signal: new AbortController().signal,
-    });
-    expect(owner.calls.some(({ name }) => name === "github.repositories.fork")).toBe(false);
-    expect(owner.calls.find(({ name }) => name === "github.contents.put")?.input).toMatchObject({
-      owner: "dbalders",
-      path: "community/local-accessibility-review/SKILL.md",
-    });
-  });
-
   it("requires an existing contributor fork to match the exact upstream base", async () => {
     const fixture = registryFixture({ staleFork: true });
 

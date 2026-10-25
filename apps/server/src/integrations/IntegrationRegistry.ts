@@ -673,7 +673,7 @@ function capabilityNames(manifest: IntegrationManifest, ids: ReadonlyArray<strin
  * The refusal, if any, that the persisted install state alone imposes on a tool: not installed,
  * a version that does not match the catalog, disabled, or none of its capabilities selected.
  */
-export function persistedToolUnavailability(
+function persistedToolUnavailability(
   manifest: IntegrationManifest,
   tool: IntegrationManifest["tools"][number],
   installed: InstalledIntegrationState | undefined,

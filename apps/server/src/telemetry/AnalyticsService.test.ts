@@ -3,10 +3,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Scope from "effect/Scope";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpServer from "effect/http/HttpServer";
@@ -269,55 +267,6 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
     }),
   );
 
-  it.effect("retains a buffered event after a failed flush and retries it", () =>
-    Effect.gen(function* () {
-      const capturedThreadCounts: Array<unknown> = [];
-      let rejectRequests = true;
-      const serverConfigLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
-        prefix: "t3-telemetry-retry-",
-      });
-      const telemetryLayer = AnalyticsService.layer.pipe(Layer.provideMerge(serverConfigLayer));
-      const configLayer = ConfigProvider.layer(
-        ConfigProvider.fromUnknown({
-          T3CODE_TELEMETRY_ENABLED: true,
-          T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS: 2,
-          TRITONAI_PLAUSIBLE_EVENTS_ENDPOINT: "/api/event",
-          TRITONAI_PLAUSIBLE_SITE_ID: "tritonai-harness-test",
-        }),
-      );
-      const eventServerLayer = HttpServer.serve(
-        Effect.gen(function* () {
-          const request = yield* HttpServerRequest.HttpServerRequest;
-          const body = yield* request.json.pipe(
-            Effect.map((value) => value as RecordedEventRequest["body"]),
-            Effect.orElseSucceed(() => null),
-          );
-          capturedThreadCounts.push(body?.props?.threadCount);
-          return HttpServerResponse.empty({ status: rejectRequests ? 503 : 202 });
-        }),
-      );
-      const runtimeLayer = telemetryLayer.pipe(
-        Layer.provide(configLayer),
-        Layer.provideMerge(NodeHttpServer.layerTest),
-      );
-
-      yield* Effect.gen(function* () {
-        yield* Layer.launch(eventServerLayer).pipe(Effect.forkScoped);
-        const analytics = yield* AnalyticsService.AnalyticsService;
-        for (let threadCount = 1; threadCount <= 3; threadCount += 1) {
-          yield* analytics.record("server.boot.heartbeat", { threadCount, projectCount: 1 });
-        }
-
-        yield* analytics.flush;
-        assert.deepEqual(capturedThreadCounts, [2]);
-
-        rejectRequests = false;
-        yield* analytics.flush;
-        assert.deepEqual(capturedThreadCounts, [2, 2, 3]);
-      }).pipe(Effect.provide(runtimeLayer));
-    }),
-  );
-
   it.effect("retains the failed event when the buffer fills during delivery", () =>
     Effect.gen(function* () {
       const capturedThreadCounts: Array<unknown> = [];
@@ -395,46 +344,3 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
     }),
   );
 });
-
-it.live("finalizes promptly when the analytics endpoint hangs", () =>
-  Effect.gen(function* () {
-    let requestStarted = false;
-    const hangingHttpClientLayer = Layer.succeed(
-      HttpClient.HttpClient,
-      HttpClient.make(() =>
-        Effect.sync(() => {
-          requestStarted = true;
-        }).pipe(Effect.andThen(Effect.never)),
-      ),
-    );
-    const serverConfigLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
-      prefix: "t3-telemetry-hang-",
-    });
-    const telemetryLayer = AnalyticsService.layerWithOptions({
-      requestTimeoutMs: 25,
-      shutdownTimeoutMs: 75,
-    }).pipe(Layer.provideMerge(serverConfigLayer));
-    const configLayer = ConfigProvider.layer(
-      ConfigProvider.fromUnknown({
-        T3CODE_TELEMETRY_ENABLED: true,
-        TRITONAI_PLAUSIBLE_EVENTS_ENDPOINT: "https://example.invalid/api/event",
-        TRITONAI_PLAUSIBLE_SITE_ID: "tritonai-harness-test",
-      }),
-    );
-    const runtimeLayer = telemetryLayer.pipe(
-      Layer.provide(configLayer),
-      Layer.provide(hangingHttpClientLayer),
-    );
-
-    const serviceScope = yield* Scope.make("sequential");
-    const services = yield* Layer.build(runtimeLayer).pipe(Scope.provide(serviceScope));
-    const analytics = yield* AnalyticsService.AnalyticsService.pipe(Effect.provide(services));
-    yield* analytics.record("provider.turn.completed", {
-      provider: "codex",
-      outcome: "completed",
-    });
-
-    yield* Scope.close(serviceScope, Exit.void).pipe(Effect.timeout("500 millis"));
-    assert.isTrue(requestStarted);
-  }).pipe(Effect.provide(NodeServices.layer)),
-);

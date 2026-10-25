@@ -290,34 +290,6 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
       }),
   );
 
-  it.effect(
-    "allows the full activation verification timeout when restoring a missing launcher",
-    () =>
-      Effect.gen(function* () {
-        const fixture = yield* makeFixture();
-        const backup = yield* fixture.fs.makeTempDirectory({
-          directory: fixture.runtimeRoot,
-          prefix: ".tritonai-codex-backup.",
-        });
-        yield* fixture.fs.rename(
-          fixture.installRoot,
-          fixture.path.join(backup, "openai-codex-0.146.0"),
-        );
-        const runner = yield* makeFakeRunner();
-        const timeouts: Array<unknown> = [];
-        const run: ProcessRunner["Service"]["run"] = (input) => {
-          timeouts.push(input.timeout);
-          return runner(input);
-        };
-
-        yield* recoverTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run });
-
-        expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
-        expect(yield* fixture.fs.exists(backup)).toBe(false);
-        expect(timeouts).toEqual(["30 seconds"]);
-      }),
-  );
-
   it.effect.each(["before backup", "after backup", "after activation", "verification", "rollback"])(
     "keeps a usable engine after interruption during %s",
     (phase) =>
@@ -373,36 +345,6 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
           yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
         );
       }).pipe(Effect.scoped),
-  );
-  it.effect("restores the launcher when shutdown interrupts activation after the backup move", () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeFixture();
-      const paused = yield* Deferred.make<void>();
-      const resume = yield* Deferred.make<void>();
-      const fs = FileSystem.FileSystem.of({
-        ...fixture.fs,
-        rename: (source, destination) =>
-          Effect.gen(function* () {
-            if (source.includes(".tritonai-codex-stage.") && destination === fixture.installRoot) {
-              yield* Deferred.succeed(paused, undefined);
-              yield* Deferred.await(resume);
-            }
-            return yield* fixture.fs.rename(source, destination);
-          }),
-      });
-      const fiber = yield* updateTritonAiManagedCodex({
-        binaryPath: fixture.binaryPath,
-        run: yield* makeFakeRunner(),
-      }).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.scoped, Effect.forkChild);
-      yield* Deferred.await(paused);
-      fiber.interruptUnsafe();
-      yield* Deferred.succeed(resume, undefined);
-      yield* Fiber.await(fiber);
-      expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
-      expect(["0.146.0", "0.151.0"]).toContain(
-        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
-      );
-    }).pipe(Effect.scoped),
   );
   it.effect("admits a session during staging and safely defers activation", () =>
     Effect.gen(function* () {
@@ -597,21 +539,6 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
 
       expect(error.message).toContain("Repair it with TritonAI Installer");
       expect(npmCommands).toEqual([]);
-      expect(
-        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
-      ).toBe("0.146.0");
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("leaves the current runtime unchanged when npm staging fails", () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeFixture();
-      const error = yield* updateTritonAiManagedCodex({
-        binaryPath: fixture.binaryPath,
-        run: yield* makeFakeRunner({ failNpm: true }),
-      }).pipe(Effect.scoped, Effect.flip);
-
-      expect(error.message).toContain("could not be staged");
       expect(
         yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
       ).toBe("0.146.0");

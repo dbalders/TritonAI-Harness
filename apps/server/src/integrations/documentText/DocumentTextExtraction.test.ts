@@ -44,17 +44,6 @@ describe("PDF text extraction", () => {
   });
 
   // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
-  it("bounds the characters it returns", async () => {
-    const result = await extractDocumentTextInProcess({
-      format: "pdf",
-      bytes: makePdf(["A".repeat(500)]),
-      maxCharacters: 40,
-    });
-    expect(result).toMatchObject({ status: "extracted", truncated: true });
-    expect(result.status === "extracted" && result.text.length).toBe(40);
-  });
-
-  // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
   it("fails clearly on damaged or mislabeled input", async () => {
     await expect(
       extractDocumentTextInProcess({

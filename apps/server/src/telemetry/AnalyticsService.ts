@@ -373,6 +373,3 @@ const makeWithOptions = Effect.fn("AnalyticsService.makeWithOptions")(function* 
 const make = makeWithOptions();
 
 export const layer = Layer.effect(AnalyticsService, make);
-
-export const layerWithOptions = (options: AnalyticsServiceOptions) =>
-  Layer.effect(AnalyticsService, makeWithOptions(options));

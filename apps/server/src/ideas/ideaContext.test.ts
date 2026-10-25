@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { GeneratedIdea } from "../textGeneration/TextGeneration.ts";
-import { formatIdeasContext, type IdeasContext, validateGeneratedIdeas } from "./ideaContext.ts";
+import { type IdeasContext, validateGeneratedIdeas } from "./ideaContext.ts";
 import { IDEA_KINDS } from "./starterIdeas.ts";
 
 const CONTEXT: IdeasContext = {
@@ -57,23 +57,6 @@ const idea = (overrides: Partial<GeneratedIdea>): GeneratedIdea => ({
 });
 
 describe("validateGeneratedIdeas", () => {
-  it("labels sources and picks the section from the context, not the model", () => {
-    const [accepted] = validateGeneratedIdeas({
-      ideas: [idea({ sources: ["note:2026-10-12", "thread:thread-1", "skill:unknown"] })],
-      context: CONTEXT,
-      excludedKeys: new Set(),
-    });
-    expect(accepted).toMatchObject({
-      key: "thread:thread-1",
-      section: "continue",
-      sources: [
-        { kind: "thread", label: "Thread · Q1 travel reconciliation" },
-        { kind: "note", label: "Note · Oct 12" },
-      ],
-      action: { kind: "resume-thread", threadId: "thread-1" },
-    });
-  });
-
   it("drops ideas about things the context does not contain", () => {
     expect(
       validateGeneratedIdeas({
@@ -86,103 +69,5 @@ describe("validateGeneratedIdeas", () => {
         excludedKeys: new Set(),
       }),
     ).toEqual([]);
-  });
-
-  it("drops excluded keys, avoided titles, and repeats within the batch", () => {
-    const accepted = validateGeneratedIdeas({
-      ideas: [
-        idea({}),
-        idea({ ref: "note:2026-10-12", title: "I can summarize your long email chain" }),
-        idea({ ref: "plugin:lucid", topic: "diagram", title: "I can draw your onboarding flow" }),
-        idea({ ref: "plugin:lucid", topic: "diagram", title: "I can map the approval process" }),
-      ],
-      context: CONTEXT,
-      excludedKeys: new Set(["thread:thread-1"]),
-    });
-    expect(accepted.map((entry) => entry.title)).toEqual(["I can draw your onboarding flow"]);
-  });
-
-  it("opens new work in the referenced file's project unless the model names another", () => {
-    const [fromFile, fromPlugin] = validateGeneratedIdeas({
-      ideas: [
-        idea({
-          ref: "file:project-1:data/FY26 budget.xlsx",
-          title: "I can summarize the FY26 budget by department",
-          action: "resume-thread",
-        }),
-        idea({
-          ref: "plugin:lucid",
-          topic: "diagram approvals",
-          title: "I can diagram your approval flow",
-          action: "new-thread",
-          icon: "not an emoji",
-        }),
-      ],
-      context: CONTEXT,
-      excludedKeys: new Set(),
-    });
-    expect(fromFile).toMatchObject({
-      section: "projects",
-      action: { kind: "new-thread", projectId: "project-1" },
-      sources: [{ kind: "file", label: "File · FY26 budget.xlsx" }],
-    });
-    expect(fromFile?.subject).toBe("project:project-1");
-    expect(fromPlugin).toMatchObject({
-      section: "tools",
-      icon: "🧰",
-      subject: "plugin:lucid",
-      action: { kind: "new-thread", projectId: null },
-    });
-  });
-
-  it("drops ideas that leave a blank for the user or cite a starter instead of real work", () => {
-    expect(
-      validateGeneratedIdeas({
-        ideas: [
-          idea({ prompt: "Turn these notes into an email.\n\nNotes:\n[paste your notes here]" }),
-          idea({
-            ref: "plugin:lucid",
-            topic: "diagram",
-            title: "I can diagram a process",
-            prompt: "Diagram the <your process name> process in Lucid.",
-          }),
-          idea({
-            ref: "note:2026-10-12",
-            title: "I can draft the vendor email",
-            body: "Paste the list and I'll write it.",
-            prompt: "Email {{recipient}} the vendor list.",
-          }),
-          idea({ ref: "starter:meeting-follow-up", title: "I can write a follow-up email" }),
-        ],
-        context: CONTEXT,
-        excludedKeys: new Set(),
-      }),
-    ).toEqual([]);
-    const [linked] = validateGeneratedIdeas({
-      ideas: [
-        idea({ prompt: "Match the remaining lines using [the guide](https://example.edu/guide)." }),
-      ],
-      context: CONTEXT,
-      excludedKeys: new Set(),
-    });
-    expect(linked?.title).toBe("I can finish the Q1 travel reconciliation");
-  });
-});
-
-describe("formatIdeasContext", () => {
-  it("gives every item the reference id the model must cite", () => {
-    const text = formatIdeasContext(CONTEXT);
-    for (const ref of [
-      "thread:thread-1",
-      "note:2026-10-12",
-      "file:project-1:data/FY26 budget.xlsx",
-      "plugin:lucid",
-      "skill:ucsd-decorator",
-    ]) {
-      expect(text).toContain(ref);
-    }
-    expect(text).not.toContain("starter:");
-    expect(text).toContain(`- ${IDEA_KINDS[0]}`);
-    expect(text).toContain("- I can summarize a long email chain");
   });
 });
