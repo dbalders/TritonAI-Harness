@@ -432,6 +432,104 @@ describe("thread context authorization", () => {
   );
 });
 
+it.effect("does not expose captured project files with only orchestration read access", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.projectBriefGet> =>
+          tag !== WS_METHODS.projectBriefGet,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectBriefGet, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.projectBriefGet]({
+      projectId: ProjectId.make("project"),
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("does not expose project memory with only orchestration read access", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.serverGetProjectMemory
+        > => tag !== WS_METHODS.serverGetProjectMemory,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.serverGetProjectMemory, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.serverGetProjectMemory]({
+      projectId: ProjectId.make("project"),
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("does not expose archived source snapshots without filesystem permission", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.projectBriefArchiveGet
+        > => tag !== WS_METHODS.projectBriefArchiveGet,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectBriefArchiveGet, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.projectBriefArchiveGet]({
+      projectId: ProjectId.make("project"),
+      archiveId: "archive-1",
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
 it.effect("requires filesystem permission before project-brief capture or dispatch", () =>
   Effect.gen(function* () {
     const group = WsRpcGroup.omit(

@@ -122,6 +122,29 @@ describe("isolated document text extraction", () => {
   });
 
   // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
+  it("kills a worker stuck in synchronous code when the time limit passes", async () => {
+    using spawn = vi.spyOn(NodeChildProcess, "spawn").mockClear();
+    const controller = new AbortController();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const extract = makeDocumentTextExtractor({
+        timeoutMs: 400,
+        resolveCommand: () => scriptWorker('process.stdout.write("ready"); for (;;) {}'),
+      });
+      const pending = extract({ format: "docx", bytes: new Uint8Array([1]) }, controller.signal);
+      const child = spawn.mock.results[0]?.value;
+      if (!child?.stdout) throw new Error("Worker stdout was not available.");
+      const closed = NodeEvents.EventEmitter.once(child, "close");
+      await NodeEvents.EventEmitter.once(child.stdout, "data");
+      await vi.advanceTimersByTimeAsync(400);
+      await expect(pending).resolves.toMatchObject({ status: "failed", reason: "timeout" });
+      await expect(closed).resolves.toEqual([null, "SIGKILL"]);
+    } finally {
+      controller.abort();
+      vi.useRealTimers();
+    }
+  });
+
   it("reports a worker that exhausts its memory allowance", async () => {
     const extract = makeDocumentTextExtractor({
       heapMb: 32,
