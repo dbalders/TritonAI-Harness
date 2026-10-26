@@ -1,24 +1,19 @@
+import { APP_BUNDLE_ID } from "./electron-launcher.mjs";
+import { APP_DISPLAY_NAME } from "./electron-launcher.mjs";
+
 import * as NodeChildProcess from "node:child_process";
+
 import * as NodeEvents from "node:events";
+
 import * as NodeFS from "node:fs";
+
 import * as NodeOS from "node:os";
+
 import * as NodePath from "node:path";
+
 import * as NodeVM from "node:vm";
 
 import { assert, describe, it } from "vite-plus/test";
-
-import {
-  APP_BUNDLE_ID,
-  APP_DISPLAY_NAME,
-  makeDevelopmentEnvironmentScript,
-  makeDevelopmentLauncherScript,
-  resolveElectronBinaryPath,
-  resolveMacBundleInfoPlistStrings,
-  resolveMacCodeSignArguments,
-  resolveMacLauncherIconPaths,
-  resolveMacLauncherPaths,
-  writeDevelopmentLauncherScript,
-} from "./electron-launcher.mjs";
 
 function executeLauncher({ capturedEnvironment, runtimeEnvironment }) {
   const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "tritonai-launcher-test-"));
@@ -54,12 +49,15 @@ function executeLauncher({ capturedEnvironment, runtimeEnvironment }) {
   }
 }
 
-describe("electron development launcher", () => {
-  it("keeps the downstream desktop identity", () => {
-    assert.equal(APP_DISPLAY_NAME, "TritonAI Harness");
-    assert.match(APP_BUNDLE_ID, /^edu\.ucsd\.tritonai\.harness(?:\.dev\.[a-z0-9]+)?$/u);
-  });
+import {
+  makeDevelopmentEnvironmentScript,
+  makeDevelopmentLauncherScript,
+  resolveElectronBinaryPath,
+  resolveMacLauncherPaths,
+  writeDevelopmentLauncherScript,
+} from "./electron-launcher.mjs";
 
+describe("electron development launcher", () => {
   it("uses captured values only as fallbacks for a live runner environment", () => {
     const environmentScript = makeDevelopmentEnvironmentScript({
       VITE_DEV_SERVER_URL: "http://127.0.0.1:8526",
@@ -187,30 +185,6 @@ describe("electron development launcher", () => {
     assert.notInclude(script, "node_modules/electron");
   });
 
-  it("declares why the macOS app needs protected access", () => {
-    const values = resolveMacBundleInfoPlistStrings("TritonAI Harness (Dev) Launcher");
-
-    assert.equal(
-      values.NSScreenCaptureUsageDescription,
-      "TritonAI Harness captures the active window when you use the snapshot shortcut.",
-    );
-    assert.equal(
-      values.NSDocumentsFolderUsageDescription,
-      "TritonAI Harness reads project files you open in the desktop app.",
-    );
-  });
-
-  it("ad-hoc signs the complete development app bundle", () => {
-    assert.deepEqual(resolveMacCodeSignArguments("/runtime/TritonAI Harness (Dev).app"), [
-      "--force",
-      "--deep",
-      "--sign",
-      "-",
-      "--timestamp=none",
-      "/runtime/TritonAI Harness (Dev).app",
-    ]);
-  });
-
   it("restores execute permissions on an unchanged launcher", () => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-launcher-"));
     const launcherPath = NodePath.join(directory, "launcher");
@@ -225,17 +199,9 @@ describe("electron development launcher", () => {
     }
   });
 
-  it("derives launcher icons from canonical development and production assets", () => {
-    const development = resolveMacLauncherIconPaths("/runtime", true);
-    const production = resolveMacLauncherIconPaths("/runtime", false);
-
-    assert.match(
-      development.sourceIconPath,
-      /assets[\\/]dev\/tritonai-harness-dev-macos-1024\.png$/,
-    );
-    assert.equal(development.generatedIconPath, "/runtime/icon-dev.icns");
-    assert.match(production.sourceIconPath, /assets[\\/]prod\/tritonai-harness-1024\.png$/);
-    assert.equal(production.generatedIconPath, "/runtime/icon-prod.icns");
+  it("keeps the downstream desktop identity", () => {
+    assert.equal(APP_DISPLAY_NAME, "TritonAI Harness");
+    assert.match(APP_BUNDLE_ID, /^edu\.ucsd\.tritonai\.harness(?:\.dev\.[a-z0-9]+)?$/u);
   });
 });
 

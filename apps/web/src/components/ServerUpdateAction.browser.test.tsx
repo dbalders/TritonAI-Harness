@@ -1,7 +1,8 @@
+import { ServerUpdateAction } from "./ServerUpdateAction";
+import { ServerUpdateProgress } from "./ServerUpdateAction";
 import type { EnvironmentId, ServerSelfUpdateCapability } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { render } from "../../test/render";
-import { ServerUpdateAction, ServerUpdateProgress } from "./ServerUpdateAction";
 
 describe("managed server updates", () => {
   it.each(["desktop-managed", "boot-service", "respawn", null] as const)(

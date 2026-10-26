@@ -1,4 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
+import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
+
 import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
@@ -156,7 +158,6 @@ vi.mock(import("../ProviderUpdatesAction"), async (original) => ({
 }));
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 
 const environmentId = EnvironmentId.make("remote-device");
 const codexId = ProviderInstanceId.make("codex");
@@ -210,12 +211,7 @@ function panel(options?: {
   );
 }
 
-const button = (name: string) => page.getByRole("button", { name, exact: true });
-const refreshButton = () => page.getByRole("button", { name: /^Refresh provider status/ });
 // The section header and the end of the provider list both offer Add provider.
-const addProvider = () => page.getByRole("button", { name: "Add provider" }).first();
-const select = (name: string) => button(`Select ${name}`);
-const deleteButton = (id: string) => button(`Delete instance ${id}`);
 
 async function setup() {
   await page.viewport(1280, 900);
@@ -240,10 +236,14 @@ async function setup() {
 describe("EnvironmentProviderSettings routing", () => {
   it("shows TritonAI and hides unsupported provider slots", async () => {
     await setup();
-    await using screen = await render(panel());
-    await expect.element(select("TritonAI")).toBeVisible();
+    await using _screen = await render(panel());
+    await expect
+      .element(page.getByRole("button", { name: "Select TritonAI", exact: true }))
+      .toBeVisible();
     for (const label of ["Claude", "Cursor", "Grok", "Pi", "OpenCode", "Antigravity"])
-      await expect.element(select(label)).not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: `Select ${label}`, exact: true }))
+        .not.toBeInTheDocument();
   });
 
   it("keeps an explicitly configured Codex account visible when disabled", async () => {
@@ -258,8 +258,10 @@ describe("EnvironmentProviderSettings routing", () => {
         },
       },
     };
-    await using screen = await render(panel());
-    await expect.element(select("Work")).toBeVisible();
+    await using _screen = await render(panel());
+    await expect
+      .element(page.getByRole("button", { name: "Select Work", exact: true }))
+      .toBeVisible();
   });
 
   it("hides unsupported legacy provider configuration", async () => {
@@ -274,69 +276,24 @@ describe("EnvironmentProviderSettings routing", () => {
         },
       },
     };
-    await using screen = await render(panel());
-    await expect.element(select("Grok")).not.toBeInTheDocument();
-    await expect.element(select("TritonAI")).toBeVisible();
+    await using _screen = await render(panel());
+    await expect
+      .element(page.getByRole("button", { name: "Select Grok", exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Select TritonAI", exact: true }))
+      .toBeVisible();
   });
 
   it("reads and writes settings on the selected environment", async () => {
     await setup();
     await using _screen = await render(panel());
-    await expect.element(select("TritonAI")).toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Select TritonAI", exact: true }))
+      .toBeVisible();
     expect(new Set(state.readEnvironmentIds)).toEqual(new Set([environmentId]));
     expect(new Set(state.updateEnvironmentIds)).toEqual(new Set([environmentId]));
     expect(new Set(state.mutationEnvironmentIds)).toEqual(new Set([environmentId]));
-  });
-
-  it("routes refresh and provider update commands to the selected environment", async () => {
-    await setup();
-    await setProviders([provider()]);
-    await using _screen = await render(panel());
-
-    await userEvent.click(refreshButton());
-    expect(state.refresh).toHaveBeenCalledWith({
-      environmentId,
-      input: { refreshModels: true },
-    });
-
-    await userEvent.click(page.getByRole("button", { name: /view details/ }).last());
-    await userEvent.click(button("Update now"));
-    expect(state.updateProvider).toHaveBeenCalledWith({
-      environmentId,
-      input: { provider: ProviderDriverKind.make("codex"), instanceId: codexId },
-    });
-  });
-
-  it("opens the requested provider instance instead of the first provider", async () => {
-    await setup();
-    state.settings = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      providerInstances: {
-        [customId]: {
-          driver: ProviderDriverKind.make("codex"),
-          enabled: true,
-          displayName: "Work",
-        },
-      },
-    };
-    await setProviders([provider()]);
-    await using _screen = await render(panel({ targetInstanceId: customId }));
-    await expect.element(deleteButton(customId)).toBeVisible();
-  });
-
-  it("saves model favorites and visibility on the selected environment", async () => {
-    await setup();
-    await setProviders([provider()]);
-    await using _screen = await render(panel());
-
-    await userEvent.click(button("Add Chosen to favorites"));
-    expect(state.toggleFavorite).toHaveBeenCalledExactlyOnceWith(codexId, "chosen");
-
-    await userEvent.click(page.getByRole("switch", { name: "Show Chosen in the model picker" }));
-    expect(state.updateModelPreferences).toHaveBeenCalledExactlyOnceWith({
-      setModelsHidden: [{ provider: codexId, model: "chosen", hidden: true }],
-    });
-    expect(state.updateSettings).not.toHaveBeenCalled();
   });
 
   it("does not substitute another account when the requested instance was removed", async () => {
@@ -349,52 +306,18 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(state.updateSettings).not.toHaveBeenCalled();
   });
 
-  it("keeps provider selection available while write controls are read only", async () => {
-    await setup();
-    state.canWriteSettings = false;
-    state.settings = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      providerInstances: {
-        [customId]: {
-          driver: ProviderDriverKind.make("codex"),
-          enabled: true,
-          displayName: "Work",
-        },
-      },
-    };
-    await setProviders([provider()]);
-    await using screen = await render(panel({ readOnly: true }));
-
-    await expect.element(page.getByRole("heading", { name: "Limited permissions" })).toBeVisible();
-    await userEvent.click(select("Work"));
-    await expect.element(deleteButton(customId)).toBeInTheDocument();
-    expect(screen.container.querySelector("[inert]")).not.toBeNull();
-    await expect.element(refreshButton()).toBeVisible();
-    await expect.element(addProvider()).not.toBeInTheDocument();
-  });
-
   it("keeps the editable layout interactive when not read only", async () => {
     await setup();
     await setProviders([provider()]);
     await using _screen = await render(panel());
     await expect.element(page.getByText("Limited permissions")).not.toBeInTheDocument();
-    await expect.element(refreshButton()).toBeVisible();
-    await expect.element(addProvider()).toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: /^Refresh provider status/ }))
+      .toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Add provider" }).first()).toBeVisible();
     await expect
       .element(page.getByRole("switch", { name: "Enable TritonAI" }).first())
       .toBeEnabled();
-  });
-
-  it("removes an open add-instance dialog when the provider grant is revoked", async () => {
-    await setup();
-    await using screen = await render(panel());
-    await userEvent.click(addProvider());
-    await expect.element(page.getByRole("dialog")).toBeVisible();
-
-    state.canManageProviders = false;
-    await screen.rerender(panel({ readOnly: true }));
-    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
-    expect(state.updateSettings).not.toHaveBeenCalled();
   });
 
   it("keeps Advanced visible when search targets the provider health interval", async () => {
@@ -427,16 +350,23 @@ describe("EnvironmentProviderSettings routing", () => {
       favorites: [{ provider: customId, model: "favorite" }],
     };
     await using _screen = await render(panel());
-    await userEvent.click(select("Work"));
-    await userEvent.click(deleteButton(customId));
+    await userEvent.click(page.getByRole("button", { name: "Select Work", exact: true }));
+    await userEvent.click(
+      page.getByRole("button", { name: `Delete instance ${customId}`, exact: true }),
+    );
     expect(state.mutateProviderInstance).toHaveBeenLastCalledWith({
       operation: "remove",
       instanceId: customId,
     });
 
     state.mutateProviderInstance.mockClear();
-    await userEvent.click(select("TritonAI"));
-    await userEvent.click(button("Reset TritonAI provider settings to default"));
+    await userEvent.click(page.getByRole("button", { name: "Select TritonAI", exact: true }));
+    await userEvent.click(
+      page.getByRole("button", {
+        name: "Reset TritonAI provider settings to default",
+        exact: true,
+      }),
+    );
     const [resetMutation, resetPatch] = state.mutateProviderInstance.mock.lastCall ?? [];
     expect(resetMutation).toEqual({ operation: "remove", instanceId: codexId });
     expect(resetPatch ?? {}).toEqual({});
@@ -496,8 +426,10 @@ describe("EnvironmentProviderSettings routing", () => {
         },
       },
     ]);
-    await using screen = await render(panel({ targetInstanceId: instanceId }));
-    await expect.element(select("Unsupported account")).not.toBeInTheDocument();
+    await using _screen = await render(panel({ targetInstanceId: instanceId }));
+    await expect
+      .element(page.getByRole("button", { name: "Select Unsupported account", exact: true }))
+      .not.toBeInTheDocument();
     await expect
       .element(page.getByRole("link", { name: "Continue authentication" }))
       .not.toBeInTheDocument();

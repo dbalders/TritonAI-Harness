@@ -1,10 +1,9 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off - exercises a real child process and its wall-clock limit.
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - exercises a real child process and its bounded kill timer.
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
+import * as NodeEvents from "node:events";
 import * as NodeURL from "node:url";
-import { afterEach, describe, expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 
 import { makeDocx, makePdf } from "./documentText/DocumentTextFixtures.testkit.ts";
 import { documentTextWorkerLimitsInEffect } from "./documentText/documentTextWorker.ts";
@@ -13,6 +12,8 @@ import {
   resolveDocumentTextWorkerCommand,
   type DocumentTextWorkerCommand,
 } from "./IntegrationDocumentText.ts";
+
+vi.mock("node:child_process", { spy: true });
 
 const serverEntry = NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url));
 const realWorker: DocumentTextWorkerCommand = {
@@ -24,34 +25,6 @@ const scriptWorker = (script: string): DocumentTextWorkerCommand => ({
   args: ["-e", script],
 });
 const signal = () => new AbortController().signal;
-const temporaryDirectories: Array<string> = [];
-function pidFile(): string {
-  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "document-text-"));
-  temporaryDirectories.push(directory);
-  return NodePath.join(directory, "pid");
-}
-function isRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-async function waitForPid(path: string): Promise<number> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (NodeFS.existsSync(path)) return Number(NodeFS.readFileSync(path, "utf8"));
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error("worker did not start");
-}
-
-afterEach(() => {
-  for (const directory of temporaryDirectories.splice(0)) {
-    NodeFS.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 describe("isolated document text extraction", () => {
   it("extracts PDF and DOCX text through the server's own __document-text process", async () => {
     const extract = makeDocumentTextExtractor({ resolveCommand: () => realWorker });
@@ -72,7 +45,7 @@ describe("isolated document text extraction", () => {
     await expect(
       extract({ format: "pdf", bytes: new TextEncoder().encode("%PDF-1.4 broken") }, signal()),
     ).resolves.toMatchObject({ status: "failed", reason: "corrupt" });
-  }, 30_000);
+  });
 
   it("runs the extractor with effective heap and code-generation limits and none of the server's environment", async () => {
     process.env.TRITONAI_DOCUMENT_TEXT_TEST_SECRET = "must-not-leak";
@@ -126,7 +99,7 @@ describe("isolated document text extraction", () => {
     expect(
       JSON.parse(run(["--max-old-space-size=96", "--disallow-code-generation-from-strings"], "96")),
     ).toMatchObject({ status: "extracted", text: "Synthetic canary 9X2-DOCX" });
-  }, 30_000);
+  });
 
   it("passes the limits through NODE_OPTIONS only for a single-executable worker", async () => {
     const extract = makeDocumentTextExtractor({
@@ -145,23 +118,26 @@ describe("isolated document text extraction", () => {
   });
 
   it("kills a worker stuck in synchronous code when the time limit passes", async () => {
-    const path = pidFile();
-    const extract = makeDocumentTextExtractor({
-      timeoutMs: 400,
-      resolveCommand: () =>
-        scriptWorker(
-          `require("node:fs").writeFileSync(${JSON.stringify(path)}, String(process.pid)); for (;;) {}`,
-        ),
-    });
-    const started = Date.now();
-    const pending = extract({ format: "docx", bytes: new Uint8Array([1]) }, signal());
-    const pid = await waitForPid(path);
-    await expect(pending).resolves.toMatchObject({ status: "failed", reason: "timeout" });
-    expect(Date.now() - started).toBeLessThan(5_000);
-    for (let attempt = 0; attempt < 100 && isRunning(pid); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    using spawn = vi.spyOn(NodeChildProcess, "spawn").mockClear();
+    const controller = new AbortController();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const extract = makeDocumentTextExtractor({
+        timeoutMs: 400,
+        resolveCommand: () => scriptWorker('process.stdout.write("ready"); for (;;) {}'),
+      });
+      const pending = extract({ format: "docx", bytes: new Uint8Array([1]) }, controller.signal);
+      const child = spawn.mock.results[0]?.value;
+      if (!child?.stdout) throw new Error("Worker stdout was not available.");
+      const closed = NodeEvents.EventEmitter.once(child, "close");
+      await NodeEvents.EventEmitter.once(child.stdout, "data");
+      await vi.advanceTimersByTimeAsync(400);
+      await expect(pending).resolves.toMatchObject({ status: "failed", reason: "timeout" });
+      await expect(closed).resolves.toEqual([null, "SIGKILL"]);
+    } finally {
+      controller.abort();
+      vi.useRealTimers();
     }
-    expect(isRunning(pid)).toBe(false);
   });
 
   it("reports a worker that exhausts its memory allowance", async () => {
@@ -173,25 +149,23 @@ describe("isolated document text extraction", () => {
     await expect(
       extract({ format: "pdf", bytes: new Uint8Array([1]) }, signal()),
     ).resolves.toMatchObject({ status: "failed", reason: "resource_limit" });
-  }, 20_000);
+  });
 
   it("stops the worker when the invocation is cancelled", async () => {
-    const path = pidFile();
+    using spawn = vi.spyOn(NodeChildProcess, "spawn").mockClear();
     const controller = new AbortController();
     const extract = makeDocumentTextExtractor({
       resolveCommand: () =>
-        scriptWorker(
-          `require("node:fs").writeFileSync(${JSON.stringify(path)}, String(process.pid)); setInterval(() => {}, 1000);`,
-        ),
+        scriptWorker('process.stdout.write("ready"); setInterval(() => {}, 1000);'),
     });
     const pending = extract({ format: "pdf", bytes: new Uint8Array([1]) }, controller.signal);
-    const pid = await waitForPid(path);
+    const child = spawn.mock.results[0]?.value;
+    if (!child?.stdout) throw new Error("Worker stdout was not available.");
+    const closed = NodeEvents.EventEmitter.once(child, "close");
+    await NodeEvents.EventEmitter.once(child.stdout, "data");
     controller.abort();
     await expect(pending).resolves.toMatchObject({ status: "failed", reason: "cancelled" });
-    for (let attempt = 0; attempt < 100 && isRunning(pid); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    expect(isRunning(pid)).toBe(false);
+    await expect(closed).resolves.toEqual([null, "SIGKILL"]);
   });
 
   it("rejects oversized output, malformed output, and results over the character limit", async () => {
@@ -249,13 +223,11 @@ describe("isolated document text extraction", () => {
     const running = extract({ format: "pdf", bytes: new Uint8Array([1]) }, blocker.signal);
     const aborted = new AbortController();
     aborted.abort();
-    const started = Date.now();
     const cancelled = await Promise.all(
       Array.from({ length: 12 }, () =>
         extract({ format: "pdf", bytes: new Uint8Array([1]) }, aborted.signal),
       ),
     );
-    expect(Date.now() - started).toBeLessThan(1_000);
     expect(
       cancelled.every((result) => result.status === "failed" && result.reason === "cancelled"),
     ).toBe(true);

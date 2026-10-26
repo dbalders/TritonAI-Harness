@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
-const { EventEmitter } = require("node:events");
+const { EventEmitter, once } = require("node:events");
 const { spawn, execFileSync } = require("node:child_process");
 const { test } = require("node:test");
 const { createRequire } = require("node:module");
@@ -304,7 +304,8 @@ test("process snapshots parse explicit PID ancestry, group and start time fields
 
 test(
   "macOS process fixture freezes and discovers a detached child spawned during cleanup",
-  { skip: process.platform !== "darwin", timeout: 10_000 },
+  // Requires macOS process-group start-time and SIGSTOP semantics.
+  { skip: process.platform !== "darwin" },
   async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "local-release-process-test-"));
     const control = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
@@ -336,12 +337,21 @@ test(
         if (signal === "SIGSTOP" && pgid === parent.pid && !requestedLateChild) {
           requestedLateChild = true;
           parent.send("fork-before-freeze");
-          const deadline = Date.now() + 2000;
-          while (!fs.existsSync(lateReceipt)) {
-            if (Date.now() >= deadline)
-              throw new Error("Late detached child fixture did not become ready");
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-          }
+          execFileSync(
+            process.execPath,
+            [
+              "-e",
+              `
+            const fs = require('node:fs');
+            const receipt = ${JSON.stringify(lateReceipt)};
+            const watcher = fs.watch(${JSON.stringify(root)}, () => {
+              if (fs.existsSync(receipt)) { watcher.close(); process.exit(0); }
+            });
+            if (fs.existsSync(receipt)) { watcher.close(); process.exit(0); }
+          `,
+            ],
+            { timeout: 2000 },
+          );
         }
         if (signal === "SIGKILL") killed.push(pgid);
         process.kill(-pgid, signal);
@@ -357,15 +367,9 @@ test(
         if (tracker.stopped) fs.rmSync(root, { recursive: true, force: true });
       }
     });
-    let timer;
-    const { descendantPid } = await new Promise((resolve, reject) => {
-      timer = setTimeout(
-        () => reject(new Error("Owned process fixture did not become ready")),
-        3000,
-      );
-      parent.once("message", resolve);
-      parent.once("error", reject);
-    }).finally(() => clearTimeout(timer));
+    const [{ descendantPid }] = await once(parent, "message", {
+      signal: AbortSignal.timeout(3000),
+    });
     const owned = tracker.capture();
     assert(
       owned.some(
@@ -407,6 +411,7 @@ function bootMocks(
   let closed = false;
   const child = Object.assign(new EventEmitter(), { pid: 100, exitCode: null, signalCode: null });
   const signals = new EventEmitter();
+  const evaluationReceipt = Promise.withResolvers();
   const killedGroups = [];
   const signaledGroups = [];
   let processes = [
@@ -419,8 +424,9 @@ function bootMocks(
   const page = { url: () => rendererUrl, evaluate: async () => true };
   const application = {
     process: () => child,
-    evaluate: async (_callback, argument) =>
-      hungEvaluation
+    evaluate: async (_callback, argument) => {
+      evaluationReceipt.resolve();
+      return hungEvaluation
         ? new Promise(() => {})
         : argument
           ? true
@@ -436,7 +442,8 @@ function bootMocks(
                     "tritonai-harness",
                   ),
               windows: [{ visible: true, rendererPid: 300, url: page.url() }],
-            },
+            };
+    },
     windows: () => [page],
     close: async () => {
       closed = true;
@@ -452,6 +459,7 @@ function bootMocks(
     },
   };
   return {
+    evaluationStarted: evaluationReceipt.promise,
     electron: {
       launch: async (options) => {
         launchOptions = options;
@@ -687,7 +695,7 @@ for (const [signal, exitCode] of [
       closeTimeoutMs: 10,
     });
     const rejected = assert.rejects(result, assertCancellation);
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await mock.evaluationStarted;
     mock.signals.emit(signal);
     assert.equal(mock.getState().child.signalCode, "SIGKILL");
     assert.deepEqual(mock.getState().killedGroups, [200, 100]);

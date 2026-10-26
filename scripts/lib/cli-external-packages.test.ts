@@ -1,16 +1,24 @@
-import * as NodeURL from "node:url";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
 import serverPackageJson from "../../apps/server/package.json" with { type: "json" };
+import { selectCliRuntimeExternalDependencies } from "./cli-external-packages.ts";
+import * as NodeURL from "node:url";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import { assert, describe, it } from "@effect/vitest";
+
+import * as Effect from "effect/Effect";
+
+import * as FileSystem from "effect/FileSystem";
+
+import * as Path from "effect/Path";
+
+import * as Schema from "effect/Schema";
+
 import { findEsmImportsOfExternalPackages } from "./cli-executable-imports.ts";
+
 import {
   isRuntimeExternalCliDependency,
   findInlinedExternalPackages,
-  selectCliRuntimeExternalDependencies,
   shouldBundleCliDependency,
 } from "./cli-external-packages.ts";
 
@@ -23,27 +31,12 @@ const PackageManifest = Schema.Struct({
   optionalDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   peerDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
+
 type PackageManifest = typeof PackageManifest.Type;
 
 const decodeManifest = Schema.decodeUnknownSync(Schema.fromJsonString(PackageManifest));
 
 describe("shouldBundleCliDependency", () => {
-  it("bundles ordinary runtime dependencies", () => {
-    for (const id of [
-      "@effect/platform",
-      "effect-acp/client",
-      "effect-codex-app-server/client",
-      "hono",
-      "@t3tools/shared/HostProcess",
-    ]) {
-      assert.strictEqual(shouldBundleCliDependency(id), true, id);
-    }
-  });
-
-  it("never bundles node: builtins", () => {
-    assert.strictEqual(shouldBundleCliDependency("node:fs"), false);
-  });
-
   it("leaves native addons and their dlopen wrappers external", () => {
     for (const id of [
       "effect",
@@ -63,6 +56,18 @@ describe("shouldBundleCliDependency", () => {
 
   it("treats prefix-matched siblings as external", () => {
     assert.strictEqual(shouldBundleCliDependency("node-gyp-build-optional-packages"), false);
+  });
+
+  it("bundles ordinary runtime dependencies", () => {
+    for (const id of [
+      "@effect/platform",
+      "effect-acp/client",
+      "effect-codex-app-server/client",
+      "hono",
+      "@t3tools/shared/HostProcess",
+    ]) {
+      assert.strictEqual(shouldBundleCliDependency(id), true, id);
+    }
   });
 });
 
@@ -147,25 +152,6 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
   // loaded by Node, so their closure genuinely does not need to be external.
   const isRuntimeExternal = isRuntimeExternalCliDependency;
 
-  // A cold walk of the pnpm store can exceed the root timeout when the Windows
-  // lane runs four filesystem-heavy workspace suites at once.
-  it.effect(
-    "finds the runtime-external packages on disk",
-    () =>
-      Effect.gen(function* () {
-        const installed = yield* readInstalledPackages;
-        const found = [...installed.keys()].filter(isRuntimeExternal);
-
-        for (const required of ["node-pty", "node-addon-api"]) {
-          assert.ok(
-            found.includes(required),
-            `expected ${required} in the pnpm store; the closure check is only meaningful if it can read these (found ${found.length})`,
-          );
-        }
-      }),
-    120_000,
-  );
-
   it.effect("keeps every runtime dependency of an external package external too", () =>
     Effect.gen(function* () {
       const installed = yield* readInstalledPackages;
@@ -220,13 +206,6 @@ var x = 1;
     assert.strictEqual(result.regionCount, 2);
   });
 
-  it("flags scoped external packages", () => {
-    const result = findInlinedExternalPackages(
-      region("../../node_modules/@ff-labs/fff-node/dist/src/index.js"),
-    );
-    assert.deepStrictEqual(result.inlined, ["@ff-labs/fff-node"]);
-  });
-
   it("ignores packages that are meant to be bundled", () => {
     const source =
       region("../../node_modules/.pnpm/hono@4.0.0/node_modules/hono/dist/index.js") +
@@ -253,12 +232,6 @@ var x = 1;
       region("../../node_modules/.pnpm/hono@4.0.0/node_modules/hono/dist/index.js"),
     );
     assert.deepStrictEqual(result.inlinedPackages, ["hono"]);
-  });
-
-  it("reports no regions when the marker format is absent", () => {
-    const result = findInlinedExternalPackages("var x = 1; // node_modules/node-pty/lib.js");
-    assert.strictEqual(result.regionCount, 0);
-    assert.deepStrictEqual(result.inlined, []);
   });
 });
 

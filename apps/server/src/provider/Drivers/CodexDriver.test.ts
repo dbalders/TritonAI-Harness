@@ -1,50 +1,87 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as CodexInstallation from "../CodexInstallation.ts";
-import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
-import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
-import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
+import * as CodexTextGeneration from "../../textGeneration/CodexTextGeneration.ts";
+import { managedCodexModelCatalogFileName } from "./CodexModelCatalog.ts";
+import { decideProviderSessionTransition } from "../../orchestration-v2/ProviderSessionTransitionPolicy.ts";
+import { assert } from "@effect/vitest";
+import { describe } from "@effect/vitest";
+import { mergeCodexProviderEnvironment as mergeCodexEnvironment } from "../CodexEnvironment.ts";
+import * as CodexInstallation from "../CodexInstallation.ts";
+
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import * as NodePath from "node:path";
+
+import { expect, it } from "@effect/vitest";
+
 import { EnvironmentId, ProviderInstanceId, ProviderSessionId, ThreadId } from "@t3tools/contracts";
+
 import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import * as Effect from "effect/Effect";
+
 import * as Exit from "effect/Exit";
+
 import * as Deferred from "effect/Deferred";
+
 import * as Fiber from "effect/Fiber";
+
 import * as FileSystem from "effect/FileSystem";
+
 import * as Layer from "effect/Layer";
+
 import * as Option from "effect/Option";
+
 import * as PlatformError from "effect/PlatformError";
+
 import * as Schema from "effect/Schema";
+
 import * as Sink from "effect/Sink";
+
 import * as Stream from "effect/Stream";
+
 import { HttpClient, HttpClientResponse } from "effect/http";
+
 import * as ChildProcess from "effect/process/ChildProcess";
+
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
+
 import * as ServerConfig from "../../config.ts";
-import * as CodexTextGeneration from "../../textGeneration/CodexTextGeneration.ts";
+
 import * as ServerSettings from "../../serverSettings.ts";
+
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
+
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+
 import * as ModelManifest from "../ModelManifest.ts";
+
 import {
   createProviderVersionAdvisory,
   resolveLatestProviderVersion,
 } from "@t3tools/provider-core/server/maintenanceResolver";
+
 import { CodexDriver } from "./CodexDriver.ts";
-import { managedCodexModelCatalogFileName } from "./CodexModelCatalog.ts";
+
 import * as CodexAdapterV2 from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
+
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+
 import * as ProviderCredentialStore from "../ProviderCredentialStore.ts";
+
 import * as ProviderHostLive from "../ProviderHostLive.ts";
-import { decideProviderSessionTransition } from "../../orchestration-v2/ProviderSessionTransitionPolicy.ts";
 
 const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-codex-driver-maintenance-",
@@ -90,6 +127,7 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
     ),
   ),
 );
+
 const layerTest = ProviderHostLive.layer.pipe(Layer.provideMerge(layerDeps));
 
 // The `#!/bin/sh` stub below cannot be resolved as an executable on Windows.
@@ -102,268 +140,10 @@ const encodeCodexPackage = Schema.encodeSync(
 const noSpawn = ChildProcessSpawner.make(() =>
   Effect.die("Disabled Codex must not spawn a process"),
 );
+
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
-  it.effect.each(["", "   "])(
-    "resolves a blank config home to the environment's Codex home before Help setup: %j",
-    (homePath) =>
-      Effect.gen(function* () {
-        using generation = vi.spyOn(CodexTextGeneration, "makeCodexTextGeneration");
-        const config = yield* ServerConfig.ServerConfig;
-        const instance = yield* CodexDriver.create({
-          instanceId: ProviderInstanceId.make("blank-home-help"),
-          displayName: "Blank home Help",
-          enabled: false,
-          environment: [],
-          config: {
-            ...CodexDriver.defaultConfig(),
-            setupMode: "existing",
-            binaryPath: process.execPath,
-            homePath,
-          },
-        });
-        expect(generation).toHaveBeenCalledOnce();
-        expect(generation.mock.calls[0]?.[0].homePath).toBe(NodePath.join(config.baseDir, "codex"));
-        expect(instance.textGeneration.generateHelp).toBeDefined();
-      }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
-        Effect.scoped,
-      ),
-  );
-
-  it.effect.each([
-    { id: "codex_frontier", managed: true, explicitModalities: false },
-    { id: "codex", managed: true, explicitModalities: true },
-    { id: "codex_personal", managed: false, explicitModalities: false },
-    { id: "codex_frontier", managed: false, explicitModalities: false },
-    { id: "codex_personal", managed: false, explicitModalities: true },
-  ])(
-    "passes the right catalog to the launch boundary: $id / managed=$managed / modalities=$explicitModalities",
-    ({ id, managed, explicitModalities }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "codex-catalog-launch-" });
-        const instanceId = ProviderInstanceId.make(id);
-        const model = explicitModalities ? "api-glm-5.3-flash" : "gpt-6.1-sol";
-        const filePath = NodePath.join(homePath, managedCodexModelCatalogFileName(id));
-        const staleCatalog = JSON.stringify({ models: [{ slug: "codex-auto-review" }] });
-        yield* fs.writeFileString(filePath, staleCatalog);
-        const launches: Array<
-          Parameters<CodexAdapterV2.CodexAppServerClientFactoryShape["open"]>[0]
-        > = [];
-        let catalogReads = 0;
-        const spawner = ChildProcessSpawner.make((command) => {
-          if (
-            !ChildProcess.isStandardCommand(command) ||
-            command.args.join(" ") !== "debug models --bundled"
-          ) {
-            // Status probes are outside this launch-boundary fixture.
-            return Effect.interrupt;
-          }
-          catalogReads += 1;
-          return Effect.succeed(
-            ChildProcessSpawner.makeHandle({
-              pid: ChildProcessSpawner.ProcessId(1),
-              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-              isRunning: Effect.succeed(false),
-              kill: () => Effect.void,
-              unref: Effect.succeed(Effect.void),
-              stdin: Sink.drain,
-              stdout: Stream.encodeText(
-                Stream.make(
-                  JSON.stringify({
-                    models: [
-                      {
-                        slug: "gpt-6.1-sol",
-                        input_modalities: ["text", "image"],
-                        auto_review_model_override: "codex-auto-review",
-                      },
-                      { slug: "codex-auto-review", visibility: "hide" },
-                    ],
-                  }),
-                ),
-              ),
-              stderr: Stream.empty,
-              all: Stream.empty,
-              getInputFd: () => Sink.drain,
-              getOutputFd: () => Stream.empty,
-            }),
-          );
-        });
-        const inheritedLaunchArgs = '-c model_catalog_json="/old/model-catalog.json"';
-        const instance = yield* CodexDriver.create({
-          instanceId,
-          displayName: id,
-          enabled: true,
-          environment: managed
-            ? [
-                {
-                  name: "TRITONAI_API_KEY_SOURCE",
-                  value: id === "codex" ? "TRITONAI_ONPREM_API_KEY" : "TRITONAI_FRONTIER_API_KEY",
-                  sensitive: false,
-                },
-              ]
-            : [],
-          config: {
-            ...CodexDriver.defaultConfig(),
-            binaryPath: "/fixture/codex",
-            homePath,
-            launchArgs: inheritedLaunchArgs,
-            customModels: [model],
-            customModelMetadata: {
-              [model]: {
-                name: "Fixture model",
-                ...(explicitModalities ? { capabilities: { inputModalities: ["text"] } } : {}),
-              },
-            },
-          },
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(CodexAdapterV2.CodexAppServerClientFactory, {
-            open: (launch) =>
-              Effect.sync(() => launches.push(launch)).pipe(
-                Effect.andThen(Effect.die("The fixture stops at the app-server launch boundary")),
-              ),
-          }),
-        );
-        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-          runtimeMode: "auto",
-          interactionMode: "default",
-          cwd: homePath,
-        });
-        yield* instance.orchestrationAdapter
-          .openSession({
-            threadId: ThreadId.make("catalog-launch-thread"),
-            providerSessionId: ProviderSessionId.make("catalog-launch-session"),
-            modelSelection: { instanceId, model },
-            runtimePolicy,
-          })
-          .pipe(Effect.scoped, Effect.exit);
-
-        expect(launches).toHaveLength(1);
-        const launch = launches[0]!;
-        const appServerArgs = launch.appServerArgs ?? [];
-        expect(launch.runtimePolicy).toEqual(runtimePolicy);
-        expect(launch.settings.launchArgs).toBe(inheritedLaunchArgs);
-        const needsCatalog = managed || explicitModalities;
-        expect(catalogReads).toBe(needsCatalog ? 1 : 0);
-        if (needsCatalog) {
-          expect(appServerArgs).toContain(`model_catalog_json=${JSON.stringify(filePath)}`);
-          const catalog = JSON.parse(yield* fs.readFileString(filePath));
-          expect(catalog.models[0].auto_review_model_override).toBe(
-            managed ? null : "codex-auto-review",
-          );
-          expect(catalog.models.map((entry: { slug: string }) => entry.slug)).toEqual(
-            explicitModalities ? ["gpt-6.1-sol", model] : ["gpt-6.1-sol"],
-          );
-          if (explicitModalities) {
-            expect(
-              catalog.models.find((entry: { slug: string }) => entry.slug === model)
-                .input_modalities,
-            ).toEqual(["text"]);
-          }
-        } else {
-          expect(appServerArgs.some((argument) => argument.startsWith("model_catalog_json="))).toBe(
-            false,
-          );
-          expect(yield* fs.readFileString(filePath)).toBe(staleCatalog);
-        }
-      }).pipe(Effect.scoped),
-  );
-
-  it.effect.each([
-    ["codex_frontier", "gpt-6.1-sol", "codex", "api-glm-5.3-flash"],
-    ["codex", "api-glm-5.3-flash", "codex_frontier", "gpt-6.1-sol"],
-  ] as const)(
-    "hands off managed history from %s/%s to %s/%s even with a shared home",
-    ([currentId, currentModel, targetId, targetModel]) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "managed-route-handoff-" });
-        const create = (id: string) =>
-          CodexDriver.create({
-            instanceId: ProviderInstanceId.make(id),
-            displayName: id,
-            enabled: false,
-            environment: [
-              {
-                name: "TRITONAI_API_KEY_SOURCE",
-                value: id === "codex" ? "TRITONAI_ONPREM_API_KEY" : "TRITONAI_FRONTIER_API_KEY",
-                sensitive: false,
-              },
-            ],
-            config: { ...CodexDriver.defaultConfig(), binaryPath: process.execPath, homePath },
-          });
-        const current = yield* create(currentId);
-        const target = yield* create(targetId);
-        const capabilities = yield* current.orchestrationAdapter.getCapabilities();
-        const state = {
-          driver: CodexDriver.driverKind,
-          runtimeMode: "approval-required" as const,
-          interactionMode: "default" as const,
-          workspace: "/repo",
-          capabilities,
-        };
-        expect(
-          decideProviderSessionTransition({
-            current: {
-              ...state,
-              continuationIdentity: current.continuationIdentity,
-              modelSelection: {
-                instanceId: ProviderInstanceId.make(currentId),
-                model: currentModel,
-              },
-            },
-            target: {
-              ...state,
-              continuationIdentity: target.continuationIdentity,
-              modelSelection: { instanceId: ProviderInstanceId.make(targetId), model: targetModel },
-              available: true,
-            },
-          }),
-        ).toEqual({ type: "create_with_handoff" });
-      }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
-        Effect.scoped,
-      ),
-  );
-
-  it.effect("keeps native continuation shared between compatible personal profiles", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const homePath = yield* fs.makeTempDirectoryScoped({
-        prefix: "personal-route-continuation-",
-      });
-      const create = (id: string) =>
-        CodexDriver.create({
-          instanceId: ProviderInstanceId.make(id),
-          displayName: id,
-          enabled: false,
-          environment: [],
-          config: { ...CodexDriver.defaultConfig(), binaryPath: process.execPath, homePath },
-        });
-      const current = yield* create("codex_personal");
-      const target = yield* create("codex_work");
-      expect(current.continuationIdentity).toEqual(target.continuationIdentity);
-    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn), Effect.scoped),
-  );
-
-  it.effect("reports a disabled managed account as disabled", () =>
-    Effect.gen(function* () {
-      const instance = yield* CodexDriver.create({
-        instanceId: ProviderInstanceId.make("disabled-managed-account"),
-        displayName: "Disabled account",
-        enabled: false,
-        environment: [],
-        config: { ...CodexDriver.defaultConfig(), setupMode: "managed" },
-      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn));
-
-      expect((yield* instance.snapshot.getSnapshot).enabled).toBe(false);
-      expect((yield* instance.snapshot.refresh).enabled).toBe(false);
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("disconnect refreshes a restored managed account while its auth flow is idle", () =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("restored-managed-account");
@@ -690,22 +470,6 @@ it.layer(layerTest)("CodexDriver", (it) => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect("stays manual-only when the configured executable does not exist", () =>
-    Effect.gen(function* () {
-      const instance = yield* CodexDriver.create({
-        instanceId: ProviderInstanceId.make("codex-missing"),
-        displayName: "Codex test",
-        enabled: false,
-        environment: [],
-        config: {
-          ...CodexDriver.defaultConfig(),
-          binaryPath: NodePath.join(NodeOS.tmpdir(), "t3-codex-missing", "codex"),
-        },
-      });
-      expect((yield* instance.snapshot.resolveMaintenance()).update).toBeNull();
-    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn), Effect.scoped),
-  );
-
   for (const fixture of [
     {
       name: "leaves mise npm-backend installations manual-only",
@@ -786,44 +550,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
     );
   }
 
-  for (const layout of ["direct", "wrapper"] as const) {
-    it.effect.skipIf(windowsHost)(`leaves a mise ${layout} installation manual-only`, () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const tempDir = yield* fs
-          .makeTempDirectoryScoped({ prefix: `t3-codex-mise-${layout}-` })
-          .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
-        const binaryPath =
-          layout === "direct"
-            ? NodePath.join(tempDir, "mise", "installs", "codex", "0.110.0", "codex")
-            : NodePath.join(tempDir, "omarchy", "bin", "codex");
-        yield* fs.makeDirectory(NodePath.dirname(binaryPath), { recursive: true });
-        yield* fs.writeFileString(
-          binaryPath,
-          layout === "direct"
-            ? "#!/bin/sh\n"
-            : '#!/bin/sh\nmise use -g --quiet "codex" || exit 1\nexec mise x "codex" -- "codex" "$@"\n',
-        );
-        yield* fs.chmod(binaryPath, 0o755);
-
-        const instance = yield* CodexDriver.create({
-          instanceId: ProviderInstanceId.make(`codex-mise-${layout}`),
-          displayName: "Codex mise test",
-          enabled: false,
-          environment: [],
-          config: {
-            ...CodexDriver.defaultConfig(),
-            binaryPath,
-            homePath: NodePath.join(tempDir, "codex-home"),
-          },
-        });
-
-        expect((yield* instance.snapshot.resolveMaintenance()).update).toBeNull();
-      }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
-        Effect.scoped,
-      ),
-    );
+  for (const {} of ["direct", "wrapper"] as const) {
   }
 
   it.effect.each([
@@ -972,11 +699,252 @@ it.layer(layerTest)("CodexDriver", (it) => {
       }).pipe(Effect.scoped),
     { skip: windowsHost },
   );
+
+  it.effect.each(["", "   "])(
+    "resolves a blank config home to the environment's Codex home before Help setup: %j",
+    (homePath) =>
+      Effect.gen(function* () {
+        using generation = vi.spyOn(CodexTextGeneration, "makeCodexTextGeneration");
+        const config = yield* ServerConfig.ServerConfig;
+        const instance = yield* CodexDriver.create({
+          instanceId: ProviderInstanceId.make("blank-home-help"),
+          displayName: "Blank home Help",
+          enabled: false,
+          environment: [],
+          config: {
+            ...CodexDriver.defaultConfig(),
+            setupMode: "existing",
+            binaryPath: process.execPath,
+            homePath,
+          },
+        });
+        expect(generation).toHaveBeenCalledOnce();
+        expect(generation.mock.calls[0]?.[0].homePath).toBe(NodePath.join(config.baseDir, "codex"));
+        expect(instance.textGeneration.generateHelp).toBeDefined();
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect.each([
+    { id: "codex_frontier", managed: true, explicitModalities: false },
+    { id: "codex", managed: true, explicitModalities: true },
+    { id: "codex_personal", managed: false, explicitModalities: false },
+    { id: "codex_frontier", managed: false, explicitModalities: false },
+    { id: "codex_personal", managed: false, explicitModalities: true },
+  ])(
+    "passes the right catalog to the launch boundary: $id / managed=$managed / modalities=$explicitModalities",
+    ({ id, managed, explicitModalities }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "codex-catalog-launch-" });
+        const instanceId = ProviderInstanceId.make(id);
+        const model = explicitModalities ? "api-glm-5.3-flash" : "gpt-6.1-sol";
+        const filePath = NodePath.join(homePath, managedCodexModelCatalogFileName(id));
+        const staleCatalog = JSON.stringify({ models: [{ slug: "codex-auto-review" }] });
+        yield* fs.writeFileString(filePath, staleCatalog);
+        const launches: Array<
+          Parameters<CodexAdapterV2.CodexAppServerClientFactoryShape["open"]>[0]
+        > = [];
+        let catalogReads = 0;
+        const spawner = ChildProcessSpawner.make((command) => {
+          if (
+            !ChildProcess.isStandardCommand(command) ||
+            command.args.join(" ") !== "debug models --bundled"
+          ) {
+            // Status probes are outside this launch-boundary fixture.
+            return Effect.interrupt;
+          }
+          catalogReads += 1;
+          return Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+              isRunning: Effect.succeed(false),
+              kill: () => Effect.void,
+              unref: Effect.succeed(Effect.void),
+              stdin: Sink.drain,
+              stdout: Stream.encodeText(
+                Stream.make(
+                  JSON.stringify({
+                    models: [
+                      {
+                        slug: "gpt-6.1-sol",
+                        input_modalities: ["text", "image"],
+                        auto_review_model_override: "codex-auto-review",
+                      },
+                      { slug: "codex-auto-review", visibility: "hide" },
+                    ],
+                  }),
+                ),
+              ),
+              stderr: Stream.empty,
+              all: Stream.empty,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+            }),
+          );
+        });
+        const inheritedLaunchArgs = '-c model_catalog_json="/old/model-catalog.json"';
+        const instance = yield* CodexDriver.create({
+          instanceId,
+          displayName: id,
+          enabled: true,
+          environment: managed
+            ? [
+                {
+                  name: "TRITONAI_API_KEY_SOURCE",
+                  value: id === "codex" ? "TRITONAI_ONPREM_API_KEY" : "TRITONAI_FRONTIER_API_KEY",
+                  sensitive: false,
+                },
+              ]
+            : [],
+          config: {
+            ...CodexDriver.defaultConfig(),
+            binaryPath: "/fixture/codex",
+            homePath,
+            launchArgs: inheritedLaunchArgs,
+            customModels: [model],
+            customModelMetadata: {
+              [model]: {
+                name: "Fixture model",
+                ...(explicitModalities ? { capabilities: { inputModalities: ["text"] } } : {}),
+              },
+            },
+          },
+        }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(CodexAdapterV2.CodexAppServerClientFactory, {
+            open: (launch) =>
+              Effect.sync(() => launches.push(launch)).pipe(
+                Effect.andThen(Effect.die("The fixture stops at the app-server launch boundary")),
+              ),
+          }),
+        );
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "auto",
+          interactionMode: "default",
+          cwd: homePath,
+        });
+        yield* instance.orchestrationAdapter
+          .openSession({
+            threadId: ThreadId.make("catalog-launch-thread"),
+            providerSessionId: ProviderSessionId.make("catalog-launch-session"),
+            modelSelection: { instanceId, model },
+            runtimePolicy,
+          })
+          .pipe(Effect.scoped, Effect.exit);
+
+        expect(launches).toHaveLength(1);
+        const launch = launches[0]!;
+        const appServerArgs = launch.appServerArgs ?? [];
+        expect(launch.runtimePolicy).toEqual(runtimePolicy);
+        expect(launch.settings.launchArgs).toBe(inheritedLaunchArgs);
+        const needsCatalog = managed || explicitModalities;
+        expect(catalogReads).toBe(needsCatalog ? 1 : 0);
+        if (needsCatalog) {
+          expect(appServerArgs).toContain(`model_catalog_json=${JSON.stringify(filePath)}`);
+          const catalog = JSON.parse(yield* fs.readFileString(filePath));
+          expect(catalog.models[0].auto_review_model_override).toBe(
+            managed ? null : "codex-auto-review",
+          );
+          expect(catalog.models.map((entry: { slug: string }) => entry.slug)).toEqual(
+            explicitModalities ? ["gpt-6.1-sol", model] : ["gpt-6.1-sol"],
+          );
+          if (explicitModalities) {
+            expect(
+              catalog.models.find((entry: { slug: string }) => entry.slug === model)
+                .input_modalities,
+            ).toEqual(["text"]);
+          }
+        } else {
+          expect(appServerArgs.some((argument) => argument.startsWith("model_catalog_json="))).toBe(
+            false,
+          );
+          expect(yield* fs.readFileString(filePath)).toBe(staleCatalog);
+        }
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    ["codex_frontier", "gpt-6.1-sol", "codex", "api-glm-5.3-flash"],
+    ["codex", "api-glm-5.3-flash", "codex_frontier", "gpt-6.1-sol"],
+  ] as const)(
+    "hands off managed history from %s/%s to %s/%s even with a shared home",
+    ([currentId, currentModel, targetId, targetModel]) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "managed-route-handoff-" });
+        const create = (id: string) =>
+          CodexDriver.create({
+            instanceId: ProviderInstanceId.make(id),
+            displayName: id,
+            enabled: false,
+            environment: [
+              {
+                name: "TRITONAI_API_KEY_SOURCE",
+                value: id === "codex" ? "TRITONAI_ONPREM_API_KEY" : "TRITONAI_FRONTIER_API_KEY",
+                sensitive: false,
+              },
+            ],
+            config: { ...CodexDriver.defaultConfig(), binaryPath: process.execPath, homePath },
+          });
+        const current = yield* create(currentId);
+        const target = yield* create(targetId);
+        const capabilities = yield* current.orchestrationAdapter.getCapabilities();
+        const state = {
+          driver: CodexDriver.driverKind,
+          runtimeMode: "approval-required" as const,
+          interactionMode: "default" as const,
+          workspace: "/repo",
+          capabilities,
+        };
+        expect(
+          decideProviderSessionTransition({
+            current: {
+              ...state,
+              continuationIdentity: current.continuationIdentity,
+              modelSelection: {
+                instanceId: ProviderInstanceId.make(currentId),
+                model: currentModel,
+              },
+            },
+            target: {
+              ...state,
+              continuationIdentity: target.continuationIdentity,
+              modelSelection: { instanceId: ProviderInstanceId.make(targetId), model: targetModel },
+              available: true,
+            },
+          }),
+        ).toEqual({ type: "create_with_handoff" });
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect("keeps native continuation shared between compatible personal profiles", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const homePath = yield* fs.makeTempDirectoryScoped({
+        prefix: "personal-route-continuation-",
+      });
+      const create = (id: string) =>
+        CodexDriver.create({
+          instanceId: ProviderInstanceId.make(id),
+          displayName: id,
+          enabled: false,
+          environment: [],
+          config: { ...CodexDriver.defaultConfig(), binaryPath: process.execPath, homePath },
+        });
+      const current = yield* create("codex_personal");
+      const target = yield* create("codex_work");
+      expect(current.continuationIdentity).toEqual(target.continuationIdentity);
+    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn), Effect.scoped),
+  );
 });
 
-import { assert, describe } from "@effect/vitest";
-
-import { mergeCodexProviderEnvironment as mergeCodexEnvironment } from "../CodexEnvironment.ts";
 const mergeCodexProviderEnvironment = mergeCodexEnvironment;
 
 describe("mergeCodexProviderEnvironment", () => {

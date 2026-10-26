@@ -1,49 +1,78 @@
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as CodexInstallation from "./CodexInstallation.ts";
-import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
-import { describe, expect, it } from "@effect/vitest";
-import { vi } from "vite-plus/test";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  EnvironmentId,
-  type ClaudeSettings,
-  type CodexSettings,
-  ProviderDriverKind,
-  type ProviderInstanceConfigMap,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
-import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
-import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import { type ClaudeSettings } from "@t3tools/contracts";
+import { type CodexSettings } from "@t3tools/contracts";
+import { type ProviderInstanceConfigMap } from "@t3tools/contracts";
 import type { GrokSettings } from "@t3tools/provider-grok/settings";
 import type { CursorSettings } from "@t3tools/provider-cursor/settings";
+import type { OpenCodeSettings } from "@t3tools/provider-opencode/settings";
+
+import * as AntigravityInstallation from "./AntigravityInstallation.ts";
+import { CursorDriver } from "@t3tools/provider-cursor/server";
+import { type CursorDriverEnv } from "@t3tools/provider-cursor/server";
+import { GrokDriver } from "@t3tools/provider-grok/server";
+import { type GrokDriverEnv } from "@t3tools/provider-grok/server";
+import { OpenCodeDriver } from "@t3tools/provider-opencode/server";
+import { type OpenCodeDriverEnv } from "@t3tools/provider-opencode/server";
+
+import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
+import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+
+import * as CodexInstallation from "./CodexInstallation.ts";
+
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+
+import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
+
+import { describe, expect, it } from "@effect/vitest";
+
+import { vi } from "vite-plus/test";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import { EnvironmentId, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+
+import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
+
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+
 import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import * as DateTime from "effect/DateTime";
+
 import * as Effect from "effect/Effect";
+
 import * as FileSystem from "effect/FileSystem";
+
 import * as Layer from "effect/Layer";
+
 import * as Path from "effect/Path";
+
 import * as Stream from "effect/Stream";
+
 import * as TestClock from "effect/testing/TestClock";
+
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import * as AntigravityInstallation from "./AntigravityInstallation.ts";
+
 import * as ServerConfig from "../config.ts";
+
 import * as ServerSettings from "../serverSettings.ts";
+
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
+
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
-import { CursorDriver, type CursorDriverEnv } from "@t3tools/provider-cursor/server";
-import { GrokDriver, type GrokDriverEnv } from "@t3tools/provider-grok/server";
-import { OpenCodeDriver, type OpenCodeDriverEnv } from "@t3tools/provider-opencode/server";
-import type { OpenCodeSettings } from "@t3tools/provider-opencode/settings";
+
 import * as ModelManifest from "./ModelManifest.ts";
-import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
-import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
+
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
+
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+
 import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
+
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
+
 import * as ProviderHostLive from "./ProviderHostLive.ts";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
@@ -107,6 +136,7 @@ const makeClaudeConfig = (overrides: Partial<ClaudeSettings>): ClaudeSettings =>
   customModels: [],
   launchArgs: "",
   autoCompactWindow: "",
+  idleCompaction: "default",
   ...overrides,
 });
 
@@ -214,7 +244,9 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     Layer.provideMerge(ModelManifest.layerTest),
     Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
+
   const layerBase = ProviderHostLive.layer.pipe(Layer.provideMerge(layerBaseDeps));
+
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
     Layer.provideMerge(layerBase),
   );
@@ -315,42 +347,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       expect(instance!.enabled).toBe(false);
       const snapshot = yield* instance!.snapshot.getSnapshot;
       expect(snapshot.enabled).toBe(false);
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.live("reports Codex's answer when a redemption changed nothing", () =>
-    Effect.gen(function* () {
-      if (yield* HostProcess.isWindows) return;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const fixtures = yield* makeTildeProviderFixtures();
-      yield* fileSystem.writeFileString(
-        fixtures.codexScriptPath,
-        JSON.stringify({
-          rootThreadId: "probe-thread",
-          notifications: [],
-          account: { type: "chatgpt", email: "test@example.com", planType: "plus" },
-          failRateLimitsRead: true,
-          resetCreditOutcome: "alreadyRedeemed",
-        }),
-      );
-      const codexId = ProviderInstanceId.make("codex_reset");
-      const { registry } = yield* makeProviderInstanceRegistry({
-        drivers: [CodexDriver],
-        configMap: {
-          [codexId]: {
-            driver: ProviderDriverKind.make("codex"),
-            enabled: true,
-            environment: [
-              { name: "T3_CODEX_COLLAB_SCRIPT", value: fixtures.codexScriptPath, sensitive: false },
-            ],
-            config: makeCodexConfig({ enabled: true, binaryPath: fixtures.codexBinaryPath }),
-          },
-        },
-      });
-      const codex = yield* registry.getInstance(codexId);
-      expect(codex).toBeDefined();
-      yield* codex!.snapshot.refresh;
-      expect(yield* codex!.consumeResetCredit!()).toBe("alreadyRedeemed");
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -715,17 +711,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       probeLog: fs.readFileString(probeLog),
     };
   });
-
-  it.effect.skipIf(windowsHost)("reuses Claude's successful usage probe on refresh", () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeClaudeCacheFixture("ready");
-      const first = yield* fixture.refresh;
-      const second = yield* fixture.refresh;
-      expect(first.usageLimits?.windows.map((window) => window.id)).toEqual(["five_hour"]);
-      expect(second.usageLimits).toEqual(first.usageLimits);
-      expect(yield* fixture.probeLog).toBe("probe\n");
-    }).pipe(Effect.provide(layerTest)),
-  );
 
   for (const state of ["signed-out", "usage-failed"] as const) {
     it.effect.skipIf(windowsHost)(

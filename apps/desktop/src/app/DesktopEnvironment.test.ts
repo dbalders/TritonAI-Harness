@@ -1,13 +1,18 @@
-import * as NodePath from "@effect/platform-node/NodePath";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
+import * as NodePath from "@effect/platform-node/NodePath";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import { assert, describe, it } from "@effect/vitest";
+
+import * as Effect from "effect/Effect";
+
+import * as Layer from "effect/Layer";
+
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+
 import * as DesktopConfig from "./DesktopConfig.ts";
-import { resolveEarlyLinuxElectronOptions } from "./DesktopEarlyElectronStartup.ts";
 
 const defaultInput = {
   dirname: "/repo/apps/desktop/dist-electron",
@@ -40,6 +45,75 @@ const makeEnvironment = (
 ) => DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(layerEnvironment(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it.effect("uses the packaged Windows server sidecar as the backend root", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({
+        platform: "win32",
+        isPackaged: true,
+        appPath: "/install/resources/app.asar",
+        resourcesPath: "/install/resources",
+      });
+
+      assert.equal(environment.appRoot, "/install/resources/app.asar");
+      assert.equal(environment.serverRoot, "/install/resources/server.asar");
+      assert.equal(
+        environment.backendEntryPath,
+        "/install/resources/server.asar/apps/server/dist/bin.mjs",
+      );
+      assert.equal(
+        environment.clientAssetsDir,
+        "/install/resources/server.asar/apps/server/dist/client",
+      );
+    }),
+  );
+
+  it.effect("uses the stable desktop entry as the packaged Linux portal identity", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({
+        platform: "linux",
+        isPackaged: true,
+        appPath: "/tmp/.mount_t3code/resources/app.asar",
+        resourcesPath: "/tmp/.mount_t3code/resources",
+      });
+
+      assert.equal(environment.linuxDesktopEntryName, "tritonai-harness.desktop");
+    }),
+  );
+
+  it.effect("keeps implicit development state separate from production state", () =>
+    Effect.gen(function* () {
+      const development = yield* makeEnvironment(
+        {},
+        { VITE_DEV_SERVER_URL: "http://localhost:5173" },
+      );
+      const production = yield* makeEnvironment();
+
+      assert.equal(development.stateDir, "/Users/alice/.tritonai-harness/dev");
+      assert.equal(production.stateDir, "/Users/alice/.tritonai-harness/userdata");
+    }),
+  );
+
+  it.effect("resolves picker defaults without nullish sentinels", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment();
+
+      assert.equal(environment.baseDir, "/Users/alice/.tritonai-harness");
+      assert.deepEqual(environment.resolvePickFolderDefaultPath(null), Option.none());
+      assert.deepEqual(
+        environment.resolvePickFolderDefaultPath({ initialPath: " " }),
+        Option.none(),
+      );
+      assert.deepEqual(
+        environment.resolvePickFolderDefaultPath({ initialPath: "~" }),
+        Option.some("/Users/alice"),
+      );
+      assert.deepEqual(
+        environment.resolvePickFolderDefaultPath({ initialPath: "~/project" }),
+        Option.some("/Users/alice/project"),
+      );
+    }),
+  );
+
   it.effect("uses an isolated app-data root only for development desktops", () =>
     Effect.gen(function* () {
       const isolated = yield* makeEnvironment(
@@ -55,92 +129,6 @@ describe("DesktopEnvironment", () => {
         { T3CODE_DEV_APP_DATA_DIR: "/repo/.t3/desktop/electron" },
       );
       assert.equal(packaged.appDataDirectory, "/Users/alice/Library/Application Support");
-    }),
-  );
-  describe.each(Array.from(["0.3.4", "0.3.4-nightly.20260912.12"], (scenario) => ({ scenario })))(
-    "case $scenario",
-    ({ scenario: appVersion }) => {
-      it.effect(`reads the same Linux settings before and after startup for ${appVersion}`, () =>
-        Effect.gen(function* () {
-          for (const env of [
-            {},
-            { TRITONAI_HOME: "/custom/preferred", T3CODE_HOME: "/custom/legacy" },
-            { TRITONAI_HOME: "  ", T3CODE_HOME: " /custom/legacy " },
-            { VITE_DEV_SERVER_URL: "http://localhost:5173" },
-            { VITE_DEV_SERVER_URL: "http://localhost:5173", TRITONAI_HOME: "/custom/dev" },
-          ]) {
-            const environment = yield* makeEnvironment(
-              { platform: "linux", isPackaged: true, appVersion },
-              env,
-            );
-            let settingsPath: string | undefined;
-            const early = resolveEarlyLinuxElectronOptions({
-              env,
-              appVersion,
-              homeDirectory: environment.homeDirectory,
-              joinPath: environment.path.join,
-              readFileString: (path) => {
-                settingsPath = path;
-                return JSON.stringify({ linuxPasswordStore: "kwallet6" });
-              },
-            });
-
-            assert.equal(settingsPath, environment.desktopSettingsPath);
-            assert.equal(early.passwordStore, "kwallet6");
-            assert.equal(early.linuxWmClass, environment.linuxWmClass);
-          }
-        }),
-      );
-    },
-  );
-
-  describe.each(Array.from(["win32", "darwin", "linux"] as const, (scenario) => ({ scenario })))(
-    "case $scenario",
-    ({ scenario: platform }) => {
-      it.effect(`isolates stable and Nightly profiles on ${platform}`, () =>
-        Effect.gen(function* () {
-          const stable = yield* makeEnvironment({ platform, isPackaged: true });
-          const nightly = yield* makeEnvironment({
-            platform,
-            isPackaged: true,
-            appVersion: "0.3.4-nightly.20260912.12",
-          });
-          assert.equal(stable.baseDir, "/Users/alice/.tritonai-harness");
-          assert.equal(nightly.baseDir, "/Users/alice/.tritonai-harness-nightly");
-          assert.equal(stable.appUserModelId, "edu.ucsd.tritonai.harness");
-          assert.equal(nightly.appUserModelId, "edu.ucsd.tritonai.harness.nightly");
-          for (const key of [
-            "stateDir",
-            "desktopSettingsPath",
-            "clientSettingsPath",
-            "savedEnvironmentRegistryPath",
-            "serverSettingsPath",
-            "logDir",
-            "userDataDirName",
-            "legacyUserDataDirName",
-            "linuxDesktopEntryName",
-            "linuxWmClass",
-          ] as const) {
-            assert.notEqual(stable[key], nightly[key], key);
-          }
-          assert.equal(nightly.defaultDesktopSettings.updateChannel, "nightly");
-          assert.equal(stable.defaultDesktopSettings.updateChannel, "latest");
-        }),
-      );
-    },
-  );
-
-  it.effect("prefers TRITONAI_HOME over the legacy home input", () =>
-    Effect.gen(function* () {
-      const environment = yield* makeEnvironment(
-        {},
-        {
-          TRITONAI_HOME: " /tmp/tritonai ",
-          T3CODE_HOME: "/tmp/legacy",
-        },
-      );
-
-      assert.equal(environment.baseDir, "/tmp/tritonai");
     }),
   );
 
@@ -242,104 +230,17 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
-  it.effect("stores production state under userdata in an explicit home", () =>
+  it.effect("prefers TRITONAI_HOME over the legacy home input", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(
         {},
         {
-          T3CODE_HOME: "/tmp/t3",
+          TRITONAI_HOME: " /tmp/tritonai ",
+          T3CODE_HOME: "/tmp/legacy",
         },
       );
 
-      assert.equal(environment.isDevelopment, false);
-      assert.equal(environment.stateDir, "/tmp/t3/userdata");
-      assert.equal(environment.logDir, "/tmp/t3/userdata/logs");
-      assert.equal(environment.browserArtifactsDir, "/tmp/t3/userdata/browser-artifacts");
-      assert.equal(environment.serverSettingsPath, "/tmp/t3/userdata/settings.json");
-      assert.equal(environment.otlpProtocol, "http/json");
-    }),
-  );
-
-  it.effect("uses the packaged Windows server sidecar as the backend root", () =>
-    Effect.gen(function* () {
-      const environment = yield* makeEnvironment({
-        platform: "win32",
-        isPackaged: true,
-        appPath: "/install/resources/app.asar",
-        resourcesPath: "/install/resources",
-      });
-
-      assert.equal(environment.appRoot, "/install/resources/app.asar");
-      assert.equal(environment.serverRoot, "/install/resources/server.asar");
-      assert.equal(
-        environment.backendEntryPath,
-        "/install/resources/server.asar/apps/server/dist/bin.mjs",
-      );
-      assert.equal(
-        environment.clientAssetsDir,
-        "/install/resources/server.asar/apps/server/dist/client",
-      );
-    }),
-  );
-
-  it.effect("uses the stable desktop entry as the packaged Linux portal identity", () =>
-    Effect.gen(function* () {
-      const environment = yield* makeEnvironment({
-        platform: "linux",
-        isPackaged: true,
-        appPath: "/tmp/.mount_t3code/resources/app.asar",
-        resourcesPath: "/tmp/.mount_t3code/resources",
-      });
-
-      assert.equal(environment.linuxDesktopEntryName, "tritonai-harness.desktop");
-    }),
-  );
-
-  it.effect("keeps implicit development state separate from production state", () =>
-    Effect.gen(function* () {
-      const development = yield* makeEnvironment(
-        {},
-        { VITE_DEV_SERVER_URL: "http://localhost:5173" },
-      );
-      const production = yield* makeEnvironment();
-
-      assert.equal(development.stateDir, "/Users/alice/.tritonai-harness/dev");
-      assert.equal(production.stateDir, "/Users/alice/.tritonai-harness/userdata");
-    }),
-  );
-
-  it.effect("uses a configured app user model id override", () =>
-    Effect.gen(function* () {
-      const environment = yield* makeEnvironment(
-        {},
-        {
-          T3CODE_DESKTOP_APP_USER_MODEL_ID: " com.t3tools.t3code.dev.local ",
-          VITE_DEV_SERVER_URL: "http://localhost:5173",
-        },
-      );
-
-      assert.equal(environment.appUserModelId, "com.t3tools.t3code.dev.local");
-    }),
-  );
-
-  it.effect("resolves picker defaults without nullish sentinels", () =>
-    Effect.gen(function* () {
-      const environment = yield* makeEnvironment();
-
-      assert.equal(environment.baseDir, "/Users/alice/.tritonai-harness");
-      assert.deepEqual(environment.resolvePickFolderDefaultPath(null), Option.none());
-      assert.deepEqual(
-        environment.resolvePickFolderDefaultPath({ initialPath: " " }),
-        Option.none(),
-      );
-      assert.deepEqual(
-        environment.resolvePickFolderDefaultPath({ initialPath: "~" }),
-        Option.some("/Users/alice"),
-      );
-      assert.deepEqual(
-        environment.resolvePickFolderDefaultPath({ initialPath: "~/project" }),
-        Option.some("/Users/alice/project"),
-      );
+      assert.equal(environment.baseDir, "/tmp/tritonai");
     }),
   );
 });

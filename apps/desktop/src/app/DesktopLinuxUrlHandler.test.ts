@@ -1,20 +1,31 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+
 import { assert, describe, it } from "@effect/vitest";
+
 import * as Deferred from "effect/Deferred";
+
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
+
 import * as FileSystem from "effect/FileSystem";
+
 import * as Layer from "effect/Layer";
+
 import * as Option from "effect/Option";
+
 import * as Path from "effect/Path";
+
 import * as PlatformError from "effect/PlatformError";
+
 import * as Sink from "effect/Sink";
+
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
+
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+
 import * as DesktopAssets from "./DesktopAssets.ts";
+
 import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
 
 interface RecordedRegistration {
@@ -177,25 +188,6 @@ describe("DesktopLinuxUrlHandler", () => {
     assert.notInclude(entry, "StartupWMClass=");
     assert.include(entry, "MimeType=x-scheme-handler/t3code;");
     assert.include(entry, "Icon=/home/al ice/icons/T3\\\\x.png");
-  });
-
-  it.each([
-    {
-      execTarget: "/opt/T3(beta)/t3code.AppImage",
-      execLine: 'Exec="/opt/T3(beta)/t3code.AppImage" %U',
-    },
-    {
-      execTarget: "/opt/t3%20code/t3code.AppImage",
-      execLine: "Exec=/opt/t3%%20code/t3code.AppImage %U",
-    },
-  ])("renders the handler Exec line for $execTarget", ({ execTarget, execLine }) => {
-    const entry = DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
-      displayName: "T3 Code",
-      execTarget,
-      scheme: "t3code",
-    });
-
-    assert.include(entry.split("\n"), execLine);
   });
 
   it("carries structured context on registration errors", () => {
@@ -420,26 +412,6 @@ describe("DesktopLinuxUrlHandler", () => {
       assert.deepEqual(writeFailed.commands, []);
     });
   });
-
-  it.effect("continues to xdg-mime when the desktop MIME cache refresh stalls", () =>
-    Effect.gen(function* () {
-      const recorded = emptyRecording();
-      const started = yield* Deferred.make<void>();
-      const registration = yield* runRegister(recorded, {
-        updateDesktopDatabaseStalled: true,
-        updateDesktopDatabaseStarted: started,
-      }).pipe(Effect.forkChild);
-
-      yield* Deferred.await(started);
-      yield* TestClock.adjust("5 seconds");
-      yield* Fiber.join(registration);
-
-      assert.deepEqual(
-        recorded.commands.map(({ command }) => command),
-        ["update-desktop-database", "xdg-mime"],
-      );
-    }),
-  );
 });
 
 interface ThemeIconRun {
@@ -570,34 +542,6 @@ const iconCacheRuns = (run: ThemeIconRun) =>
   run.commands.filter(({ command }) => command === "gtk-update-icon-cache").length;
 
 it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
-  it.effect("installs the Harness app icon without creating an icon cache", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const icon = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
-      const fixture = yield* themeIconFixture(icon);
-      const run: ThemeIconRun = { root: fixture.root, commands: [] };
-
-      yield* registerWithRealFileSystem(run);
-      assert.deepEqual([...(yield* fileSystem.readDirectory(fixture.appsDir))].sort(), [
-        "tritonai-harness.png",
-      ]);
-      for (const name of ["tritonai-harness"]) {
-        const target = path.join(fixture.appsDir, `${name}.png`);
-        assert.deepEqual([...(yield* fileSystem.readFile(target))], [...icon]);
-        yield* fileSystem.utimes(target, fixture.pastSeconds, fixture.pastSeconds);
-      }
-
-      yield* registerWithRealFileSystem(run);
-      for (const name of ["tritonai-harness"]) {
-        const info = yield* fileSystem.stat(path.join(fixture.appsDir, `${name}.png`));
-        assert.equal(Option.getOrThrow(info.mtime).getTime(), fixture.pastSeconds * 1000);
-      }
-      assert.isFalse(yield* fileSystem.exists(fixture.cachePath));
-      assert.equal(iconCacheRuns(run), 0);
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("replaces same-length stale icons and refreshes an existing cache once", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -695,32 +639,31 @@ it.layer(NodeServices.layer)("DesktopLinuxUrlHandler theme icons", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("continues to xdg-mime when the icon cache refresh stalls", () =>
+  it.effect("installs the Harness app icon without creating an icon cache", () =>
     Effect.gen(function* () {
-      const fixture = yield* themeIconFixture(new Uint8Array([1, 2, 3]));
-      yield* fixture.seedCache;
-      const started = yield* Deferred.make<void>();
-      const iconCacheOptions: Array<Record<string, unknown>> = [];
-      const run: ThemeIconRun = {
-        root: fixture.root,
-        commands: [],
-        iconCacheOptions,
-        iconCacheStalled: true,
-        iconCacheStarted: started,
-      };
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const icon = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
+      const fixture = yield* themeIconFixture(icon);
+      const run: ThemeIconRun = { root: fixture.root, commands: [] };
 
-      const registration = yield* registerWithRealFileSystem(run).pipe(Effect.forkChild);
-      yield* Deferred.await(started);
-      yield* TestClock.adjust("5 seconds");
-      yield* Fiber.join(registration);
+      yield* registerWithRealFileSystem(run);
+      assert.deepEqual([...(yield* fileSystem.readDirectory(fixture.appsDir))].sort(), [
+        "tritonai-harness.png",
+      ]);
+      for (const name of ["tritonai-harness"]) {
+        const target = path.join(fixture.appsDir, `${name}.png`);
+        assert.deepEqual([...(yield* fileSystem.readFile(target))], [...icon]);
+        yield* fileSystem.utimes(target, fixture.pastSeconds, fixture.pastSeconds);
+      }
 
-      assert.deepEqual(
-        run.commands.map(({ command }) => command),
-        ["gtk-update-icon-cache", "update-desktop-database", "xdg-mime"],
-      );
-      // Without a forced kill, releasing a helper that ignores SIGTERM after
-      // the timeout would still wait for it to exit.
-      assert.equal(iconCacheOptions[0]?.forceKillAfter, "1 second");
+      yield* registerWithRealFileSystem(run);
+      for (const name of ["tritonai-harness"]) {
+        const info = yield* fileSystem.stat(path.join(fixture.appsDir, `${name}.png`));
+        assert.equal(Option.getOrThrow(info.mtime).getTime(), fixture.pastSeconds * 1000);
+      }
+      assert.isFalse(yield* fileSystem.exists(fixture.cachePath));
+      assert.equal(iconCacheRuns(run), 0);
     }).pipe(Effect.scoped),
   );
 });

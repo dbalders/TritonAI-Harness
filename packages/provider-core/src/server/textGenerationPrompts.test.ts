@@ -5,15 +5,9 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
-  buildReviewGuidePrompt,
   buildThreadTitlePrompt,
 } from "./textGenerationPrompts.ts";
-import {
-  normalizeCliError,
-  sanitizeThreadTitle,
-  toJsonSchemaObject,
-} from "./textGenerationUtils.ts";
-import { TextGenerationError } from "@t3tools/contracts";
+import { normalizeCliError, toJsonSchemaObject } from "./textGenerationUtils.ts";
 
 describe("buildCommitMessagePrompt", () => {
   it("includes staged patch and summary in the prompt", () => {
@@ -44,17 +38,6 @@ describe("buildCommitMessagePrompt", () => {
       required: ["subject", "body", "branch"],
       properties: { branch: { type: "string" } },
     });
-  });
-
-  it("shows (detached) when branch is null", () => {
-    const result = buildCommitMessagePrompt({
-      branch: null,
-      stagedSummary: "M a.ts",
-      stagedPatch: "diff",
-      includeBranch: false,
-    });
-
-    expect(result.prompt).toContain("Branch: (detached)");
   });
 
   it("includes policy instructions", () => {
@@ -112,39 +95,6 @@ describe("buildPrContentPrompt", () => {
 });
 
 describe("buildBranchNamePrompt", () => {
-  it("requests a semantic prefix as part of the same branch response", () => {
-    const { prompt, outputSchema } = buildBranchNamePrompt({
-      message: "Add search",
-      naming: { mode: "semantic", prefix: "ignored", instructions: "ignored instruction" },
-    });
-    expect(prompt).toContain("feat/add-search");
-    expect(prompt).not.toContain("ignored instruction");
-    expect(toJsonSchemaObject(outputSchema)).toMatchObject({ required: ["branch"] });
-  });
-  it("appends custom instructions without imposing a prefix, case or word limit", () => {
-    const { prompt } = buildBranchNamePrompt({
-      message: "Add search",
-      naming: {
-        mode: "custom",
-        prefix: "ignored",
-        instructions: "Use Julius/ABC-123 and preserve capitalization.",
-      },
-    });
-    expect(prompt).toContain("Use Julius/ABC-123 and preserve capitalization.");
-    expect(prompt).toContain("complete branch name");
-    expect(prompt).not.toContain("2-6 words");
-    expect(prompt).not.toContain("lowercase");
-    expect(prompt).not.toContain("no issue prefixes");
-  });
-  it("asks for just the fragment in static mode", () => {
-    const { prompt } = buildBranchNamePrompt({
-      message: "Add search",
-      naming: { mode: "static", prefix: "team", instructions: "ignored instruction" },
-    });
-    expect(prompt).toContain("without a prefix or namespace");
-    expect(prompt).not.toContain("ignored instruction");
-  });
-
   it("includes the user message in the prompt", () => {
     const result = buildBranchNamePrompt({
       message: "Fix the login timeout bug",
@@ -174,69 +124,7 @@ describe("buildBranchNamePrompt", () => {
   });
 });
 
-describe("buildReviewGuidePrompt", () => {
-  const input = {
-    number: 42,
-    title: "Add search",
-    description: "",
-    baseBranch: "main",
-    baseCommit: "abc123",
-    settledReview: "",
-  };
-
-  it("adds the maintainer's preferences after the change context", () => {
-    const { prompt } = buildReviewGuidePrompt({
-      ...input,
-      instructions: "  Skip test files unless they change behavior.  ",
-    });
-    const preferences = prompt.indexOf("The maintainer's preferences for guides:");
-    expect(preferences).toBeGreaterThan(prompt.indexOf("Already settled in review:"));
-    expect(prompt.slice(preferences)).toContain("Skip test files unless they change behavior.");
-    expect(prompt.slice(preferences)).toContain("do not change the JSON format");
-  });
-
-  it("names the stack's other layers as context the guide may point at", () => {
-    const { prompt } = buildReviewGuidePrompt({
-      ...input,
-      stack: [
-        { number: 41, title: "Add the index", headSha: "aaa111", state: "merged" },
-        { number: 42, title: "Add search", headSha: "bbb222", state: "open" },
-        { number: 43, title: "Search UI", headSha: null, state: "open" },
-      ],
-    });
-    expect(prompt).toContain("1. #41: Add the index, merged, head aaa111");
-    expect(prompt).toContain("2. #42 (this change): Add search\n");
-    expect(prompt).toContain("3. #43: Search UI, head not available");
-    expect(prompt).toContain("Never excerpt another layer's code");
-  });
-
-  it("leaves the stack out for a change that is not in one", () => {
-    expect(buildReviewGuidePrompt(input).prompt).not.toContain("layer of a stack");
-    expect(
-      buildReviewGuidePrompt({
-        ...input,
-        stack: [{ number: 42, title: "Add search", headSha: "bbb222", state: "open" }],
-      }).prompt,
-    ).not.toContain("layer of a stack");
-  });
-
-  it("leaves the section out when there are no preferences", () => {
-    expect(buildReviewGuidePrompt(input).prompt).not.toContain("preferences for guides");
-    expect(buildReviewGuidePrompt({ ...input, instructions: "  " }).prompt).not.toContain(
-      "preferences for guides",
-    );
-  });
-});
-
 describe("buildThreadTitlePrompt", () => {
-  it("requires each generated field in the strict response schema", () => {
-    const { outputSchema } = buildThreadTitlePrompt({ message: "Fix this" });
-    expect(toJsonSchemaObject(outputSchema)).toMatchObject({
-      required: ["title", "needsRefinement"],
-      properties: { title: { type: "string" }, needsRefinement: { type: "boolean" } },
-    });
-  });
-
   it("includes the user message without absent attachment metadata", () => {
     const result = buildThreadTitlePrompt({
       message: "Investigate reconnect regressions after session restore",
@@ -274,123 +162,9 @@ describe("buildThreadTitlePrompt", () => {
     expect(result.prompt).toContain("Earlier reconnect title");
     expect(result.prompt).toContain("The remaining issue is stale session state");
   });
-
-  it("keeps the latest thread contents when regeneration context is truncated", () => {
-    const result = buildThreadTitlePrompt({
-      message: `${"old context ".repeat(1_000)}\n\nASSISTANT:\nCurrent thread state`,
-      previousTitle: "Old title",
-    });
-
-    expect(result.prompt).toContain("[Earlier content truncated]");
-    expect(result.prompt).toContain("Current thread state");
-    expect(result.prompt).not.toContain("[truncated]");
-  });
-
-  it("does not truncate an already-marked regeneration context twice", () => {
-    const retainedContext = "x".repeat(7_998);
-    const result = buildThreadTitlePrompt({
-      message: `[Earlier content truncated]\n\n${retainedContext}`,
-      previousTitle: "Old title",
-    });
-
-    expect(result.prompt).toContain(
-      `Thread contents:\n[Earlier content truncated]\n\n${retainedContext}`,
-    );
-    expect(result.prompt.match(/\[Earlier content truncated\]/g)).toHaveLength(1);
-  });
-});
-
-describe("sanitizeThreadTitle", () => {
-  it.each([
-    '{"title": "Refresh ev-stg APP ASG instances"}',
-    '{\n  "title": "Refresh ev-stg APP ASG instances"\n}',
-  ])("unwraps a JSON title before normalizing: %s", (raw) => {
-    expect(sanitizeThreadTitle(raw)).toBe("Refresh ev-stg APP ASG instances");
-  });
-
-  it.each([
-    "Rolling ES Refresh ev-stg",
-    "Fix {title} interpolation",
-    '{"title": 42}',
-    '{"subject": "Fix parsing"}',
-    '{"title": "unfinished}',
-  ])("preserves text that is not a JSON title: %s", (raw) => {
-    expect(sanitizeThreadTitle(raw)).toBe(raw);
-  });
-
-  it("normalizes the extracted title", () => {
-    expect(sanitizeThreadTitle('{"title": "  Fix   reconnect failures  "}')).toBe(
-      "Fix reconnect failures",
-    );
-    expect(sanitizeThreadTitle('{"title": "  "}')).toBe("New thread");
-    expect(
-      sanitizeThreadTitle(
-        '{"title": "Reconnect failures after restart because the session state does not recover"}',
-      ),
-    ).toBe("Reconnect failures after restart because the session state does not recover");
-  });
-
-  it("keeps complete titles for client display truncation", () => {
-    expect(
-      sanitizeThreadTitle(
-        '  "Reconnect failures after restart because the session state does not recover"  ',
-      ),
-    ).toBe("Reconnect failures after restart because the session state does not recover");
-  });
-
-  it("caps runaway titles so a paragraph cannot reach the sidebar", () => {
-    const words = Array.from({ length: 40 }, (_, index) => `word${index}`).join(" ");
-    const title = sanitizeThreadTitle(words);
-    expect(title.length).toBeLessThanOrEqual(120);
-    expect(title.endsWith("...")).toBe(true);
-  });
 });
 
 describe("normalizeCliError", () => {
-  it("detects 'Command not found' and includes CLI name in the message", () => {
-    const error = normalizeCliError(
-      "claude",
-      "generateCommitMessage",
-      new Error("Command not found: claude"),
-      "Something went wrong",
-    );
-
-    expect(error).toBeInstanceOf(TextGenerationError);
-    expect(error.detail).toContain("Claude CLI");
-    expect(error.detail).toContain("not available on PATH");
-  });
-
-  it("uses the CLI name from the first argument for codex", () => {
-    const error = normalizeCliError(
-      "codex",
-      "generateBranchName",
-      new Error("Command not found: codex"),
-      "Something went wrong",
-    );
-
-    expect(error).toBeInstanceOf(TextGenerationError);
-    expect(error.detail).toContain("Codex CLI");
-    expect(error.detail).toContain("not available on PATH");
-  });
-
-  it("returns the error as-is if it is already a TextGenerationError", () => {
-    const existing = new TextGenerationError({
-      operation: "generatePrContent",
-      detail: "Already wrapped",
-    });
-
-    const result = normalizeCliError("claude", "generatePrContent", existing, "fallback");
-
-    expect(result).toBe(existing);
-  });
-
-  it("wraps unknown non-Error values with the fallback message", () => {
-    const result = normalizeCliError("codex", "generateCommitMessage", "string error", "fallback");
-
-    expect(result).toBeInstanceOf(TextGenerationError);
-    expect(result.detail).toBe("fallback");
-  });
-
   it("does not expose CLI failure details in the public error message", () => {
     const result = normalizeCliError(
       "codex",

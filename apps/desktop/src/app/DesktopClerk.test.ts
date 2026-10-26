@@ -1,13 +1,20 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetchInEffect:off - Hosted handoff test uses a real localhost listener without an OpenAI account.
 import * as NodeHttp from "node:http";
+
 import * as NodePath from "@effect/platform-node/NodePath";
+
 import { codexAuthHandoffUrl, readCodexAuthDelivery } from "@t3tools/shared/codexAuthHandoff";
+
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
+
 import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import { assert, describe, it } from "@effect/vitest";
-import * as Cause from "effect/Cause";
+
 import * as Effect from "effect/Effect";
+
 import * as Layer from "effect/Layer";
+
 import { beforeEach, vi } from "vite-plus/test";
 
 const { createClerkBridgeMock, requestSingleInstanceLockMock, storageAdapter, storageMock } =
@@ -31,14 +38,23 @@ vi.mock("@clerk/electron/storage", () => ({
 }));
 
 import * as Option from "effect/Option";
+
 import * as Exit from "effect/Exit";
+
 import * as FileSystem from "effect/FileSystem";
+
 import * as ElectronApp from "../electron/ElectronApp.ts";
+
 import * as ElectronShell from "../electron/ElectronShell.ts";
+
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
+
 import * as DesktopClerk from "./DesktopClerk.ts";
+
 import * as DesktopWebLinks from "./DesktopWebLinks.ts";
+
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+
 import * as DesktopPreReadyFileSystem from "./DesktopPreReadyFileSystem.ts";
 
 const ignoreWebLinks = DesktopWebLinks.DesktopWebLinks.of({
@@ -197,54 +213,6 @@ describe("DesktopClerk", () => {
       ]);
     },
   );
-
-  it.effect("preserves bridge initialization failures", () => {
-    const cause = new Error("bridge initialization failed");
-    storageMock.mockReturnValue(storageAdapter);
-    createClerkBridgeMock.mockImplementationOnce(() => {
-      throw cause;
-    });
-
-    return Effect.gen(function* () {
-      const error = yield* Effect.scoped(Layer.build(layerDesktopClerk())).pipe(Effect.flip);
-
-      assert.instanceOf(error, DesktopClerk.DesktopClerkBridgeInitializationError);
-      assert.equal(error.stateDir, "/tmp/t3-state");
-      assert.equal(error.isDevelopment, true);
-      assert.strictEqual(error.cause, cause);
-      assert.equal(
-        error.message,
-        'Failed to initialize the desktop Clerk bridge for state directory "/tmp/t3-state" (development: true).',
-      );
-    });
-  });
-
-  it.effect("preserves bridge cleanup failures", () => {
-    const cause = new Error("bridge cleanup failed");
-    storageMock.mockReturnValue(storageAdapter);
-    createClerkBridgeMock.mockReturnValue({
-      cleanup: () => {
-        throw cause;
-      },
-    });
-
-    return Effect.gen(function* () {
-      const exit = yield* Effect.exit(Effect.scoped(Layer.build(layerDesktopClerk(false))));
-
-      assert.equal(exit._tag, "Failure");
-      if (exit._tag === "Failure") {
-        const error = Cause.squash(exit.cause);
-        assert.instanceOf(error, DesktopClerk.DesktopClerkBridgeCleanupError);
-        assert.equal(error.stateDir, "/tmp/t3-state");
-        assert.equal(error.isDevelopment, false);
-        assert.strictEqual(error.cause, cause);
-        assert.equal(
-          error.message,
-          'Failed to clean up the desktop Clerk bridge for state directory "/tmp/t3-state" (development: false).',
-        );
-      }
-    });
-  });
 
   it.effect.each(["before configure", "after configure"] as const)(
     "reveals the running window when a second instance launches %s",

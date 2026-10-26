@@ -4,7 +4,6 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeTimersPromises from "node:timers/promises";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { canonicalJson, type JsonValue } from "@t3tools/shared/pluginSdkContract";
@@ -560,7 +559,8 @@ describe("plugin SDK adapter", () => {
       loadPluginSdkIntegration({
         files: artifact(`
 export async function createIntegrationProvider() {
-  await new Promise((_, reject) => setTimeout(() => reject(new Error("late factory failure")), 0));
+  await Promise.resolve();
+  throw new Error("late factory failure");
 }
 `),
         secrets: secretStore(),
@@ -569,7 +569,6 @@ export async function createIntegrationProvider() {
         hostNodeVersion: "24.13.1",
       }),
     ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
-    await NodeTimersPromises.setTimeout(10);
 
     for (const entry of [
       `export function createIntegrationProvider() {

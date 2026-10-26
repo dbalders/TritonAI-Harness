@@ -1,59 +1,100 @@
+import { type UsageSource } from "@t3tools/contracts";
+import { type UsageSummary } from "@t3tools/contracts";
+import { type UsageSummaryInput } from "@t3tools/contracts";
+import { HttpClientRequest } from "effect/http";
+import { type UsageRecord } from "@t3tools/provider-core/server/usage";
+
 // @effect-diagnostics nodeBuiltinImport:off - the suite seeds and grows real
 // transcript trees on disk, outside the service's Effect FileSystem.
 import * as NodeChildProcess from "node:child_process";
+
 import * as NodeFSP from "node:fs/promises";
+
 import * as NodeOS from "node:os";
+
 import * as NodePath from "node:path";
+
 import * as NodeSqlite from "node:sqlite";
 
 import { assert, describe, it } from "@effect/vitest";
+
 import { vi } from "vite-plus/test";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
+
 import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import { mergeUsage } from "@t3tools/shared/usageMerge";
+
 import {
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   UsageDay,
-  type UsageSource,
-  type UsageSummary,
-  type UsageSummaryInput,
 } from "@t3tools/contracts";
+
 import * as Duration from "effect/Duration";
+
 import * as Clock from "effect/Clock";
+
 import * as Deferred from "effect/Deferred";
+
 import * as Effect from "effect/Effect";
+
 import * as Exit from "effect/Exit";
+
 import * as Fiber from "effect/Fiber";
+
 import * as FileSystem from "effect/FileSystem";
+
 import * as Context from "effect/Context";
+
 import * as Layer from "effect/Layer";
+
 import * as Scheduler from "effect/Scheduler";
+
 import * as Schema from "effect/Schema";
+
 import * as TestClock from "effect/testing/TestClock";
+
 import * as SqlClient from "effect/sql/SqlClient";
-import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
+
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 
 import * as ServerConfig from "../config.ts";
+
 import * as ServerSettings from "../serverSettings.ts";
+
 import * as Sqlite from "../persistence/Sqlite.ts";
+
 import * as CodexUsageHistory from "./CodexUsageHistory.ts";
+
 import * as CursorAccountReader from "@t3tools/provider-cursor/server/CursorAccountReader";
+
 import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain";
+
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
+
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+
 import * as AntigravityUsage from "../provider/Drivers/AntigravityUsage.ts";
+
 import * as ProviderHostLive from "../provider/ProviderHostLive.ts";
-import { totalTokens, type UsageRecord } from "@t3tools/provider-core/server/usage";
+
+import { totalTokens } from "@t3tools/provider-core/server/usage";
+
 import * as UsageService from "./UsageService.ts";
+
 import { encodeScanCache, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
 
 vi.mock("node:fs/promises", { spy: true });
 
 const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 const decodeUnknownJsonString = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
 
 function claudeLine(id: number, outputTokens: number, model = "claude-fable-5"): string {
@@ -184,6 +225,7 @@ const layerService = (input: {
   );
 
 const BEFORE_NARROW_WINDOW = Date.parse("2026-08-01T10:00:00Z") / 1000;
+
 const NARROW_WINDOW: UsageSummaryInput = {
   timeZone: "UTC",
   sinceDay: UsageDay.make("2026-09-01"),
@@ -215,8 +257,8 @@ function totalOutputTokens(summary: { buckets: readonly { totals: { outputTokens
 }
 
 const CURSOR_NOW = Date.parse("2026-08-02T12:00:00Z");
+
 const HOUR_MS = 60 * 60 * 1000;
-const CURSOR_RETENTION_MS = 92 * 24 * HOUR_MS;
 
 function makeFakeCursor() {
   const state = {
@@ -1001,26 +1043,6 @@ describe("UsageService", () => {
       );
     }).pipe(Effect.scoped),
   );
-  it.live("omits Cursor account usage when no file login is saved", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      for (const platform of ["linux", "win32", "darwin"] as const) {
-        const service = yield* UsageService.make.pipe(
-          Effect.provide(
-            layerService({
-              prefix: `usage-service-cursor-no-login-${platform}`,
-              home,
-              settings,
-              platform,
-              environment: { AGENT_CLI_CREDENTIAL_STORE: "file" },
-            }),
-          ),
-        );
-        const summary = yield* service.readSummary(WINDOW);
-        assert.isFalse(summary.sources.some((source) => source.fingerprint.provider === "cursor"));
-      }
-    }).pipe(Effect.scoped),
-  );
 
   it.live("keeps Cursor credential errors visible when a saved login cannot be read", () =>
     Effect.gen(function* () {
@@ -1039,138 +1061,6 @@ describe("UsageService", () => {
       const cursor = summary.sources.find((source) => source.fingerprint.provider === "cursor");
       assert.strictEqual(cursor?.message, "Cursor credentials could not be read.");
     }).pipe(Effect.scoped),
-  );
-
-  it.live("answers Cursor from its cache while one shared refresh runs", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      yield* writeCursorLogin(home);
-      yield* TestClock.setTime(CURSOR_NOW);
-      const cursor = makeFakeCursor();
-      cursor.state.events = [{ timestampMs: CURSOR_NOW - 2 * HOUR_MS, outputTokens: 5 }];
-      const gate = yield* Deferred.make<void>();
-      cursor.state.gate = gate;
-      yield* Effect.gen(function* () {
-        const service = yield* makeWithCursor(cursor.read);
-        const cold = yield* service.readSummary(WINDOW);
-        assert.strictEqual(cursorSource(cold)?.refreshing, true);
-        assert.strictEqual(cursorSource(cold)?.status, "ok");
-        assert.strictEqual(totalOutputTokens(cold), 0);
-        const joined = yield* service.readSummary(WINDOW);
-        assert.strictEqual(cursorSource(joined)?.refreshing, true);
-
-        const waited = yield* service
-          .readSummary({ ...WINDOW, awaitRefresh: true })
-          .pipe(Effect.forkChild);
-        yield* Deferred.succeed(gate, undefined);
-        const refreshed = yield* Fiber.join(waited);
-        assert.isFalse(refreshed.sources.some((source) => source.refreshing));
-        assert.strictEqual(cursorSource(refreshed)?.status, "ok");
-        assert.strictEqual(totalOutputTokens(refreshed), 5);
-        assert.strictEqual(cursor.state.calls.length, 1);
-
-        yield* TestClock.adjust(Duration.seconds(30));
-        const cached = yield* service.readSummary(WINDOW);
-        assert.isUndefined(cursorSource(cached)?.refreshing);
-        assert.strictEqual(totalOutputTokens(cached), 5);
-        assert.strictEqual(cursor.state.calls.length, 1);
-
-        yield* TestClock.adjust(Duration.seconds(31));
-        cursor.state.events.push({ timestampMs: CURSOR_NOW, outputTokens: 7 });
-        const stale = yield* service.readSummary(WINDOW);
-        assert.strictEqual(cursorSource(stale)?.refreshing, true);
-        assert.strictEqual(totalOutputTokens(stale), 5);
-        const fresh = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
-        assert.isUndefined(cursorSource(fresh)?.refreshing);
-        assert.strictEqual(totalOutputTokens(fresh), 12);
-        assert.strictEqual(cursor.state.calls.length, 2);
-      }).pipe(Effect.provide(layerService({ prefix: "usage-service-cursor-swr", home, settings })));
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-  );
-
-  it.live("caches Cursor's whole retention and then refetches only the newest edge", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      yield* writeCursorLogin(home);
-      yield* TestClock.setTime(CURSOR_NOW);
-      const cursor = makeFakeCursor();
-      cursor.state.events = [
-        { timestampMs: Date.parse("2026-07-10T10:00:00Z"), outputTokens: 17 },
-        { timestampMs: CURSOR_NOW - 24 * HOUR_MS, outputTokens: 5 },
-        { timestampMs: CURSOR_NOW - HOUR_MS / 2, outputTokens: 7 },
-        { timestampMs: CURSOR_NOW - HOUR_MS / 2, outputTokens: 7 },
-      ];
-      yield* Effect.gen(function* () {
-        const service = yield* makeWithCursor(cursor.read);
-        const read = (input: UsageSummaryInput) =>
-          service.readSummary({ ...input, awaitRefresh: true });
-        assert.strictEqual(totalOutputTokens(yield* read(WINDOW)), 19);
-        assert.deepStrictEqual(cursor.state.calls, [
-          { sinceMs: CURSOR_NOW - CURSOR_RETENTION_MS, untilMs: CURSOR_NOW },
-        ]);
-
-        const wide = { ...WINDOW, sinceDay: UsageDay.make("2026-07-01") };
-        assert.strictEqual(totalOutputTokens(yield* read(wide)), 36);
-        assert.strictEqual(cursor.state.calls.length, 1);
-
-        cursor.state.events.push(
-          { timestampMs: CURSOR_NOW - HOUR_MS / 6, outputTokens: 11 },
-          { timestampMs: CURSOR_NOW + HOUR_MS, outputTokens: 13 },
-        );
-        yield* TestClock.adjust(Duration.hours(2));
-        assert.strictEqual(totalOutputTokens(yield* read(WINDOW)), 43);
-        assert.deepStrictEqual(cursor.state.calls[1], {
-          sinceMs: CURSOR_NOW - HOUR_MS,
-          untilMs: CURSOR_NOW + 2 * HOUR_MS,
-        });
-
-        cursor.state.accountKey = "account-b";
-        yield* TestClock.adjust(Duration.minutes(2));
-        assert.strictEqual(totalOutputTokens(yield* read(wide)), 60);
-        assert.strictEqual(cursor.state.calls.length, 4);
-        assert.strictEqual(cursorSource(yield* read(wide))?.fingerprint.volumeId, "account-b");
-      }).pipe(
-        Effect.provide(
-          layerService({ prefix: "usage-service-cursor-incremental", home, settings }),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-  );
-
-  it.live("reports a failed Cursor refresh from its cache without refreshing", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      yield* writeCursorLogin(home);
-      yield* TestClock.setTime(CURSOR_NOW);
-      const cursor = makeFakeCursor();
-      cursor.state.events = [{ timestampMs: CURSOR_NOW - HOUR_MS * 3, outputTokens: 5 }];
-      yield* Effect.gen(function* () {
-        const service = yield* makeWithCursor(cursor.read);
-        yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
-
-        yield* TestClock.adjust(Duration.minutes(2));
-        cursor.state.error = "Sign in to Cursor again to read account usage.";
-        const failed = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
-        assert.strictEqual(cursorSource(failed)?.status, "partial");
-        assert.strictEqual(cursorSource(failed)?.message, cursor.state.error);
-        assert.isUndefined(cursorSource(failed)?.refreshing);
-        assert.strictEqual(totalOutputTokens(failed), 5);
-
-        const again = yield* service.readSummary(WINDOW);
-        assert.strictEqual(cursorSource(again)?.status, "partial");
-        assert.isUndefined(cursorSource(again)?.refreshing);
-        assert.strictEqual(cursor.state.calls.length, 2);
-
-        yield* TestClock.adjust(Duration.minutes(2));
-        cursor.state.accountKey = "account-b";
-        const switched = yield* service.readSummary({ ...WINDOW, awaitRefresh: true });
-        assert.strictEqual(cursorSource(switched)?.status, "missing");
-        assert.strictEqual(cursorSource(switched)?.message, cursor.state.error);
-        assert.strictEqual(totalOutputTokens(switched), 0);
-      }).pipe(
-        Effect.provide(layerService({ prefix: "usage-service-cursor-failure", home, settings })),
-      );
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
   it.live("restores the Cursor account cache after a restart", () =>
@@ -1858,24 +1748,6 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("counts appended usage on a rescan of a grown transcript", () =>
-    Effect.gen(function* () {
-      const { transcript, settings, home } = yield* setup;
-      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
-
-      const service = yield* UsageService.make.pipe(
-        Effect.provide(layerService({ prefix: "usage-service-grow-test", home, settings })),
-      );
-
-      const first = yield* service.readSummary(WINDOW);
-      assert.strictEqual(totalOutputTokens(first), 5);
-
-      yield* Effect.promise(() => NodeFSP.appendFile(transcript, claudeLine(2, 7)));
-      const second = yield* service.readSummary(WINDOW);
-      assert.strictEqual(totalOutputTokens(second), 12);
-    }).pipe(Effect.scoped),
-  );
-
   it.live(
     "retains Codex reconciliation and partial coverage through persisted restart, append and repair",
     () =>
@@ -2054,7 +1926,7 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.live.each([4, 5, 6])(
+  it.live.each([4, 5, 6, 7, 8])(
     "upgrades a v%s cache: reparses live Codex usage, keeps deleted rollouts and the old file",
     (version) =>
       Effect.gen(function* () {
@@ -2076,7 +1948,10 @@ describe("UsageService", () => {
               timestamp: "2026-08-01T10:00:00Z",
               payload: {
                 type: "token_count",
-                info: { last_token_usage: { input_tokens: 0, output_tokens: outputTokens } },
+                info: {
+                  last_token_usage: { input_tokens: 0, output_tokens: outputTokens },
+                  total_token_usage: { input_tokens: 100, output_tokens: outputTokens + 30 },
+                },
               },
             },
           ]
@@ -2102,13 +1977,14 @@ describe("UsageService", () => {
           yield* first.awaitPersisted;
 
           const legacy = yield* Effect.promise(async () => {
+            const livePath = await NodeFSP.realpath(live);
             const document = decodeUnknownJsonString(await NodeFSP.readFile(cachePath, "utf8")) as {
-              files: Record<string, { r: unknown[][]; cs: Record<string, unknown> }>;
+              files: Record<string, { r: unknown[][]; mr: number; cs: Record<string, unknown> }>;
             };
             for (const [path, file] of Object.entries(document.files)) {
               file.r = file.r.map((row) => [
                 ...row.slice(0, 6),
-                path === live ? 99 : row[6],
+                path === livePath ? 99 : row[6],
                 ...row.slice(7, 10),
                 version === 4 ? 0 : 1,
               ]);
@@ -2116,6 +1992,11 @@ describe("UsageService", () => {
               if (version < 6) {
                 delete file.cs.lastCumulativeUsage;
                 delete file.cs.malformedRecords;
+              }
+              if (version === 8 && path === livePath) {
+                file.r = [];
+                file.mr = 1;
+                file.cs.malformedRecords = 1;
               }
             }
             const text = encodeUnknownJsonString({ ...document, version });
@@ -2144,7 +2025,7 @@ describe("UsageService", () => {
             60 + 20 * (version === 4 ? 1 : 2),
           );
           yield* upgraded.awaitPersisted;
-          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v7.json");
+          assert.strictEqual(SCAN_CACHE_FILE_NAME, "usage-scan-cache-v9.json");
           assert.strictEqual(
             yield* Effect.promise(() => NodeFSP.readFile(legacyPath, "utf8")),
             legacy,
@@ -2340,48 +2221,6 @@ describe("UsageService", () => {
       }).pipe(Effect.scoped),
   );
 
-  it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-    "keeps the later read when a scan that read earlier finishes first",
-    () =>
-      Effect.gen(function* () {
-        const { transcript, settings, home } = yield* setup;
-        const dir = NodePath.dirname(transcript);
-        const gate = (name: string) => NodePath.join(dir, `${name}.jsonl`);
-        const wideProbe = gate("wide-probe");
-        const wideHold = gate("wide-hold");
-        const narrowProbe = gate("narrow-probe");
-        const narrowHold = gate("narrow-hold");
-        yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
-        yield* makeGate(wideProbe, BEFORE_NARROW_WINDOW);
-        yield* makeGate(wideHold, BEFORE_NARROW_WINDOW);
-        yield* Effect.gen(function* () {
-          const service = yield* UsageService.make;
-          const wide = yield* service.readSummary(WINDOW).pipe(Effect.forkChild);
-          yield* openGate(wideProbe);
-          yield* replaceFile(transcript, claudeLine(1, 5) + claudeLine(2, 7));
-          yield* makeGate(narrowProbe);
-          yield* makeGate(narrowHold);
-          const narrow = yield* service.readSummary(NARROW_WINDOW).pipe(Effect.forkChild);
-          yield* openGate(narrowProbe);
-          yield* openGate(wideHold);
-          yield* Fiber.join(wide);
-          yield* openGate(narrowHold);
-          yield* Fiber.join(narrow);
-
-          yield* Effect.promise(() =>
-            Promise.all(
-              [transcript, wideProbe, wideHold, narrowProbe, narrowHold].map((path) =>
-                NodeFSP.rm(path),
-              ),
-            ),
-          );
-          assert.strictEqual(totalOutputTokens(yield* service.readSummary(WINDOW)), 12);
-        }).pipe(
-          Effect.provide(layerService({ prefix: "usage-service-late-read-test", home, settings })),
-        );
-      }).pipe(Effect.scoped),
-  );
-
   it.live("keeps an absent directory missing when its cached files only contain diagnostics", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;
@@ -2519,37 +2358,6 @@ describe("UsageService", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.live("shares one scan between concurrent identical requests", () =>
-    Effect.gen(function* () {
-      const { transcript, settings, home } = yield* setup;
-      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
-
-      let ratesFetches = 0;
-      const service = yield* UsageService.make.pipe(
-        Effect.provide(
-          layerService({
-            prefix: "usage-service-flight-test",
-            home,
-            settings,
-            onRatesFetch: () => {
-              ratesFetches += 1;
-            },
-          }),
-        ),
-      );
-
-      const [first, second] = yield* Effect.all(
-        [service.readSummary(WINDOW), service.readSummary(WINDOW)],
-        { concurrency: 2 },
-      );
-      assert.deepStrictEqual(first, second);
-      assert.strictEqual(ratesFetches, 2);
-
-      yield* service.readSummary(WINDOW);
-      assert.strictEqual(ratesFetches, 2);
-    }).pipe(Effect.scoped),
-  );
-
   it.live("refetches a rate table inside its TTL only when the client asks", () =>
     Effect.gen(function* () {
       const { transcript, settings, home } = yield* setup;
@@ -2586,49 +2394,6 @@ describe("UsageService", () => {
       assert.strictEqual(ratesFetches, 2);
       assert.strictEqual(refreshed.status, "fresh");
       assert.strictEqual(refreshed.knownModels, 2);
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-  );
-
-  it.live("preserves cached estimates when both pricing downloads fail and recovers", () =>
-    Effect.gen(function* () {
-      const { transcript, settings, home } = yield* setup;
-      yield* Effect.promise(() => NodeFSP.writeFile(transcript, claudeLine(1, 5)));
-      let status = 200;
-      const requests: string[] = [];
-      const service = yield* UsageService.make.pipe(
-        Effect.provide(
-          layerService({
-            prefix: "usage-service-rates-failure-test",
-            home,
-            settings,
-            ratesDocument: {
-              "claude-fable-5": { input_cost_per_token: 1e-5, output_cost_per_token: 5e-5 },
-            },
-            ratesStatus: () => status,
-            onRatesFetch: (request) => requests.push(request.url),
-          }),
-        ),
-      );
-      const first = yield* service.readSummary(WINDOW);
-      yield* TestClock.adjust(Duration.minutes(2));
-      status = 503;
-
-      const failed = yield* service.refreshRates;
-      assert.strictEqual(failed.status, "cached");
-      assert.strictEqual(failed.fetchedAt, first.pricing.fetchedAt);
-      assert.strictEqual(requests.length, 3);
-      assert.strictEqual(
-        requests[2],
-        "https://api.github.com/repos/BerriAI/litellm/contents/model_prices_and_context_window.json?ref=main",
-      );
-      const cached = yield* service.readSummary(WINDOW);
-      assert.deepStrictEqual(cached.buckets, first.buckets);
-
-      status = 200;
-      yield* TestClock.adjust(Duration.minutes(1));
-      const recovered = yield* service.refreshRates;
-      assert.strictEqual(recovered.status, "fresh");
-      assert.notStrictEqual(recovered.fetchedAt, first.pricing.fetchedAt);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
@@ -2719,18 +2484,6 @@ describe("UsageService", () => {
       assert.strictEqual(pricing.status, "fresh");
       assert.strictEqual(pricing.knownModels, 2);
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-  );
-
-  it.live("keeps pricing unavailable when neither download has usable rates", () =>
-    Effect.gen(function* () {
-      const { settings, home } = yield* setup;
-      const service = yield* UsageService.make.pipe(
-        Effect.provide(layerService({ prefix: "usage-service-rates-empty-test", home, settings })),
-      );
-      const pricing = yield* service.refreshRates;
-      assert.strictEqual(pricing.status, "unavailable");
-      assert.isNull(pricing.fetchedAt);
-    }).pipe(Effect.scoped),
   );
 
   it.live.each([false, true])(

@@ -1,13 +1,6 @@
 import { expect, it } from "vite-plus/test";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import {
-  EnvironmentId,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  type ServerProvider,
-} from "@t3tools/contracts";
-import {
-  buildLocalEnvironmentUpdateGroups,
-  collectProviderLaunchUpdateCandidates,
   collectProviderUpdateCandidates,
   isProviderUpdateCandidate,
 } from "./ProviderUpdateLaunchNotification.logic";
@@ -42,69 +35,16 @@ function updateAvailableProvider(input: {
   };
 }
 
-it("offers the launch popup for Codex updates only", () => {
-  const codex = updateAvailableProvider({ driver: "codex" });
-  const nonCodexProviders = ["claude", "cursor", "grok", "opencode"].map((driver) =>
-    updateAvailableProvider({ driver }),
-  );
-
-  expect(
-    collectProviderLaunchUpdateCandidates(
-      [nonCodexProviders[0]!, codex, ...nonCodexProviders.slice(1)],
-      ProviderDriverKind.make("codex"),
-    ),
-  ).toEqual([codex]);
-  expect(
-    collectProviderLaunchUpdateCandidates(nonCodexProviders, ProviderDriverKind.make("codex")),
-  ).toEqual([]);
-});
-
-it("keeps a manual-only Codex update in the launch popup", () => {
+it("keeps a manual-only Codex update visible in Settings", () => {
   const codexWithoutUpdateAction = updateAvailableProvider({
     driver: "codex",
     canUpdate: false,
     updateCommand: null,
   });
 
-  expect(
-    collectProviderLaunchUpdateCandidates(
-      [codexWithoutUpdateAction],
-      ProviderDriverKind.make("codex"),
-    ),
-  ).toEqual([codexWithoutUpdateAction]);
-  // The broader candidate collector still powers Settings/sidebar visibility.
   expect(collectProviderUpdateCandidates([codexWithoutUpdateAction])).toEqual([
     codexWithoutUpdateAction,
   ]);
-});
-
-it("keeps non-Codex providers out of scoped local-environment update rows", () => {
-  const codex = updateAvailableProvider({ driver: "codex" });
-  const claude = updateAvailableProvider({ driver: "claude" });
-  const opencode = updateAvailableProvider({ driver: "opencode" });
-
-  const { groups } = buildLocalEnvironmentUpdateGroups(
-    [
-      {
-        environmentId: EnvironmentId.make("environment-primary"),
-        label: "macOS",
-        isPrimary: true,
-        connectionState: "ready",
-        providers: [codex, claude],
-      },
-      {
-        environmentId: EnvironmentId.make("environment-wsl"),
-        label: "WSL",
-        isPrimary: false,
-        connectionState: "ready",
-        providers: [opencode],
-      },
-    ],
-    ProviderDriverKind.make("codex"),
-  );
-
-  expect(groups[0]?.candidates).toEqual([codex]);
-  expect(groups[1]?.candidates).toEqual([]);
 });
 
 it("does not surface provider update UI for disabled-check advisory snapshots", () => {

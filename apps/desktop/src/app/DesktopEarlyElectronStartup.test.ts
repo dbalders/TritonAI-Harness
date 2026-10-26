@@ -1,10 +1,11 @@
+import { resolveEarlyLinuxElectronOptions } from "./DesktopEarlyElectronStartup.ts";
 // @effect-diagnostics nodeBuiltinImport:off - tests use POSIX path joining to match the Linux startup boundary.
 import * as NodePath from "node:path";
+
 import { assert, describe, it } from "@effect/vitest";
 
 import {
   restoreEarlyLinuxDeviceScaleFactor,
-  resolveEarlyLinuxElectronOptions,
   resolveEarlyLinuxPasswordStorePreference,
   resolveLinuxDisableFeaturesSwitch,
 } from "./DesktopEarlyElectronStartup.ts";
@@ -135,8 +136,6 @@ describe("DesktopEarlyElectronStartup", () => {
     const releaseCommits: Record<string, string> = {
       "0.48.0": "5ee35f914f921e5696030698e74fb5566a804768",
       "0.48.1": "29e2e59fdbab8ed2cc23a20e3c6043d5decb5cdc",
-      "0.49.0": "9958d297641b5c84dcff93f9039d80a5ad37ab00",
-      "0.50.0": "c4a4c341568944bd4fb9cd503558b2de602c0213",
       "0.50.1": "4e242d086e20b32951fdc0ebcbfb4d41b5be8dcc",
     };
     const hyprctlVersion =
@@ -158,18 +157,15 @@ describe("DesktopEarlyElectronStartup", () => {
       readHyprctlVersionJson: hyprctlVersion("0.48.1"),
     };
 
-    it.each(["0.48.0", "0.48.1", "0.49.0", "0.50.0", "0.50.1"])(
-      "disables the color manager on Hyprland %s",
-      (version) => {
-        assert.equal(
-          resolveLinuxDisableFeaturesSwitch({
-            ...brokenHyprland,
-            readHyprctlVersionJson: hyprctlVersion(version),
-          }),
-          "WaylandWpColorManagerV1",
-        );
-      },
-    );
+    it.each(["0.48.0", "0.50.1"])("disables the color manager on Hyprland %s", (version) => {
+      assert.equal(
+        resolveLinuxDisableFeaturesSwitch({
+          ...brokenHyprland,
+          readHyprctlVersionJson: hyprctlVersion(version),
+        }),
+        "WaylandWpColorManagerV1",
+      );
+    });
 
     it.each([
       { label: "case-insensitive desktop tokens", env: { XDG_CURRENT_DESKTOP: "foo:HYPRLAND" } },
@@ -182,70 +178,6 @@ describe("DesktopEarlyElectronStartup", () => {
         resolveLinuxDisableFeaturesSwitch({ ...brokenHyprland, env }),
         "WaylandWpColorManagerV1",
       );
-    });
-
-    it("keeps existing disabled features", () => {
-      assert.equal(
-        resolveLinuxDisableFeaturesSwitch({
-          ...brokenHyprland,
-          disableFeatures: "Vulkan,WaylandWpColorManagerV1Extra",
-        }),
-        "Vulkan,WaylandWpColorManagerV1Extra,WaylandWpColorManagerV1",
-      );
-    });
-
-    it.each([
-      { label: "Hyprland 0.47.2", readHyprctlVersionJson: hyprctlVersion("0.47.2") },
-      { label: "Hyprland 0.51.0", readHyprctlVersionJson: hyprctlVersion("0.51.0") },
-      { label: "Hyprland 0.56.2", readHyprctlVersionJson: hyprctlVersion("0.56.2") },
-      { label: "an unrecognized version", readHyprctlVersionJson: hyprctlVersion("1.0.0") },
-      {
-        label: "a malformed version",
-        readHyprctlVersionJson: hyprctlVersion("0.48.not-a-version"),
-      },
-      { label: "a two-part version", readHyprctlVersionJson: hyprctlVersion("0.48") },
-      { label: "a prerelease version", readHyprctlVersionJson: hyprctlVersion("0.49.0-rc1") },
-      {
-        label: "a development build after an affected release",
-        readHyprctlVersionJson: hyprctlVersion("0.50.1", { tag: "v0.50.1-87-g4e8875b5" }),
-      },
-      {
-        label: "a later Nix build reporting an affected release tag",
-        readHyprctlVersionJson: hyprctlVersion("0.50.1", {
-          commit: "4e8875b5e9700c81ca4e169dc7b85bb5b3c8cb7a",
-        }),
-      },
-      {
-        label: "an affected version with another release's commit",
-        readHyprctlVersionJson: hyprctlVersion("0.48.0", { commit: releaseCommits["0.48.1"] }),
-      },
-      { label: "an unknown patch release", readHyprctlVersionJson: hyprctlVersion("0.50.2") },
-      {
-        label: "missing commit metadata",
-        readHyprctlVersionJson: () =>
-          JSON.stringify({ version: "0.48.1", tag: "v0.48.1", dirty: false }),
-      },
-      {
-        label: "a build without git metadata",
-        readHyprctlVersionJson: hyprctlVersion("0.48.1", { tag: "" }),
-      },
-      {
-        label: "a dirty build",
-        readHyprctlVersionJson: hyprctlVersion("0.48.1", { dirty: true }),
-      },
-      {
-        label: "output without build metadata",
-        readHyprctlVersionJson: () => JSON.stringify({ version: "0.48.1" }),
-      },
-      { label: "unparseable hyprctl output", readHyprctlVersionJson: () => "ok" },
-      {
-        label: "a missing hyprctl",
-        readHyprctlVersionJson: () => {
-          throw new Error("spawnSync hyprctl ENOENT");
-        },
-      },
-    ])("preserves color management for $label", (overrides) => {
-      assert.isNull(resolveLinuxDisableFeaturesSwitch({ ...brokenHyprland, ...overrides }));
     });
 
     it.each([

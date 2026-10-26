@@ -389,9 +389,7 @@ describe("Project brief owner review", () => {
     const state = fixture();
     await _fixture.mount(state);
     await act(() => _fixture.button("Edit").click());
-    await act(() =>
-      _fixture.editField(_fixture.field("Proposal text"), "My revised instructions."),
-    );
+    await _fixture.editField("Proposal text", "My revised instructions.");
     await act(() =>
       _fixture.renderer!.rerender(
         _fixture.content({
@@ -494,28 +492,32 @@ describe("Project brief owner review", () => {
       synthesis: null,
     });
     expect(_fixture.button("Generate brief").disabled).toBe(true);
-    await act(() => _fixture.button("Choose sources").click());
-    await act(() => _fixture.editField(_fixture.field("Source type"), "excerpt"));
+    await userEvent.click(
+      _fixture.renderer.getByRole("button", { name: "Choose sources", exact: true }),
+    );
+    await _fixture.editField("Source type", "excerpt");
     for (const [label, value] of [
       ["Source title", "Meeting notes"],
       ["Source excerpt", "Review the export."],
       ["Original source URL", "https://example.com/private-note"],
     ] as const) {
-      await act(() => _fixture.editField(_fixture.field(label), value));
+      await _fixture.editField(label, value);
     }
     _fixture.run.mockResolvedValueOnce(false);
-    await act(() =>
-      _fixture.renderer!.container.querySelector<HTMLFormElement>("form")!.requestSubmit(),
+    await userEvent.click(
+      _fixture.renderer.getByRole("button", { name: "Add source", exact: true }),
     );
-    expect(_fixture.run).toHaveBeenLastCalledWith({
-      action: "addSource",
-      source: {
-        kind: "excerpt",
-        title: "Meeting notes",
-        text: "Review the export.",
-        url: "https://example.com/private-note",
-      },
-    });
+    await vi.waitFor(() =>
+      expect(_fixture.run).toHaveBeenLastCalledWith({
+        action: "addSource",
+        source: {
+          kind: "excerpt",
+          title: "Meeting notes",
+          text: "Review the export.",
+          url: "https://example.com/private-note",
+        },
+      }),
+    );
     expect(_fixture.field("Source excerpt").value).toBe("Review the export.");
     expect(_fixture.text(_fixture.renderer!.container)).toContain(
       "the page is not imported or refreshed",
@@ -555,12 +557,21 @@ describe("Project brief owner review", () => {
         ),
       );
     });
-    await act(() => _fixture.button("Choose sources").click());
-    const sourceType = () => _fixture.field("Source type");
-    await act(() => _fixture.editField(sourceType(), "message"));
-    await act(() => _fixture.button("Pick message").click());
-    await act(() => _fixture.editField(sourceType(), "file"));
-    await act(() => _fixture.editField(sourceType(), "message"));
+    await userEvent.click(
+      _fixture.renderer.getByRole("button", { name: "Choose sources", exact: true }),
+    );
+    await _fixture.editField("Source type", "message");
+    await userEvent.click(
+      _fixture.renderer.getByRole("button", { name: "Pick message", exact: true }),
+    );
+    await expect
+      .element(_fixture.renderer.getByRole("button", { name: "Add source", exact: true }))
+      .toBeEnabled();
+    await _fixture.editField("Source type", "file");
+    await _fixture.editField("Source type", "message");
+    await expect
+      .element(_fixture.renderer.getByRole("button", { name: "Add source", exact: true }))
+      .toBeDisabled();
     await act(() =>
       _fixture.renderer!.container.querySelector<HTMLFormElement>("form")!.requestSubmit(),
     );
@@ -572,10 +583,17 @@ describe("Project brief owner review", () => {
 
     const state = fixture();
     await _fixture.mount(state);
-    await act(() => _fixture.button("Review & start thread").click());
-    await act(() => _fixture.renderer!.rerender(_fixture.content(state, false)));
-    expect(_fixture.button("Start thread").disabled).toBe(true);
-    expect(_fixture.button("Add").disabled).toBe(true);
+    await userEvent.click(
+      _fixture.renderer.getByRole("button", { name: "Review & start thread", exact: true }),
+    );
+    await _fixture.renderer.rerender(_fixture.content(state, false));
+    await expect
+      .element(_fixture.renderer.getByRole("button", { name: "Start thread", exact: true }))
+      .toBeDisabled();
+    await expect
+      .element(_fixture.renderer.getByRole("button", { name: "Add", exact: true }))
+      .toBeDisabled();
+    expect(_fixture.run).not.toHaveBeenCalled();
   });
 
   it("does not turn unsafe source URLs into links", async () => {
@@ -598,15 +616,16 @@ async function setupTest() {
   function field(label: string): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement {
     return renderer.container.querySelector('[aria-label="' + label + '"]')!;
   }
-  async function editField(
-    element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
-    value: string,
-  ) {
-    if (element instanceof HTMLSelectElement) await userEvent.selectOptions(element, value);
-    else {
-      await userEvent.clear(element);
-      if (value) await userEvent.type(element, value);
+  async function editField(label: string, value: string) {
+    const locator = renderer.getByLabelText(label, { exact: true });
+    await expect.element(locator).toBeVisible();
+    if (locator.element() instanceof HTMLSelectElement) {
+      await userEvent.selectOptions(locator, value);
+    } else {
+      await userEvent.clear(locator);
+      if (value) await userEvent.type(locator, value);
     }
+    await expect.element(locator).toHaveValue(value);
   }
   function button(label: string) {
     return Array.from(renderer!.container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -628,13 +647,11 @@ async function setupTest() {
     );
   }
   async function mount(state: ProjectBriefState) {
-    await act(async () => {
-      renderer = stack.use(
-        await renderUi(content(state), {
-          router: false /* These subjects use mocked navigation or no routing. */,
-        }),
-      );
-    });
+    renderer = stack.use(
+      await renderUi(content(state), {
+        router: false /* These subjects use mocked navigation or no routing. */,
+      }),
+    );
   }
 
   run.mockReset().mockResolvedValue(true);

@@ -137,6 +137,7 @@ vi.mock("./PluginsSettings", () => ({
   ),
 }));
 
+const memorySignInEpochMs = Date.parse("2026-10-25T12:00:00.000Z");
 const local = EnvironmentId.make("local");
 const remote = EnvironmentId.make("remote");
 const offline = EnvironmentId.make("offline");
@@ -164,7 +165,7 @@ function flow(id: EnvironmentId) {
     flowId: `flow-${id}`,
     userCode: `CODE-${id}`,
     verificationUri: "https://microsoft.com/devicelogin",
-    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    expiresAt: new Date(memorySignInEpochMs + 60_000).toISOString(),
     intervalSeconds: 1,
   });
 }
@@ -234,7 +235,7 @@ describe("Memory across environments", () => {
     using fixture = setup();
     // This isolated settings component supplies all state through mocked environment hooks.
     await using screen = await render(ui(fixture.registry), { router: false });
-    using _timers = fakeTimers();
+    using _timers = fakeTimers({ now: memorySignInEpochMs });
     expect(Array.from(screen.container.querySelectorAll("select"))).toHaveLength(2);
     expect(text(screen)).toContain("Mixed");
     expect(text(screen)).toContain("Offline Mac");
@@ -255,7 +256,7 @@ describe("Memory across environments", () => {
       );
     // This isolated settings component supplies all state through mocked environment hooks.
     await using screen = await render(ui(fixture.registry), { router: false });
-    using _timers = fakeTimers();
+    using _timers = fakeTimers({ now: memorySignInEpochMs });
     await choose(screen, 1, "on");
     expect(
       state.commands.get("start")!.mock.calls.map(([request]) => request.environmentId),
@@ -278,7 +279,7 @@ describe("Memory across environments", () => {
       );
     // This isolated settings component supplies all state through mocked environment hooks.
     await using screen = await render(ui(fixture.registry), { router: false });
-    using _timers = fakeTimers();
+    using _timers = fakeTimers({ now: memorySignInEpochMs });
     await choose(screen, 1, "on");
     expect(text(screen)).toContain("Connect OneDrive on Work PC");
     expect(text(screen)).toContain("CODE-remote");
@@ -311,7 +312,7 @@ describe("Memory across environments", () => {
       );
     // This isolated settings component supplies all state through mocked environment hooks.
     await using screen = await render(ui(fixture.registry), { router: false });
-    using _timers = fakeTimers();
+    using _timers = fakeTimers({ now: memorySignInEpochMs });
     await choose(screen, 1, "on");
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(state.commands.get("poll")).toHaveBeenCalledTimes(2);
@@ -339,7 +340,7 @@ describe("Memory across environments", () => {
       );
     // This isolated settings component supplies all state through mocked environment hooks.
     await using screen = await render(ui(fixture.registry), { router: false });
-    using _timers = fakeTimers();
+    using _timers = fakeTimers({ now: memorySignInEpochMs });
     await choose(screen, 1, "on");
     await act(() => vi.advanceTimersByTimeAsync(3000));
     expect(state.commands.get("poll")).toHaveBeenCalledTimes(4);
@@ -354,7 +355,7 @@ describe("Memory across environments", () => {
     state.writable.delete(remote);
     // This isolated settings component supplies all state through mocked environment hooks.
     await using screen = await render(ui(fixture.registry), { router: false });
-    using _timers = fakeTimers();
+    using _timers = fakeTimers({ now: memorySignInEpochMs });
     expect(
       Array.from(screen.container.querySelectorAll("select")).every((node) => node.disabled),
     ).toBe(true);
@@ -375,7 +376,7 @@ describe("Memory across environments", () => {
     );
     // This isolated settings component supplies all state through mocked environment hooks.
     await using screen = await render(ui(fixture.registry), { router: false });
-    using _timers = fakeTimers();
+    using _timers = fakeTimers({ now: memorySignInEpochMs });
     await choose(screen, 1, "on");
     expect(
       state.commands.get("start")!.mock.calls.map(([request]) => request.environmentId),
@@ -390,7 +391,7 @@ describe("Memory across environments", () => {
       .mockImplementation(async ({ environmentId }) => flow(environmentId));
     // This isolated settings component supplies all state through mocked environment hooks.
     await using screen = await render(ui(fixture.registry), { router: false });
-    using _timers = fakeTimers();
+    using _timers = fakeTimers({ now: memorySignInEpochMs });
     await choose(screen, 1, "on");
     state.environments = state.environments.map((environment) =>
       environment.environmentId === remote
