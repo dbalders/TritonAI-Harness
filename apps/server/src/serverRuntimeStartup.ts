@@ -262,7 +262,7 @@ const resolveWelcomeBase = Effect.gen(function* () {
   } as const;
 });
 
-export const launchBootstrapThread = Effect.fn("server.startup.launchBootstrapThread")(function* (
+const launchBootstrapThread = Effect.fn("server.startup.launchBootstrapThread")(function* (
   input: ThreadLaunch.ThreadLaunchInput,
 ) {
   const launcher = yield* ThreadLaunch.ThreadLaunchService;

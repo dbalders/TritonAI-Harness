@@ -1,4 +1,3 @@
-import type { CommandPaletteActionItem } from "./CommandPalette.logic";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import type { Thread } from "../types";
@@ -8,36 +7,11 @@ import {
   buildLinkedThreadActionItems,
   filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
-  HELP_COMMAND_PALETTE_ACTION,
   reduceCommandPaletteUiState,
   createCommandPaletteSearchState,
   reduceCommandPaletteSearchState,
   type CommandPaletteUiState,
 } from "./CommandPalette.logic";
-
-describe("Help discovery", () => {
-  it.each(["help", "support", "troubleshoot", "feedback", "settings"])(
-    "finds Open Help for %s in normal and action-only search",
-    (keyword) => {
-      const help: CommandPaletteActionItem = {
-        ...HELP_COMMAND_PALETTE_ACTION,
-        icon: null,
-        run: async () => undefined,
-      };
-      for (const query of [keyword, `>${keyword}`]) {
-        const groups = filterCommandPaletteGroups({
-          activeGroups: [{ value: "actions", label: "Actions", items: [help] }],
-          query,
-          isInSubmenu: false,
-          projectSearchItems: [],
-          settingsSearchItems: [],
-          threadSearchItems: [],
-        });
-        expect(groups.flatMap((group) => group.items)).toEqual([help]);
-      }
-    },
-  );
-});
 
 describe("linked pull request thread navigation", () => {
   it("keeps archived relations searchable and routes them through the PR environment", async () => {

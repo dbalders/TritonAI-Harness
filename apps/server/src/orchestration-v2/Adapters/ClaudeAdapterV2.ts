@@ -1479,7 +1479,7 @@ export const CLAUDE_T3_MCP_BROWSER_NAVIGATION_TOOLS: ReadonlyArray<string> = [
  * address asks with the complete URL; opening a tab under a named profile with saved sign-ins also
  * asks; a blank or local tab runs directly. All share the one session browsing grant.
  */
-export function claudeBrowserNavigationApproval(
+function claudeBrowserNavigationApproval(
   toolName: string,
   toolInput: unknown,
 ):

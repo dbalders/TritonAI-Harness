@@ -56,6 +56,7 @@ const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = modelSelection.instanceId;
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
+// regression: #427 preserve migration activity, native file stashes and fatal shutdown
 it.effect.each(
   (
     [

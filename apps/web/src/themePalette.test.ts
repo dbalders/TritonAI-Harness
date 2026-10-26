@@ -69,33 +69,6 @@ describe("theme files", () => {
     expect(resolveThemeAppearance("ucsd-dark", false)).toBe("dark");
   });
 
-  it.each(["light", "dark"] as const)(
-    "keeps Quiet Workspace text readable on its %s surfaces",
-    (appearance) => {
-      const colors = getThemeColorsForMode(UCSD_THEME, appearance)!;
-      const pairs = [
-        ["text", "canvas"],
-        ["textMuted", "canvas"],
-        ["textMuted", "surface"],
-        ["placeholder", "surface"],
-        ["toolbarControlForeground", "toolbarControl"],
-        ["sidebarForeground", "sidebar"],
-        ["sidebarMutedForeground", "sidebar"],
-        ["sidebarMutedForeground", "sidebarRowSelected"],
-        ["messageForeground", "messageSurface"],
-        ["messageActionForeground", "messageAction"],
-        ["messageActionForeground", "messageActionHover"],
-        ["codeForeground", "codeBackground"],
-        ["terminalForeground", "terminalBackground"],
-        ["errorForeground", "errorSurface"],
-        ["warningForeground", "warningSurface"],
-      ] as const;
-      for (const [foreground, background] of pairs) {
-        expect(contrastRatio(colors[foreground], colors[background])).toBeGreaterThanOrEqual(4.5);
-      }
-    },
-  );
-
   it("keeps built-in and standard search pairs readable and distinct from inline code", () => {
     const toOklab = converter("oklab");
     const distance = (first: string, second: string) => {

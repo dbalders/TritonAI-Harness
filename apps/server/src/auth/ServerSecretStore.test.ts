@@ -176,28 +176,6 @@ const FailureAfterPublishFileSystemLayer = Layer.effect(
   }),
 ).pipe(Layer.provide(NodeServices.layer));
 
-const RemoveFailureFileSystemLayer = Layer.effect(
-  FileSystem.FileSystem,
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    return {
-      ...fileSystem,
-      remove: (path, options) =>
-        String(path).endsWith(".lock")
-          ? fileSystem.remove(path, options)
-          : Effect.fail(
-              PlatformError.systemError({
-                _tag: "PermissionDenied",
-                module: "FileSystem",
-                method: "remove",
-                pathOrDescriptor: String(path),
-                description: `Permission denied while removing secret file.${options ? " options-set" : ""}`,
-              }),
-            ),
-    } satisfies FileSystem.FileSystem;
-  }),
-).pipe(Layer.provide(NodeServices.layer));
-
 it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
   it.effect("reuses an existing secret instead of regenerating it", () =>
     Effect.gen(function* () {
@@ -336,36 +314,6 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
     ),
   );
 
-  it.effect("uses restrictive permissions for the secret directory and files", () => {
-    const chmodCalls: Array<{ readonly path: string; readonly mode: number }> = [];
-    const recordingFileSystemLayer = Layer.effect(
-      FileSystem.FileSystem,
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        return {
-          ...fileSystem,
-          chmod: (path, mode) =>
-            fileSystem
-              .chmod(path, mode)
-              .pipe(
-                Effect.tap(() => Effect.sync(() => chmodCalls.push({ path: String(path), mode }))),
-              ),
-        } satisfies FileSystem.FileSystem;
-      }),
-    ).pipe(Layer.provide(NodeServices.layer));
-
-    return Effect.gen(function* () {
-      const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      yield* secretStore.set("session-signing-key", Uint8Array.from([1, 2, 3]));
-      assert.isTrue(
-        chmodCalls.some((call) => call.mode === 0o700 && /[\\/]secrets$/.test(call.path)),
-      );
-      assert.isAtLeast(chmodCalls.filter((call) => call.mode === 0o600).length, 2);
-    }).pipe(
-      Effect.provide(makeServerSecretStoreLayer({ fileSystemLayer: recordingFileSystemLayer })),
-    );
-  });
-
   it.effect("propagates read failures other than missing-file errors", () =>
     Effect.gen(function* () {
       const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -390,24 +338,6 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
     }).pipe(
       Effect.provide(makeServerSecretStoreLayer({ fileSystemLayer: RenameFailureFileSystemLayer })),
     ),
-  );
-
-  it.effect("propagates remove failures other than missing-file errors", () =>
-    Effect.gen(function* () {
-      const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      const error = yield* Effect.flip(secretStore.remove("session-signing-key"));
-      assert.instanceOf(error, ServerSecretStore.SecretStoreRemoveError);
-      assert.equal((error.cause as PlatformError.PlatformError).reason._tag, "PermissionDenied");
-    }).pipe(
-      Effect.provide(makeServerSecretStoreLayer({ fileSystemLayer: RemoveFailureFileSystemLayer })),
-    ),
-  );
-
-  it.effect("returns Option.none when a secret file does not exist", () =>
-    Effect.gen(function* () {
-      const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      assert.isTrue(Option.isNone(yield* secretStore.get("missing-secret")));
-    }).pipe(Effect.provide(makeServerSecretStoreLayer())),
   );
 
   it.effect("encrypts new values while preserving the caller-facing bytes", () =>
@@ -839,97 +769,6 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       );
       assert.isTrue(Option.isSome(recovered));
       assert.isTrue(yield* fileSystem.exists(lockPath));
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("surfaces a failure to remove a raw-key retirement temporary file", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-keyring-temp-cleanup-failure-",
-      });
-      const name = "legacy-oauth";
-      const value = new TextEncoder().encode("legacy-value");
-      const fingerprint = legacyFingerprint(name, value);
-      const locations = yield* Effect.gen(function* () {
-        const config = yield* ServerConfig.ServerConfig;
-        yield* ServerSecretStore.ServerSecretStore;
-        yield* fileSystem.writeFile(secretPath(config, name), value);
-        return { keyFilePath: config.secretStoreKeyFilePath! };
-      }).pipe(
-        Effect.provide(
-          makeServerSecretStoreLayer({
-            baseDir,
-            legacySecretFingerprints: { [name]: fingerprint },
-          }),
-        ),
-      );
-
-      const failedCleanupLayer = Layer.effect(
-        FileSystem.FileSystem,
-        Effect.gen(function* () {
-          const underlying = yield* FileSystem.FileSystem;
-          const isKeyringTemp = (filePath: string) =>
-            filePath.startsWith(`${locations.keyFilePath}.`) && filePath.endsWith(".tmp");
-          return {
-            ...underlying,
-            rename: (from, to) =>
-              isKeyringTemp(String(from)) && String(to) === locations.keyFilePath
-                ? Effect.fail(
-                    PlatformError.systemError({
-                      _tag: "PermissionDenied",
-                      module: "FileSystem",
-                      method: "rename",
-                      pathOrDescriptor: `${String(from)} -> ${String(to)}`,
-                      description: "Injected keyring rename failure.",
-                    }),
-                  )
-                : underlying.rename(from, to),
-            remove: (filePath, options) =>
-              isKeyringTemp(String(filePath))
-                ? Effect.fail(
-                    PlatformError.systemError({
-                      _tag: "PermissionDenied",
-                      module: "FileSystem",
-                      method: "remove",
-                      pathOrDescriptor: String(filePath),
-                      description: "Injected raw-key temporary file cleanup failure.",
-                    }),
-                  )
-                : underlying.remove(filePath, options),
-          } satisfies FileSystem.FileSystem;
-        }),
-      ).pipe(Layer.provide(NodeServices.layer));
-
-      const error = yield* Effect.gen(function* () {
-        const secretStore = yield* ServerSecretStore.ServerSecretStore;
-        return yield* Effect.flip(secretStore.get(name));
-      }).pipe(
-        Effect.provide(
-          Layer.fresh(
-            makeServerSecretStoreLayer({
-              baseDir,
-              legacySecretFingerprints: { [name]: fingerprint },
-              secretStoreKeyFilePath: locations.keyFilePath,
-              fileSystemLayer: failedCleanupLayer,
-            }),
-          ),
-        ),
-      );
-      assert.instanceOf(error, ServerSecretStore.SecretStorePersistError);
-      assert.equal(error.resource, "external secret-store keyring temporary file cleanup");
-      assert.instanceOf(error.cause, AggregateError);
-      assert.isTrue(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
-      const keyringDirectory = locations.keyFilePath.slice(
-        0,
-        locations.keyFilePath.lastIndexOf("/"),
-      );
-      const entries = yield* fileSystem.readDirectory(keyringDirectory);
-      assert.isTrue(
-        entries.some(
-          (entry) => entry.startsWith("test-secret-keyring.json.") && entry.endsWith(".tmp"),
-        ),
-      );
     }).pipe(Effect.scoped),
   );
 

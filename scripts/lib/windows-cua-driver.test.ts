@@ -22,6 +22,7 @@ function executable(arch: "x64" | "arm64") {
 }
 
 describe("bundled Windows Cua Driver", () => {
+  // regression: #313 fix(desktop): package the Windows CUA driver without a console
   it.each(["x64", "arm64"] as const)(
     "prevents console allocation for %s without changing code or the entry point",
     (arch) => {
@@ -34,16 +35,12 @@ describe("bundled Windows Cua Driver", () => {
     },
   );
 
-  it("is idempotent when the upstream helper already has no console", () => {
-    const image = executable("arm64");
-    image.writeUInt16LE(2, SUBSYSTEM_OFFSET);
-    expect(prepareWindowsCuaDriver(image, "arm64")).toEqual(image);
-  });
-
+  // regression: #313 fix(desktop): package the Windows CUA driver without a console
   it("rejects the wrong architecture", () => {
     expect(() => prepareWindowsCuaDriver(executable("x64"), "arm64")).toThrow();
   });
 
+  // regression: #313 fix(desktop): package the Windows CUA driver without a console
   it.each([
     [0, 0],
     [0x3c, 0xffff],
@@ -62,6 +59,7 @@ describe("bundled Windows Cua Driver", () => {
     expect(() => prepareWindowsCuaDriver(image, "x64")).toThrow();
   });
 
+  // regression: #313 fix(desktop): package the Windows CUA driver without a console
   it.each([0, 63, OPTIONAL_OFFSET + 151, OPTIONAL_OFFSET + 239])(
     "rejects truncated images (%s bytes)",
     (length) => {

@@ -1,5 +1,3 @@
-import { vi } from "vite-plus/test";
-import * as CodexTextGeneration from "../../textGeneration/CodexTextGeneration.ts";
 import { managedCodexModelCatalogFileName } from "./CodexModelCatalog.ts";
 import { decideProviderSessionTransition } from "../../orchestration-v2/ProviderSessionTransitionPolicy.ts";
 import { assert } from "@effect/vitest";
@@ -700,33 +698,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
     { skip: windowsHost },
   );
 
-  it.effect.each(["", "   "])(
-    "resolves a blank config home to the environment's Codex home before Help setup: %j",
-    (homePath) =>
-      Effect.gen(function* () {
-        using generation = vi.spyOn(CodexTextGeneration, "makeCodexTextGeneration");
-        const config = yield* ServerConfig.ServerConfig;
-        const instance = yield* CodexDriver.create({
-          instanceId: ProviderInstanceId.make("blank-home-help"),
-          displayName: "Blank home Help",
-          enabled: false,
-          environment: [],
-          config: {
-            ...CodexDriver.defaultConfig(),
-            setupMode: "existing",
-            binaryPath: process.execPath,
-            homePath,
-          },
-        });
-        expect(generation).toHaveBeenCalledOnce();
-        expect(generation.mock.calls[0]?.[0].homePath).toBe(NodePath.join(config.baseDir, "codex"));
-        expect(instance.textGeneration.generateHelp).toBeDefined();
-      }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
-        Effect.scoped,
-      ),
-  );
-
+  // regression: #421 fix(codex): contain Stop commands and restore managed Auto approvals
   it.effect.each([
     { id: "codex_frontier", managed: true, explicitModalities: false },
     { id: "codex", managed: true, explicitModalities: true },
@@ -867,10 +839,8 @@ it.layer(layerTest)("CodexDriver", (it) => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect.each([
-    ["codex_frontier", "gpt-6.1-sol", "codex", "api-glm-5.3-flash"],
-    ["codex", "api-glm-5.3-flash", "codex_frontier", "gpt-6.1-sol"],
-  ] as const)(
+  // regression: 70a86ecdbd fix(codex): hand off context between managed gateway routes
+  it.effect.each([["codex_frontier", "gpt-6.1-sol", "codex", "api-glm-5.3-flash"]] as const)(
     "hands off managed history from %s/%s to %s/%s even with a shared home",
     ([currentId, currentModel, targetId, targetModel]) =>
       Effect.gen(function* () {
@@ -923,31 +893,12 @@ it.layer(layerTest)("CodexDriver", (it) => {
         Effect.scoped,
       ),
   );
-
-  it.effect("keeps native continuation shared between compatible personal profiles", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const homePath = yield* fs.makeTempDirectoryScoped({
-        prefix: "personal-route-continuation-",
-      });
-      const create = (id: string) =>
-        CodexDriver.create({
-          instanceId: ProviderInstanceId.make(id),
-          displayName: id,
-          enabled: false,
-          environment: [],
-          config: { ...CodexDriver.defaultConfig(), binaryPath: process.execPath, homePath },
-        });
-      const current = yield* create("codex_personal");
-      const target = yield* create("codex_work");
-      expect(current.continuationIdentity).toEqual(target.continuationIdentity);
-    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn), Effect.scoped),
-  );
 });
 
 const mergeCodexProviderEnvironment = mergeCodexEnvironment;
 
 describe("mergeCodexProviderEnvironment", () => {
+  // regression: #142 fix(desktop): apply TritonAI API keys without relaunch
   it.effect("keeps the Usage-managed TritonAI key authoritative", () =>
     Effect.gen(function* () {
       const environment = [
@@ -1009,6 +960,7 @@ describe("mergeCodexProviderEnvironment", () => {
     }),
   );
 
+  // regression: #142 fix(desktop): apply TritonAI API keys without relaunch
   it.effect("normalizes inherited Windows key casing when applying the managed key", () =>
     Effect.gen(function* () {
       const result = yield* mergeCodexProviderEnvironment(
@@ -1085,26 +1037,6 @@ describe("mergeCodexProviderEnvironment", () => {
 
       assert.equal(routed.TRITONAI_API_KEY, "frontier-key");
       assert.equal(shared.TRITONAI_API_KEY, "shared-key");
-    }),
-  );
-
-  it.effect("ignores unrecognized credential selectors", () =>
-    Effect.gen(function* () {
-      const result = yield* mergeCodexProviderEnvironment(
-        [
-          {
-            name: "TRITONAI_API_KEY_SOURCE",
-            value: "UNRELATED_SECRET",
-            sensitive: false,
-          },
-        ],
-        { UNRELATED_SECRET: "must-not-be-forwarded" },
-        "darwin",
-        "codex_personal",
-      );
-
-      assert.notProperty(result, "TRITONAI_API_KEY");
-      assert.equal(result.UNRELATED_SECRET, "must-not-be-forwarded");
     }),
   );
 

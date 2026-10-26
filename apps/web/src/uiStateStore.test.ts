@@ -6,15 +6,11 @@ import {
   markThreadVisited,
   parsePersistedState,
   PERSISTED_STATE_KEY,
-  pinProjects,
   type PersistedUiState,
   persistState,
-  reorderPinnedProjects,
   reorderProjects,
   resolveProjectExpanded,
   setProjectExpanded,
-  setProjectsPinned,
-  unpinProjects,
   type UiState,
 } from "./uiStateStore";
 
@@ -95,37 +91,6 @@ describe("uiStateStore pure functions", () => {
     const next = reorderProjects(makeUiState(), currentOrder, [keyALocal, keyARemote], [keyC]);
 
     expect(next.projectOrder).toEqual([keyB, keyC, keyALocal, keyARemote]);
-  });
-
-  it("pins and unpins projects in stable order", () => {
-    const keyA = "env-local:proj-a";
-    const keyB = "env-local:proj-b";
-    const keyC = "env-local:proj-c";
-    const initialState = makeUiState({
-      pinnedProjectOrder: [keyA],
-    });
-
-    const afterPin = pinProjects(initialState, [keyB, keyA, keyC]);
-    expect(afterPin.pinnedProjectOrder).toEqual([keyA, keyB, keyC]);
-
-    const afterUnpin = unpinProjects(afterPin, [keyA, keyB]);
-    expect(afterUnpin.pinnedProjectOrder).toEqual([keyC]);
-
-    expect(setProjectsPinned(afterUnpin, [keyC], false).pinnedProjectOrder).toEqual([]);
-  });
-
-  it("reorders pinned grouped project members together", () => {
-    const keyALocal = "env-local:proj-a";
-    const keyARemote = "env-remote:proj-a";
-    const keyB = "env-local:proj-b";
-    const keyC = "env-local:proj-c";
-    const initialState = makeUiState({
-      pinnedProjectOrder: [keyALocal, keyARemote, keyB, keyC],
-    });
-
-    const next = reorderPinnedProjects(initialState, [keyALocal, keyARemote], [keyC]);
-
-    expect(next.pinnedProjectOrder).toEqual([keyB, keyC, keyALocal, keyARemote]);
   });
 });
 

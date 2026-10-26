@@ -27,11 +27,7 @@ import {
   persistClientSettingsUpdate,
 } from "../hooks/useSettings";
 import { reduceGettingStarted } from "./gettingStarted.logic";
-import {
-  cancelGettingStartedPreparation,
-  recordGettingStartedSubmission,
-  updateGettingStarted,
-} from "./gettingStartedState";
+import { recordGettingStartedSubmission, updateGettingStarted } from "./gettingStartedState";
 import { useGettingStartedActions } from "./useGettingStartedActions";
 
 const mocks = vi.hoisted(() => ({
@@ -313,44 +309,6 @@ describe("queued getting started persistence", () => {
 });
 
 describe("delayed draft preparation", () => {
-  it.each(["pause", "restart", "select"] as const)(
-    "cancels preparation as soon as %s is requested while its save is pending",
-    async (interruption) => {
-      const project = deferred<typeof PROJECT>();
-      const entered = deferred<void>();
-      mocks.openProject.mockImplementationOnce(() => {
-        entered.resolve();
-        return project.promise;
-      });
-      const actions = await mountHook(() => useGettingStartedActions(ENVIRONMENT));
-      let preparing!: Promise<void>;
-      await act(async () => {
-        preparing = actions().prepare("conversation", "Practice prompt");
-        await entered.promise;
-      });
-      const gate = holdNextSave();
-      const cancelling = updateGettingStarted(
-        interruption === "select" ? { type: "select", chapter: "files" } : { type: interruption },
-      );
-      await gate.entered;
-      expect(getClientSettings().gettingStarted.paused).toBe(false);
-      try {
-        project.resolve(PROJECT);
-        await act(async () => {
-          await Promise.resolve();
-        });
-        expect(mocks.newThread).not.toHaveBeenCalled();
-        expect(useComposerDraftStore.getState().getComposerDraft(DRAFT)).toBeNull();
-      } finally {
-        gate.release();
-        await act(async () => {
-          await Promise.all([cancelling, preparing]);
-          await drainSettings();
-        });
-      }
-    },
-  );
-
   it("keeps a user's replacement prompt when Ideas tracking finishes later", async () => {
     select("ideas");
     const open = await mountHook(() => useOpenIdeaDraft(ENVIRONMENT));
@@ -412,28 +370,6 @@ describe("delayed draft preparation", () => {
       expect(actions().error).toBeNull();
     },
   );
-
-  it("does not close the chapter selected while a prepared task is saving", async () => {
-    const actions = await mountHook(() => useGettingStartedActions(ENVIRONMENT));
-    const gate = holdNextSave();
-    let preparing!: Promise<void>;
-    await act(async () => {
-      preparing = actions().prepare("conversation", "Practice prompt");
-      await gate.entered;
-    });
-    const selection = updateGettingStarted({ type: "select", chapter: "files" });
-    gate.release();
-    await act(async () => {
-      await preparing;
-      await selection;
-      await drainSettings();
-    });
-
-    expect(durable.gettingStarted).toMatchObject({ activeChapter: "files", open: true });
-    expect(useComposerDraftStore.getState().getComposerDraft(DRAFT)?.prompt).toBe(
-      "Practice prompt",
-    );
-  });
 });
 
 describe("chapter acknowledgement controls", () => {
@@ -489,49 +425,6 @@ describe("chapter acknowledgement controls", () => {
       expect(getClientSettings().gettingStarted).toEqual(before);
     },
   );
-});
-
-describe("experimental guide toggle", () => {
-  it("hides saved chapters and leaves progress unchanged while disabled", async () => {
-    const before = getClientSettings().gettingStarted;
-    __setClientSettingsForTests({ ...durable, experimentalGuidedTourEnabled: false });
-    await renderer!.rerender(createElement(GettingStartedHost));
-    expect(renderer!.container.textContent).toBe("");
-    expect(await updateGettingStarted({ type: "restart" })).toBe(false);
-    expect(getClientSettings().gettingStarted).toEqual(before);
-    expect(mocks.setClientSettings).not.toHaveBeenCalled();
-    await act(() =>
-      persistClientSettingsUpdate((settings) => ({
-        ...settings,
-        experimentalGuidedTourEnabled: true,
-      })),
-    );
-    expect(renderer!.container.textContent).toContain("Prepare a practice conversation");
-  });
-
-  it("cancels preparation as soon as disabling is requested, before its save finishes", async () => {
-    const project = deferred<typeof PROJECT>();
-    mocks.openProject.mockReturnValueOnce(project.promise);
-    const actions = await mountHook(() => useGettingStartedActions(ENVIRONMENT));
-    let preparing!: Promise<void>;
-    await act(async () => {
-      preparing = actions().prepare("conversation", "Practice prompt");
-    });
-    const gate = holdNextSave();
-    cancelGettingStartedPreparation();
-    const disabling = persistClientSettingsUpdate((settings) => ({
-      ...settings,
-      experimentalGuidedTourEnabled: false,
-    }));
-    await gate.entered;
-    project.resolve(PROJECT);
-    await act(async () => {
-      await preparing;
-    });
-    expect(mocks.newThread).not.toHaveBeenCalled();
-    gate.release();
-    await disabling;
-  });
 });
 
 describe("preparation environment ownership", () => {

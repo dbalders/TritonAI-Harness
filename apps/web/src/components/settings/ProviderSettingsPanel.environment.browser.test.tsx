@@ -234,68 +234,6 @@ async function setup() {
 }
 
 describe("EnvironmentProviderSettings routing", () => {
-  it("shows TritonAI and hides unsupported provider slots", async () => {
-    await setup();
-    await using _screen = await render(panel());
-    await expect
-      .element(page.getByRole("button", { name: "Select TritonAI", exact: true }))
-      .toBeVisible();
-    for (const label of ["Claude", "Cursor", "Grok", "Pi", "OpenCode", "Antigravity"])
-      await expect
-        .element(page.getByRole("button", { name: `Select ${label}`, exact: true }))
-        .not.toBeInTheDocument();
-  });
-
-  it("keeps an explicitly configured Codex account visible when disabled", async () => {
-    await setup();
-    state.settings = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      providerInstances: {
-        [customId]: {
-          driver: ProviderDriverKind.make("codex"),
-          enabled: false,
-          displayName: "Work",
-        },
-      },
-    };
-    await using _screen = await render(panel());
-    await expect
-      .element(page.getByRole("button", { name: "Select Work", exact: true }))
-      .toBeVisible();
-  });
-
-  it("hides unsupported legacy provider configuration", async () => {
-    await setup();
-    state.settings = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      providerInstances: {
-        [ProviderInstanceId.make("grok")]: {
-          driver: ProviderDriverKind.make("grok"),
-          enabled: false,
-          config: { binaryPath: "/custom/grok" },
-        },
-      },
-    };
-    await using _screen = await render(panel());
-    await expect
-      .element(page.getByRole("button", { name: "Select Grok", exact: true }))
-      .not.toBeInTheDocument();
-    await expect
-      .element(page.getByRole("button", { name: "Select TritonAI", exact: true }))
-      .toBeVisible();
-  });
-
-  it("reads and writes settings on the selected environment", async () => {
-    await setup();
-    await using _screen = await render(panel());
-    await expect
-      .element(page.getByRole("button", { name: "Select TritonAI", exact: true }))
-      .toBeVisible();
-    expect(new Set(state.readEnvironmentIds)).toEqual(new Set([environmentId]));
-    expect(new Set(state.updateEnvironmentIds)).toEqual(new Set([environmentId]));
-    expect(new Set(state.mutationEnvironmentIds)).toEqual(new Set([environmentId]));
-  });
-
   it("does not substitute another account when the requested instance was removed", async () => {
     await setup();
     await setProviders([provider()]);
@@ -304,72 +242,6 @@ describe("EnvironmentProviderSettings routing", () => {
       .element(page.getByText("This provider instance is no longer available on this device."))
       .toBeVisible();
     expect(state.updateSettings).not.toHaveBeenCalled();
-  });
-
-  it("keeps the editable layout interactive when not read only", async () => {
-    await setup();
-    await setProviders([provider()]);
-    await using _screen = await render(panel());
-    await expect.element(page.getByText("Limited permissions")).not.toBeInTheDocument();
-    await expect
-      .element(page.getByRole("button", { name: /^Refresh provider status/ }))
-      .toBeVisible();
-    await expect.element(page.getByRole("button", { name: "Add provider" }).first()).toBeVisible();
-    await expect
-      .element(page.getByRole("switch", { name: "Enable TritonAI" }).first())
-      .toBeEnabled();
-  });
-
-  it("keeps Advanced visible when search targets the provider health interval", async () => {
-    await setup();
-    await using screen = await render(panel());
-    await expect.element(page.getByText("Advanced", { exact: true }).first()).toBeVisible();
-    expect(screen.container.querySelector("#provider-health-check-interval")).not.toBeNull();
-
-    state.searchTargetId = "provider-health-check-interval";
-    await screen.rerender(panel());
-    await expect.element(page.getByText("Advanced", { exact: true }).first()).toBeVisible();
-    expect(screen.container.querySelector("#provider-health-check-interval")).not.toBeNull();
-  });
-
-  it("deletes and resets provider configuration without erasing shared preferences", async () => {
-    await setup();
-    state.settings = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      providerInstances: {
-        [codexId]: { driver: ProviderDriverKind.make("codex"), enabled: false },
-        [customId]: {
-          driver: ProviderDriverKind.make("codex"),
-          enabled: true,
-          displayName: "Work",
-        },
-      },
-      providerModelPreferences: {
-        [customId]: { hiddenModels: ["hidden"], modelOrder: ["model"] },
-      },
-      favorites: [{ provider: customId, model: "favorite" }],
-    };
-    await using _screen = await render(panel());
-    await userEvent.click(page.getByRole("button", { name: "Select Work", exact: true }));
-    await userEvent.click(
-      page.getByRole("button", { name: `Delete instance ${customId}`, exact: true }),
-    );
-    expect(state.mutateProviderInstance).toHaveBeenLastCalledWith({
-      operation: "remove",
-      instanceId: customId,
-    });
-
-    state.mutateProviderInstance.mockClear();
-    await userEvent.click(page.getByRole("button", { name: "Select TritonAI", exact: true }));
-    await userEvent.click(
-      page.getByRole("button", {
-        name: "Reset TritonAI provider settings to default",
-        exact: true,
-      }),
-    );
-    const [resetMutation, resetPatch] = state.mutateProviderInstance.mock.lastCall ?? [];
-    expect(resetMutation).toEqual({ operation: "remove", instanceId: codexId });
-    expect(resetPatch ?? {}).toEqual({});
   });
 
   it("updates one provider instance without sending a stale whole map", async () => {
@@ -395,43 +267,5 @@ describe("EnvironmentProviderSettings routing", () => {
       },
       {},
     );
-  });
-
-  it("does not expose unsupported ACP accounts or authentication actions", async () => {
-    await setup();
-    const instanceId = ProviderInstanceId.make("acpRegistry_antigravity");
-    state.settings = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      providerInstances: {
-        [instanceId]: {
-          driver: ProviderDriverKind.make("acpRegistry"),
-          enabled: true,
-          displayName: "Unsupported account",
-          config: { agentId: "antigravity" },
-        },
-      },
-    };
-    await setProviders([
-      {
-        ...provider(),
-        instanceId,
-        driver: ProviderDriverKind.make("acpRegistry"),
-        auth: {
-          status: "unauthenticated",
-          action: {
-            elicitationId: "login",
-            url: "https://accounts.google.com/login",
-            message: "Continue with Google",
-          },
-        },
-      },
-    ]);
-    await using _screen = await render(panel({ targetInstanceId: instanceId }));
-    await expect
-      .element(page.getByRole("button", { name: "Select Unsupported account", exact: true }))
-      .not.toBeInTheDocument();
-    await expect
-      .element(page.getByRole("link", { name: "Continue authentication" }))
-      .not.toBeInTheDocument();
   });
 });

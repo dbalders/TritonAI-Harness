@@ -20,7 +20,7 @@ const CODEX_DRIVER = ProviderDriverKind.make("codex");
  * attempt in this process. Managed ownership is checked separately because it
  * comes from the instance's maintenance capabilities, not the snapshot.
  */
-export function isManagedCodexAutoUpdateCandidate(provider: ServerProvider): boolean {
+function isManagedCodexAutoUpdateCandidate(provider: ServerProvider): boolean {
   const advisory = provider.versionAdvisory;
   return (
     provider.driver === CODEX_DRIVER &&

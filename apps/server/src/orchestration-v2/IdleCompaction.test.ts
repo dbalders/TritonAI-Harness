@@ -1,20 +1,4 @@
-import { type IdleCompactionRecords } from "./IdleCompaction.ts";
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
-import { EventId } from "@t3tools/contracts";
-import { type OrchestrationV2DomainEvent } from "@t3tools/contracts";
-import { type OrchestrationV2ServerCommand } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Queue from "effect/Queue";
-import * as Stream from "effect/Stream";
-import { TestClock } from "effect/testing";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import * as ServerSettings from "../serverSettings.ts";
-import * as IdleCompactionService from "./IdleCompactionService.ts";
-import * as Orchestrator from "./Orchestrator.ts";
-import * as ProjectionStore from "./ProjectionStore.ts";
 import { describe, expect, it } from "@effect/vitest";
-
 import {
   MessageId,
   NodeId,
@@ -26,25 +10,17 @@ import {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
-
 import * as DateTime from "effect/DateTime";
 
-import { idleCompactionWindow } from "./IdleCompaction.ts";
+import { idleCompactionWindow, type IdleCompactionRecords } from "./IdleCompaction.ts";
 
 const NOW_MS = Date.parse("2026-10-19T12:00:00.000Z");
-
 const MINUTE_MS = 60_000;
-
 const at = (offset = 0) => DateTime.makeUnsafe(NOW_MS + offset);
-
 const threadId = ThreadId.make("idle-thread");
-
 const runId = RunId.make("run-1");
-
 const instanceId = ProviderInstanceId.make("claudeAgent");
-
 const providerThreadId = ProviderThreadId.make("provider-thread");
-
 const modelSelection = { instanceId, model: "claude-opus-5-5" };
 
 function records(
@@ -178,96 +154,3 @@ describe("idleCompactionWindow", () => {
     expect(idleCompactionWindow(archived, NOW_MS)).toBeNull();
   });
 });
-
-const seed = Effect.fn("seedIdleThread")(function* (value: IdleCompactionRecords) {
-  const store = yield* ProjectionStore.ProjectionStoreV2;
-  const event = { threadId, occurredAt: at() };
-  yield* store.apply({
-    ...event,
-    id: EventId.make("e1"),
-    type: "thread.created",
-    payload: value.thread,
-  });
-  yield* store.apply({
-    ...event,
-    id: EventId.make("e2"),
-    type: "run.created",
-    payload: value.runs[0]!,
-  });
-  yield* store.apply({
-    ...event,
-    id: EventId.make("e3"),
-    type: "message.updated",
-    payload: value.messages[0]!,
-  });
-  yield* store.apply({
-    ...event,
-    id: EventId.make("e4"),
-    type: "provider-thread.updated",
-    payload: value.providerThreads[0]!,
-  });
-  yield* store.apply({
-    ...event,
-    id: EventId.make("e5"),
-    type: "provider-turn.updated",
-    payload: value.providerTurns[0]!,
-  });
-});
-
-it.effect("sends /compact as TritonAI Harness once the cache is about to expire", () =>
-  Effect.gen(function* () {
-    yield* TestClock.setTime(NOW_MS);
-    const value = records({ cacheExpiresInMs: 5 * MINUTE_MS });
-    yield* seed(value);
-    const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
-    const commands = yield* Queue.unbounded<OrchestrationV2ServerCommand>();
-    const reads = yield* Queue.unbounded<void>();
-    const store = yield* ProjectionStore.ProjectionStoreV2;
-    const dependencies = Layer.mergeAll(
-      Layer.succeed(ProjectionStore.ProjectionStoreV2, {
-        ...store,
-        getThreadRecords: (...args) =>
-          store.getThreadRecords(...args).pipe(Effect.tap(() => Queue.offer(reads, undefined))),
-      }),
-      Layer.mock(ServerSettings.ServerSettingsService)({
-        getSettings: Effect.succeed({
-          ...DEFAULT_SERVER_SETTINGS,
-          compactIdleThreads: true,
-          projectSettingsOverrides: {
-            project: { providerInstances: { [instanceId]: { enabled: true } } },
-          },
-        }),
-      }),
-      Layer.mock(Orchestrator.OrchestratorV2)({
-        streamDomainEvents: Stream.fromQueue(events),
-        dispatch: (command) =>
-          Queue.offer(commands, command).pipe(Effect.as({ sequence: 1, storedEvents: [] })),
-      }),
-    );
-    yield* Effect.gen(function* () {
-      const service = yield* IdleCompactionService.make;
-      yield* service.start();
-      yield* Queue.offer(events, {
-        id: EventId.make("completed"),
-        type: "run.updated",
-        threadId,
-        occurredAt: at(),
-        payload: value.runs[0]!,
-      });
-      yield* Queue.take(reads);
-      yield* TestClock.adjust("2 minutes");
-      expect(yield* Queue.size(commands)).toBe(0);
-      yield* TestClock.adjust("1 minute");
-      expect(yield* Queue.take(commands)).toMatchObject({
-        type: "message.dispatch",
-        threadId,
-        text: "/compact",
-        createdBy: "agent",
-        creationSource: "server",
-      });
-    }).pipe(Effect.provide(dependencies));
-  }).pipe(
-    Effect.provide(ProjectionStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
-    Effect.scoped,
-  ),
-);

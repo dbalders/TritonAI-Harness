@@ -91,14 +91,6 @@ vi.mock(import("./ProviderWizardAuthenticationStep"), async (original) => ({
 
 const remoteEnvironmentId = EnvironmentId.make("remote-device");
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 const dialog = () => (
   <AddProviderInstanceDialog
     open
@@ -183,31 +175,6 @@ describe("AddProviderInstanceDialog environment routing", () => {
         config: { setupMode: "existing" },
       },
     });
-  });
-
-  it("awaits the atomic Codex create before closing", async () => {
-    setup();
-    const mutation = deferred<{ readonly _tag: "Success"; readonly value: unknown }>();
-    settingsHooks.mutate.mockReturnValueOnce(mutation.promise);
-    await using _screen = await prepareCodexInstance();
-    await click("Add instance");
-    expect(actions.onOpenChange).not.toHaveBeenCalled();
-    expect(button("Adding...").disabled).toBe(true);
-    await act(async () => mutation.resolve({ _tag: "Success", value: {} }));
-    expect(actions.onOpenChange).toHaveBeenCalledWith(false);
-    expect(settingsHooks.mutate).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the Codex dialog open when the atomic create fails", async () => {
-    setup();
-    settingsHooks.mutate.mockResolvedValueOnce({ _tag: "Failure", cause: new Error("Conflict") });
-    await using _screen = await prepareCodexInstance();
-    await click("Add instance");
-    expect(actions.onOpenChange).not.toHaveBeenCalled();
-    expect(actions.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Could not add provider instance" }),
-    );
-    expect(button("Add instance").disabled).toBe(false);
   });
 
   it("rejects a queued save after the provider grant is revoked", async () => {

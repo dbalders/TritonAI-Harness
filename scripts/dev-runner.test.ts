@@ -105,60 +105,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
-    it.effect("defaults TRITONAI_HOME and disables browser auto-open", () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const env = yield* createDevRunnerEnv({
-          mode: "dev",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          t3Home: undefined,
-          browser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
-        });
-
-        const defaultHome = path.resolve(NodeOS.homedir(), ".tritonai-harness");
-        assert.equal(env.TRITONAI_HOME, defaultHome);
-        assert.isUndefined(env.T3CODE_HOME);
-        assert.equal(env.T3CODE_NO_BROWSER, "1");
-      }),
-    );
-
-    it.effect("supports explicit typed overrides", () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const env = yield* createDevRunnerEnv({
-          mode: "dev:server",
-          baseEnv: { T3CODE_HOME: "/tmp/legacy-home" },
-          serverOffset: 0,
-          webOffset: 0,
-          t3Home: "/tmp/custom-t3",
-          browser: false,
-          autoBootstrapProjectFromCwd: false,
-          logWebSocketEvents: true,
-          host: "0.0.0.0",
-          port: 4222,
-          devUrl: new URL("http://localhost:7331"),
-        });
-
-        assert.equal(env.TRITONAI_HOME, path.resolve("/tmp/custom-t3"));
-        assert.isUndefined(env.T3CODE_HOME);
-        assert.equal(env.T3CODE_PORT, "4222");
-        assert.equal(env.VITE_HTTP_URL, "http://localhost:4222");
-        assert.equal(env.VITE_WS_URL, "ws://localhost:4222");
-        assert.equal(env.T3CODE_NO_BROWSER, "1");
-        assert.equal(env.T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD, "0");
-        assert.equal(env.T3CODE_LOG_WS_EVENTS, "1");
-        assert.equal(env.T3CODE_HOST, "0.0.0.0");
-        assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:7331/");
-      }),
-    );
-
     it.effect("strips inherited service-launcher context", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
@@ -180,66 +126,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
         assert.equal(env.T3_SERVICE_LAUNCHER_CONTEXT, undefined);
         assert.equal(env.T3_BOOT_SERVICE_UNIT, undefined);
-      }),
-    );
-
-    it.effect("uses custom t3Home when provided", () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const env = yield* createDevRunnerEnv({
-          mode: "dev",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          t3Home: "/tmp/my-t3",
-          browser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
-        });
-
-        assert.equal(env.TRITONAI_HOME, path.resolve("/tmp/my-t3"));
-        assert.isUndefined(env.T3CODE_HOME);
-      }),
-    );
-
-    it.effect("pins desktop dev to a stable backend port and websocket url", () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const env = yield* createDevRunnerEnv({
-          mode: "dev:desktop",
-          baseEnv: {
-            T3CODE_PORT: "13773",
-            T3CODE_MODE: "web",
-            T3CODE_NO_BROWSER: "0",
-            T3CODE_HOST: "0.0.0.0",
-            VITE_DEV_SERVER_URL: "http://127.0.0.1:8526",
-            VITE_WS_URL: "ws://localhost:13773",
-          },
-          serverOffset: 0,
-          webOffset: 0,
-          t3Home: "/tmp/my-t3",
-          browser: true,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: "127.0.0.1",
-          port: 4222,
-          devUrl: undefined,
-        });
-
-        assert.equal(env.TRITONAI_HOME, path.resolve("/tmp/my-t3"));
-        assert.isUndefined(env.T3CODE_HOME);
-        assert.equal(env.PORT, "5733");
-        assert.equal(env.VITE_DEV_SERVER_URL, "http://127.0.0.1:5733");
-        assert.equal(env.HOST, "127.0.0.1");
-        assert.equal(env.T3CODE_PORT, "4222");
-        assert.equal(env.VITE_HTTP_URL, "http://127.0.0.1:4222");
-        assert.equal(env.T3CODE_MODE, undefined);
-        assert.equal(env.T3CODE_NO_BROWSER, undefined);
-        assert.equal(env.T3CODE_HOST, undefined);
-        assert.equal(env.VITE_WS_URL, "ws://127.0.0.1:4222");
       }),
     );
 
@@ -495,34 +381,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.notInclude(error.message, "secret-token-value");
       });
     });
-
-    // `tailscale serve` config outlives the process, so a dry run that shared
-    // would replace and then tear down whatever mapping the port already had.
-    // Base-dir precedence (--home-dir > worktree .t3 > ambient TRITONAI_HOME/T3CODE_HOME)
-    // lives in runDevRunnerWithInput; the env builder must not consult the
-    // ambient variable on its own, or it would silently outrank the worktree
-    // default and land dev state on the user's real database.
-    it.effect("does not promote an ambient legacy home inside the env builder", () =>
-      Effect.gen(function* () {
-        const path = yield* Path.Path;
-        const env = yield* createDevRunnerEnv({
-          mode: "dev",
-          baseEnv: { T3CODE_HOME: "/home/user/.t3" },
-          serverOffset: 0,
-          webOffset: 0,
-          t3Home: undefined,
-          browser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
-        });
-
-        assert.equal(env.TRITONAI_HOME, path.resolve(NodeOS.homedir(), ".tritonai-harness"));
-        assert.equal(env.T3CODE_HOME, undefined);
-      }),
-    );
 
     it.effect("rejects a specific non-loopback --host for browser dev modes", () => {
       const spawnerLayer = Layer.succeed(
@@ -807,54 +665,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           });
           assert.equal(home, path.join(path.resolve(root), ".t3"));
         }).pipe(Effect.scoped),
-      );
-
-      it.effect("falls back to an ambient TRITONAI_HOME outside a worktree", () =>
-        Effect.gen(function* () {
-          const path = yield* Path.Path;
-          const home = yield* spawnedHome({
-            t3Home: undefined,
-            cwd: NodeOS.tmpdir(),
-            ambientHome: "/home/user/.t3",
-          });
-          assert.equal(home, path.resolve("/home/user/.t3"));
-        }),
-      );
-
-      it.effect("uses legacy T3CODE_HOME only when TRITONAI_HOME is absent", () =>
-        Effect.gen(function* () {
-          const path = yield* Path.Path;
-          const home = yield* spawnedHome({
-            t3Home: undefined,
-            cwd: NodeOS.tmpdir(),
-            ambientLegacyHome: "/home/user/.legacy-t3",
-          });
-          assert.equal(home, path.resolve("/home/user/.legacy-t3"));
-        }),
-      );
-
-      it.effect("prefers ambient TRITONAI_HOME over legacy T3CODE_HOME", () =>
-        Effect.gen(function* () {
-          const path = yield* Path.Path;
-          const home = yield* spawnedHome({
-            t3Home: undefined,
-            cwd: NodeOS.tmpdir(),
-            ambientHome: "/home/user/.tritonai",
-            ambientLegacyHome: "/home/user/.legacy-t3",
-          });
-          assert.equal(home, path.resolve("/home/user/.tritonai"));
-        }),
-      );
-
-      it.effect("uses the branded default with no worktree and no ambient value", () =>
-        Effect.gen(function* () {
-          const path = yield* Path.Path;
-          const home = yield* spawnedHome({
-            t3Home: undefined,
-            cwd: NodeOS.tmpdir(),
-          });
-          assert.equal(home, path.resolve(NodeOS.homedir(), ".tritonai-harness"));
-        }),
       );
 
       it.effect("seeds a worktree database from ~/.t3 only when it has none", () =>

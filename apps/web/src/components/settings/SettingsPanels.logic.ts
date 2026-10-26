@@ -1,6 +1,4 @@
 import {
-  ProviderDriverKind,
-  type EnvironmentId,
   type BackgroundActivityProfile,
   type BackgroundActivitySettings,
   type ProviderInstanceConfig,
@@ -19,13 +17,6 @@ import {
 } from "@t3tools/shared/backgroundActivitySettings";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
-
-export function providerUpdateTrackingKey(input: {
-  readonly environmentId: EnvironmentId;
-  readonly driver: ProviderDriverKind;
-}): string {
-  return `${input.environmentId}:${input.driver}`;
-}
 
 export function isProjectGroupingEnabled(mode: SidebarProjectGroupingMode): boolean {
   return mode !== "separate";

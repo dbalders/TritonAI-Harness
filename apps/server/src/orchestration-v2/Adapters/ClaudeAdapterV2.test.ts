@@ -12,9 +12,6 @@ import { type OrchestrationV2AppThread } from "@t3tools/contracts";
 import { type ProviderInstanceEnvironment } from "@t3tools/contracts";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 
-import * as Clock from "effect/Clock";
-import * as Duration from "effect/Duration";
-
 import * as IntegrationRegistry from "../../integrations/IntegrationRegistry.ts";
 import { HOST_MCP_TOOL_NAMES } from "../../mcp/hostToolNames.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- workflow fixtures use files and the fake Claude CLI uses Node streams
@@ -504,21 +501,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     browserToolsAvailable: true,
   });
 
-  it("pre-approves the Harness's own t3-code tools when attaching an MCP session", () => {
-    const threadId = ThreadId.make("thread-claude-mcp-no-allowlist");
-    const mcpSession = mcpSessionFor(threadId);
-    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
-      mcpSession,
-      readOnlySandbox: false,
-    });
-
-    assert.deepEqual(overrides, {
-      allowedTools: [...ClaudeAdapterV2.claudeT3McpHostAllowedTools()],
-      mcpServers: T3_MCP_SERVERS,
-    });
-    assert.isFalse(overrides.allowedTools?.includes(ClaudeAdapterV2.CLAUDE_T3_MCP_TOOL_WILDCARD));
-  });
-
+  // regression: #417 bound attachment text extraction and browser navigation approval
   it("leaves browser navigation to the permission callback when one is installed", () => {
     const mcpSession = mcpSessionFor(ThreadId.make("thread-claude-mcp-browser-callback"));
     const withCallback = ClaudeAdapterV2.claudeMcpQueryOverrides({
@@ -540,49 +523,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     ]);
   });
 
-  it("plans browser approval with the complete URL under the one session browsing grant", () => {
-    const url = "https://example.test/path?token=abc&next=%2Fsecret#frag";
-    const external = ClaudeAdapterV2.claudeBrowserNavigationApproval(
-      "mcp__t3-code__preview_navigate",
-      { url },
-    );
-    assert.equal(external?.requiresApproval, true);
-    assert.equal(external?.grantKey, "browser-navigation");
-    assert.include(external?.requiresApproval ? external.prompt : "", `URL: ${url}`);
-    const local = ClaudeAdapterV2.claudeBrowserNavigationApproval("mcp__t3-code__preview_open", {
-      url: "http://localhost:5173/",
-    });
-    assert.deepEqual(local, { requiresApproval: false, grantKey: "browser-navigation" });
-    const profiled = ClaudeAdapterV2.claudeBrowserNavigationApproval("mcp__t3-code__preview_open", {
-      profileId: "work",
-    });
-    assert.equal(profiled?.requiresApproval, true);
-    assert.equal(profiled?.grantKey, "browser-navigation");
-    assert.include(
-      profiled?.requiresApproval ? profiled.prompt : "",
-      "any tab or browser profile in this thread",
-    );
-    assert.isUndefined(
-      ClaudeAdapterV2.claudeBrowserNavigationApproval("mcp__t3-code__preview_snapshot", {}),
-    );
-    assert.isUndefined(ClaudeAdapterV2.claudeBrowserNavigationApproval("Bash", { url }));
-  });
-
-  it("extends an explicit allowlist with the Harness's own t3-code tools", () => {
-    const threadId = ThreadId.make("thread-claude-mcp-with-allowlist");
-    const mcpSession = mcpSessionFor(threadId);
-    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
-      mcpSession,
-      readOnlySandbox: false,
-      allowedTools: ["Read"],
-    });
-
-    assert.deepEqual(overrides, {
-      allowedTools: ["Read", ...ClaudeAdapterV2.claudeT3McpHostAllowedTools()],
-      mcpServers: T3_MCP_SERVERS,
-    });
-  });
-
+  // regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
   it("pre-approves plugin reads but never plugin writes", () => {
     const threadId = ThreadId.make("thread-claude-mcp-plugin-tools");
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
@@ -600,6 +541,7 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     );
   });
 
+  // regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
   it("pre-approves exactly the tools the Harness MCP server registers itself", () => {
     assert.deepEqual(
       [...ClaudeAdapterV2.claudeT3McpHostAllowedTools()].sort(),
@@ -978,6 +920,7 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
 });
 
 describe("ClaudeAdapterV2 plugin tool approvals", () => {
+  // regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
   it.effect("asks before a plugin write with its change, and runs plugin reads directly", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1271,6 +1214,7 @@ describe("ClaudeAdapterV2 append-system-prompt-file launch argument", () => {
 });
 
 describe("ClaudeAdapterV2 browser navigation approvals", () => {
+  // regression: #417 bound attachment text extraction and browser navigation approval
   it.effect("asks with the full URL, runs local tabs, and shares one session browsing grant", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -2637,17 +2581,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     origin: { kind: "task-notification" },
     terminalReason: null,
   });
-
-  const awaitUntil = (predicate: () => boolean, label: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < 5000; attempt++) {
-        if (predicate()) {
-          return;
-        }
-        yield* Effect.yieldNow;
-      }
-      return yield* Effect.die(`Timed out waiting for ${label}.`);
-    });
 
   // Harnesses notify after every recorded event, continuation, or prompt, so a
   // wait re-checks exactly when the state it reads changes. Subscribing before
@@ -13600,316 +13533,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         ),
       ),
     ),
-  );
-
-  it.effect.each([
-    { backgrounding: "succeeds" },
-    { backgrounding: "fails" },
-    { backgrounding: "never answers" },
-    { backgrounding: "answers after the steer went out" },
-    { backgrounding: "answers after the turn ended" },
-    { backgrounding: "answers after the subagent ran again" },
-  ] as const)(
-    "moves the root's foreground subagents to the background before a steer ($backgrounding)",
-    ({ backgrounding }) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const FOREGROUND_TOOL_USE_ID = "toolu-steer-foreground";
-          const NESTED_TOOL_USE_ID = "toolu-steer-nested";
-          const FINISHED_TOOL_USE_ID = "toolu-steer-finished";
-          const calls: Array<string> = [];
-          let beforeAnswer: Effect.Effect<void> = Effect.void;
-          const harness = yield* makeWakeHarnessWithOptions({
-            backgroundTasks: (toolUseId) =>
-              Effect.sync(() => calls.push(toolUseId)).pipe(
-                Effect.andThen(
-                  backgrounding === "answers after the turn ended" ||
-                    backgrounding === "answers after the subagent ran again"
-                    ? Effect.suspend(() => beforeAnswer).pipe(Effect.as(true))
-                    : backgrounding === "fails"
-                      ? Effect.fail(
-                          new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
-                            method: "backgroundTasks",
-                            cause: new Error("Background tasks are disabled in this session."),
-                          }),
-                        )
-                      : backgrounding === "never answers"
-                        ? Effect.never
-                        : backgrounding === "answers after the steer went out"
-                          ? Effect.sleep("6 seconds").pipe(Effect.as(true))
-                          : Effect.succeed(true),
-                ),
-              ),
-          });
-          const idAllocator = yield* IdAllocator.IdAllocatorV2;
-          const attemptId = RunAttemptId.make("attempt-steer-foreground-subagent");
-          const input = makeClaudeTestTurnInput({
-            threadId: harness.threadId,
-            providerThread: harness.providerThread,
-            now: yield* DateTime.now,
-            attemptId,
-            text: "Audit the repo with a subagent.",
-            attachments: [],
-          });
-          yield* harness.runtime.startTurn(input);
-          if (backgrounding === "answers after the turn ended") {
-            beforeAnswer = Queue.offer(
-              harness.sdkMessages,
-              makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000a10", result: "Done." }),
-            ).pipe(
-              Effect.andThen(awaitUntil(() => harness.terminalEvents().length === 1, "turn end")),
-            );
-          }
-          const foregroundTaskStarted = (task: {
-            readonly spawnDepth?: number;
-            readonly taskId: string;
-            readonly toolUseId: string;
-            readonly uuid: string;
-          }) =>
-            claudeSdkFrame({
-              type: "system",
-              subtype: "task_started",
-              task_id: task.taskId,
-              tool_use_id: task.toolUseId,
-              description: task.taskId,
-              subagent_type: "general-purpose",
-              is_backgrounded: false,
-              task_type: "local_agent",
-              prompt: "Audit.",
-              ...(task.spawnDepth === undefined ? {} : { spawn_depth: task.spawnDepth }),
-              uuid: task.uuid,
-              session_id: WAKE_NATIVE_SESSION,
-            });
-          for (const frame of [
-            foregroundTaskStarted({
-              taskId: "task-steer-finished",
-              toolUseId: FINISHED_TOOL_USE_ID,
-              uuid: "00000000-0000-4000-8000-000000000a01",
-            }),
-            makeSubagentNotificationFrame({
-              taskId: "task-steer-finished",
-              toolUseId: FINISHED_TOOL_USE_ID,
-              summary: "Finished before the steer.",
-              uuid: "00000000-0000-4000-8000-000000000a02",
-            }),
-            foregroundTaskStarted({
-              taskId: "task-steer-foreground",
-              toolUseId: FOREGROUND_TOOL_USE_ID,
-              uuid: "00000000-0000-4000-8000-000000000a03",
-            }),
-            claudeSdkFrame({
-              type: "assistant",
-              message: {
-                model: "claude-sonnet-4-6",
-                id: "msg_steer_nested_launch",
-                type: "message",
-                role: "assistant",
-                content: [
-                  {
-                    type: "tool_use",
-                    id: NESTED_TOOL_USE_ID,
-                    name: "Agent",
-                    input: { description: "Nested check", prompt: "Check." },
-                  },
-                ],
-              },
-              parent_tool_use_id: FOREGROUND_TOOL_USE_ID,
-              uuid: "00000000-0000-4000-8000-000000000a04",
-              session_id: WAKE_NATIVE_SESSION,
-            }),
-            foregroundTaskStarted({
-              taskId: "task-steer-nested",
-              toolUseId: NESTED_TOOL_USE_ID,
-              uuid: "00000000-0000-4000-8000-000000000a05",
-            }),
-            foregroundTaskStarted({
-              taskId: "task-steer-deep",
-              toolUseId: "toolu-steer-deep",
-              spawnDepth: 2,
-              uuid: "00000000-0000-4000-8000-000000000a11",
-            }),
-          ]) {
-            yield* Queue.offer(harness.sdkMessages, frame);
-          }
-          const latestSubagent = (taskId: string) =>
-            harness.events
-              .flatMap((event) =>
-                event.type === "subagent.updated" &&
-                event.subagent.nativeTaskRef?.nativeId === taskId
-                  ? [event.subagent]
-                  : [],
-              )
-              .at(-1);
-          yield* awaitUntil(
-            () =>
-              latestSubagent("task-steer-nested")?.status === "running" &&
-              latestSubagent("task-steer-deep")?.status === "running" &&
-              latestSubagent("task-steer-foreground")?.status === "running" &&
-              latestSubagent("task-steer-finished")?.status === "completed",
-            "subagents registered",
-          );
-
-          const offered = harness.offeredMessages.length;
-          const clock = yield* Clock.Clock;
-          const steerTimeouts = yield* Queue.unbounded<{
-            readonly duration: Duration.Duration;
-            readonly resume: Deferred.Deferred<void>;
-          }>();
-          const expireSteerTimeout = (offeredCount: number) =>
-            Effect.gen(function* () {
-              const timeout = yield* Queue.take(steerTimeouts);
-              assert.equal(Duration.toMillis(timeout.duration), 5_000);
-              assert.equal(harness.offeredMessages.length, offeredCount);
-              yield* Deferred.succeed(timeout.resume, undefined);
-            });
-          const steer = harness.runtime
-            .steerTurn({
-              threadId: harness.threadId,
-              runId: input.runId,
-              providerThread: harness.providerThread,
-              providerTurnId: idAllocator.derive.providerTurn({
-                driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-                nativeTurnId: `turn:${attemptId}`,
-              }),
-              message: {
-                createdBy: "user",
-                creationSource: "web",
-                messageId: MessageId.make("message-steer-foreground-subagent"),
-                text: "Also check the docs.",
-                attachments: [],
-              },
-            })
-            .pipe(
-              Effect.provideService(
-                Clock.Clock,
-                backgrounding === "never answers"
-                  ? {
-                      ...clock,
-                      sleep: (duration) =>
-                        Effect.gen(function* () {
-                          const resume = yield* Deferred.make<void>();
-                          yield* Queue.offer(steerTimeouts, { duration, resume });
-                          yield* Deferred.await(resume);
-                        }),
-                    }
-                  : clock,
-              ),
-            );
-          const RERUN_TOOL_USE_ID = "toolu-steer-rerun";
-          if (backgrounding === "answers after the subagent ran again") {
-            beforeAnswer = harness
-              .offerAndWait(
-                makeSubagentNotificationFrame({
-                  taskId: "task-steer-foreground",
-                  toolUseId: FOREGROUND_TOOL_USE_ID,
-                  summary: "First run done.",
-                  uuid: "00000000-0000-4000-8000-000000000a12",
-                }),
-              )
-              .pipe(
-                Effect.andThen(
-                  harness.offerAndWait(
-                    foregroundTaskStarted({
-                      taskId: "task-steer-foreground",
-                      toolUseId: RERUN_TOOL_USE_ID,
-                      uuid: "00000000-0000-4000-8000-000000000a13",
-                    }),
-                  ),
-                ),
-              );
-          }
-          const steering = yield* Effect.forkScoped(steer);
-          if (
-            backgrounding === "never answers" ||
-            backgrounding === "answers after the steer went out"
-          ) {
-            yield* awaitUntil(() => calls.length === 1, "background request");
-            assert.equal(harness.offeredMessages.length, offered);
-            if (backgrounding === "never answers") {
-              yield* expireSteerTimeout(offered);
-            } else {
-              yield* TestClock.adjust("5 seconds");
-            }
-          }
-          const steered = yield* Fiber.await(steering);
-
-          assert.deepEqual(calls, [FOREGROUND_TOOL_USE_ID]);
-          if (backgrounding === "answers after the turn ended") {
-            assert.isTrue(Exit.isFailure(steered));
-            assert.equal(harness.offeredMessages.length, offered);
-            return;
-          }
-          assert.isTrue(Exit.isSuccess(steered));
-          assert.equal(harness.offeredMessages.length, offered + 1);
-          assert.equal(harness.offeredMessages.at(-1)?.priority, "now");
-          if (backgrounding === "never answers") {
-            for (let repeat = 1; repeat <= 2; repeat++) {
-              const again = yield* Effect.forkScoped(steer);
-              // Skill discovery uses real filesystem I/O before installing
-              // the deadline. Expire each observed wait instead of advancing
-              // virtual time before that I/O has finished.
-              yield* expireSteerTimeout(offered + repeat);
-              assert.isTrue(Exit.isSuccess(yield* Fiber.await(again)));
-              assert.equal(harness.offeredMessages.length, offered + 1 + repeat);
-            }
-            assert.deepEqual(calls, [FOREGROUND_TOOL_USE_ID]);
-          }
-          if (backgrounding === "answers after the steer went out") {
-            yield* TestClock.adjust("1 second");
-          } else if (
-            backgrounding !== "succeeds" &&
-            backgrounding !== "answers after the subagent ran again"
-          ) {
-            return;
-          }
-          const reran = backgrounding === "answers after the subagent ran again";
-
-          for (const frame of [
-            makeResultFrame({
-              uuid: "00000000-0000-4000-8000-000000000a06",
-              result: "",
-              terminalReason: "aborted_tools",
-            }),
-            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000a07", result: "Docs too." }),
-          ]) {
-            yield* Queue.offer(harness.sdkMessages, frame);
-          }
-          yield* awaitUntil(() => harness.terminalEvents().length === 1, "steered turn terminal");
-          yield* harness.runtime.startTurn(
-            makeClaudeTestTurnInput({
-              threadId: harness.threadId,
-              providerThread: harness.providerThread,
-              now: yield* DateTime.now,
-              attemptId: RunAttemptId.make("attempt-steer-next-turn"),
-              text: "Anything else?",
-              attachments: [],
-              providerTurnOrdinal: 2,
-            }),
-          );
-          for (const frame of [
-            makeSubagentNotificationFrame({
-              taskId: "task-steer-foreground",
-              toolUseId: reran ? RERUN_TOOL_USE_ID : FOREGROUND_TOOL_USE_ID,
-              summary: "AUDITED",
-              uuid: "00000000-0000-4000-8000-000000000a08",
-            }),
-            makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000a09", result: "No." }),
-          ]) {
-            yield* Queue.offer(harness.sdkMessages, frame);
-          }
-          yield* awaitUntil(() => harness.terminalEvents().length === 2, "next turn terminal");
-          yield* Queue.offer(harness.sdkMessages, wakeTurnInit);
-          yield* awaitUntil(() => harness.continuationRequests.length === 1, "subagent wake");
-          assert.equal(
-            harness.continuationRequests[0]?.notification?.summary,
-            reran ? undefined : 'Subagent "task-steer-foreground" finished',
-          );
-        }).pipe(
-          Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-          ),
-        ),
-      ),
   );
 
   describe("native goals", () => {

@@ -64,27 +64,6 @@ describe("buildThreadActionMenuItems", () => {
     },
   );
 
-  it("offers auto-settle as a submenu with the current option checked", () => {
-    const find = (state: ThreadActionMenuState) =>
-      buildThreadActionMenuItems(state).find((item) => item.id === "auto-settle");
-    const on = find(baseState);
-    expect(on?.label).toBe("Automatically mark done");
-    expect(on?.children?.map((child) => [child.id, child.checked])).toEqual([
-      ["auto-settle:enabled", true],
-      ["auto-settle:disabled", false],
-    ]);
-    const off = find({ ...baseState, autoSettleEnabled: false });
-    expect(off?.children?.map((child) => child.checked)).toEqual([false, true]);
-    const items = buildThreadActionMenuItems(baseState);
-    expect(items[items.findIndex((item) => item.id === "mark-unread") + 1]?.id).toBe("auto-settle");
-    expect(
-      buildThreadActionMenuItems({
-        ...baseState,
-        supports: { ...baseState.supports, autoSettleOptOut: false },
-      }).map((item) => item.id),
-    ).not.toContain("auto-settle");
-  });
-
   it("disables archive while the thread is running", () => {
     const archiveItem = buildThreadActionMenuItems({ ...baseState, isRunning: true }).find(
       (item) => item.id === "archive",

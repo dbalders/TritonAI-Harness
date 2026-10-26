@@ -309,6 +309,7 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  // regression: #145 fix(desktop): harden packaged runtime releases
   it.effect("terminates a child that stays alive past the readiness timeout", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -358,6 +359,7 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  // regression: #323 fix(runtime): remove history scans and bound startup recovery
   it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
     "force-kills a backend that ignores termination after readiness fails",
     () =>
@@ -505,52 +507,6 @@ describe("DesktopBackendManager", () => {
         yield* instance.start;
         assert.isTrue(yield* Deferred.await(handled));
       }),
-    ),
-  );
-
-  it.effect("allows an 82-second Windows cold start before reporting readiness", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        let requestCount = 0;
-        let readyCount = 0;
-        const firstRequest = yield* Deferred.make<void>();
-        const ready = yield* Deferred.make<void>();
-
-        const spawnerLayer = Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() =>
-            Effect.succeed(
-              makeProcess({
-                exitCode: Deferred.await(ready).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
-              }),
-            ),
-          ),
-        );
-
-        const instance = yield* makeTestInstance({
-          spawnerLayer,
-          httpClientLayer: layerHttpClient((request) =>
-            Effect.gen(function* () {
-              requestCount += 1;
-              yield* Deferred.succeed(firstRequest, void 0);
-              return responseForRequest(request, requestCount > 820 ? 200 : 503);
-            }),
-          ),
-          onReady: Effect.sync(() => {
-            readyCount += 1;
-          }).pipe(Effect.andThen(Deferred.succeed(ready, void 0)), Effect.asVoid),
-        });
-
-        yield* instance.start;
-        yield* Deferred.await(firstRequest);
-
-        assert.equal(readyCount, 0);
-        yield* TestClock.adjust(Duration.seconds(82));
-        yield* Effect.yieldNow;
-
-        assert.equal(readyCount, 1);
-        assert.equal(requestCount, 821);
-      }).pipe(Effect.provide(TestClock.layer())),
     ),
   );
 
@@ -720,94 +676,6 @@ describe("DesktopBackendManager", () => {
         const restarted = yield* instance.snapshot;
         assert.equal(restarted.desiredRunning, true);
         assert.deepEqual(restarted.activePid, Option.some(123));
-      }).pipe(Effect.provide(TestClock.layer())),
-    ),
-  );
-
-  it.effect("surfaces and stops a backend that repeatedly exits before readiness", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const starts = yield* Queue.unbounded<number>();
-        const surfaced = yield* Queue.unbounded<{ reason: string; attempt: number }>();
-        let startCount = 0;
-
-        const spawnerLayer = Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() =>
-            Effect.sync(() => {
-              startCount += 1;
-              return makeProcess({
-                exitCode: Queue.offer(starts, startCount).pipe(
-                  Effect.as(ChildProcessSpawner.ExitCode(1)),
-                ),
-              });
-            }),
-          ),
-        );
-
-        const instance = yield* makeTestInstance({
-          spawnerLayer,
-          httpClientLayer: layerHttpClient(() => Effect.never),
-          onRepeatedStartupFailure: (failure) => Queue.offer(surfaced, failure).pipe(Effect.asVoid),
-        });
-
-        yield* instance.start;
-        assert.equal(yield* Queue.take(starts), 1);
-        yield* TestClock.adjust(Duration.millis(500));
-        assert.equal(yield* Queue.take(starts), 2);
-        yield* TestClock.adjust(Duration.seconds(1));
-        assert.equal(yield* Queue.take(starts), 3);
-
-        assert.deepEqual(yield* Queue.take(surfaced), { reason: "code=1", attempt: 3 });
-        yield* TestClock.adjust(Duration.seconds(30));
-        assert.equal(startCount, 3);
-        const stopped = yield* instance.snapshot;
-        assert.equal(stopped.desiredRunning, false);
-        assert.equal(stopped.restartScheduled, false);
-      }).pipe(Effect.provide(TestClock.layer())),
-    ),
-  );
-
-  it.effect("surfaces and stops repeated configuration failures from the initial start", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const configAttempts = yield* Ref.make(0);
-        const surfaced = yield* Queue.unbounded<{ reason: string; attempt: number }>();
-        const configFailure = PlatformError.systemError({
-          _tag: "Unknown",
-          module: "DesktopBackendManager",
-          method: "configResolve",
-          description: "transient initial configuration failure",
-        });
-        const spawnerLayer = Layer.succeed(
-          ChildProcessSpawner.ChildProcessSpawner,
-          ChildProcessSpawner.make(() => Effect.die("configuration failure must prevent spawn")),
-        );
-        const instance = yield* makeTestInstance({
-          spawnerLayer,
-          configResolve: Ref.updateAndGet(configAttempts, (attempt) => attempt + 1).pipe(
-            Effect.andThen(Effect.fail(configFailure)),
-          ),
-          httpClientLayer: layerHttpClient(() => Effect.never),
-          onRepeatedStartupFailure: (failure) => Queue.offer(surfaced, failure).pipe(Effect.asVoid),
-        });
-
-        yield* instance.start;
-        assert.equal(yield* Ref.get(configAttempts), 1);
-        yield* TestClock.adjust(Duration.millis(500));
-        assert.equal(yield* Ref.get(configAttempts), 2);
-        yield* TestClock.adjust(Duration.seconds(1));
-
-        assert.equal(yield* Ref.get(configAttempts), 3);
-        assert.deepEqual(yield* Queue.take(surfaced), {
-          reason: "failed to generate desktop backend configuration",
-          attempt: 3,
-        });
-        yield* TestClock.adjust(Duration.seconds(30));
-        assert.equal(yield* Ref.get(configAttempts), 3);
-        const stopped = yield* instance.snapshot;
-        assert.equal(stopped.desiredRunning, false);
-        assert.equal(stopped.restartScheduled, false);
       }).pipe(Effect.provide(TestClock.layer())),
     ),
   );

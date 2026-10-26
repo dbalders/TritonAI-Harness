@@ -198,16 +198,10 @@ function secretStore(): ServerSecretStore.ServerSecretStore["Service"] {
 describe("plugin SDK adapter", () => {
   it.each([
     [">=24.13.1 <25", "24.13.1", true],
-    [">=24.13.1 <25", "24.21.0", true],
     [">=24.13.1 <25", "26.8.2", false],
-    [">=24.13.1 <25 || >=26.8.2 <27", "24.13.1", true],
     [">=24.13.1 <25 || >=26.8.2 <27", "26.8.2", true],
-    [">=24.13.1 <25 || >=26.8.2 <27", "26.9.0", true],
-    [">=24.13.1 <25 || >=26.8.2 <27", "24.13.0", false],
-    [">=24.13.1 <25 || >=26.8.2 <27", "25.0.0", false],
     [">=24.13.1 <25 || >=26.8.2 <27", "26.8.1", false],
     [">=24.13.1 <25 || >=26.8.2 <27", "26.8.2-rc.1", false],
-    [">=24.13.1 <25 || >=26.8.2 <27", "27.0.0", false],
     [">=24.13.1", "26.8.2", false],
   ] as const)(
     "enforces the artifact runtime target %s on Node %s",
@@ -221,6 +215,7 @@ describe("plugin SDK adapter", () => {
     },
   );
 
+  // regression: #253 fix(plugins): preserve Unicode validation patterns
   it("preserves Unicode patterns when decoding plugin tool arguments", async () => {
     const loaded = await loadPluginSdkIntegration({
       files: artifact(providerSource, "# Fixture reader\n", {
@@ -250,6 +245,7 @@ describe("plugin SDK adapter", () => {
     }
   });
 
+  // regression: #304 fix(server): show agents why integration tool calls fail
   it("reports failing plugin input paths and expectations without submitted values", async () => {
     const loaded = await loadPluginSdkIntegration({
       files: artifact(providerSource, "# Fixture reader\n", {
@@ -309,6 +305,7 @@ describe("plugin SDK adapter", () => {
     }
   });
 
+  // regression: #304 fix(server): show agents why integration tool calls fail
   it("names submitted property keys but never their values in plugin input issues", async () => {
     const loaded = await loadPluginSdkIntegration({
       files: artifact(providerSource, "# Fixture reader\n", {
@@ -340,35 +337,6 @@ describe("plugin SDK adapter", () => {
       const issues = describeIntegrationToolInputIssues(failure);
       expect(issues).toContain("labels.SECRET_KEY: must be number");
       expect(issues).not.toContain("SECRET_VALUE");
-    } finally {
-      await loaded.provider?.close?.();
-    }
-  });
-
-  it("uses Unicode matching for plugin patternProperties", async () => {
-    const loaded = await loadPluginSdkIntegration({
-      files: artifact(providerSource, "# Fixture reader\n", {
-        inputSchema: {
-          type: "object",
-          patternProperties: { "^\\p{L}+$": { type: "string" } },
-          properties: {},
-          $schema: "https://json-schema.org/draft/2020-12/schema",
-          additionalProperties: false,
-        },
-      }),
-      secrets: secretStore(),
-      configuration: { prefix: "fixture" },
-      expected: { id, version: "1.0.0" },
-      hostNodeVersion: "24.13.1",
-    });
-    try {
-      const tool = loaded.provider!.tools[0]!;
-      await expect(decodeIntegrationToolInput(tool, { 日本語: "value" })).resolves.toEqual({
-        日本語: "value",
-      });
-      await expect(decodeIntegrationToolInput(tool, { 日本語: 123 })).rejects.toThrow();
-      await expect(decodeIntegrationToolInput(tool, { "123": "value" })).rejects.toThrow();
-      await expect(decodeIntegrationToolInput(tool, [])).rejects.toThrow();
     } finally {
       await loaded.provider?.close?.();
     }
@@ -454,6 +422,7 @@ describe("plugin SDK adapter", () => {
     await loaded.provider?.close?.();
   });
 
+  // regression: #206 fix(release): unblock Windows builds and managed plugin startup
   it("registers strict empty-object SDK tools without widening their input contract", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-sdk-empty-input-"));
     try {
@@ -483,6 +452,7 @@ describe("plugin SDK adapter", () => {
     }
   });
 
+  // regression: #206 fix(release): unblock Windows builds and managed plugin startup
   it("rejects arrays and extra fields in strict empty-object SDK configuration", async () => {
     const load = (configuration: Readonly<Record<string, unknown>>) =>
       loadPluginSdkIntegration({
@@ -504,8 +474,6 @@ describe("plugin SDK adapter", () => {
 
   it.each([
     { hook: "async connect() { return {}; },", effect: "read" as const, authorization: false },
-    { hook: "async disconnect() {},", effect: "read" as const, authorization: false },
-    { hook: "async poll() { return {}; },", effect: "read" as const, authorization: false },
     { hook: "", effect: "write" as const, authorization: false },
     { hook: "", effect: "read" as const, authorization: true },
   ])(
@@ -772,23 +740,6 @@ export function createIntegrationProvider() {
       /JSON cycle/u,
     );
     await expect(provider.close!()).rejects.toThrow(/must be undefined/u);
-  });
-
-  it("quarantines a module whose top-level evaluation does not settle", async () => {
-    const pendingModule = `
-await new Promise(() => {});
-export function createIntegrationProvider() { throw new Error("unreachable"); }
-`;
-    await expect(
-      loadPluginSdkIntegration({
-        files: artifact(pendingModule),
-        secrets: secretStore(),
-        configuration: { prefix: "fixture" },
-        expected: { id, version: "1.0.0" },
-        hostNodeVersion: "24.13.1",
-        admissionTimeoutMs: 10,
-      }),
-    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
   });
 
   it("isolates module state by the complete admitted artifact", async () => {

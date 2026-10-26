@@ -1,4 +1,4 @@
-import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import { ProviderDriverKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,22 +6,10 @@ import {
   providerAccentForegroundColor,
   providerInstanceInitials,
   shouldShowInstanceBadge,
-  resolveProviderInstanceDisplayName,
 } from "./providerInstanceDisplay.ts";
 
 const codex = ProviderDriverKind.make("codex");
 const acpRegistry = ProviderDriverKind.make("acpRegistry");
-
-describe("resolveProviderInstanceDisplayName", () => {
-  it("uses the brand label for the default instance", () => {
-    expect(
-      resolveProviderInstanceDisplayName({
-        instanceId: ProviderInstanceId.make("codex"),
-        driver: codex,
-      }),
-    ).toBe("TritonAI");
-  });
-});
 
 describe("providerInstanceInitials", () => {
   it("keeps an emoji whole instead of splitting its surrogate pair", () => {

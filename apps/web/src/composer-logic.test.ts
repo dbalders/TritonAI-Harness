@@ -537,6 +537,7 @@ describe("isCollapsedCursorAdjacentToInlineToken", () => {
 });
 
 describe("parseStandaloneComposerSlashCommand", () => {
+  // regression: #431 fix(web): align goal commands with upstream native behavior
   it("leaves native goal commands to the provider", () => {
     for (const text of ["/goal", "/goal set pause", "/goal pause", "/goal resume", "/goal clear"]) {
       expect(parseStandaloneComposerSlashCommand(text)).toBeNull();

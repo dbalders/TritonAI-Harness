@@ -1,4 +1,4 @@
-import { EnvironmentId, DEFAULT_UNIFIED_SETTINGS, ProviderDriverKind } from "@t3tools/contracts";
+import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts";
 
 import * as Duration from "effect/Duration";
 import { describe, expect, it } from "vite-plus/test";
@@ -6,29 +6,7 @@ import {
   backgroundActivitySharedPolicySettings,
   getChangedBrowserSettingLabels,
   hasChangedBackgroundActivitySettings,
-  providerUpdateTrackingKey,
 } from "./SettingsPanels.logic";
-
-describe("providerUpdateTrackingKey", () => {
-  it("scopes in-flight provider updates to both environment and driver", () => {
-    const environmentId = EnvironmentId.make("primary-a");
-    const driver = ProviderDriverKind.make("codex");
-    const updateKey = providerUpdateTrackingKey({ environmentId, driver });
-
-    expect(updateKey).not.toBe(
-      providerUpdateTrackingKey({
-        environmentId: EnvironmentId.make("primary-b"),
-        driver,
-      }),
-    );
-    expect(updateKey).not.toBe(
-      providerUpdateTrackingKey({
-        environmentId,
-        driver: ProviderDriverKind.make("other-driver"),
-      }),
-    );
-  });
-});
 
 describe("background activity settings restore", () => {
   it("detects legacy interval values even when the structured setting is at its default", () => {

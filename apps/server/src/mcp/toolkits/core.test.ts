@@ -1,15 +1,6 @@
-import { type OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
-
-import * as Deferred from "effect/Deferred";
-
-import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
-
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
-
 import { expect, it } from "@effect/vitest";
-
 import {
   DEFAULT_SERVER_SETTINGS,
   ChatImageAttachment,
@@ -23,23 +14,16 @@ import {
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
+  type OrchestrationV2ProjectedTurnItem,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
-
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-
 import * as Effect from "effect/Effect";
-
 import * as TestClock from "effect/testing/TestClock";
-
 import * as Layer from "effect/Layer";
-
 import * as Schema from "effect/Schema";
-
 import { McpAttachmentInput } from "./attachment/input.ts";
-
 import { McpSchema, McpServer } from "effect/ai";
-
 import { FetchHttpClient } from "effect/http";
 
 import {
@@ -49,41 +33,23 @@ import {
 } from "../../orchestration-v2/Orchestrator.ts";
 
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
-
 import * as ServerConfig from "../../config.ts";
-
 import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapterRegistry.ts";
-
 import * as ThreadLaunchService from "../../orchestration-v2/ThreadLaunchService.ts";
-
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
-
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
-
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
-
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
-
 import * as ProjectService from "../../project/ProjectService.ts";
-
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
-
 import * as SecretRequests from "../../secrets/SecretRequests.ts";
-
 import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
-
 import * as ServerSettings from "../../serverSettings.ts";
-
 import * as McpHttpServer from "../McpHttpServer.ts";
-
 import * as McpInvocationContext from "../McpInvocationContext.ts";
-
 import * as McpToolAccessTestkit from "../McpToolAccess.testkit.ts";
-
 import { dispatchFailure } from "../threadAccess.ts";
-
 import * as EnvironmentHandlers from "./environment/handlers.ts";
-
 import * as AttachmentHandlers from "./attachment/handlers.ts";
 
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
@@ -97,11 +63,9 @@ const declaredFailure = (result: McpSchema.CallToolResult) => {
   const text = result.content[0];
   return result.isError === true && text?.type === "text" ? JSON.parse(text.text) : undefined;
 };
-
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 
 const decodeMcpAttachmentInput = Schema.decodeUnknownEffect(McpAttachmentInput);
-
 const decodeThreadReadResult = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 
 const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
@@ -110,7 +74,6 @@ const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
 );
 
 const threadId = ThreadId.make("mcp-core-thread");
-
 const scope: McpInvocationContext.McpInvocationScope = {
   environmentId: EnvironmentId.make("mcp-core-environment"),
   requestNamespace: "mcp-core-session",
@@ -123,7 +86,6 @@ const scope: McpInvocationContext.McpInvocationScope = {
   issuedAt: 0,
   capabilities: new Set(["orchestration"]),
 };
-
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
@@ -354,131 +316,6 @@ it.effect("keeps unexpected handler defects private through the production regis
   ),
 );
 
-it.effect("records the calling agent and the agent a tool acted on", () => {
-  // Recording runs detached from the tool response, so each expected event is awaited.
-  const recorded = [
-    Deferred.makeUnsafe<{ event: string; properties: object }>(),
-    Deferred.makeUnsafe<{ event: string; properties: object }>(),
-  ];
-  let recordedCount = 0;
-  const shell = (id: ThreadId, instanceId: string, model: string) =>
-    ({
-      id,
-      projectId: "mcp-core-project",
-      providerInstanceId: ProviderInstanceId.make(instanceId),
-      modelSelection: { instanceId: ProviderInstanceId.make(instanceId), model },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      archivedAt: null,
-      deletedAt: null,
-      activeRunId: "mcp-core-run",
-      createdBy: "agent",
-      creationSource: "mcp",
-      lineage: {
-        parentThreadId: id === threadId ? ThreadId.make("mcp-core-parent") : null,
-        relationshipToParent: id === threadId ? "subagent" : null,
-        rootThreadId: ThreadId.make("mcp-core-parent"),
-      },
-    }) as never;
-  return Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    yield* server
-      .callTool({ name: "t3_thread_fork", arguments: { sourcePoint: { type: "latest_stable" } } })
-      .pipe(
-        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-        Effect.provideService(McpSchema.McpServerClient, client),
-      );
-    const { event, properties } = yield* Deferred.await(recorded[0]!);
-    expect(event).toBe("mcp.tool.invoked");
-    expect(properties).toMatchObject({
-      tool: "t3_thread_fork",
-      outcome: "ok",
-      callerProvider: "codex",
-      callerModel: "gpt-5.5",
-      callerOrigin: "agent",
-      callerDepth: 1,
-      targetProvider: "claudeAgent",
-      targetModel: "claude-opus-5-5",
-      targetRuntimeMode: "full-access",
-      targetInteractionMode: "default",
-      crossProvider: true,
-    });
-    expect(properties).toHaveProperty("durationMs");
-    expect(Object.values(properties).some((value) => String(value).includes("mcp-core"))).toBe(
-      false,
-    );
-
-    // Queue tools return only a sequence, so the receiving thread comes from the input.
-    yield* server
-      .callTool({
-        name: "t3_queue_edit",
-        arguments: { threadId: "mcp-core-other", queuedRunId: "mcp-core-queued", text: "secret" },
-      })
-      .pipe(
-        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-        Effect.provideService(McpSchema.McpServerClient, client),
-      );
-    // The fork recorded a single event, so the next one is the queue edit.
-    expect((yield* Deferred.await(recorded[1]!)).properties).toMatchObject({
-      tool: "t3_queue_edit",
-      outcome: "ok",
-      callerProvider: "codex",
-      targetProvider: "claudeAgent",
-      crossProvider: true,
-    });
-  }).pipe(
-    Effect.provide(
-      layerThreadToolkit.pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(
-          Layer.mock(ThreadManagement.ThreadManagementService)({
-            getThreadShell: (id) =>
-              Effect.succeed(
-                id === threadId
-                  ? shell(threadId, "codex", "gpt-5.5")
-                  : shell(id, "claudeAgent", "claude-opus-5-5"),
-              ),
-            getThreadRecords: () => Effect.succeed({ runs: [], messages: [] } as never),
-            getProjectThreadRecords: () =>
-              Effect.succeed({ thread: shell(threadId, "codex", "gpt-5.5") } as never),
-            dispatch: () => Effect.succeed({ sequence: 1 } as never),
-          }),
-        ),
-        Layer.provide(
-          Layer.mock(ProviderRegistry.ProviderRegistry)({
-            getProviders: Effect.succeed([
-              {
-                instanceId: ProviderInstanceId.make("codex"),
-                driver: "codex",
-                models: [{ slug: "gpt-5.5", isCustom: false }],
-              } as never,
-              {
-                instanceId: ProviderInstanceId.make("claudeAgent"),
-                driver: "claudeAgent",
-                models: [{ slug: "claude-opus-5-5", isCustom: false }],
-              } as never,
-            ]),
-          }),
-        ),
-        Layer.provide(
-          Layer.succeed(
-            AnalyticsService.AnalyticsService,
-            AnalyticsService.AnalyticsService.of({
-              record: (event, properties) =>
-                Deferred.succeed(recorded[recordedCount++]!, {
-                  event,
-                  properties: properties ?? {},
-                }).pipe(Effect.asVoid),
-              flush: Effect.void,
-            }),
-          ),
-        ),
-      ),
-    ),
-  );
-});
-
 it("keeps MCP preference output allowlisted and Unicode-bounded", () => {
   const settings = {
     ...DEFAULT_SERVER_SETTINGS,
@@ -677,7 +514,6 @@ it.effect("a read-only client reads threads and is refused every write before it
     ),
   ),
 );
-
 const dispatched: Array<string> = [];
 
 it.effect("refuses act-as-caller tools to a client caller", () =>

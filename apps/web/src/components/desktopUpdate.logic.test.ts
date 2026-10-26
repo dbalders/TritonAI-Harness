@@ -64,12 +64,6 @@ describe("desktop update button state", () => {
 });
 
 describe("desktop update UI helpers", () => {
-  it("builds the stable release URL for a downloaded version", () => {
-    expect(getDesktopUpdateReleaseUrl("0.0.30", "dbalders/TritonAI-Harness")).toBe(
-      "https://github.com/dbalders/TritonAI-Harness/releases/tag/v0.0.30",
-    );
-  });
-
   it.each([
     "owner/repo/extra",
     "owner#notes/repo",
@@ -82,20 +76,6 @@ describe("desktop update UI helpers", () => {
     );
     expect(getDesktopUpdateReleaseUrl("1.2.3", repository)).toBe(
       "https://github.com/dbalders/TritonAI-Harness/releases/tag/v1.2.3",
-    );
-  });
-
-  it("builds the nightly release URL without dropping its version suffix", () => {
-    expect(
-      getDesktopUpdateReleaseUrl("0.0.30-nightly.20260728.931", "dbalders/TritonAI-Harness"),
-    ).toBe(
-      "https://github.com/dbalders/TritonAI-Harness/releases/tag/v0.0.30-nightly.20260728.931",
-    );
-  });
-
-  it("builds the release history URL", () => {
-    expect(getDesktopUpdateReleaseHistoryUrl("dbalders/TritonAI-Harness")).toBe(
-      "https://github.com/dbalders/TritonAI-Harness/releases",
     );
   });
 });

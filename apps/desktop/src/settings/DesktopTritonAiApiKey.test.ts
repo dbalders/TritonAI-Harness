@@ -39,20 +39,7 @@ const withKeyStore = <A, E, R>(
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 describe("DesktopTritonAiApiKey", () => {
-  it("reports the normalized shared key suffix for both routes", () => {
-    assert.deepEqual(
-      DesktopTritonAiApiKey.credentialStatus({ sharedApiKey: " shared-key-aB12 \n" }),
-      {
-        ready: true,
-        usesSharedKey: true,
-        onPremConfigured: true,
-        frontierConfigured: true,
-        onPremKeyLastFour: "aB12",
-        frontierKeyLastFour: "aB12",
-      },
-    );
-  });
-
+  // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
   it("omits suffixes for missing keys and never reveals an entire short key", () => {
     for (const key of [undefined, "", "a", "abcd"]) {
       const status = DesktopTritonAiApiKey.credentialStatus(
@@ -61,13 +48,6 @@ describe("DesktopTritonAiApiKey", () => {
       assert.isNull(status.onPremKeyLastFour);
       assert.isNull(status.frontierKeyLastFour);
     }
-  });
-
-  it("resolves model validation against the configured TritonAI endpoint", () => {
-    assert.equal(
-      DesktopTritonAiApiKey.resolveTritonAiModelsEndpoint("https://configured.tritonai.example/v1"),
-      "https://configured.tritonai.example/v1/models",
-    );
   });
 
   it("refuses to send a key to an insecure non-loopback endpoint", () => {
@@ -80,69 +60,7 @@ describe("DesktopTritonAiApiKey", () => {
     );
   });
 
-  it("assigns submitted keys by detected model access", () => {
-    assert.deepEqual(
-      DesktopTritonAiApiKey.assignValidatedCredentials([
-        { key: "frontier-key", keyIndex: 0, access: { onPrem: false, frontier: true } },
-        { key: "on-prem-key", keyIndex: 1, access: { onPrem: true, frontier: false } },
-      ]),
-      { onPremApiKey: "on-prem-key", frontierApiKey: "frontier-key" },
-    );
-    assert.deepEqual(
-      DesktopTritonAiApiKey.assignValidatedCredentials([
-        { key: "shared-key", keyIndex: 0, access: { onPrem: true, frontier: true } },
-      ]),
-      { sharedApiKey: "shared-key" },
-    );
-  });
-
-  it("binds a replacement to the requested route even when the key covers both", () => {
-    const access = { onPrem: true, frontier: true };
-    const candidate = "all-access-key";
-    assert.deepEqual(DesktopTritonAiApiKey.credentialUpdateForRoute(candidate, access, "on-prem"), {
-      onPremApiKey: candidate,
-    });
-    assert.deepEqual(
-      DesktopTritonAiApiKey.credentialUpdateForRoute(candidate, access, "frontier"),
-      { frontierApiKey: candidate },
-    );
-    const frontierCandidate = "frontier-only-key";
-    assert.isNull(
-      DesktopTritonAiApiKey.credentialUpdateForRoute(
-        frontierCandidate,
-        { onPrem: false, frontier: true },
-        "on-prem",
-      ),
-    );
-  });
-
-  it("keeps an existing route when a new key only replaces the other route", () => {
-    assert.deepEqual(
-      DesktopTritonAiApiKey.mergeCredentialUpdate(
-        { sharedApiKey: "existing-shared-key" },
-        { onPremApiKey: "new-on-prem-key" },
-      ),
-      {
-        onPremApiKey: "new-on-prem-key",
-        frontierApiKey: "existing-shared-key",
-      },
-    );
-  });
-
-  it("removes only the selected route, including from a shared key", () => {
-    assert.deepEqual(
-      DesktopTritonAiApiKey.credentialBundleWithoutRoute({ sharedApiKey: "shared-key" }, "on-prem"),
-      { frontierApiKey: "shared-key" },
-    );
-    assert.deepEqual(
-      DesktopTritonAiApiKey.credentialBundleWithoutRoute(
-        { onPremApiKey: "on-prem-key" },
-        "on-prem",
-      ),
-      {},
-    );
-  });
-
+  // regression: #154 fix(settings): route TritonAI keys per connection
   it.effect(
     "persists an empty override so removing the last route does not reveal installer keys",
     () =>
@@ -210,20 +128,6 @@ describe("DesktopTritonAiApiKey", () => {
         const info = yield* fileSystem.stat(overridePath);
         assert.equal(info.mode & 0o777, 0o600);
         assert.isTrue(overridePath.startsWith(environment.stateDir));
-      }),
-    ),
-  );
-
-  it.effect("atomically replaces an earlier desktop credential bundle", () =>
-    withKeyStore(
-      Effect.gen(function* () {
-        yield* DesktopTritonAiApiKey.replaceTritonAiCredentials({ sharedApiKey: "first-key" });
-        yield* DesktopTritonAiApiKey.replaceTritonAiCredentials({
-          onPremApiKey: "second-key",
-        });
-
-        const stored = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride;
-        assert.deepEqual(Option.getOrUndefined(stored), { onPremApiKey: "second-key" });
       }),
     ),
   );

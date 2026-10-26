@@ -96,34 +96,32 @@ export const syncTritonAiFeedbackSkill = Effect.fn("syncTritonAiFeedbackSkill")(
  * Keeps the skill current in the Codex home: on a schedule, and as soon as the
  * Codex home moves, so `/feedback` never waits a full interval in a new home.
  */
-export const runTritonAiFeedbackSkillSync = Effect.fn("runTritonAiFeedbackSkillSync")(
-  function* (input: {
-    readonly currentSkillsDirectory: Effect.Effect<string>;
-    readonly skillsDirectoryChanges: Stream.Stream<string>;
-    readonly sync: (skillsDirectory: string) => Effect.Effect<void>;
-    readonly refreshInterval: Duration.Input;
-  }) {
-    const lock = yield* Semaphore.make(1);
-    const lastSynced = yield* Ref.make<string | null>(null);
-    const syncInto = (skillsDirectory: string, force: boolean) =>
-      lock.withPermits(1)(
-        Effect.gen(function* () {
-          if (!force && (yield* Ref.get(lastSynced)) === skillsDirectory) return;
-          yield* Ref.set(lastSynced, skillsDirectory);
-          yield* input.sync(skillsDirectory);
-        }),
-      );
-    yield* input.currentSkillsDirectory.pipe(
-      Effect.flatMap((skillsDirectory) => syncInto(skillsDirectory, true)),
-      Effect.repeat(Schedule.spaced(input.refreshInterval)),
-      Effect.forkScoped,
+const runTritonAiFeedbackSkillSync = Effect.fn("runTritonAiFeedbackSkillSync")(function* (input: {
+  readonly currentSkillsDirectory: Effect.Effect<string>;
+  readonly skillsDirectoryChanges: Stream.Stream<string>;
+  readonly sync: (skillsDirectory: string) => Effect.Effect<void>;
+  readonly refreshInterval: Duration.Input;
+}) {
+  const lock = yield* Semaphore.make(1);
+  const lastSynced = yield* Ref.make<string | null>(null);
+  const syncInto = (skillsDirectory: string, force: boolean) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        if (!force && (yield* Ref.get(lastSynced)) === skillsDirectory) return;
+        yield* Ref.set(lastSynced, skillsDirectory);
+        yield* input.sync(skillsDirectory);
+      }),
     );
-    yield* input.skillsDirectoryChanges.pipe(
-      Stream.runForEach((skillsDirectory) => syncInto(skillsDirectory, false)),
-      Effect.forkScoped,
-    );
-  },
-);
+  yield* input.currentSkillsDirectory.pipe(
+    Effect.flatMap((skillsDirectory) => syncInto(skillsDirectory, true)),
+    Effect.repeat(Schedule.spaced(input.refreshInterval)),
+    Effect.forkScoped,
+  );
+  yield* input.skillsDirectoryChanges.pipe(
+    Stream.runForEach((skillsDirectory) => syncInto(skillsDirectory, false)),
+    Effect.forkScoped,
+  );
+});
 
 export const syncLayer = Effect.gen(function* () {
   const settings = yield* ServerSettingsService;

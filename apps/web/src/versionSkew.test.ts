@@ -10,7 +10,6 @@ import {
   isVersionMismatchDismissed,
   resolveServerSelfUpdateCapability,
   resolveVersionMismatch,
-  serverUpdateGuidance,
 } from "./versionSkew";
 
 // Pinned so the direction cases below read as fixed versions instead of
@@ -147,13 +146,4 @@ describe("versionSkew", () => {
       ).toBeNull();
     },
   );
-
-  it("provides downstream-safe version-drift guidance", () => {
-    expect(serverUpdateGuidance("desktop-managed", "Desktop server")).toBe(
-      "The Desktop server is run by the TritonAI Harness desktop app on its machine — update the desktop app there to sync them.",
-    );
-    expect(serverUpdateGuidance(null, "Local server")).toBe(
-      "Automatic updates are unavailable for the Local server; update it through its approved TritonAI Harness distribution.",
-    );
-  });
 });

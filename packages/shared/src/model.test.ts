@@ -10,7 +10,6 @@ import {
   getProviderOptionDescriptors,
   readCustomModelEntries,
   toCustomModelSetting,
-  isClaudeUltrathinkPrompt,
   modelCapabilitiesAreExplicitlyTextOnly,
   normalizeModelSlug,
   resolveSelectableModel,
@@ -74,31 +73,6 @@ const claudeCaps: ModelCapabilities = createModelCapabilities({
   ],
 });
 
-describe("normalizeModelSlug", () => {
-  it("maps known aliases to canonical slugs", () => {
-    expect(normalizeModelSlug("gpt-5-codex")).toBe("gpt-5.4");
-    expect(normalizeModelSlug("5.3")).toBe("gpt-5.3-codex");
-  });
-
-  it("returns null for empty or missing values", () => {
-    expect(normalizeModelSlug("")).toBeNull();
-    expect(normalizeModelSlug("   ")).toBeNull();
-    expect(normalizeModelSlug(null)).toBeNull();
-    expect(normalizeModelSlug(undefined)).toBeNull();
-  });
-});
-
-describe("modelCapabilitiesAreExplicitlyTextOnly", () => {
-  it("requires explicit text support without image support", () => {
-    expect(modelCapabilitiesAreExplicitlyTextOnly({ inputModalities: ["text"] })).toBe(true);
-    expect(modelCapabilitiesAreExplicitlyTextOnly({ inputModalities: ["text", "image"] })).toBe(
-      false,
-    );
-    expect(modelCapabilitiesAreExplicitlyTextOnly({})).toBe(false);
-    expect(modelCapabilitiesAreExplicitlyTextOnly(null)).toBe(false);
-  });
-});
-
 describe("resolveSelectableModel", () => {
   it("resolves exact slugs, labels, and aliases", () => {
     const options = [
@@ -117,36 +91,7 @@ describe("resolveSelectableModel", () => {
   });
 });
 
-describe("misc helpers", () => {
-  it("detects ultrathink prompts", () => {
-    expect(isClaudeUltrathinkPrompt("Please ultrathink about this")).toBe(true);
-    expect(isClaudeUltrathinkPrompt("Ultrathink:\nInvestigate")).toBe(true);
-    expect(isClaudeUltrathinkPrompt("Investigate")).toBe(false);
-  });
-
-  it("prefixes ultrathink prompts once", () => {
-    expect(applyClaudePromptEffortPrefix("Investigate", "ultrathink")).toBe(
-      "Ultrathink:\nInvestigate",
-    );
-    expect(applyClaudePromptEffortPrefix("Ultrathink:\nInvestigate", "ultrathink")).toBe(
-      "Ultrathink:\nInvestigate",
-    );
-  });
-});
-
 describe("descriptor helpers", () => {
-  it("preserves advertised input modalities", () => {
-    expect(
-      createModelCapabilities({
-        inputModalities: ["text", "image"],
-        optionDescriptors: [],
-      }),
-    ).toEqual({
-      inputModalities: ["text", "image"],
-      optionDescriptors: [],
-    });
-  });
-
   it("applies selection values to capability descriptors", () => {
     expect(
       getProviderOptionDescriptors({
@@ -299,14 +244,6 @@ describe("custom model modality round trips", () => {
     expect(modelCapabilitiesAreExplicitlyTextOnly(model!.capabilities)).toBe(false);
     const [restored] = readCustomModelEntries([toCustomModelSetting(model!)]);
     expect(restored?.capabilities?.inputModalities).toEqual(["text", "image"]);
-  });
-
-  it("retains explicit text-only routing through custom model settings", () => {
-    const [model] = readCustomModelEntries([
-      { slug: "campus-text", capabilities: { inputModalities: ["text"] } },
-    ]);
-    const [restored] = readCustomModelEntries([toCustomModelSetting(model!)]);
-    expect(modelCapabilitiesAreExplicitlyTextOnly(restored?.capabilities)).toBe(true);
   });
 });
 

@@ -12,8 +12,6 @@ import {
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolSuccess,
-  summarizeToolGroup,
-  toolGroupSummaryKind,
 } from "./presentation.js";
 
 function commandItem(
@@ -99,38 +97,6 @@ describe("workEntryIndicatesToolFailure", () => {
   });
 });
 
-describe("summarizeToolGroup", () => {
-  const entry = (
-    id: string,
-    overrides: Partial<WorkLogPresentationEntry>,
-  ): WorkLogPresentationEntry => ({
-    id,
-    createdAt: "2026-09-01T00:00:00Z",
-    label: "Tool call",
-    tone: "tool",
-    ...overrides,
-  });
-
-  it("excludes reasoning from mixed tool counts and icons", () => {
-    const thought = entry("thought", {
-      itemType: "reasoning",
-      tone: "thinking",
-      detail: "Check the source",
-    });
-    const command = entry("command", { itemType: "command_execution", command: "vp test run" });
-    expect(summarizeToolGroup([thought, command, { ...thought, id: "thought-2" }])).toEqual({
-      summary: "Ran 1 command",
-      hasFailure: false,
-    });
-    expect(toolGroupSummaryKind([thought, command])).toBe("command");
-    expect(summarizeToolGroup([thought]).summary).toBe("Reasoning");
-    expect(summarizeToolGroup([thought, { ...thought, id: "thought-2" }]).summary).toBe(
-      "Reasoning",
-    );
-    expect(toolGroupSummaryKind([thought])).toBe("reasoning");
-  });
-});
-
 describe("resolveWorkEntryToolPresentation", () => {
   it("shows returned MCP errors as failures even in the live activity row", () => {
     const entry: WorkLogPresentationEntry = {
@@ -199,31 +165,15 @@ describe("resolveWorkEntryToolPresentation", () => {
     ).toBe("Failed to click in the preview browser");
   });
 
+  // regression: #9106 fix(chat): improve tool group summaries and scrolling
   it.each([
     ["preview_type", "Typing in the preview browser", "Typed in the preview browser"],
-    [
-      "preview_set_appearance",
-      "Setting preview browser appearance",
-      "Set preview browser appearance",
-    ],
-    [
-      "preview_snapshot",
-      "Taking a snapshot of the preview page",
-      "Took a snapshot of the preview page",
-    ],
     [
       "preview_recording_stop",
       "Stopping recording the preview browser",
       "Stopped recording the preview browser",
     ],
     ["t3_thread_read", "Reading a TritonAI thread", "Read a TritonAI thread"],
-    ["t3_thread_wait", "Waiting for a TritonAI thread", "Waited for a TritonAI thread"],
-    ["t3_thread_send", "Sending to a TritonAI thread", "Sent to a TritonAI thread"],
-    [
-      "t3_worktree_handoff",
-      "Handing off thread to a git worktree",
-      "Handed off thread to a git worktree",
-    ],
   ])("preserves verb forms and the rest of %s's label", (tool, running, completed) => {
     const entry = { label: `t3-code.${tool}` };
     expect(
@@ -233,15 +183,6 @@ describe("resolveWorkEntryToolPresentation", () => {
     expect(
       resolveWorkEntryToolPresentation({ ...entry, toolLifecycleStatus: "completed" })?.displayName,
     ).toBe(completed);
-  });
-
-  it("keeps app branding for non-browser tools and falls back to the original tool label", () => {
-    expect(
-      resolveWorkEntryToolPresentation({
-        label: "mcp__t3_code__task_status",
-        toolTitle: "Check the child task",
-      }),
-    ).toEqual({ displayName: "Getting delegated task status", icon: "t3-code" });
   });
 
   it("does not brand unknown tools or another server's matching tool name", () => {

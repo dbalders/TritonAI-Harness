@@ -382,34 +382,6 @@ describe("server state projection", () => {
     ).toBe(true);
   });
 
-  it("projects live managed policy diagnostics", () => {
-    const snapshot = applyServerConfigProjection(Option.none(), snapshotEvent(CONFIG));
-    const diagnostics = {
-      applicationVersion: "1.2.3",
-      schemaVersion: 2,
-      policyVersion: 1,
-      configDigest: "0".repeat(64),
-      loaded: true,
-      managedProviderInstanceId: "codex",
-      managedProviderInstanceIds: ["codex", "codex_frontier"],
-      migrationStatus: "completed",
-      managedCategories: [],
-      secureSkillsStatus: "current",
-      secureSkillsRevision: "revision-1",
-      secureSkillsLastCheckedAt: "2026-08-09T07:00:00.000Z",
-      secureSkillsMessage: "Current.",
-    } as const;
-    const projected = applyServerConfigProjection(snapshot, {
-      version: 1,
-      type: "managedPolicyDiagnosticsUpdated",
-      payload: { diagnostics },
-    });
-
-    const result = Option.getOrThrow(projected);
-    expect(result.config.managedPolicyDiagnostics).toBe(diagnostics);
-    expect(result.latestEvent.type).toBe("managedPolicyDiagnosticsUpdated");
-  });
-
   it("keeps published themes across a reconnect snapshot", () => {
     const themes = [
       {

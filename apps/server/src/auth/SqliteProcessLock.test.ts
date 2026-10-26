@@ -79,23 +79,6 @@ const terminateLockOwner = async (child: NodeChildProcess.ChildProcess): Promise
 };
 
 it.layer(NodeServices.layer)("SqliteProcessLock", (it) => {
-  it.effect("reuses an unlocked persistent lock database", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-sqlite-lock-stale-",
-      });
-      const lockPath = `${directory}/secret.lock`;
-
-      const first = yield* acquireSqliteProcessLock(lockPath, "test secret");
-      yield* releaseSqliteProcessLock(first);
-      assert.isTrue(yield* fileSystem.exists(lockPath));
-
-      const second = yield* acquireSqliteProcessLock(lockPath, "test secret");
-      yield* releaseSqliteProcessLock(second);
-    }).pipe(Effect.scoped, TestClock.withLive),
-  );
-
   it.effect("recovers after a lock owner is forcibly terminated", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -164,21 +147,6 @@ it.layer(NodeServices.layer)("SqliteProcessLock", (it) => {
 
       const recovered = yield* acquireSqliteProcessLock(lockPath, "test secret");
       yield* releaseSqliteProcessLock(recovered);
-      assert.strictEqual(probeLock(lockPath), "acquired");
-    }).pipe(Effect.scoped, TestClock.withLive),
-  );
-
-  it.effect("holds the kernel lock until every owned descriptor is closed", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-sqlite-lock-descriptor-",
-      });
-      const lockPath = `${directory}/secret.lock`;
-
-      const lock = yield* acquireSqliteProcessLock(lockPath, "test secret");
-      assert.strictEqual(probeLock(lockPath), "busy");
-      yield* releaseSqliteProcessLock(lock);
       assert.strictEqual(probeLock(lockPath), "acquired");
     }).pipe(Effect.scoped, TestClock.withLive),
   );

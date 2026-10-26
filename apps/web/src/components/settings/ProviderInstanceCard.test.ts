@@ -38,6 +38,7 @@ describe("deriveProviderModelsForDisplay", () => {
     ).toEqual(["server-model", "kept-custom"]);
   });
 
+  // regression: #154 fix(settings): route TritonAI keys per connection
   it("hides managed routing variables while preserving them across unrelated edits", () => {
     const current = [
       { name: "UCSD_AI_BASE_URL", value: "https://example.test/v1", sensitive: false },

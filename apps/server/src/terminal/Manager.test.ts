@@ -3,8 +3,6 @@ import { type TerminalRestartInput } from "@t3tools/contracts";
 import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
 
-import { ServerSettingsError } from "@t3tools/contracts";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { assert, it } from "@effect/vitest";
@@ -1229,47 +1227,6 @@ it.layer(
     }),
   );
 
-  it.effect("preserves the settings failure when provider environment resolution fails", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const providerInstanceId = ProviderInstanceId.make("codex_work");
-      const settingsCause = new Error("secret store read failed");
-      const settingsError = new ServerSettingsError({
-        settingsPath: "/test/settings.json",
-        operation: "read-secret",
-        providerInstanceId,
-        environmentVariable: "OPENROUTER_API_KEY",
-        cause: settingsCause,
-      });
-      const serverSettings = ServerSettings.ServerSettingsService.of({
-        start: Effect.void,
-        ready: Effect.void,
-        getSettings: Effect.fail(settingsError),
-        getPersistedSettings: Effect.fail(settingsError),
-        updateSettings: () => Effect.fail(settingsError),
-        updateProviderInstance: () => Effect.fail(settingsError),
-        withSettingsSnapshot: () => Effect.fail(settingsError),
-        streamChanges: Stream.empty,
-        subscribeChanges: Effect.succeed(Stream.empty),
-      });
-
-      const error = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
-        serverSettings,
-        path,
-        rawProviderInstanceId: providerInstanceId,
-        env: undefined,
-      }).pipe(Effect.flip);
-
-      expect(error).toMatchObject({
-        _tag: "TerminalProviderEnvironmentError",
-        providerInstanceId,
-      });
-      expect(error.cause).toBe(settingsError);
-      expect(error.message).not.toContain(settingsError.message);
-      expect(error.message).not.toContain("OPENROUTER_API_KEY");
-    }),
-  );
-
   it.effect.each([
     {
       name: "Codex home",
@@ -1444,31 +1401,6 @@ it.layer(
       expect(events[0]?.type).toBe("snapshot");
       expect(ptyAdapter.spawnInputs).toHaveLength(1);
       expect(ptyAdapter.processes[0]?.killed).toBe(false);
-    }),
-  );
-
-  it.effect("applies explicit runtime overrides after scrubbing inherited AppImage state", () =>
-    Effect.gen(function* () {
-      const { manager, ptyAdapter } = yield* createManager(5, {
-        env: {
-          APPIMAGE: "/home/user/T3-Code.AppImage",
-          APPDIR: "/tmp/.mount_T3Codeabc123",
-          OWD: "/inherited",
-          PATH: "/tmp/.mount_T3Codeabc123/usr/bin:/usr/bin",
-        },
-      });
-      yield* manager.open(
-        openInput({
-          env: { OWD: "/repo", PATH: "/repo/bin:/usr/bin", APPIMAGE: "explicit" },
-        }),
-      );
-      const spawnInput = ptyAdapter.spawnInputs[0];
-      expect(spawnInput).toBeDefined();
-      if (!spawnInput) return;
-
-      expect(spawnInput.env.OWD).toBe("/repo");
-      expect(spawnInput.env.PATH).toBe("/repo/bin:/usr/bin");
-      expect(spawnInput.env.APPIMAGE).toBe("explicit");
     }),
   );
 

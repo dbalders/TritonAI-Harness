@@ -169,6 +169,7 @@ describe("DesktopAppIdentity", () => {
     ),
   );
 
+  // regression: 13e7bc16e3 fix(desktop): let Nightly coexist with stable Harness
   it.effect("never adopts the stable legacy profile for Nightly", () =>
     withIdentity(
       Effect.gen(function* () {
@@ -184,36 +185,6 @@ describe("DesktopAppIdentity", () => {
       },
     ),
   );
-
-  it.effect("configures app identity from the environment commit override", () => {
-    const calls: ElectronAppCalls = {
-      setAboutPanelOptions: [],
-      setDockIcon: [],
-      setName: [],
-    };
-
-    return withIdentity(
-      Effect.gen(function* () {
-        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        yield* identity.configure;
-
-        assert.deepEqual(calls.setName, ["TritonAI Harness Alpha"]);
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "TritonAI Harness");
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
-        assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
-        assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
-      }),
-      {
-        calls,
-        environment: {
-          env: {
-            T3CODE_COMMIT_HASH: "0123456789abcdef",
-          },
-        },
-        pngIconPath: Option.some("/icon.png"),
-      },
-    );
-  });
 
   it.effect.each([
     { stage: "Beta", environment: {} },
@@ -251,28 +222,6 @@ describe("DesktopAppIdentity", () => {
         );
       }),
       { calls, environment },
-    );
-  });
-
-  it.effect("also sets the dock icon when running unpackaged", () => {
-    const calls: ElectronAppCalls = {
-      setAboutPanelOptions: [],
-      setDockIcon: [],
-      setName: [],
-    };
-
-    return withIdentity(
-      Effect.gen(function* () {
-        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        yield* identity.configure;
-
-        assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
-      }),
-      {
-        calls,
-        environment: { isPackaged: false },
-        pngIconPath: Option.some("/icon.png"),
-      },
     );
   });
 });

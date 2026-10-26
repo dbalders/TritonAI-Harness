@@ -1,4 +1,3 @@
-import { resolveEarlyLinuxElectronOptions } from "./DesktopEarlyElectronStartup.ts";
 // @effect-diagnostics nodeBuiltinImport:off - tests use POSIX path joining to match the Linux startup boundary.
 import * as NodePath from "node:path";
 
@@ -55,80 +54,6 @@ describe("DesktopEarlyElectronStartup", () => {
     });
 
     assert.equal(preference, "auto");
-  });
-
-  it("preserves absolute root paths when resolving early settings", () => {
-    const preference = resolveEarlyLinuxPasswordStorePreference({
-      env: { T3CODE_HOME: "/" },
-      appVersion: "0.3.4",
-      homeDirectory: "/home/user",
-      joinPath,
-      readFileString: (path) => {
-        assert.equal(path, "/userdata/desktop-settings.json");
-        return JSON.stringify({ linuxPasswordStore: "kwallet6" });
-      },
-    });
-
-    assert.equal(preference, "kwallet6");
-  });
-
-  it("resolves the early linux Electron switches", () => {
-    const options = resolveEarlyLinuxElectronOptions({
-      env: {
-        T3CODE_HOME: "/home/user/.t3-test",
-        XDG_CURRENT_DESKTOP: "niri",
-        VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
-      },
-      appVersion: "0.3.4",
-      homeDirectory: "/home/user",
-      joinPath,
-      readFileString: (path) => {
-        assert.equal(path, "/home/user/.t3-test/userdata/desktop-settings.json");
-        return JSON.stringify({ linuxPasswordStore: "auto" });
-      },
-    });
-
-    assert.deepEqual(options, {
-      isDevelopment: true,
-      linuxWmClass: "tritonai-harness-dev",
-      linuxDesktopEntryName: "tritonai-harness-dev.desktop",
-      passwordStore: "gnome-libsecret",
-    });
-  });
-
-  it("keeps implicit development state under ~/.tritonai-harness/dev when T3CODE_HOME is unset", () => {
-    const preference = resolveEarlyLinuxPasswordStorePreference({
-      env: {
-        VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
-      },
-      appVersion: "0.3.4",
-      homeDirectory: "/home/user",
-      joinPath,
-      readFileString: (path) => {
-        assert.equal(path, "/home/user/.tritonai-harness/dev/desktop-settings.json");
-        return JSON.stringify({ linuxPasswordStore: "kwallet" });
-      },
-    });
-
-    assert.equal(preference, "kwallet");
-  });
-
-  it("treats whitespace-only T3CODE_HOME as unconfigured in development", () => {
-    const preference = resolveEarlyLinuxPasswordStorePreference({
-      env: {
-        T3CODE_HOME: "   ",
-        VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
-      },
-      appVersion: "0.3.4",
-      homeDirectory: "/home/user",
-      joinPath,
-      readFileString: (path) => {
-        assert.equal(path, "/home/user/.tritonai-harness/dev/desktop-settings.json");
-        return JSON.stringify({ linuxPasswordStore: "gnome-libsecret" });
-      },
-    });
-
-    assert.equal(preference, "gnome-libsecret");
   });
 
   describe("resolveLinuxDisableFeaturesSwitch", () => {

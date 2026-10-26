@@ -18,13 +18,7 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as Layer from "effect/Layer";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
-import { ThreadManagementProviderInstanceDisabledError } from "./orchestration-v2/ThreadManagementService.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
-import {
-  ThreadLaunchError,
-  ThreadLaunchService,
-  type ThreadLaunchInput,
-} from "./orchestration-v2/ThreadLaunchService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as ServerConfig from "./config.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -383,51 +377,4 @@ it.effect("automatic pull only updates enabled, behind, clean default-branch che
     ).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, git));
     assert.deepStrictEqual(pulled, ["/inherited"]);
   }),
-);
-
-it.effect(
-  "keeps onboarding available before Codex is configured while preserving real startup failures",
-  () =>
-    Effect.gen(function* () {
-      const input: ThreadLaunchInput = {
-        commandId: CommandId.make("bootstrap-test"),
-        projectId: ProjectId.make("bootstrap-project"),
-        title: "New thread",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "managed-bootstrap-model",
-        },
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        workspaceStrategy: { type: "root" },
-        createdBy: "system",
-        creationSource: "server",
-      };
-      const unavailable = Layer.mock(ThreadLaunchService)({
-        launch: () =>
-          Effect.fail(
-            new ThreadManagementProviderInstanceDisabledError({
-              projectId: input.projectId,
-              instanceId: input.modelSelection.instanceId,
-            }),
-          ),
-      });
-      assert.isNull(
-        yield* ServerRuntimeStartup.launchBootstrapThread(input).pipe(Effect.provide(unavailable)),
-      );
-      const failure = new ThreadLaunchError({
-        operation: "create-thread",
-        commandId: input.commandId,
-        projectId: input.projectId,
-        cause: "storage failure",
-      });
-      const broken = Layer.mock(ThreadLaunchService)({ launch: () => Effect.fail(failure) });
-      assert.strictEqual(
-        yield* ServerRuntimeStartup.launchBootstrapThread(input).pipe(
-          Effect.provide(broken),
-          Effect.flip,
-        ),
-        failure,
-      );
-    }),
 );

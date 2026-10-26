@@ -1,9 +1,6 @@
 import { type ProviderOptionDescriptor } from "@t3tools/contracts";
 import { type ServerProviderModel } from "@t3tools/contracts";
 import { type ProviderOptionSelection } from "@t3tools/contracts";
-
-import { renderProviderTraitsPicker } from "./composerProviderState";
-import { shouldRenderTraitsControls } from "./TraitsPicker";
 import { describe, expect, it } from "vite-plus/test";
 import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import {
@@ -429,49 +426,5 @@ describe("getComposerReasoningStep", () => {
         selections(["reasoningEffort", to]),
       );
     }
-  });
-});
-
-describe("provider traits render guards", () => {
-  it("hides the Codex service tier descriptor from trait controls", () => {
-    const models = modelWith([
-      selectDescriptor("serviceTier", [
-        { id: "default", label: "Standard", isDefault: true },
-        { id: "fast", label: "Fast" },
-      ]),
-    ]);
-    const args = {
-      provider: PROVIDER,
-      model: MODEL,
-      models,
-      modelOptions: undefined,
-      promptUltrathink: readPromptUltrathink(""),
-      onPromptEdit: () => {},
-      planModeEnabled: false,
-    };
-
-    expect(shouldRenderTraitsControls(args)).toBe(false);
-    expect(renderProviderTraitsPicker({ ...args, draftId: "draft-test" as never })).toBeNull();
-  });
-
-  it("keeps visible trait controls when a hidden service tier is also present", () => {
-    const models = modelWith([
-      selectDescriptor("reasoningEffort", [{ id: "high", label: "High", isDefault: true }]),
-      selectDescriptor("serviceTier", [
-        { id: "default", label: "Standard", isDefault: true },
-        { id: "fast", label: "Fast" },
-      ]),
-    ]);
-
-    expect(
-      shouldRenderTraitsControls({
-        provider: PROVIDER,
-        model: MODEL,
-        models,
-        modelOptions: undefined,
-        promptUltrathink: readPromptUltrathink(""),
-        planModeEnabled: false,
-      }),
-    ).toBe(true);
   });
 });

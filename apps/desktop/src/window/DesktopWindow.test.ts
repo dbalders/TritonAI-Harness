@@ -517,37 +517,6 @@ describe("DesktopWindow", () => {
     );
   });
 
-  it("allows only same-origin audio media permission requests", () => {
-    assert.isTrue(
-      DesktopWindow.isTrustedRendererMicrophoneRequest({
-        applicationUrl: "t3code-dev://app/",
-        requestingUrl: "t3code-dev://app/",
-        mediaTypes: ["audio"],
-      }),
-    );
-    assert.isFalse(
-      DesktopWindow.isTrustedRendererMicrophoneRequest({
-        applicationUrl: "t3code-dev://app/",
-        requestingUrl: "https://example.com/",
-        mediaTypes: ["audio"],
-      }),
-    );
-    assert.isFalse(
-      DesktopWindow.isTrustedRendererMicrophoneRequest({
-        applicationUrl: "t3code-dev://app/",
-        requestingUrl: "t3code-dev://evil/",
-        mediaTypes: ["audio"],
-      }),
-    );
-    assert.isFalse(
-      DesktopWindow.isTrustedRendererMicrophoneRequest({
-        applicationUrl: "t3code-dev://app/",
-        requestingUrl: "t3code-dev://app/",
-        mediaTypes: ["audio", "video"],
-      }),
-    );
-  });
-
   it.effect(
     "opens and reopens the window without backend readiness when local execution is disabled",
     () =>

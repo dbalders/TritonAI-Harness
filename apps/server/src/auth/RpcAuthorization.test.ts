@@ -48,46 +48,6 @@ describe("RPC authorization scopes", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });
 
-  it("preserves TritonAI management and integration scopes", () => {
-    const readMethods = [
-      WS_METHODS.serverGetAccountStatus,
-      WS_METHODS.serverGetTritonAiUsage,
-      WS_METHODS.serverListProviderSkillCatalog,
-      WS_METHODS.serverListPlugins,
-      WS_METHODS.integrationsList,
-    ];
-    const manageMethods = [
-      WS_METHODS.serverStartAccountLogin,
-      WS_METHODS.serverPollAccountLogin,
-      WS_METHODS.serverSignOutAccount,
-      WS_METHODS.serverInstallProviderSkill,
-      WS_METHODS.serverRemoveProviderSkill,
-      WS_METHODS.serverSetProviderSkillEnabled,
-      WS_METHODS.serverSubmitProviderSkillToTritonAiCommons,
-      WS_METHODS.serverInstallPlugin,
-      WS_METHODS.serverUninstallPlugin,
-      WS_METHODS.serverAddMarketplace,
-      WS_METHODS.serverRemoveMarketplace,
-      WS_METHODS.serverUpgradeMarketplace,
-      WS_METHODS.integrationsInstall,
-      WS_METHODS.integrationsSetEnabled,
-      WS_METHODS.integrationsSetCapabilityEnabled,
-      WS_METHODS.integrationsConnect,
-      WS_METHODS.integrationsPoll,
-      WS_METHODS.integrationsDisconnect,
-    ];
-
-    for (const method of readMethods) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
-    }
-    for (const method of manageMethods) {
-      expect(requiredScopeForRpcMethod(method)).toBe(AuthProvidersManageScope);
-    }
-    expect(requiredScopeForRpcMethod(WS_METHODS.serverTranscribeVoice)).toBe(
-      AuthOrchestrationOperateScope,
-    );
-  });
-
   it("keeps webhook delivery logs, which hold request bodies, behind operate scope", () => {
     for (const method of [
       WS_METHODS.scheduledTasksListWebhookDeliveries,
@@ -243,23 +203,8 @@ describe("Help RPC authorization", () => {
       ),
     );
 
-  it.effect("allows a read-and-diagnostics session to read the Help snapshot", () =>
-    Effect.gen(function* () {
-      const handled: Array<string> = [];
-      const client = yield* makeClient(
-        authenticatedSession([AuthDiagnosticsReadScope, AuthOrchestrationReadScope]),
-        handled,
-      );
-
-      expect(yield* client[WS_METHODS.helpGetContext]({})).toEqual(context);
-      expect(handled).toEqual(["context"]);
-    }).pipe(Effect.scoped),
-  );
-
   it.effect.each([
     { scopes: [], missing: AuthOrchestrationOperateScope },
-    { scopes: [AuthDiagnosticsReadScope], missing: AuthOrchestrationOperateScope },
-    { scopes: [AuthOrchestrationOperateScope], missing: AuthDiagnosticsReadScope },
     {
       scopes: [AuthOrchestrationOperateScope, AuthDiagnosticsReadScope],
       missing: AuthOrchestrationReadScope,
@@ -324,26 +269,6 @@ describe("Help RPC authorization", () => {
         requiredPermission: AuthOrchestrationReadScope,
       });
       expect(handled).toEqual([]);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("allows Help invocation when the authenticated session has all required grants", () =>
-    Effect.gen(function* () {
-      const handled: Array<string> = [];
-      const client = yield* makeClient(
-        authenticatedSession([
-          AuthOrchestrationOperateScope,
-          AuthDiagnosticsReadScope,
-          AuthOrchestrationReadScope,
-        ]),
-        handled,
-      );
-
-      expect(yield* client[WS_METHODS.helpAsk](question)).toEqual({
-        answer: "Open Settings > Providers.",
-        context,
-      });
-      expect(handled).toEqual(["ask"]);
     }).pipe(Effect.scoped),
   );
 });

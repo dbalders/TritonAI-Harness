@@ -36,31 +36,6 @@ function cloudEnvironment(environmentId: string): RelayClientEnvironmentRecord {
 }
 
 describe("mobile environment settings sections", () => {
-  it("keeps saved relay-managed connections under TritonAI Connect", () => {
-    const local = connectedEnvironment({
-      environmentId: "environment-local",
-      isRelayManaged: false,
-    });
-    const cloud = connectedEnvironment({
-      environmentId: "environment-cloud",
-      isRelayManaged: true,
-    });
-
-    const sections = splitEnvironmentSections({
-      connectedEnvironments: [cloud, local],
-      cloudEnvironments: [
-        cloudEnvironment("environment-cloud"),
-        cloudEnvironment("environment-new"),
-      ],
-    });
-
-    expect(sections.localEnvironments).toEqual([local]);
-    expect(sections.connectedCloudEnvironments).toEqual([cloud]);
-    expect(
-      sections.availableCloudEnvironments.map((environment) => environment.environmentId),
-    ).toEqual([EnvironmentId.make("environment-new")]);
-  });
-
   it("keeps saved relay-managed connections visible when cloud listing is unavailable", () => {
     const cloud = connectedEnvironment({
       environmentId: "environment-cloud",

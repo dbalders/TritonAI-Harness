@@ -227,7 +227,7 @@ function isRetryableDevelopmentRendererLoadFailure(input: {
   );
 }
 
-export function isTrustedRendererMicrophoneRequest(input: {
+function isTrustedRendererMicrophoneRequest(input: {
   readonly applicationUrl: string;
   readonly requestingUrl: string;
   readonly mediaTypes: readonly string[];

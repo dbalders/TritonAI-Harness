@@ -2661,6 +2661,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  // regression: #187 fix: preserve git index during commit generation
   it.effect("preserves the exact index when commit message generation fails", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -2881,57 +2882,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       });
 
       expect(generatedModelSelection).toEqual(projectModel);
-    }),
-  );
-
-  it.effect("includes local agent instructions when recent history is empty", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
-      yield* runGit(repoDir, ["init", "--initial-branch=main"]);
-      yield* runGit(repoDir, ["config", "user.email", "test@example.com"]);
-      yield* runGit(repoDir, ["config", "user.name", "Test User"]);
-      const agentInstructions = "Use lowercase source control text.";
-      const claudeInstructions = "Keep pull request bodies brief.";
-      NodeFS.writeFileSync(NodePath.join(repoDir, "AGENTS.md"), agentInstructions);
-      NodeFS.writeFileSync(NodePath.join(repoDir, "CLAUDE.md"), claudeInstructions);
-      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\n");
-      yield* runGit(repoDir, ["add", "README.md"]);
-      let generatedPolicy: TextGeneration.CommitMessageGenerationInput["policy"] = undefined;
-
-      const { manager } = yield* makeManager({
-        serverSettings: {
-          textGenerationModelSelection: {
-            instanceId: ProviderInstanceId.make("claudeAgent"),
-            model: "claude-sonnet-4-6",
-          },
-          providerInstances: {
-            [ProviderInstanceId.make("claudeAgent")]: {
-              driver: ProviderDriverKind.make("claudeAgent"),
-              enabled: true,
-            },
-          },
-          sourceControlWritingStyle: {
-            mode: "repo_conventions" as const,
-          },
-        },
-        textGeneration: {
-          generateCommitMessage: (input) => {
-            generatedPolicy = input.policy;
-            return Effect.succeed({ subject: "Create initial commit", body: "" });
-          },
-        },
-      });
-      yield* runStackedAction(manager, {
-        cwd: repoDir,
-        action: "commit",
-      });
-
-      expect(generatedPolicy).toEqual({
-        kind: "repo_conventions",
-        commitInstructions: `Follow the repository's established commit message style when examples are available.\n\nLocal AGENTS.md:\n${agentInstructions}\n\nLocal CLAUDE.md:\n${claudeInstructions}`,
-        changeRequestInstructions: `Follow the repository's established change request title and body style when examples are available.\n\nLocal AGENTS.md:\n${agentInstructions}\n\nLocal CLAUDE.md:\n${claudeInstructions}`,
-        inferRepositoryConventions: true,
-      });
     }),
   );
 

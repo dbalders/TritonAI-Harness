@@ -213,6 +213,7 @@ $null = [Threading.ManualResetEvent]::new($false).WaitOne()`;
   };
 }
 
+// regression: #426 fix(provider): recover interrupted Codex updates and coordinate sessions
 describe("native managed Codex lifecycle", () => {
   it("reads the same native boot identity in separate processes", async () => {
     const f = await fixture();

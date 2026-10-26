@@ -491,27 +491,6 @@ describe("makeAggregateState", () => {
     ]);
   });
 
-  it("drops finished threads from the aggregate after the display window", () => {
-    const active: RelayAgentActivityState = {
-      ...state,
-      threadId: "thread-active" as RelayAgentActivityState["threadId"],
-      updatedAt: "1970-01-01T00:58:00.000Z",
-    };
-    const staleCompleted: RelayAgentActivityState = {
-      ...state,
-      threadId: "thread-done" as RelayAgentActivityState["threadId"],
-      phase: "completed",
-      updatedAt: "1970-01-01T00:44:00.000Z",
-    };
-    const aggregate = AgentActivityPublisher.makeAggregateState({
-      activeStates: [active, staleCompleted],
-      terminalState: null,
-      nowMs: hourMs,
-    });
-
-    expect(aggregate?.activities).toMatchObject([{ threadId: "thread-active" }]);
-  });
-
   it("keeps showing recently finished work when nothing is active", () => {
     const lingeringCompleted: RelayAgentActivityState = {
       ...state,

@@ -204,7 +204,7 @@ const TIMEOUT_RESULT: ShellResult = {
   transportFailure: "timeout",
 };
 
-export const formatWslShellTransportFailureReason = (
+const formatWslShellTransportFailureReason = (
   failure: ShellResult["transportFailure"],
   subject = "Node.js",
 ): string | null => {
@@ -223,7 +223,7 @@ export const formatWslShellTransportFailureReason = (
 // Reuse the SSH remote resolver so WSL and SSH discover version-managed Node
 // the same way. Passing the engine range lets the resolver fall through to
 // version managers like nvm when a system node exists but is too old.
-export const buildWslNodeEnvPreamble = (
+const buildWslNodeEnvPreamble = (
   nodeEngineRange?: string | null,
 ): string => `${buildRemoteNodeEnvScript({ nodeEngineRange: nodeEngineRange ?? null })}
 ensure_remote_node_path || true
@@ -491,7 +491,7 @@ export const parseWslRuntimeRoot = (stdout: string): string | null => {
 
 const NODE_PTY_BINARY_MISSING_EXIT_CODE = 4;
 
-export const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
+const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
   exitCode === NODE_PTY_BINARY_MISSING_EXIT_CODE
     ? "WSL support is missing from this TritonAI Harness build: the packaged Linux node-pty binary was not included. Install a build that includes WSL support."
     : null;

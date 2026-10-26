@@ -62,6 +62,7 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  // regression: #433 fix(files): offer open and download actions for unsupported files
   it.effect("hides OS file actions and rejects launch after the destination grant is lost", () =>
     Effect.scoped(
       Effect.gen(function* () {

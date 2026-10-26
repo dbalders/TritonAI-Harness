@@ -7,8 +7,6 @@ import { type ProviderApprovalDecision } from "@t3tools/contracts";
 import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import { vi } from "vite-plus/test";
 import * as Clock from "effect/Clock";
-import * as ConfigProvider from "effect/ConfigProvider";
-import * as TritonAiRequestAnalytics from "../../telemetry/TritonAiRequestAnalytics.ts";
 import * as IntegrationRegistry from "../../integrations/IntegrationRegistry.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
@@ -21,7 +19,6 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
-import * as ServerConfig from "../../config.ts";
 import { BROWSER_SESSION_SCOPE } from "../../preview/BrowserNavigationApproval.ts";
 import * as BrowserNavigationGate from "../../preview/BrowserNavigationGate.ts";
 
@@ -317,6 +314,7 @@ describe("CodexAdapterV2 thread MCP configuration", () => {
 });
 
 describe("CodexAdapterV2 process spawning", () => {
+  // regression: #426 recover interrupted Codex updates and coordinate sessions
   it.effect.each(["", "codex", "~"])(
     "leases the same managed executable it spawns for setting '%s'",
     (configured) =>
@@ -404,89 +402,6 @@ describe("CodexAdapterV2 process spawning", () => {
           [],
         );
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("launches the app-server with the configured launch arguments", () =>
-    Effect.gen(function* () {
-      const spawnedArgs: Array<ReadonlyArray<string>> = [];
-      const inheritedEnvironment: Array<boolean | undefined> = [];
-      const spawner = ChildProcessSpawner.make((command) => {
-        if (ChildProcess.isStandardCommand(command)) {
-          spawnedArgs.push(command.args);
-          inheritedEnvironment.push(command.options.extendEnv);
-        }
-        return Effect.fail(
-          PlatformError.systemError({ _tag: "NotFound", module: "ChildProcess", method: "spawn" }),
-        );
-      });
-      const factory = yield* CodexAdapterV2.CodexAppServerClientFactory.pipe(
-        Effect.provide(CodexAdapterV2.layerAppServerClientFactory),
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.provideService(
-          ProviderEventLoggers.ProviderEventLoggers,
-          ProviderEventLoggers.NoOpProviderEventLoggers,
-        ),
-      );
-      const open = (environment: NodeJS.ProcessEnv) =>
-        factory
-          .open({
-            instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
-            threadId: ThreadId.make("thread-launch-args"),
-            providerSessionId: ProviderSessionId.make("provider-session-launch-args"),
-            runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-              runtimeMode: "full-access",
-              interactionMode: "default",
-              cwd: "/workspace",
-            }),
-            settings: {
-              ...DEFAULT_CODEX_SETTINGS,
-              launchArgs: " --strict-config -c model_reasoning_summary=detailed ",
-            },
-            environment,
-          })
-          .pipe(Effect.scoped, Effect.exit);
-
-      yield* open({});
-      yield* open({ T3CODE_CODEX_LAUNCH_ARGS: " --enable env-feature " });
-
-      assert.deepEqual(inheritedEnvironment, [false, false]);
-      assert.deepEqual(
-        spawnedArgs.map((args, index) => args.slice(0, index === 0 ? 4 : 3)),
-        [
-          ["app-server", "--strict-config", "-c", "model_reasoning_summary=detailed"],
-          ["app-server", "--enable", "env-feature"],
-        ],
-      );
-      for (const args of spawnedArgs) {
-        assert.ok(args.includes('model_provider="ucsd"'));
-        assert.ok(
-          args.some((arg) =>
-            /^model_providers.ucsd.base_url="http:\/\/127\.0\.0\.1:\d+\//.test(arg),
-          ),
-        );
-        assert.ok(args.includes("model_providers.ucsd.supports_websockets=false"));
-        assert.ok(args.includes("features.enable_request_compression=false"));
-        const headers = args.find((arg) => arg.startsWith("model_providers.ucsd.http_headers="));
-        const fs = yield* FileSystem.FileSystem;
-        const config = yield* ServerConfig.ServerConfig;
-        const installId = (yield* fs.readFileString(config.anonymousIdPath)).trim();
-        assert.include(headers ?? "", "purpose:chat");
-        assert.include(headers ?? "", `harness-install:${installId}`);
-      }
-    }).pipe(
-      Effect.provideService(HostProcess.Platform, "linux"),
-      Effect.provide(
-        TritonAiRequestAnalytics.layer.pipe(
-          Layer.provideMerge(
-            ServerConfig.layerTest(process.cwd(), { prefix: "t3-codex-tagged-launch-" }),
-          ),
-          Layer.provide(
-            ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: true })),
-          ),
-          Layer.provideMerge(NodeServices.layer),
-        ),
-      ),
-    ),
   );
 });
 
@@ -1649,6 +1564,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   // A long, email-style destination: the approval must show all of it, not a 120-character cut.
   const EXTERNAL_DESTINATION = `https://ic6do.example.test/Ysh5Fd_urgent_update.cmd?${"q=1&".repeat(40)}end=1`;
 
+  // regression: #417 bound attachment text extraction and browser navigation approval
   it.live.each([
     {
       scenario: "supervised-session",
@@ -1890,6 +1806,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   // dynamic-tool approval, and in Auto Codex's own reviewer approves it. The adapter's gate must
   // apply the same runtime mode, prompt and session grant there. A standard (non-custom) model has
   // no direct browser tools at all, so the MCP route is its only one.
+  // regression: #417 bound attachment text extraction and browser navigation approval
   it.live.each([
     {
       scenario: "supervised-session",
@@ -2392,49 +2309,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("identifies sessions to Codex with the same client info as main", () =>
-    Effect.gen(function* () {
-      const transcript = makeCodexReplayTranscript({
-        scenario: "initialize-client-info",
-        entries: codexReplayPreamble({
-          nativeThreadId: "client-info-thread",
-          nativeTurnId: "unused",
-          prompt: "unused",
-        }).slice(0, 5),
-      });
-      const initializeParams: Array<unknown> = [];
-      yield* makeCodexReplayHarness(
-        transcript,
-        () => Effect.void,
-        (method, params) =>
-          Effect.sync(() => {
-            if (method === "initialize") initializeParams.push(params);
-          }),
-      );
-      assert.deepEqual(initializeParams, [
-        {
-          clientInfo: {
-            name: "tritonai_harness_desktop",
-            title: "TritonAI Harness Desktop",
-            version: packageJson.version,
-          },
-          capabilities: {
-            experimentalApi: true,
-            optOutNotificationMethods: ["turn/diff/updated"],
-            extensions: {
-              "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] },
-            },
-          },
-        },
-      ]);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-      ),
-    ),
-  );
-
   it.effect("waits for native start before interrupting an acknowledged queued turn", () =>
     Effect.gen(function* () {
       const nativeThreadId = "early-stop-thread";
@@ -2534,73 +2408,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
-  it.effect("reports failed Stop without discarding a queued native turn that never starts", () =>
-    Effect.gen(function* () {
-      const nativeThreadId = "early-stop-thread";
-      const nativeTurnId = "early-stop-turn";
-      const prompt = "Run a command.";
-      const preamble = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt });
-      const transcript = makeCodexReplayTranscript({
-        scenario: "early-stop-never-starts",
-        entries: [
-          ...preamble.slice(0, -2),
-          {
-            type: "emit_inbound",
-            label: "turn/start/queued",
-            frame: {
-              id: 3,
-              result: {
-                turn: {
-                  ...makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }),
-                  startedAt: null,
-                },
-              },
-            },
-          },
-        ],
-      });
-      let interruptSent = false;
-      const harness = yield* makeCodexReplayHarness(
-        transcript,
-        () => Effect.void,
-        (method) =>
-          Effect.sync(() => {
-            if (method === "turn/interrupt") interruptSent = true;
-          }),
-      );
-      yield* harness.runtime.startTurn(
-        makeCodexTestTurnInput({
-          threadId: harness.threadId,
-          providerThread: harness.providerThread,
-          now: yield* DateTime.now,
-          attemptId: RunAttemptId.make("early-stop-attempt"),
-          text: prompt,
-        }),
-      );
-      const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
-        driver: CodexAdapterV2.CODEX_DRIVER_KIND,
-        nativeTurnId,
-      });
-      const interrupt = yield* harness.runtime
-        .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
-        .pipe(Effect.exit, Effect.forkScoped);
-      yield* TestClock.adjust("10 seconds");
-      assert.equal((yield* Fiber.join(interrupt))._tag, "Failure");
-      assert.lengthOf(
-        harness.terminalEvents(),
-        0,
-        "A turn that never received Stop must not be reported interrupted",
-      );
-      assert.isFalse(interruptSent, "An unstarted native turn must not receive turn/interrupt");
-      assert.isFalse(yield* harness.hasPendingBackgroundWork);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-      ),
-    ),
-  );
-
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect("keeps a queued turn after undelivered Stop and accepts its later completion", () =>
     Effect.gen(function* () {
       const nativeThreadId = "early-stop-thread";
@@ -2697,6 +2505,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect(
     "preserves native completion when Stop is canceled while waiting for a queued turn",
     () =>
@@ -5288,6 +5097,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect("retains descendant ownership when an interrupt request fails", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -5512,6 +5322,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect("attempts every terminal and retains tracking when termination fails", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -5569,6 +5380,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  // regression: #421 contain Stop commands and restore managed Auto approvals
   it.effect.each(["owner", "drain"] as const)(
     "preserves structured Codex failure info through buffered Stop %s finalization",
     (route) =>

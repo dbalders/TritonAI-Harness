@@ -15,8 +15,8 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-export const APP_DISPLAY_NAME = "TritonAI Harness";
-export const APP_BUNDLE_ID = isDevelopment
+const APP_DISPLAY_NAME = "TritonAI Harness";
+const APP_BUNDLE_ID = isDevelopment
   ? `edu.ucsd.tritonai.harness.dev.${devBundleIdSuffix || "local"}`
   : "edu.ucsd.tritonai.harness";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];

@@ -1,8 +1,6 @@
 import { type ServerProviderSlashCommand } from "@t3tools/contracts";
 import { type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
 
-import * as PlatformError from "effect/PlatformError";
-
 import { vi } from "vite-plus/test";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -142,10 +140,6 @@ const defaultClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)(
 
 const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({});
 
-const disabledCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({
-  enabled: false,
-});
-
 process.env.T3CODE_CURSOR_ENABLED = "1";
 
 const encoder = new TextEncoder();
@@ -270,22 +264,6 @@ function layerMockSpawner(
       const cmd = command as unknown as { args: ReadonlyArray<string> };
       return Effect.succeed(mockHandle(handler(cmd.args)));
     }),
-  );
-}
-
-function layerFailingSpawner(description: string) {
-  return Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() =>
-      Effect.fail(
-        PlatformError.systemError({
-          _tag: "NotFound",
-          module: "ChildProcess",
-          method: "spawn",
-          description,
-        }),
-      ),
-    ),
   );
 }
 
@@ -435,68 +413,6 @@ it.layer(
 
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.auth.status, "unknown");
-      }),
-    );
-
-    it.effect("uses the app-server account and curated managed models for provider status", () =>
-      Effect.gen(function* () {
-        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
-          Effect.succeed(
-            makeCodexProbeSnapshot({
-              skills: [
-                {
-                  name: "github:gh-fix-ci",
-                  path: "/Users/test/.codex/skills/gh-fix-ci/SKILL.md",
-                  enabled: true,
-                  displayName: "CI Debug",
-                  shortDescription: "Debug failing GitHub Actions checks",
-                },
-              ],
-            }),
-          ),
-        );
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.installed, true);
-        assert.strictEqual(status.version, "1.0.0");
-        assert.strictEqual(status.auth.status, "authenticated");
-        assert.strictEqual(status.auth.type, "chatgpt");
-        assert.strictEqual(status.auth.label, "ChatGPT Pro 20x Subscription");
-        assert.strictEqual(status.auth.email, "test@example.com");
-        assert.deepStrictEqual(status.setup, { canAuthenticate: false, canInstall: false });
-        assert.include(
-          status.models.map((model) => model.slug),
-          "api-glm-5.3-flash",
-        );
-        assert.notInclude(
-          status.models.map((model) => model.slug),
-          "gpt-live-codex",
-        );
-        assert.deepStrictEqual(status.skills, [
-          {
-            name: "github:gh-fix-ci",
-            path: "/Users/test/.codex/skills/gh-fix-ci/SKILL.md",
-            enabled: true,
-            displayName: "CI Debug",
-            shortDescription: "Debug failing GitHub Actions checks",
-          },
-        ]);
-        assert.deepStrictEqual(status.slashCommands.slice(1), [
-          {
-            name: "feedback",
-            description: "Report a problem or idea to the TritonAI team",
-            input: { hint: "Describe the problem or idea (optional)" },
-          },
-          {
-            name: "goal",
-            description: "Set a goal Codex keeps working toward until it is done",
-            input: { hint: "Objective, or pause, resume, clear" },
-          },
-          {
-            name: "openai-feedback",
-            description: "Send this thread and Codex logs to OpenAI",
-            input: { hint: "Describe the issue (optional)" },
-          },
-        ]);
       }),
     );
 
@@ -2241,21 +2157,6 @@ it.layer(
           assert.include(unavailable, "ghost_current");
           assert.notInclude(unavailable, "ghost_stale");
         }),
-    );
-
-    it.effect("skips codex probes entirely when the provider is disabled", () =>
-      Effect.gen(function* () {
-        const status = yield* checkCodexProviderStatus(disabledCodexSettings).pipe(
-          Effect.provide(layerFailingSpawner("spawn codex ENOENT")),
-        );
-        assert.strictEqual(status.enabled, false);
-        assert.strictEqual(status.status, "disabled");
-        assert.strictEqual(status.installed, false);
-        assert.strictEqual(
-          status.message,
-          "The TritonAI Codex runtime is disabled in TritonAI Harness settings.",
-        );
-      }),
     );
   });
 

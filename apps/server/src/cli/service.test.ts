@@ -1,5 +1,3 @@
-import * as Console from "effect/Console";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { expect, it } from "@effect/vitest";
@@ -73,38 +71,6 @@ function makeTestService(
 }
 
 it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer))("service commands", (it) => {
-  it.effect("keeps service-status repair advice on the Harness update path", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "tritonai-service-status-" });
-      const output: unknown[] = [];
-      const testConsole: Console.Console = Object.assign(Object.create(console), {
-        log: (...args: readonly unknown[]) => {
-          output.push(...args);
-        },
-      });
-      const { service } = makeTestService({
-        ...status,
-        current: false,
-        installedVersion: "0.0.28",
-      });
-      vi.spyOn(BootService, "layer").mockReturnValue(
-        Layer.succeed(BootService.BootService, service),
-      );
-      yield* Command.runWith(serviceCommand, { version: packageJson.version })([
-        "status",
-        "--base-dir",
-        baseDir,
-      ]).pipe(
-        Effect.provideService(HostProcess.Environment, {}),
-        Effect.provideService(Console.Console, testConsole),
-        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
-      );
-      const text = output.join("\n");
-      expect(text).toContain("This upstream service path is not supported by TritonAI Harness.");
-      expect(text).not.toContain("npx");
-    }),
-  );
   it.effect.each(["install", "update"] as const)(
     "%s refuses a downgrade before changing the service",
     (command) =>

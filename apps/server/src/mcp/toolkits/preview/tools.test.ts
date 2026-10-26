@@ -58,6 +58,7 @@ it("exports provider-compatible object schemas with described parameters", () =>
   }
 });
 
+// regression: #417 fix(server): bound attachment text extraction and browser navigation approval
 it("keeps redirect notices in browser navigation results sent to MCP clients", () => {
   const result = {
     available: true,

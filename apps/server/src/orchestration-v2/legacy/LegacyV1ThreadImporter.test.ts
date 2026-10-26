@@ -177,6 +177,7 @@ it.effect("propagates interruption from transcript reads and retry-marker writes
   }).pipe(Effect.provide(layerTest)),
 );
 
+// regression: #427 preserve migration activity, native file stashes and fatal shutdown
 it.effect("preserves newer thread activity while hydrating legacy transcripts", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;

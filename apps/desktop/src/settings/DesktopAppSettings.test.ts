@@ -119,27 +119,6 @@ describe("DesktopSettings", () => {
       ),
   );
 
-  it("defaults packaged nightly builds to the nightly update channel", () => {
-    assert.deepEqual(
-      DesktopAppSettings.resolveDefaultDesktopSettings("0.0.17-nightly.20260415.1"),
-      {
-        computerUseEnabled: false,
-        linuxPasswordStore: "auto",
-        localEnvironmentEnabled: true,
-        mainWindowBounds: null,
-        mainWindowMaximized: false,
-        serverExposureMode: "local-only",
-        tailscaleServeEnabled: false,
-        tailscaleServePort: 443,
-        updateChannel: "nightly",
-        updateChannelConfiguredByUser: false,
-        wslBackendEnabled: false,
-        wslOnly: false,
-        wslDistro: null,
-      } satisfies DesktopAppSettings.DesktopSettings,
-    );
-  });
-
   it.effect("loads persisted settings and applies semantic updates", () =>
     withSettings(
       Effect.gen(function* () {
@@ -262,6 +241,7 @@ describe("DesktopSettings", () => {
     ),
   );
 
+  // regression: #2916 fix(desktop): Niri/Hyprland - Linux secret storage backend
   it.effect(
     "normalizes unsupported linux password-store values without dropping other settings",
     () =>

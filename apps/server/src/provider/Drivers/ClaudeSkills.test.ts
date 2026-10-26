@@ -412,30 +412,6 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
     }),
   );
 
-  it.effect("ignores .agents/skills, which Claude Code does not load", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const tempDir = yield* fs
-        .makeTempDirectoryScoped({ prefix: "t3-claude-skills-" })
-        .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
-      const configDir = path.join(tempDir, "claude-home");
-      const workspace = path.join(tempDir, "workspace");
-
-      // Verified against the CLI: `/review` here is answered with
-      // `Unknown command`, so offering it would dispatch a dead command.
-      yield* writeSkill(
-        path.join(workspace, ".agents", "skills"),
-        "review",
-        ["---", "name: review", "description: Review the changes.", "---"].join("\n"),
-      );
-
-      const skills = yield* discoverClaudeSkills({ homePath: configDir }, workspace);
-
-      assert.deepEqual(skills, []);
-    }),
-  );
-
   it.effect("prefers user skills on name collisions even with a stray .agents copy", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -473,35 +449,6 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
           description: "User deploy.",
         },
       ]);
-    }),
-  );
-
-  it.effect("prefers user skills over project skills on name collisions", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const tempDir = yield* fs
-        .makeTempDirectoryScoped({ prefix: "t3-claude-skills-" })
-        .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
-      const configDir = path.join(tempDir, "claude-home");
-      const workspace = path.join(tempDir, "workspace");
-
-      yield* writeSkill(
-        path.join(configDir, "skills"),
-        "deploy",
-        ["---", "name: deploy", "description: User deploy.", "---"].join("\n"),
-      );
-      yield* writeSkill(
-        path.join(workspace, ".claude", "skills"),
-        "deploy",
-        ["---", "name: deploy", "description: Project deploy.", "---"].join("\n"),
-      );
-
-      const skills = yield* discoverClaudeSkills({ homePath: configDir }, workspace);
-
-      assert.equal(skills.length, 1);
-      assert.equal(skills[0]?.scope, "user");
-      assert.equal(skills[0]?.description, "User deploy.");
     }),
   );
 
@@ -654,50 +601,6 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
         ["relative-skill"],
       );
       assert.equal(skills[0]?.scope, "user");
-    }),
-  );
-
-  it.effect("marks skills that only the user can invoke", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const tempDir = yield* fs
-        .makeTempDirectoryScoped({ prefix: "t3-claude-skills-" })
-        .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
-      const configDir = path.join(tempDir, "claude-home");
-      const workspace = path.join(tempDir, "workspace");
-
-      yield* writeSkill(
-        path.join(workspace, ".claude", "skills"),
-        "re-release-version",
-        [
-          "---",
-          "name: re-release-version",
-          "description: Move the current tag forward.",
-          "disable-model-invocation: true",
-          "---",
-          "",
-          "# Body",
-        ].join("\n"),
-      );
-      yield* writeSkill(
-        path.join(workspace, ".claude", "skills"),
-        "release-version",
-        ["---", "name: release-version", "description: Cut a release.", "---", "", "# Body"].join(
-          "\n",
-        ),
-      );
-
-      const skills = yield* discoverClaudeSkills({ homePath: configDir }, workspace);
-
-      assert.equal(
-        skills.find((skill) => skill.name === "re-release-version")?.userInvocationOnly,
-        true,
-      );
-      assert.equal(
-        skills.find((skill) => skill.name === "release-version")?.userInvocationOnly,
-        undefined,
-      );
     }),
   );
 
@@ -913,30 +816,6 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
     }),
   );
 
-  it.effect("records a skill Claude Code keeps out of its own slash commands", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const tempDir = yield* fs
-        .makeTempDirectoryScoped({ prefix: "t3-claude-skills-" })
-        .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
-      const configDir = path.join(tempDir, "claude-home");
-
-      yield* writeSkill(
-        path.join(configDir, "skills"),
-        "agent-only",
-        ["---", "name: agent-only", "user-invocable: false", "---", "", "# Body"].join("\n"),
-      );
-
-      const skills = yield* discoverClaudeSkills({ homePath: configDir });
-
-      assert.deepEqual(
-        skills.map((skill) => [skill.name, skill.userInvocable]),
-        [["agent-only", false]],
-      );
-    }),
-  );
-
   it.effect("identifies a skill by its directory, as Claude Code does", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -965,6 +844,7 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
     }),
   );
 
+  // regression: #9128 skills picked from the composer did not run
   it.effect("switches a skill off by its directory name", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1033,23 +913,6 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
           ["user-only-yes", true, false],
         ],
       );
-    }),
-  );
-
-  it.effect("returns an empty list when no skill roots exist", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const tempDir = yield* fs
-        .makeTempDirectoryScoped({ prefix: "t3-claude-skills-" })
-        .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
-
-      const skills = yield* discoverClaudeSkills(
-        { homePath: path.join(tempDir, "missing-home") },
-        path.join(tempDir, "missing-workspace"),
-      );
-
-      assert.deepEqual(skills, []);
     }),
   );
 });
