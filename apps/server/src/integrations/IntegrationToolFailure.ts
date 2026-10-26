@@ -1,6 +1,10 @@
 import { IntegrationOperationError } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { ExternalContentDenied, ExternalContentPersistenceError } from "./ExternalContent.ts";
+import {
+  ExternalContentDenied,
+  ExternalContentPersistenceError,
+  ExternalContentWriteOutcomeUnavailable,
+} from "./ExternalContent.ts";
 
 const MAX_FAILURE_TEXT_LENGTH = 2_000;
 
@@ -46,6 +50,7 @@ function bounded(text: string): string {
 const isIntegrationOperationError = Schema.is(IntegrationOperationError);
 const isExternalContentDenied = Schema.is(ExternalContentDenied);
 const isExternalContentPersistenceError = Schema.is(ExternalContentPersistenceError);
+const isExternalContentWriteOutcomeUnavailable = Schema.is(ExternalContentWriteOutcomeUnavailable);
 
 function isProviderPublicError(error: unknown): error is Error {
   return (
@@ -67,6 +72,8 @@ export function describeIntegrationToolFailure(error: unknown): IntegrationToolF
     return { code: `external_content_${error.reason}`, text: error.message };
   if (isExternalContentPersistenceError(error))
     return { code: "external_content_receipt_failed", text: error.message };
+  if (isExternalContentWriteOutcomeUnavailable(error))
+    return { code: "external_content_write_outcome_unavailable", text: error.message };
   if (error instanceof IntegrationToolUnavailableError) {
     return { code: "integration_tool_unavailable", text: error.message };
   }

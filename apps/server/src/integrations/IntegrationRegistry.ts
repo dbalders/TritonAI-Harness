@@ -3510,11 +3510,15 @@ export class RegistryRuntime {
       connectionGeneration: this.#connectionGeneration(entry.manifest.id),
     };
     let outcome: { isError: boolean; data: Record<string, unknown> };
+    let writeAdmitted = false;
     try {
       const data = await this.#invokeTool(name, input, context, {
         invocation,
         observeSource: (current) => {
           source = current;
+        },
+        observeCommit: () => {
+          writeAdmitted = true;
         },
       });
       outcome = { isError: false, data };
@@ -3522,12 +3526,26 @@ export class RegistryRuntime {
       const failure = describeIntegrationToolFailure(error);
       outcome = { isError: true, data: { error: failure.code, message: failure.text } };
     }
-    if (
-      this.#closing ||
-      source.connectionGeneration !== this.#connectionGeneration(source.integrationId)
-    )
-      throw new ExternalContent.ExternalContentDenied({ reason: "scope_changed" });
-    const result = await this.#externalContent.record(invocation, source, outcome);
+    const assertDelivery = () => {
+      invocation.assertCurrent();
+      if (
+        this.#closing ||
+        context.signal.aborted ||
+        source.connectionGeneration !== this.#connectionGeneration(source.integrationId)
+      )
+        throw new ExternalContent.ExternalContentDenied({ reason: "scope_changed" });
+    };
+    let result;
+    try {
+      assertDelivery();
+      result = await this.#externalContent.record(invocation, source, outcome);
+      // Receipt persistence is asynchronous; connection revocation may win during that wait.
+      assertDelivery();
+    } catch (cause) {
+      if (writeAdmitted)
+        throw new ExternalContent.ExternalContentWriteOutcomeUnavailable({ cause });
+      throw cause;
+    }
     if (result.isError) throw new ExternalContent.ExternalToolResultError(result);
     return result;
   }
@@ -3543,6 +3561,7 @@ export class RegistryRuntime {
     external?: {
       readonly invocation: ExternalContent.ExternalContentInvocation;
       readonly observeSource: (source: ExternalToolSource) => void;
+      readonly observeCommit: () => void;
     },
   ): Promise<Record<string, unknown>> {
     let submitted;
@@ -3799,6 +3818,7 @@ export class RegistryRuntime {
                   beginCommit: async () => {
                     const commitSignal = await providerContext.beginCommit();
                     writeCommitAdmitted = true;
+                    external?.observeCommit();
                     return commitSignal;
                   },
                 }

@@ -38,6 +38,15 @@ export class ExternalContentPersistenceError extends Schema.TaggedError<External
   }
 }
 
+export class ExternalContentWriteOutcomeUnavailable extends Schema.TaggedError<ExternalContentWriteOutcomeUnavailable>()(
+  "ExternalContentWriteOutcomeUnavailable",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Write commit was admitted before its result could be delivered. It may already have completed. Check the external record and connection recovery status before retrying; do not retry automatically.";
+  }
+}
+
 export interface ExternalContentCaller {
   readonly ownerId: string;
   readonly providerSessionId: string;

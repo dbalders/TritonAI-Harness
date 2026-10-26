@@ -65,6 +65,9 @@ const fixture = Effect.fn("ExternalContentRegistry.fixture")(function* (
   options: {
     readonly noBoundary?: boolean;
     readonly result?: () => Promise<unknown>;
+    readonly beforeRecord?: () => Promise<void>;
+    readonly afterWrite?: () => void;
+    readonly runtimeCurrent?: () => boolean;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -97,6 +100,7 @@ const fixture = Effect.fn("ExternalContentRegistry.fixture")(function* (
       if (name.endsWith(".write")) {
         await context!.beginCommit!();
         writes++;
+        options.afterWrite?.();
         return { id: "synthetic-write-receipt", input };
       }
       reads++;
@@ -119,11 +123,17 @@ const fixture = Effect.fn("ExternalContentRegistry.fixture")(function* (
       boundaryDigest: "a".repeat(64),
       allowedTools: manifest.tools.map((tool) => tool.name),
       expiresAt: 60_000,
-      isCurrent: () => true,
+      isCurrent: options.runtimeCurrent ?? (() => true),
     });
   const registry = yield* Effect.promise(() =>
     createRegistryRuntime(root, [{ manifest, provider }], undefined, {
-      externalContent,
+      externalContent: {
+        ...externalContent,
+        record: async (...args) => {
+          await options.beforeRecord?.();
+          return externalContent.record(...args);
+        },
+      },
     }),
   );
   yield* Effect.addFinalizer(() => Effect.promise(() => registry.close()));
@@ -285,6 +295,75 @@ it.effect("a changed credential generation withholds the old account's in-flight
       invalidateIntegrationCredentials(manifest.id);
       release.resolve();
       expect(yield* Fiber.join(pending)).toMatchObject({ cause: { reason: "scope_changed" } });
+    }),
+  ),
+);
+
+it.effect("rechecks the connection after asynchronous receipt persistence", () =>
+  test(
+    Effect.gen(function* () {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const state = yield* fixture({
+        beforeRecord: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      });
+      const pending = yield* state
+        .invoke("external.fixture.read")
+        .pipe(Effect.flip, Effect.forkChild);
+      yield* Effect.promise(() => entered.promise);
+      invalidateIntegrationCredentials(manifest.id);
+      release.resolve();
+      expect(yield* Fiber.join(pending)).toMatchObject({ cause: { reason: "scope_changed" } });
+    }),
+  ),
+);
+
+it.effect("shutdown while a receipt is pending cannot deliver the previous result", () =>
+  test(
+    Effect.gen(function* () {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const state = yield* fixture({
+        beforeRecord: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+      });
+      const pending = yield* state
+        .invoke("external.fixture.read")
+        .pipe(Effect.flip, Effect.forkChild);
+      yield* Effect.promise(() => entered.promise);
+      yield* Effect.promise(() => state.registry.close());
+      release.resolve();
+      expect(yield* Fiber.join(pending)).toMatchObject({ cause: { reason: "scope_changed" } });
+    }),
+  ),
+);
+
+it.effect("post-admission scope loss retains write uncertainty and forbids automatic retry", () =>
+  test(
+    Effect.gen(function* () {
+      let current = true;
+      const state = yield* fixture({
+        runtimeCurrent: () => current,
+        afterWrite: () => {
+          current = false;
+        },
+      });
+      using _gate = installIntegrationWriteGate(owner.providerInstanceId, () =>
+        Effect.succeed({ approved: true as const, isCurrent: () => true }),
+      );
+      const failure = yield* Effect.flip(state.invoke("external.fixture.write"));
+      expect(state.counters().writes).toBe(1);
+      expect(failure.cause).toMatchObject({ _tag: "ExternalContentWriteOutcomeUnavailable" });
+      expect(failure.cause).toBeInstanceOf(Error);
+      if (failure.cause instanceof Error) {
+        expect(failure.cause.message).toContain("may already have completed");
+        expect(failure.cause.message).toContain("do not retry automatically");
+      }
     }),
   ),
 );
