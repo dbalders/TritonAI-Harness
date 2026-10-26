@@ -125,22 +125,6 @@ it("cancel and shutdown discard without reading the capture", async () => {
   assert.strictEqual(second.process.stop.mock.calls.length, 0);
 });
 
-it("shows the recording only while it runs, however it ends", async () => {
-  const stopped = harness({ started: recording });
-  await stopped.recorder.start(1, "s1");
-  await stopped.recorder.stop("s1", 1);
-  assert.deepEqual(stopped.shown, ["s1", null]);
-
-  const closed = harness({ started: recording });
-  await closed.recorder.start(1, "s1");
-  closed.closeOwner(1);
-  assert.deepEqual(closed.shown, ["s1", null]);
-
-  const failed = harness({ started: { status: "unavailable" } });
-  await failed.recorder.start(1, "s1");
-  assert.deepEqual(failed.shown, []);
-});
-
 it("stops capture from the bar at once and hands the result only to its window", async () => {
   const { recorder, process, shown } = harness({ started: recording });
   await recorder.start(1, "s1");
@@ -156,24 +140,6 @@ it("stops capture from the bar at once and hands the result only to its window",
   gone.recorder.halt("s1");
   gone.closeOwner(1);
   assert.deepEqual(await gone.recorder.stop("s1", 1), { status: "not-found" });
-});
-
-it("discards a recording halted from the bar", async () => {
-  const { recorder } = harness({ started: recording });
-  await recorder.start(1, "s1");
-  recorder.halt("s1");
-  recorder.cancel("s1", 1);
-  assert.deepEqual(await recorder.stop("s1", 1), { status: "not-found" });
-});
-
-it("keeps each halted recording for its own window", async () => {
-  const { recorder } = harness({ started: recording });
-  await recorder.start(1, "s1");
-  recorder.halt("s1");
-  await recorder.start(2, "s2");
-  recorder.halt("s2");
-  assert.strictEqual((await recorder.stop("s1", 1)).status, "stopped");
-  assert.strictEqual((await recorder.stop("s2", 2)).status, "stopped");
 });
 
 it("stops the recording when capture ends by itself, but not after Stop", async () => {

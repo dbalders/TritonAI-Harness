@@ -36,7 +36,7 @@ const review = (id: string): ServerCommonsWriteReview => ({
   submittedDigest: `submitted-${id}`,
   effectiveDigest: `effective-${id}`,
   payload: `${"Synthetic source line\n".repeat(400)}${id}: LAST LINE MUST BE REVIEWABLE`,
-  expiresAt: Date.now() + 300_000,
+  expiresAt: 1_800_000_300_000,
 });
 function setup(initial: Omit<ServerCommonsApprovalState, "reviewId">) {
   state.respond.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });

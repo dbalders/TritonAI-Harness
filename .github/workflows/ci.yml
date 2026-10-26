@@ -63,7 +63,7 @@ jobs:
         run: vp run preflight:desktop
 
       - name: Build and verify standalone server executable
-        run: VP_NODE_VERSION=26.8.2 node apps/server/scripts/cli.ts build-exe --verbose
+        run: VP_NODE_VERSION=26.12.1 node apps/server/scripts/cli.ts build-exe --verbose
 
   # Everything except `t3` (apps/server). `--parallel` drops the package
   # dependency ordering that `vp run` applies by default: these `test` tasks
@@ -102,7 +102,7 @@ jobs:
         run: python3 -B .github/scripts/stage-preview-bundle.test.py
 
       - name: Test nightly release checks
-        run: node --test .github/scripts/check-nightly-release.test.cjs
+        run: node --test .github/scripts/check-nightly-release.test.cjs .github/scripts/vercel-deployment-output.test.cjs
 
       - name: Install Chromium for web browser tests
         run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium

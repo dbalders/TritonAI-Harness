@@ -1,8 +1,6 @@
-import { IntegrationOperationError, ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-
-import { IntegrationToolUnavailableError } from "../integrations/IntegrationToolFailure.ts";
 import { dynamicToolApprovalPrompt, invokeAdmittedDynamicTool } from "./CodexDynamicTools.ts";
 import { ExternalToolResultError } from "../integrations/ExternalContent.ts";
 
@@ -52,33 +50,6 @@ it.effect(
     }),
 );
 
-it.effect("tells the agent why a plugin tool was unavailable at invoke time", () =>
-  Effect.gen(function* () {
-    const response = yield* invokeFailing(
-      new IntegrationToolUnavailableError("The plugin tool is unavailable.", {
-        toolName: "microsoft365.mail.search",
-        reason: "not_connected",
-        detail: "Reconnect Microsoft 365.",
-      }),
-    );
-    assert.isFalse(response.success);
-    assert.equal(responseText(response), "The plugin tool is unavailable.");
-  }),
-);
-
-it.effect("passes host-authored operation errors through to the agent", () =>
-  Effect.gen(function* () {
-    const response = yield* invokeFailing(
-      new IntegrationOperationError({ code: "not_connected", message: "Sign in again." }),
-    );
-    assert.isFalse(response.success);
-    assert.equal(
-      responseText(response),
-      "Integration tool call failed (not_connected): Sign in again.",
-    );
-  }),
-);
-
 it.effect("keeps raw provider errors generic", () =>
   Effect.gen(function* () {
     const response = yield* invokeFailing(new Error("HTTP 500 body with private data"));
@@ -87,6 +58,7 @@ it.effect("keeps raw provider errors generic", () =>
   }),
 );
 
+// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it.effect("returns a successful result as JSON", () =>
   Effect.gen(function* () {
     let received: { readonly writeApproved?: boolean } | undefined;

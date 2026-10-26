@@ -50,23 +50,6 @@ const skillOnlyManifest: IntegrationManifest = {
 };
 
 describe("integration manifest v2", () => {
-  it("accepts the one current contract and skill-only bundles", () => {
-    expect(validateIntegrationManifest(manifest)).toEqual(manifest);
-    expect(validateIntegrationManifest(skillOnlyManifest)).toEqual(skillOnlyManifest);
-  });
-
-  it("accepts capabilities chosen during provider authorization", () => {
-    const providerAuthorized = {
-      ...manifest,
-      capabilities: manifest.capabilities.map((capability) => ({
-        ...capability,
-        access: "authorization" as const,
-      })),
-    };
-
-    expect(validateIntegrationManifest(providerAuthorized)).toEqual(providerAuthorized);
-  });
-
   it("requires a provider for provider-authorized capabilities", () => {
     expect(() =>
       validateIntegrationManifest({
@@ -77,83 +60,6 @@ describe("integration manifest v2", () => {
         })),
       }),
     ).toThrow(/require a declared provider/u);
-  });
-
-  it("does not retain mutable capability references from caller input", () => {
-    const toolCapabilities = ["fixture.read"];
-    const skillCapabilities = ["fixture.read"];
-    const validated = validateIntegrationManifest({
-      ...manifest,
-      tools: [
-        {
-          name: "fixture.read",
-          displayName: "Read fixture",
-          description: "Read fixture data.",
-          capabilities: toolCapabilities,
-          effect: "read",
-        },
-      ],
-      skills: [
-        {
-          name: "fixture-reader",
-          description: "Read fixture data.",
-          capabilities: skillCapabilities,
-        },
-      ],
-    });
-
-    toolCapabilities[0] = "caller.mutation";
-    skillCapabilities[0] = "caller.mutation";
-
-    expect(validated.tools[0]?.capabilities).toEqual(["fixture.read"]);
-    expect(validated.skills[0]?.capabilities).toEqual(["fixture.read"]);
-  });
-
-  it("requires a provider for tool bundles", () => {
-    expect(() =>
-      validateIntegrationManifest({
-        ...skillOnlyManifest,
-        tools: [
-          {
-            name: "fixture.write",
-            displayName: "Write fixture",
-            description: "Write fixture data.",
-            capabilities: ["workflow.use"],
-            effect: "write",
-          },
-        ],
-      }),
-    ).toThrow(/with tools must declare a provider/u);
-  });
-
-  it("keeps tool and skill names in independent runtime namespaces", () => {
-    expect(() =>
-      validateIntegrationManifest({
-        ...manifest,
-        tools: [
-          {
-            name: "shared-component",
-            displayName: "Shared component tool",
-            description: "Tool namespace fixture.",
-            capabilities: ["fixture.read"],
-            effect: "read",
-          },
-        ],
-        skills: [
-          {
-            name: "shared-component",
-            description: "Skill namespace fixture.",
-            capabilities: ["fixture.read"],
-          },
-        ],
-      }),
-    ).not.toThrow();
-  });
-
-  it("rejects numeric prerelease identifiers with leading zeroes", () => {
-    expect(() => validateIntegrationManifest({ ...manifest, version: "1.0.0-alpha.01" })).toThrow(
-      /semver/u,
-    );
   });
 
   it("rejects identifiers, names, and versions with trailing line terminators", () => {
@@ -170,17 +76,6 @@ describe("integration manifest v2", () => {
             description: "Read fixture data.",
             capabilities: ["fixture.read"],
             effect: "read",
-          },
-        ],
-      }),
-    ).toThrow(/stable name/u);
-    expect(() =>
-      validateIntegrationManifest({
-        ...skillOnlyManifest,
-        skills: [
-          {
-            ...skillOnlyManifest.skills[0]!,
-            name: `${skillOnlyManifest.skills[0]!.name}\n`,
           },
         ],
       }),

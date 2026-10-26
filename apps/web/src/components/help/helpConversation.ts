@@ -58,7 +58,7 @@ export function helpFailureMessage(error: unknown): string {
 }
 
 /** Nine complete exchanges plus the new question fit the bounded server input. */
-export function helpRequestMessages(
+function helpRequestMessages(
   history: readonly HelpMessage[],
   question: string,
 ): readonly HelpMessage[] {

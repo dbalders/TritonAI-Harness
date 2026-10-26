@@ -92,7 +92,7 @@ describe("plugin payload review", () => {
       { value: NaN },
       { value: Infinity },
       { value: 1n },
-      new Date(),
+      new Date(0),
       new Proxy({}, {}),
       sparse,
     ])

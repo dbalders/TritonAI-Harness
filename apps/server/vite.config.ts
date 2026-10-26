@@ -15,6 +15,7 @@ import {
 import { loadManagedHarnessConfigForBuild } from "../../scripts/lib/managed-harness-config.ts";
 import { loadHelpDocumentationForBuild } from "../../scripts/lib/help-documentation.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import rootPackageJson from "../../package.json" with { type: "json" };
 import packageJson from "./package.json" with { type: "json" };
 import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.ts";
 
@@ -60,7 +61,6 @@ if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {
 // executable needs a host Node that supports `--build-sea` (25.7+), so this is
 // a separate mode rather than a second entry in the default build.
 const packExecutable = process.env.T3CODE_PACK_EXE === "1";
-const SEA_NODE_VERSION = "26.8.2";
 const SEA_TARGETS = {
   "darwin-arm64": { platform: "darwin", arch: "arm64" },
   "darwin-x64": { platform: "darwin", arch: "x64" },
@@ -76,6 +76,16 @@ const hostSeaPlatform = hostPlatform === "win32" ? "win" : hostPlatform;
 const packExecutableTarget =
   process.env.T3CODE_PACK_EXE_TARGET?.trim() ||
   (packExecutable ? `${hostSeaPlatform}-${hostArchitecture}` : undefined);
+const cliNodeVersion = rootPackageJson.engines.node;
+if (
+  packExecutable &&
+  !process.env.T3CODE_PACK_EXE_TARGET?.trim() &&
+  process.versions.node !== cliNodeVersion
+) {
+  throw new Error(
+    `Native CLI executables must be built with Node ${cliNodeVersion}; running ${process.versions.node}.`,
+  );
+}
 if (packExecutableTarget && !Object.hasOwn(SEA_TARGETS, packExecutableTarget)) {
   throw new Error(
     `T3CODE_PACK_EXE_TARGET must be one of ${Object.keys(SEA_TARGETS).join(", ")}, got "${packExecutableTarget}".`,
@@ -85,13 +95,17 @@ const packExecutableTargets = packExecutableTarget
   ? [
       {
         ...SEA_TARGETS[packExecutableTarget as keyof typeof SEA_TARGETS],
-        nodeVersion: SEA_NODE_VERSION,
+        nodeVersion: cliNodeVersion,
       },
     ]
   : undefined;
 
+// The root config's `projects` route repo-root runs to package configs,
+// including this one. Inheriting them would make this config a container.
+const { projects: _rootTestProjects, ...baseTestConfig } = baseConfig.test ?? {};
+
 export default mergeConfig(
-  baseConfig,
+  { ...baseConfig, test: baseTestConfig },
   defineConfig({
     run: {
       tasks: {
