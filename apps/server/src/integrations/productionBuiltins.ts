@@ -19,6 +19,10 @@ import { validateIntegrationManifest } from "./manifest.ts";
 import { loadPluginSdkIntegration, PluginSdkQuarantineError } from "./pluginSdk/adapter.ts";
 import { acquireProductionRuntime, type ProductionRuntimeLease } from "./productionRuntime.ts";
 import { createMacPluginSandboxRuntime } from "./pluginSandbox/MacPluginSandboxRuntime.ts";
+import {
+  createBundledPluginSandbox,
+  type PluginSandboxHost,
+} from "./pluginSandbox/BundledPluginSandbox.ts";
 import type { IsolatedPluginRuntime } from "./pluginSandbox/IsolatedPluginAdapter.ts";
 
 declare const __TRITONAI_BUILD_PLUGIN_COMPOSITION__: unknown;
@@ -517,7 +521,10 @@ export async function loadProductionPackagesForTest(
 
 export async function loadProductionIntegrations(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
-  options: { readonly isolatedRuntime?: Parameters<typeof createMacPluginSandboxRuntime>[0] } = {},
+  options: {
+    readonly host?: PluginSandboxHost;
+    readonly isolatedRuntime?: Parameters<typeof createMacPluginSandboxRuntime>[0];
+  } = {},
 ): Promise<ReadonlyArray<IntegrationPackage>> {
   if (!buildComposition) return [];
   let ownedRuntime: Awaited<ReturnType<typeof createMacPluginSandboxRuntime>> | null = null;
@@ -532,7 +539,9 @@ export async function loadProductionIntegrations(
     const configuration = validateBuildConfiguration(buildComposition, buildConfiguration);
     ownedRuntime = options.isolatedRuntime
       ? await createMacPluginSandboxRuntime(options.isolatedRuntime)
-      : null;
+      : options.host
+        ? await createBundledPluginSandbox(import.meta.dirname, options.host)
+        : null;
     const runtime = ownedRuntime;
     const packages = await loadProductionPackages(
       buildComposition.packages.map((plugin) => {

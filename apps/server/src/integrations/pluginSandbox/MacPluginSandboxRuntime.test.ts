@@ -1,6 +1,6 @@
 import { expect, it } from "vite-plus/test";
 import { createMacPluginSandboxRuntime } from "./MacPluginSandboxRuntime.ts";
-import { QUICKJS_RUNTIME_FILES } from "./QuickJsRuntimeProfile.ts";
+import { QUICKJS_RUNTIME_FILES } from "@t3tools/shared/pluginSandboxProfile";
 
 it("rejects an unsupported platform before accessing or executing any supplied path", async () => {
   for (const platform of ["win32", "linux"] as const) {

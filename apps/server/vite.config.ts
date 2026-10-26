@@ -15,6 +15,7 @@ import {
 import { loadManagedHarnessConfigForBuild } from "../../scripts/lib/managed-harness-config.ts";
 import { loadHelpDocumentationForBuild } from "../../scripts/lib/help-documentation.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { loadPluginSandboxBundleForBuild } from "../../scripts/lib/plugin-sandbox-bundle.ts";
 import rootPackageJson from "../../package.json" with { type: "json" };
 import packageJson from "./package.json" with { type: "json" };
 import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.ts";
@@ -32,6 +33,7 @@ const repoRoot = NodeURL.fileURLToPath(new URL("../..", import.meta.url));
 const managedHarnessConfig = loadManagedHarnessConfigForBuild(repoRoot);
 const managedPluginBuildInput = loadManagedPluginCompositionFromEnvironment(repoEnv);
 const managedPluginComposition = managedPluginBuildInput?.composition ?? null;
+const pluginSandboxBundle = loadPluginSandboxBundleForBuild(repoRoot, repoEnv);
 const managedPluginConfiguration = managedPluginBuildInput
   ? readManagedPluginBuildConfiguration(managedPluginBuildInput.composition, repoEnv)
   : null;
@@ -179,6 +181,7 @@ export default mergeConfig(
         __TRITONAI_BUILD_SUPPORTS_INTEGRATION_FIXTURES__: "false",
         __TRITONAI_BUILD_PLUGIN_COMPOSITION__: JSON.stringify(managedPluginComposition),
         __TRITONAI_BUILD_PLUGIN_CONFIGURATION__: JSON.stringify(managedPluginConfiguration),
+        __TRITONAI_BUILD_PLUGIN_SANDBOX__: JSON.stringify(pluginSandboxBundle?.manifest ?? null),
         __TRITONAI_BUILD_MICROSOFT_OAUTH__: JSON.stringify(microsoftOAuthConfiguration),
         __TRITONAI_BUILD_MANAGED_CONFIG__: JSON.stringify(managedHarnessConfig.config),
         __TRITONAI_BUILD_MANAGED_CONFIG_DIGEST__: JSON.stringify(managedHarnessConfig.digest),

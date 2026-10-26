@@ -15,6 +15,10 @@ import {
 } from "../../../scripts/lib/managed-plugin-composition.ts";
 import { loadManagedHarnessConfigForBuild } from "../../../scripts/lib/managed-harness-config.ts";
 import { loadRepoEnv } from "../../../scripts/lib/public-config.ts";
+import {
+  loadPluginSandboxBundleForBuild,
+  snapshotPluginSandboxBundle,
+} from "../../../scripts/lib/plugin-sandbox-bundle.ts";
 import { findEsmImportsOfExternalPackages } from "../../../scripts/lib/cli-executable-imports.ts";
 import rootPackageJson from "../../../package.json" with { type: "json" };
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -94,6 +98,12 @@ const emitManagedBuildResources = Effect.fn("emitManagedBuildResources")(functio
       pluginSource.root,
       path.join(serverDir, "dist/production-integrations"),
     );
+    const sandbox = loadPluginSandboxBundleForBuild(repoRoot, loadRepoEnv());
+    if (sandbox)
+      snapshotPluginSandboxBundle(
+        sandbox,
+        path.join(serverDir, "dist/production-integrations/runtime"),
+      );
     yield* Effect.log("[cli] Bundled managed plugin composition into dist");
   }
 });

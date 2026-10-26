@@ -179,6 +179,28 @@ Runtime-discovered entrypoints and dependency exceptions belong in [knip.jsonc](
 
 ## Desktop artifacts
 
+### Isolated plugin worker assets
+
+SDK2 plugins require a separate sealed worker bundle alongside the managed plugin composition.
+On a macOS build host with Xcode command-line tools, prepare a new directory for the target
+architecture:
+
+```sh
+node scripts/prepare-plugin-sandbox.ts /absolute/new-worker-directory arm64
+```
+
+Set `TRITONAI_PLUGIN_SANDBOX_SOURCE` to that directory when building the server or desktop
+with its managed plugin composition. The build verifies and stages the pinned Node distribution,
+native supervisor, QuickJS/Wasm interpreter, bridge and licenses. The server uses those files
+through its normal integration startup; it never selects Electron or the server executable as
+the worker runtime. Missing or changed assets keep providers unavailable.
+
+The host pins the exact staged bytes. Replacing or re-signing worker files requires rebuilding
+the server bundle and its artifact proof. Windows and Linux currently have no admitted OS worker;
+SDK1 and legacy Effect providers remain unavailable for isolated execution.
+
+### Building desktop artifacts
+
 Local artifact builds are unsigned by default and write to `release/`:
 
 ```sh

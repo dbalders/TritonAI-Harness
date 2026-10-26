@@ -1,4 +1,5 @@
 export const QUICKJS_EXECUTION_PROFILE = "tritonai.quickjs-wasm/v1";
+export const QUICKJS_LAUNCHER_NODE_VERSION = "24.22.1";
 export const QUICKJS_RUNTIME_FILES = {
   bootstrap: {
     name: "worker.cjs",

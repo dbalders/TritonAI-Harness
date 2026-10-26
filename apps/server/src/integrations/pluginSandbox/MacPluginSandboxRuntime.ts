@@ -7,7 +7,10 @@ import * as NodeUtil from "node:util";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import type { IsolatedPluginRuntime } from "./IsolatedPluginAdapter.ts";
 import { runMacPluginWorker } from "./PluginSandboxWorker.ts";
-import { QUICKJS_EXECUTION_PROFILE, QUICKJS_RUNTIME_FILES } from "./QuickJsRuntimeProfile.ts";
+import {
+  QUICKJS_EXECUTION_PROFILE,
+  QUICKJS_RUNTIME_FILES,
+} from "@t3tools/shared/pluginSandboxProfile";
 
 interface PinnedFile {
   readonly path: string;
