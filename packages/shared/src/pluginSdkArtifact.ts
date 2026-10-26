@@ -76,6 +76,50 @@ export interface VerifiedPluginSdkArtifact {
   readonly skillFiles: Readonly<Record<string, Uint8Array>>;
 }
 
+interface BrokerManifest extends Omit<PluginSdkManifest, "apiVersion" | "manifestVersion" | "sdk"> {
+  readonly apiVersion: "tritonai.plugin/v2";
+  readonly manifestVersion: 2;
+  readonly sdk: { readonly apiMajor: 2; readonly requiredHostContractLevel: 3 };
+  readonly broker: {
+    readonly protocol: "tritonai.plugin-broker/v1";
+    readonly policyId: string;
+    readonly policyVersion: number;
+    readonly operations: ReadonlyArray<{ readonly id: string; readonly tool: string }>;
+  };
+}
+
+interface BrokerArtifactDescriptor extends Omit<
+  PluginSdkArtifactDescriptor,
+  "artifactVersion" | "format" | "sdk" | "target"
+> {
+  readonly artifactVersion: 2;
+  readonly format: "tritonai.plugin-artifact/v2";
+  readonly sdk: BrokerManifest["sdk"];
+  readonly target: Omit<PluginSdkArtifactDescriptor["target"], "environments" | "node"> & {
+    readonly environments: readonly ["isolated-worker"];
+    readonly node: typeof NODE24_TARGET;
+  };
+  readonly broker: {
+    readonly protocol: "tritonai.plugin-broker/v1";
+    readonly policy: {
+      readonly path: ".tritonai-plugin/broker-policy.json";
+      readonly sha256: string;
+      readonly id: string;
+      readonly version: number;
+    };
+  };
+}
+
+export interface VerifiedIsolatedPluginSdkArtifact extends Omit<
+  VerifiedPluginSdkArtifact,
+  "descriptor" | "sdkManifest"
+> {
+  readonly descriptor: BrokerArtifactDescriptor;
+  readonly sdkManifest: BrokerManifest;
+  readonly policyBytes: Uint8Array;
+  readonly policyFileSha256: string;
+}
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
@@ -143,8 +187,7 @@ function nodeVersionSupported(version: string, target: NodeRuntimeTarget): boole
   );
 }
 
-// This inventories static ESM imports for reviewed application code. It is not a capability
-// boundary: curated providers execute in the normal trusted Node backend realm.
+// Static imports describe dependencies, never capabilities. Isolation is enforced at execution.
 function inspectTrustedModuleImports(source: string): {
   readonly nodeBuiltins: ReadonlyArray<string>;
   readonly exports: ReadonlyArray<string>;
@@ -370,5 +413,213 @@ export function verifyPluginSdkArtifact(
     manifest,
     entryBytes,
     skillFiles,
+  };
+}
+
+/** Verifies SDK2 bytes and ABI compatibility; it does not admit a policy or launch a worker. */
+export function verifyIsolatedPluginSdkArtifact(
+  files: ReadonlyArray<PluginSdkArtifactFile>,
+  options: { readonly workerNodeVersion: string },
+): VerifiedIsolatedPluginSdkArtifact {
+  assert(
+    typeof options?.workerNodeVersion === "string" &&
+      nodeVersionSupported(options.workerNodeVersion, NODE24_TARGET),
+    `Plugin worker requires an explicit Node ${NODE24_TARGET} runtime.`,
+  );
+  assert(files.length > 0 && files.length <= 128, "Plugin SDK artifact file limit exceeded.");
+  assertSafePaths(files.map(({ path }) => path));
+  let total = 0;
+  for (const { path, contents } of files) {
+    assert(
+      path
+        .split("/")
+        .every(
+          (segment) =>
+            !/[<>:"|?*]/u.test(segment) &&
+            !/[. ]$/u.test(segment) &&
+            !/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$)(?:\.|$)/iu.test(
+              segment,
+            ),
+        ),
+      `Plugin SDK artifact path is not portable: ${path}.`,
+    );
+    const limit =
+      path === ENTRY_PATH
+        ? 524_288
+        : [ARTIFACT_PATH, MANIFEST_PATH, ".tritonai-plugin/broker-policy.json"].includes(path)
+          ? 262_144
+          : 1_048_576;
+    total += contents.byteLength;
+    assert(
+      contents.byteLength <= limit && total <= 4_194_304,
+      "Plugin SDK artifact byte limit exceeded.",
+    );
+  }
+  const payloads = new Map(files.map(({ path, contents }) => [path, Uint8Array.from(contents)]));
+  const descriptorBytes = payloads.get(ARTIFACT_PATH);
+  const manifestBytes = payloads.get(MANIFEST_PATH);
+  const entryBytes = payloads.get(ENTRY_PATH);
+  const policyPath = ".tritonai-plugin/broker-policy.json";
+  const policyBytes = payloads.get(policyPath);
+  assert(
+    descriptorBytes && manifestBytes && entryBytes && policyBytes,
+    "Plugin SDK2 artifact payload is missing.",
+  );
+  const value = parseCanonicalJson(manifestBytes, "Plugin SDK2 manifest");
+  assert(
+    isRecord(value) &&
+      value.apiVersion === "tritonai.plugin/v2" &&
+      value.manifestVersion === 2 &&
+      isRecord(value.sdk) &&
+      canonicalJson(value.sdk as JsonValue) ===
+        canonicalJson({ apiMajor: 2, requiredHostContractLevel: 3 }),
+    "Plugin SDK2 manifest contract is unsupported.",
+  );
+  const { broker, ...common } = value;
+  // Reuse the established schema/catalog checks without admitting the SDK1 execution ABI.
+  const { sdkManifest: checked, manifest } = validatePluginSdkManifest({
+    ...common,
+    apiVersion: "tritonai.plugin/v1",
+    manifestVersion: 1,
+    sdk: { apiMajor: 1, requiredHostContractLevel: 2 },
+  });
+  assert(
+    isRecord(broker) &&
+      onlyKeys(broker, new Set(["protocol", "policyId", "policyVersion", "operations"])) &&
+      broker.protocol === "tritonai.plugin-broker/v1" &&
+      typeof broker.policyId === "string" &&
+      broker.policyId.length <= 128 &&
+      /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/u.test(broker.policyId) &&
+      Number.isSafeInteger(broker.policyVersion) &&
+      (broker.policyVersion as number) > 0 &&
+      Array.isArray(broker.operations) &&
+      broker.operations.length === checked.tools.length,
+    "Plugin SDK2 broker declaration is invalid.",
+  );
+  const tools = new Map(checked.tools.map((tool) => [tool.name, tool]));
+  const bindings = broker.operations.map((operation) => {
+    assert(
+      isRecord(operation) &&
+        onlyKeys(operation, new Set(["id", "tool"])) &&
+        typeof operation.tool === "string" &&
+        tools.has(operation.tool) &&
+        operation.id === `${operation.tool}.v1`,
+      "Plugin SDK2 broker operation does not match its tool.",
+    );
+    return { id: operation.id as string, tool: operation.tool };
+  });
+  assert(
+    new Set(bindings.map(({ tool }) => tool)).size === checked.tools.length,
+    "Plugin SDK2 broker operations are duplicated.",
+  );
+  const sdkManifest: BrokerManifest = {
+    ...checked,
+    apiVersion: "tritonai.plugin/v2",
+    manifestVersion: 2,
+    sdk: { apiMajor: 2, requiredHostContractLevel: 3 },
+    broker: {
+      protocol: "tritonai.plugin-broker/v1",
+      policyId: broker.policyId,
+      policyVersion: broker.policyVersion as number,
+      operations: bindings,
+    },
+  };
+  const policy = parseCanonicalJson(policyBytes, "Plugin SDK2 broker policy");
+  assert(
+    isRecord(policy) &&
+      policy.format === "tritonai.plugin-broker-policy/v1" &&
+      policy.id === sdkManifest.broker.policyId &&
+      policy.version === sdkManifest.broker.policyVersion &&
+      policy.pluginId === sdkManifest.id &&
+      Array.isArray(policy.operations) &&
+      policy.operations.length === bindings.length,
+    "Plugin SDK2 policy identity does not match its manifest.",
+  );
+  const policyTools = new Set<string>();
+  for (const operation of policy.operations) {
+    assert(
+      isRecord(operation) && typeof operation.tool === "string",
+      "Invalid broker policy tool.",
+    );
+    const tool = tools.get(operation.tool);
+    assert(
+      tool &&
+        !policyTools.has(tool.name) &&
+        operation.id === `${tool.name}.v1` &&
+        operation.effect === tool.effect &&
+        canonicalJson(operation.capabilities as JsonValue) === canonicalJson(tool.capabilities),
+      "Plugin SDK2 policy operation does not match its tool.",
+    );
+    policyTools.add(tool.name);
+  }
+  const expectedPaths = [
+    ARTIFACT_PATH,
+    MANIFEST_PATH,
+    ENTRY_PATH,
+    policyPath,
+    ...checked.skills.map(({ name }) => `skills/${name}/SKILL.md`),
+  ].sort();
+  assert(
+    canonicalJson([...payloads.keys()].sort()) === canonicalJson(expectedPaths),
+    "Plugin SDK2 artifact inventory does not match its manifest.",
+  );
+  for (const skill of checked.skills) {
+    validateSkillEntrypoint(payloads.get(`skills/${skill.name}/SKILL.md`)!, skill);
+  }
+  const source = Buffer.from(entryBytes).toString("utf8");
+  assert(Buffer.from(source).equals(Buffer.from(entryBytes)), "Plugin SDK2 entry must be UTF-8.");
+  const module = inspectTrustedModuleImports(source);
+  assert(
+    module.nodeBuiltins.length === 0 &&
+      canonicalJson(module.exports) === canonicalJson(["createIntegrationProvider"]),
+    "Plugin SDK2 entry must be a self-contained provider factory.",
+  );
+  const policyFileSha256 = sha256(policyBytes);
+  const descriptor: BrokerArtifactDescriptor = {
+    artifactVersion: 2,
+    format: "tritonai.plugin-artifact/v2",
+    plugin: { id: checked.id, version: checked.version },
+    sdk: sdkManifest.sdk,
+    target: { ...TARGET, environments: ["isolated-worker"], nodeBuiltins: [] },
+    entry: ENTRY_PATH,
+    manifest: MANIFEST_PATH,
+    configurationSchema: sha256(canonicalJson(checked.configurationSchema)),
+    schemas: checked.tools
+      .map(({ name, inputSchema }) => ({ tool: name, sha256: sha256(canonicalJson(inputSchema)) }))
+      .sort((left, right) => (left.tool < right.tool ? -1 : left.tool > right.tool ? 1 : 0)),
+    files: [...payloads.entries()]
+      .filter(([path]) => path !== ARTIFACT_PATH)
+      .map(([path, contents]) => ({ path, sha256: sha256(contents), size: contents.byteLength }))
+      .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
+    broker: {
+      protocol: "tritonai.plugin-broker/v1",
+      policy: {
+        path: policyPath,
+        sha256: policyFileSha256,
+        id: sdkManifest.broker.policyId,
+        version: sdkManifest.broker.policyVersion,
+      },
+    },
+  };
+  assert(
+    canonicalJson(parseCanonicalJson(descriptorBytes, "Plugin SDK2 descriptor") as JsonValue) ===
+      canonicalJson(descriptor as unknown as JsonValue),
+    "Plugin SDK2 descriptor does not match its exact payloads.",
+  );
+  return {
+    descriptor,
+    descriptorSha256: sha256(descriptorBytes),
+    sdkManifest,
+    manifest,
+    entryBytes,
+    skillFiles: Object.fromEntries(
+      checked.skills.map(({ name }) => {
+        const path = `skills/${name}/SKILL.md`;
+        return [path, payloads.get(path)!];
+      }),
+    ),
+    // This digest includes the canonical file's newline. A separate host pin must authorize it.
+    policyFileSha256,
+    policyBytes,
   };
 }
