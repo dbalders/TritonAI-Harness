@@ -36,7 +36,7 @@ async function fixture(
   const runtime = await NodeFSP.realpath(runtimePath);
   const bootstrap = await NodeFSP.realpath(
     NodeURL.fileURLToPath(
-      new URL("../../../../../native/plugin-sandbox/worker.cjs", import.meta.url),
+      new URL("../../../../../native/plugin-sandbox/test-worker.cjs", import.meta.url),
     ),
   );
   const supervisor = NodePath.join(root, "supervisor");

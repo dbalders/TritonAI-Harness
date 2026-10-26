@@ -57,6 +57,7 @@ it("quarantines a valid SDK1 artifact without evaluating it or supplying secrets
   let loaded: Awaited<ReturnType<typeof loadPluginSdkIntegration>> | undefined;
   let invocations = 0;
   const runtime = {
+    executionProfile: "tritonai.quickjs-wasm/v1" as const,
     workerNodeVersion: "24.22.1",
     invoke: async () => {
       invocations++;

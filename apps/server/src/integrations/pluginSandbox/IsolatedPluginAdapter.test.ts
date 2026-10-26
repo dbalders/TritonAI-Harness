@@ -46,17 +46,18 @@ async function artifact(id = "synthetic-api-key", changedPolicy = false) {
     },
   ];
   const descriptor = {
-    artifactVersion: 2,
-    format: "tritonai.plugin-artifact/v2",
+    artifactVersion: 3,
+    format: "tritonai.plugin-artifact/v3",
     plugin: { id, version: manifest.version },
     sdk: manifest.sdk,
     target: {
       architecture: "any",
       environments: ["isolated-worker"],
       module: "esm",
-      node: ">=24.13.1 <25",
+      launcherNode: ">=24.13.1 <25",
       platform: "any",
-      runtime: "node",
+      runtime: "quickjs-wasm",
+      executionProfile: "tritonai.quickjs-wasm/v1",
       nodeBuiltins: [],
     },
     entry: "plugin.mjs",
@@ -106,6 +107,7 @@ async function fixture(
     getOrCreateRandom: (_name, size) => Effect.succeed(new Uint8Array(size)),
   };
   const runtime: IsolatedPluginRuntime = {
+    executionProfile: "tritonai.quickjs-wasm/v1" as const,
     workerNodeVersion: "24.22.1",
     async invoke(input) {
       calls.push(input);

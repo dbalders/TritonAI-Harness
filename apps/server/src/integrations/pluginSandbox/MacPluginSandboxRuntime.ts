@@ -7,6 +7,7 @@ import * as NodeUtil from "node:util";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import type { IsolatedPluginRuntime } from "./IsolatedPluginAdapter.ts";
 import { runMacPluginWorker } from "./PluginSandboxWorker.ts";
+import { QUICKJS_EXECUTION_PROFILE, QUICKJS_RUNTIME_FILES } from "./QuickJsRuntimeProfile.ts";
 
 interface PinnedFile {
   readonly path: string;
@@ -19,9 +20,15 @@ export async function createMacPluginSandboxRuntime(input: {
   readonly runtime: PinnedFile;
   readonly supervisor: PinnedFile;
   readonly bootstrap: PinnedFile;
+  readonly engine: PinnedFile;
+  readonly bridge: PinnedFile;
 }): Promise<IsolatedPluginRuntime & AsyncDisposable> {
   if (input.platform !== "darwin" || !NodePath.isAbsolute(input.parentDirectory))
     throw new Error("The isolated plugin OS boundary is unavailable.");
+  for (const key of ["bootstrap", "engine", "bridge"] as const) {
+    if (input[key]?.sha256 !== QUICKJS_RUNTIME_FILES[key].sha256)
+      throw new Error("The plugin interpreter does not match the host execution profile.");
+  }
   const root = await NodeFSP.realpath(
     await NodeFSP.mkdtemp(NodePath.join(input.parentDirectory, "plugin-runtime-")),
   );
@@ -53,6 +60,8 @@ export async function createMacPluginSandboxRuntime(input: {
     const runtime = await snapshot(input.runtime, "node", 200 * 1024 * 1024);
     const supervisor = await snapshot(input.supervisor, "supervisor", 2 * 1024 * 1024);
     const bootstrap = await snapshot(input.bootstrap, "worker.cjs", 256 * 1024);
+    const engine = await snapshot(input.engine, "engine.wasm", 1024 * 1024);
+    const bridge = await snapshot(input.bridge, "guest-bridge.js", 64 * 1024);
     const { stdout } = await NodeUtil.promisify(NodeChildProcess.execFile)(runtime, ["--version"], {
       env: {},
       timeout: 5_000,
@@ -86,9 +95,9 @@ export async function createMacPluginSandboxRuntime(input: {
 (allow signal (target self))
 (allow sysctl-read)
 (allow process-exec (literal ${quote(runtime)}))
-(allow file-read* (subpath "/System/Library") (subpath "/usr/lib") (literal ${quote(runtime)}) (literal ${quote(bootstrap)}) (literal ${quote(pluginPath)}))
+(allow file-read* (subpath "/System/Library") (subpath "/usr/lib") (literal ${quote(runtime)}) (literal ${quote(bootstrap)}) (literal ${quote(engine)}) (literal ${quote(bridge)}) (literal ${quote(pluginPath)}))
 (allow file-map-executable (subpath "/System/Library") (subpath "/usr/lib") (literal ${quote(runtime)}))
-(allow file-read-metadata file-test-existence (path-ancestors ${quote(runtime)}) (path-ancestors ${quote(bootstrap)}) (path-ancestors ${quote(pluginPath)}))
+(allow file-read-metadata file-test-existence (path-ancestors ${quote(runtime)}) (path-ancestors ${quote(bootstrap)}) (path-ancestors ${quote(engine)}) (path-ancestors ${quote(bridge)}) (path-ancestors ${quote(pluginPath)}))
 `,
             { mode: 0o400, flag: "wx" },
           );
@@ -118,6 +127,7 @@ export async function createMacPluginSandboxRuntime(input: {
       }
     };
     return {
+      executionProfile: QUICKJS_EXECUTION_PROFILE,
       workerNodeVersion: version,
       invoke,
       async [Symbol.asyncDispose]() {

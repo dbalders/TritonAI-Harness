@@ -79,7 +79,7 @@ export interface VerifiedPluginSdkArtifact {
 interface BrokerManifest extends Omit<PluginSdkManifest, "apiVersion" | "manifestVersion" | "sdk"> {
   readonly apiVersion: "tritonai.plugin/v2";
   readonly manifestVersion: 2;
-  readonly sdk: { readonly apiMajor: 2; readonly requiredHostContractLevel: 3 };
+  readonly sdk: { readonly apiMajor: 2; readonly requiredHostContractLevel: 4 };
   readonly broker: {
     readonly protocol: "tritonai.plugin-broker/v1";
     readonly policyId: string;
@@ -92,12 +92,18 @@ interface BrokerArtifactDescriptor extends Omit<
   PluginSdkArtifactDescriptor,
   "artifactVersion" | "format" | "sdk" | "target"
 > {
-  readonly artifactVersion: 2;
-  readonly format: "tritonai.plugin-artifact/v2";
+  readonly artifactVersion: 3;
+  readonly format: "tritonai.plugin-artifact/v3";
   readonly sdk: BrokerManifest["sdk"];
-  readonly target: Omit<PluginSdkArtifactDescriptor["target"], "environments" | "node"> & {
+  readonly target: {
+    readonly architecture: "any";
     readonly environments: readonly ["isolated-worker"];
-    readonly node: typeof NODE24_TARGET;
+    readonly module: "esm";
+    readonly launcherNode: typeof NODE24_TARGET;
+    readonly platform: "any";
+    readonly runtime: "quickjs-wasm";
+    readonly executionProfile: "tritonai.quickjs-wasm/v1";
+    readonly nodeBuiltins: readonly [];
   };
   readonly broker: {
     readonly protocol: "tritonai.plugin-broker/v1";
@@ -472,7 +478,7 @@ export function verifyIsolatedPluginSdkArtifact(
       value.manifestVersion === 2 &&
       isRecord(value.sdk) &&
       canonicalJson(value.sdk as JsonValue) ===
-        canonicalJson({ apiMajor: 2, requiredHostContractLevel: 3 }),
+        canonicalJson({ apiMajor: 2, requiredHostContractLevel: 4 }),
     "Plugin SDK2 manifest contract is unsupported.",
   );
   const { broker, ...common } = value;
@@ -516,7 +522,7 @@ export function verifyIsolatedPluginSdkArtifact(
     ...checked,
     apiVersion: "tritonai.plugin/v2",
     manifestVersion: 2,
-    sdk: { apiMajor: 2, requiredHostContractLevel: 3 },
+    sdk: { apiMajor: 2, requiredHostContractLevel: 4 },
     broker: {
       protocol: "tritonai.plugin-broker/v1",
       policyId: broker.policyId,
@@ -576,11 +582,20 @@ export function verifyIsolatedPluginSdkArtifact(
   );
   const policyFileSha256 = sha256(policyBytes);
   const descriptor: BrokerArtifactDescriptor = {
-    artifactVersion: 2,
-    format: "tritonai.plugin-artifact/v2",
+    artifactVersion: 3,
+    format: "tritonai.plugin-artifact/v3",
     plugin: { id: checked.id, version: checked.version },
     sdk: sdkManifest.sdk,
-    target: { ...TARGET, environments: ["isolated-worker"], nodeBuiltins: [] },
+    target: {
+      architecture: "any",
+      environments: ["isolated-worker"],
+      module: "esm",
+      launcherNode: NODE24_TARGET,
+      platform: "any",
+      runtime: "quickjs-wasm",
+      executionProfile: "tritonai.quickjs-wasm/v1",
+      nodeBuiltins: [],
+    },
     entry: ENTRY_PATH,
     manifest: MANIFEST_PATH,
     configurationSchema: sha256(canonicalJson(checked.configurationSchema)),

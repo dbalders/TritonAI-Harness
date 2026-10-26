@@ -30,6 +30,7 @@ import { createReviewedPluginBroker, type KualiBrokerTransport } from "./Reviewe
 import { kualiBrokerTransport } from "./KualiBrokerTransport.ts";
 
 export interface IsolatedPluginRuntime {
+  readonly executionProfile: "tritonai.quickjs-wasm/v1";
   readonly workerNodeVersion: string;
   invoke(input: {
     readonly artifact: VerifiedIsolatedPluginSdkArtifact;
@@ -60,6 +61,8 @@ export async function loadIsolatedPluginIntegration(input: {
   const artifact = verifyIsolatedPluginSdkArtifact(input.files, {
     workerNodeVersion: input.runtime.workerNodeVersion,
   });
+  if (input.runtime.executionProfile !== artifact.descriptor.target.executionProfile)
+    throw new Error("The plugin execution profile is unavailable in this runtime.");
   if (
     artifact.sdkManifest.id !== input.expected.id ||
     artifact.sdkManifest.version !== input.expected.version

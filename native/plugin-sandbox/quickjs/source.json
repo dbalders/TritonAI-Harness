@@ -1,0 +1,25 @@
+{
+  "executionProfile": "tritonai.quickjs-wasm/v1",
+  "engine": {
+    "name": "QuickJS",
+    "version": "2026-06-04",
+    "archiveUrl": "https://bellard.org/quickjs/quickjs-2026-06-04.tar.xz",
+    "archiveSha256": "b376e839b322978313d929fd20663b11ba58b75df5a46c126dd19ea2fa70ad2a"
+  },
+  "compiler": {
+    "name": "Emscripten",
+    "version": "5.0.1",
+    "sourceCommit": "14c18b569f55138fe4963924162244251f454fb0"
+  },
+  "limits": {
+    "linearMemoryBytes": 67108864,
+    "allocatorBytes": 50331648,
+    "cStackBytes": 262144,
+    "jsStackBytes": 131072,
+    "interruptChecks": 10000,
+    "frameBytes": 524288,
+    "jobs": 10000,
+    "jobsPerPump": 32,
+    "wholeProcessRssHardCap": false
+  }
+}

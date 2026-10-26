@@ -52,7 +52,7 @@ function artifact(
     name: "Fixture broker",
     description: "Synthetic isolated artifact.",
     version: "2.0.0",
-    sdk: { apiMajor: 2, requiredHostContractLevel: 3 },
+    sdk: { apiMajor: 2, requiredHostContractLevel: 4 },
     entry: "dist/index.mjs",
     provider: "fixture-broker",
     configurationSchema: emptySchema,
@@ -103,17 +103,18 @@ function artifact(
     ...(options.extra ?? []),
   ];
   const descriptor = {
-    artifactVersion: 2,
-    format: "tritonai.plugin-artifact/v2",
+    artifactVersion: 3,
+    format: "tritonai.plugin-artifact/v3",
     plugin: { id: manifest.id, version: manifest.version },
     sdk: manifest.sdk,
     target: {
       architecture: "any",
       environments: ["isolated-worker"],
       module: "esm",
-      node: ">=24.13.1 <25",
+      launcherNode: ">=24.13.1 <25",
       platform: "any",
-      runtime: "node",
+      runtime: "quickjs-wasm",
+      executionProfile: "tritonai.quickjs-wasm/v1",
       nodeBuiltins: [],
     },
     entry: "plugin.mjs",
@@ -195,6 +196,23 @@ it.each([manifestPath, policyPath, "plugin.mjs", "artifact.json"])(
 );
 
 it.each([
+  {
+    manifest: { sdk: { apiMajor: 2, requiredHostContractLevel: 3 } },
+    descriptor: {
+      artifactVersion: 2,
+      format: "tritonai.plugin-artifact/v2",
+      sdk: { apiMajor: 2, requiredHostContractLevel: 3 },
+      target: {
+        architecture: "any",
+        environments: ["isolated-worker"],
+        module: "esm",
+        node: ">=24.13.1 <25",
+        platform: "any",
+        runtime: "node",
+        nodeBuiltins: [],
+      },
+    },
+  },
   { manifest: { sdk: { apiMajor: 1, requiredHostContractLevel: 2 } } },
   { manifest: { manifestVersion: 1 } },
   {
