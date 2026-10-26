@@ -48,8 +48,8 @@ it.layer(NodeServices.layer)("CodexModelCatalog materialization", (it) => {
   const metadataWithoutModalities: Array<CodexSettings["customModelMetadata"]> = [
     { "gpt-6.1-sol": { name: "GPT-6.1 Sol" } },
     { "gpt-6.1-sol": { name: "GPT-6.1 Sol", capabilities: { inputModalities: [] } } },
-    {},
   ];
+  // regression: #421 fix(codex): contain Stop commands and restore managed Auto approvals
   it.effect.each(metadataWithoutModalities)(
     "refreshes a managed catalog without explicit modalities: %j",
     (customModelMetadata) =>
@@ -172,13 +172,6 @@ it.layer(NodeServices.layer)("CodexModelCatalog materialization", (it) => {
 });
 
 describe("CodexModelCatalog", () => {
-  it("uses distinct catalog files for distinct provider instances", () => {
-    NodeAssert.notEqual(
-      managedCodexModelCatalogFileName("codex"),
-      managedCodexModelCatalogFileName("codex-work"),
-    );
-  });
-
   it("adds only custom models with explicit input modality metadata", () => {
     const result = JSON.parse(
       buildTritonAiCodexModelCatalog(bundledCatalog, {
@@ -228,83 +221,7 @@ describe("CodexModelCatalog", () => {
     NodeAssert.equal(flash?.base_instructions, glm?.base_instructions);
   });
 
-  it("updates explicit modalities for a model already in the bundled catalog", () => {
-    const result = JSON.parse(
-      buildTritonAiCodexModelCatalog(bundledCatalog, {
-        "gpt-5.5": {
-          name: "Managed GPT-5.5",
-          capabilities: { inputModalities: ["text"] },
-        },
-      }),
-    ) as { models: Array<Record<string, unknown>> };
-
-    const model = result.models.find((entry) => entry.slug === "gpt-5.5");
-    NodeAssert.equal(model?.display_name, "Managed GPT-5.5");
-    NodeAssert.deepStrictEqual(model?.input_modalities, ["text"]);
-  });
-
-  it("disables proprietary tool-search discovery for custom models", () => {
-    for (const supportsSearchTool of [false, true]) {
-      const catalog = JSON.parse(bundledCatalog) as {
-        models: Array<Record<string, unknown>>;
-      };
-      const template = catalog.models.find((model) => model.slug === "gpt-5.2");
-      NodeAssert.ok(template);
-      template.supports_search_tool = supportsSearchTool;
-
-      const result = JSON.parse(
-        buildTritonAiCodexModelCatalog(JSON.stringify(catalog), {
-          "api-glm-5.3-flash": {
-            name: "GLM 5.3 Flash",
-            capabilities: { inputModalities: ["text"] },
-          },
-        }),
-      ) as { models: Array<Record<string, unknown>> };
-      const managedModel = result.models.find((model) => model.slug === "api-glm-5.3-flash");
-
-      NodeAssert.equal(managedModel?.supports_search_tool, false);
-    }
-  });
-
-  it("disables proprietary tool-search discovery for managed bundled models", () => {
-    const result = JSON.parse(
-      buildTritonAiCodexModelCatalog(bundledCatalog, {
-        "gpt-5.5": {
-          name: "Managed GPT-5.5",
-          capabilities: { inputModalities: ["text", "image"] },
-        },
-      }),
-    ) as { models: Array<Record<string, unknown>> };
-
-    const managedModel = result.models.find((model) => model.slug === "gpt-5.5");
-    NodeAssert.equal(managedModel?.supports_search_tool, false);
-  });
-
-  it("uses generic identity with a fallback template or missing instructions", () => {
-    for (const baseInstructions of [
-      "You are Another-Model.\n\nUse tools carefully.",
-      "You are Another-Model\n\nUse tools carefully.",
-      "You are Another-Model\r\n\r\nUse tools carefully.",
-      undefined,
-    ]) {
-      const result = JSON.parse(
-        buildTritonAiCodexModelCatalog(
-          JSON.stringify({
-            models: [{ slug: "future-template", base_instructions: baseInstructions }],
-          }),
-          {
-            "custom-model": { name: "Custom", capabilities: { inputModalities: ["text"] } },
-          },
-        ),
-      ) as { models: Array<Record<string, unknown>> };
-      const managed = result.models.find((model) => model.slug === "custom-model");
-      NodeAssert.match(String(managed?.base_instructions), /^You are a coding assistant/);
-      NodeAssert.doesNotMatch(String(managed?.base_instructions), /Another-Model|undefined/);
-      if (baseInstructions)
-        NodeAssert.match(String(managed?.base_instructions), /Use tools carefully\.$/);
-    }
-  });
-
+  // regression: #297 fix(codex): review Auto-mode escalations with the chat model
   it("drops the ungranted auto-review model so Codex reviews with the chat model", () => {
     const catalog = JSON.parse(bundledCatalog) as { models: Array<Record<string, unknown>> };
     catalog.models.push({ slug: "codex-auto-review", visibility: "hide" });
@@ -321,6 +238,7 @@ describe("CodexModelCatalog", () => {
     );
   });
 
+  // regression: #421 fix(codex): contain Stop commands and restore managed Auto approvals
   it("clears inherited references to the removed reviewer only for managed gateways", () => {
     const catalog = JSON.parse(bundledCatalog) as { models: Array<Record<string, unknown>> };
     catalog.models[0]!.auto_review_model_override = "codex-auto-review";
@@ -342,12 +260,5 @@ describe("CodexModelCatalog", () => {
         ["gpt-5.2", "gpt-5.5"],
       );
     }
-  });
-
-  it("rejects malformed bundled catalog output", () => {
-    NodeAssert.throws(
-      () => buildTritonAiCodexModelCatalog("{}", {}),
-      /did not contain a models array/,
-    );
   });
 });

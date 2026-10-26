@@ -106,7 +106,7 @@ function metadataForModel(
   return Object.hasOwn(customModelMetadata, slug) ? customModelMetadata[slug] : undefined;
 }
 
-export function curateVisibleCodexModels(
+function curateVisibleCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
   configuredModels: ReadonlyArray<CustomModelSetting>,
   customModelMetadata: CustomModelMetadata = {},
@@ -494,7 +494,7 @@ function parseCodexSkillsListResponse(
   );
 }
 
-export function stabilizeIntegrationSkillPaths(
+function stabilizeIntegrationSkillPaths(
   skills: ReadonlyArray<ServerProviderSkill>,
   temporarySkills: ReadonlyArray<Integrations.IntegrationRuntimeSkill>,
   stableSkills: ReadonlyArray<Integrations.IntegrationRuntimeSkill>,

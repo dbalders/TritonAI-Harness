@@ -51,7 +51,7 @@ function getDesktopNetworkAccessBridge(): DesktopNetworkAccessBridge | undefined
   return typeof window === "undefined" ? undefined : window.desktopBridge;
 }
 
-export function createDesktopNetworkAccessStateAtom(
+function createDesktopNetworkAccessStateAtom(
   getBridge: () => DesktopNetworkAccessBridge | undefined,
 ) {
   const loadDesktopNetworkAccess = Effect.fn("loadDesktopNetworkAccess")(function* () {

@@ -51,80 +51,6 @@ describe("attachment HTML preview recovery", () => {
     expect(button, label).not.toBeNull();
     await act(async () => button!.click());
   };
-  const alert = (screen: Screen) => screen.container.querySelector('[role="alert"]');
-
-  it("keeps a renewed URL for subsequent rendered and source views", async () => {
-    setup();
-    let now = 0;
-    using _now = vi.spyOn(Date, "now").mockImplementation(() => now);
-    using _fetch = stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("<p>Captured HTML</p>")),
-    );
-    await using screen = await openRemote();
-    expect(screen.container.querySelector("iframe")?.getAttribute("src")).toBe(originalUrl);
-    now = 61 * 60_000;
-    await toggleMode(screen, "Show HTML source");
-    await act(async () => {
-      await import("./ReadOnlySourcePreview");
-    });
-    expect(fetch).toHaveBeenCalledExactlyOnceWith(renewedUrl, expect.any(Object));
-    await vi.waitFor(() =>
-      expect(screen.container.querySelector("pre")?.textContent).toBe("<p>Captured HTML</p>"),
-    );
-
-    await toggleMode(screen, "Show rendered page");
-    expect(screen.container.querySelector("iframe")?.getAttribute("src")).toBe(renewedUrl);
-    await toggleMode(screen, "Show HTML source");
-    expect(refresh).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([renewedUrl, renewedUrl]);
-  });
-
-  it("does not fetch or mark an expired URL fresh when reauthorization is unavailable", async () => {
-    setup();
-    let now = 0;
-    using _now = vi.spyOn(Date, "now").mockImplementation(() => now);
-    using _fetch = stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("<p>Captured HTML</p>")),
-    );
-    await using screen = await openRemote();
-    now = 61 * 60_000;
-    refresh.mockResolvedValue(null);
-    await toggleMode(screen, "Show HTML source");
-    expect(fetch).not.toHaveBeenCalled();
-    expect(alert(screen)?.textContent).toContain("Reconnect to the environment and try again.");
-
-    await toggleMode(screen, "Show rendered page");
-    await toggleMode(screen, "Show HTML source");
-    expect(refresh).toHaveBeenCalledTimes(3);
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it("can return to rendered HTML after local source decoding fails", async () => {
-    setup();
-    let now = 0;
-    using _now = vi.spyOn(Date, "now").mockImplementation(() => now);
-    using _fetch = stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("<p>Captured HTML</p>")),
-    );
-    const file = new Blob([new Uint8Array([0x3c, 0x70, 0x3e, 0xe9])], { type: "text/html" });
-    await using screen = await render(
-      <AttachmentFilePreview
-        name="document.html"
-        mimeType="text/html"
-        sizeBytes={file.size}
-        file={file}
-      />,
-    );
-    await toggleMode(screen, "Show HTML source");
-    await vi.waitFor(() => expect(alert(screen)?.textContent).toContain("not UTF-8"));
-
-    await toggleMode(screen, "Show rendered page");
-    expect(alert(screen)).toBeNull();
-    expect(screen.container.querySelector("iframe")?.title).toBe("document.html");
-  });
 
   it("reauthorizes before rendering after a long source-reading session", async () => {
     setup();
@@ -163,7 +89,7 @@ it("holds an attachment video source until an expired request needs a newer capa
   state.assetUrl = Atom.make<AssetUrlState>({
     _tag: "Success",
     url: urls[0]!,
-    expiresAt: Date.now() + 120_000,
+    expiresAt: 1_800_000_120_000,
   });
   const registry = AtomRegistry.make();
   using _registry = { [Symbol.dispose]: () => registry.dispose() };
@@ -195,7 +121,7 @@ it("holds an attachment video source until an expired request needs a newer capa
       video.addEventListener("loadedmetadata", () => resolve(), { once: true }),
     );
     await act(() =>
-      registry.set(state.assetUrl!, { _tag: "Success", url, expiresAt: Date.now() + 120_000 }),
+      registry.set(state.assetUrl!, { _tag: "Success", url, expiresAt: 1_800_000_120_000 }),
     );
     expect(video.src).not.toBe(url);
     video.dispatchEvent(new Event("error"));

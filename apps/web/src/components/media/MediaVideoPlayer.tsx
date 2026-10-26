@@ -88,6 +88,7 @@ export function MediaVideoPlayer({
   if (
     playbackSource !== null &&
     playbackSource.revision !== revision &&
+    (latestSrc !== null || sourceFailed) &&
     (video === null || playingVideo !== video)
   ) {
     setPlaybackSource(null);

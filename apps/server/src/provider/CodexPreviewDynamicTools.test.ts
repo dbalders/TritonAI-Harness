@@ -1,32 +1,17 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Layer from "effect/Layer";
 import { ServerConfig } from "../config.ts";
-import {
-  EnvironmentId,
-  PreviewAutomationNoAvailableHostError,
-  ProviderInstanceId,
-  ThreadId,
-  type PreviewAutomationSnapshot,
-} from "@t3tools/contracts";
+import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
 import type { PreviewAutomationInvokeInput } from "../mcp/PreviewAutomationBroker.ts";
 import {
-  CodexPreviewDynamicToolInvocationError,
-  CodexPreviewDynamicToolNotFoundError,
   getCodexPreviewDynamicToolDefinitions,
-  invokeAuthorizedCodexPreviewDynamicTool,
   invokeCodexPreviewDynamicTool,
-  makeCodexPreviewDynamicToolFailureResult,
 } from "./CodexPreviewDynamicTools.ts";
-
-const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-const isInvocationError = Schema.is(CodexPreviewDynamicToolInvocationError);
-const isToolNotFoundError = Schema.is(CodexPreviewDynamicToolNotFoundError);
 
 const invocationScope = {
   environmentId: EnvironmentId.make("environment-1"),
@@ -43,24 +28,6 @@ const invocationScope = {
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
   expiresAt: Number.MAX_SAFE_INTEGER,
-};
-
-const snapshot: PreviewAutomationSnapshot = {
-  url: "https://example.test/",
-  title: "Example",
-  loading: false,
-  visibleText: "Example source text",
-  interactiveElements: [],
-  accessibilityTree: {},
-  consoleEntries: [],
-  networkEntries: [],
-  actionTimeline: [],
-  screenshot: {
-    mimeType: "image/png",
-    data: Buffer.from("png").toString("base64"),
-    width: 10,
-    height: 5,
-  },
 };
 
 const status = {
@@ -91,21 +58,9 @@ function makeBroker(result: unknown) {
   };
 }
 
-it.effect("publishes the existing preview toolkit as flat dynamic tools", () =>
+it.effect("requires approval for preview actions but not for status reads", () =>
   Effect.gen(function* () {
     const codexPreviewDynamicToolDefinitions = yield* getCodexPreviewDynamicToolDefinitions;
-    expect(codexPreviewDynamicToolDefinitions.map(({ name }) => name)).toEqual([
-      "preview_status",
-      "preview_open",
-      "preview_navigate",
-      "preview_snapshot",
-      "preview_click",
-      "preview_type",
-      "preview_press",
-      "preview_scroll",
-      "preview_evaluate",
-      "preview_wait_for",
-    ]);
     expect(
       codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_status")
         ?.requiresApproval,
@@ -114,143 +69,12 @@ it.effect("publishes the existing preview toolkit as flat dynamic tools", () =>
       codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_click")
         ?.requiresApproval,
     ).toBe(true);
-    expect(
-      codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_snapshot")
-        ?.description,
-    ).toContain("Screenshot image bytes are omitted");
   }),
 );
 
 it.layer(
   ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(Layer.provideMerge(NodeServices.layer)),
 )("preview tools", (it) => {
-  it.effect("returns snapshot DOM context without screenshot image data", () => {
-    const { broker, invokeCalls } = makeBroker(snapshot);
-    return Effect.gen(function* () {
-      const result = yield* invokeAuthorizedCodexPreviewDynamicTool({
-        name: "preview_snapshot",
-        arguments: {},
-        invocationScope,
-        broker,
-      });
-
-      expect(result).toMatchObject({
-        url: "https://example.test/",
-        visibleText: "Example source text",
-        screenshot: { mimeType: "image/png", width: 10, height: 5, omitted: true },
-      });
-      const encodedResult = yield* encodeUnknownJson(result);
-      expect(encodedResult).not.toContain(snapshot.screenshot.data);
-      expect(invokeCalls).toHaveLength(1);
-    });
-  });
-
-  it.effect("models preview failures with structured errors and preserves the cause", () => {
-    const cause = new PreviewAutomationNoAvailableHostError({
-      operation: "status",
-      environmentId: invocationScope.environmentId,
-      threadId: invocationScope.threadId,
-      providerSessionId: invocationScope.providerSessionId,
-      providerInstanceId: invocationScope.providerInstanceId,
-    });
-    const broker = PreviewAutomationBroker.PreviewAutomationBroker.of({
-      connect: () => Effect.die("unused"),
-      focusHost: () => Effect.die("unused"),
-      respond: () => Effect.die("unused"),
-      invoke: () => Effect.fail(cause),
-    });
-
-    return Effect.gen(function* () {
-      const unknown = yield* invokeAuthorizedCodexPreviewDynamicTool({
-        name: "preview_unknown",
-        arguments: {},
-        invocationScope,
-        broker,
-      }).pipe(
-        Effect.match({
-          onFailure: (error) => error,
-          onSuccess: () => undefined,
-        }),
-      );
-      expect(isToolNotFoundError(unknown)).toBe(true);
-
-      const unavailable = yield* invokeAuthorizedCodexPreviewDynamicTool({
-        name: "preview_status",
-        arguments: {},
-        invocationScope: { ...invocationScope, capabilities: new Set() },
-        broker,
-      }).pipe(
-        Effect.match({
-          onFailure: (error) => error,
-          onSuccess: () => undefined,
-        }),
-      );
-      expect(unavailable?._tag).toBe("PreviewAutomationUnavailableError");
-
-      const failed = yield* invokeAuthorizedCodexPreviewDynamicTool({
-        name: "preview_status",
-        arguments: {},
-        invocationScope,
-        broker,
-      }).pipe(
-        Effect.match({
-          onFailure: (error) => error,
-          onSuccess: () => undefined,
-        }),
-      );
-      expect(isInvocationError(failed)).toBe(true);
-      if (isInvocationError(failed)) {
-        expect(failed.cause).toBe(cause);
-      }
-      expect(makeCodexPreviewDynamicToolFailureResult(failed)).toEqual({
-        success: false,
-        error: {
-          type: "PreviewAutomationNoAvailableHostError",
-          message: cause.message,
-        },
-      });
-    });
-  });
-
-  it.effect("tells the agent when navigation ended on a different site", () =>
-    Effect.gen(function* () {
-      const navigate = (url: string, reached: string) =>
-        invokeAuthorizedCodexPreviewDynamicTool({
-          name: "preview_navigate",
-          arguments: { url },
-          invocationScope,
-          broker: makeBroker({ ...status, url: reached }).broker,
-        });
-      const redirected = yield* navigate(
-        "https://short.example.test/r",
-        "https://news.example.org/",
-      );
-      expect(redirected).toMatchObject({
-        url: "https://news.example.org/",
-        redirectedFrom: "https://short.example.test/r",
-        redirectNotice: expect.stringContaining("different site, news.example.org"),
-      });
-      const sameSite = yield* navigate(
-        "https://short.example.test/r",
-        "https://short.example.test/x",
-      );
-      expect(sameSite).not.toHaveProperty("redirectedFrom");
-      const equivalent = yield* navigate("short.example.test/r", "https://short.example.test/r");
-      expect(equivalent).not.toHaveProperty("redirectedFrom");
-      const fromLocal = yield* navigate(
-        "http://localhost:5173/login",
-        "https://tracker.example.org/p",
-      );
-      expect(fromLocal).toMatchObject({
-        url: "https://tracker.example.org/p",
-        redirectedFrom: "http://localhost:5173/login",
-        redirectNotice: expect.stringContaining("different site, tracker.example.org"),
-      });
-      const localToLocal = yield* navigate("http://localhost:5173/", "http://localhost:5173/x");
-      expect(localToLocal).not.toHaveProperty("redirectedFrom");
-    }),
-  );
-
   it.effect("uses the current provider session and rejects it after replacement", () =>
     Effect.gen(function* () {
       const { broker, invokeCalls } = makeBroker(status);

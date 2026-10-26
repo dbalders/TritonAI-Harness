@@ -88,7 +88,7 @@ export function integrationNeedsConnectionAction(integration: IntegrationSummary
   );
 }
 
-export function shouldExpandIntegrationCard(input: {
+function shouldExpandIntegrationCard(input: {
   readonly needsConnectionAction: boolean;
   readonly hasFlow: boolean;
   readonly connectionAttentionRequest?: number;
@@ -98,7 +98,7 @@ export function shouldExpandIntegrationCard(input: {
   );
 }
 
-export function shouldFocusConnectionAction(input: {
+function shouldFocusConnectionAction(input: {
   readonly expanded: boolean;
   readonly connectionAttentionRequest?: number;
   readonly handledAttentionRequest?: number;
@@ -115,7 +115,7 @@ interface ConnectionAttentionState {
   readonly announcement: string;
 }
 
-export function clearOwnedConnectionAttention(
+function clearOwnedConnectionAttention(
   current: ConnectionAttentionState,
   integrationId: string,
 ): ConnectionAttentionState {
@@ -123,7 +123,7 @@ export function clearOwnedConnectionAttention(
   return { attention: null, announcement: "" };
 }
 
-export function reconcileConnectionAttentionForIntegration(
+function reconcileConnectionAttentionForIntegration(
   current: ConnectionAttentionState,
   integrationId: string,
   integration: IntegrationSummary | undefined,
@@ -133,7 +133,7 @@ export function reconcileConnectionAttentionForIntegration(
     : clearOwnedConnectionAttention(current, integrationId);
 }
 
-export function IntegrationConnectionActionCallout({
+function IntegrationConnectionActionCallout({
   integrationName,
 }: {
   readonly integrationName: string;
@@ -145,29 +145,24 @@ export function IntegrationConnectionActionCallout({
   );
 }
 
-export function integrationConnectAriaLabel(integrationName: string): string {
+function integrationConnectAriaLabel(integrationName: string): string {
   return `Connect ${integrationName}`;
 }
 
-export function capabilityUsesWriteTool(
-  integration: IntegrationSummary,
-  capabilityId: string,
-): boolean {
+function capabilityUsesWriteTool(integration: IntegrationSummary, capabilityId: string): boolean {
   return integration.tools.some(
     (tool) => tool.effect === "write" && tool.capabilities.includes(capabilityId),
   );
 }
 
-export const WRITE_TOOL_ACCESS_LABEL = "Write · follows task access";
-export const WRITE_TOOL_ACCESS_ARIA_LABEL = "Write operation; follows task access mode";
+const WRITE_TOOL_ACCESS_LABEL = "Write · follows task access";
+const WRITE_TOOL_ACCESS_ARIA_LABEL = "Write operation; follows task access mode";
 
-export function capabilityCanBeToggled(
-  capability: IntegrationSummary["capabilities"][number],
-): boolean {
+function capabilityCanBeToggled(capability: IntegrationSummary["capabilities"][number]): boolean {
   return capability.access !== "authorization";
 }
 
-export function capabilityAccessStateLabel(
+function capabilityAccessStateLabel(
   integration: IntegrationSummary,
   capability: IntegrationSummary["capabilities"][number],
 ): string {
@@ -306,7 +301,7 @@ function keyedSetupInstructions(instructions: ReadonlyArray<string>) {
   });
 }
 
-export function IntegrationAuthorizationFlow({
+function IntegrationAuthorizationFlow({
   integrationName,
   flow,
   busy,

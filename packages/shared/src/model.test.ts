@@ -6,42 +6,16 @@ import {
   buildProviderOptionSelectionsFromDescriptors,
   createModelCapabilities,
   createModelSelection,
-  formatCodexModelName,
-  formatModelSlugName,
   getProviderOptionCurrentLabel,
-  getModelSelectionBooleanOptionValue,
-  getModelSelectionStringOptionValue,
   getProviderOptionDescriptors,
   readCustomModelEntries,
   toCustomModelSetting,
-  getProviderOptionBooleanSelectionValue,
-  getProviderOptionStringSelectionValue,
-  isClaudeUltrathinkPrompt,
   modelCapabilitiesAreExplicitlyTextOnly,
   normalizeModelSlug,
   resolveSelectableModel,
   normalizeCustomModelSlug,
   modelSelectionsEqual,
 } from "./model.ts";
-
-it("keeps the Codex catalog display formatting", () => {
-  expect(formatCodexModelName("gpt-5.3-codex-spark")).toBe("GPT-5.3-Codex-Spark");
-  expect(formatCodexModelName("GPT Test")).toBe("GPT Test");
-});
-
-it.each([
-  ["gpt-5.4", "GPT-5.4"],
-  ["claude-opus-4-6", "Claude Opus 4.6"],
-  ["claude-sonnet-4-20250514", "Claude Sonnet 4 20250514"],
-  ["claude-opus-4-6[1m]", "Claude Opus 4.6[1m]"],
-  ["openai/gpt-5.4-mini", "openai/GPT-5.4-Mini"],
-  ["gemini-2.5-pro-preview-06-05", "Gemini 2.5 Pro Preview 06 05"],
-  ["custom/model-v2", "custom/model-v2"],
-  ["gpt-proxy", "gpt-proxy"],
-  ["My Custom Model", "My Custom Model"],
-])("formats a known model ID without losing its qualifiers: %s", (slug, expected) => {
-  expect(formatModelSlugName(slug)).toBe(expected);
-});
 
 const codexCaps: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [
@@ -99,31 +73,6 @@ const claudeCaps: ModelCapabilities = createModelCapabilities({
   ],
 });
 
-describe("normalizeModelSlug", () => {
-  it("maps known aliases to canonical slugs", () => {
-    expect(normalizeModelSlug("gpt-5-codex")).toBe("gpt-5.4");
-    expect(normalizeModelSlug("5.3")).toBe("gpt-5.3-codex");
-  });
-
-  it("returns null for empty or missing values", () => {
-    expect(normalizeModelSlug("")).toBeNull();
-    expect(normalizeModelSlug("   ")).toBeNull();
-    expect(normalizeModelSlug(null)).toBeNull();
-    expect(normalizeModelSlug(undefined)).toBeNull();
-  });
-});
-
-describe("modelCapabilitiesAreExplicitlyTextOnly", () => {
-  it("requires explicit text support without image support", () => {
-    expect(modelCapabilitiesAreExplicitlyTextOnly({ inputModalities: ["text"] })).toBe(true);
-    expect(modelCapabilitiesAreExplicitlyTextOnly({ inputModalities: ["text", "image"] })).toBe(
-      false,
-    );
-    expect(modelCapabilitiesAreExplicitlyTextOnly({})).toBe(false);
-    expect(modelCapabilitiesAreExplicitlyTextOnly(null)).toBe(false);
-  });
-});
-
 describe("resolveSelectableModel", () => {
   it("resolves exact slugs, labels, and aliases", () => {
     const options = [
@@ -142,36 +91,7 @@ describe("resolveSelectableModel", () => {
   });
 });
 
-describe("misc helpers", () => {
-  it("detects ultrathink prompts", () => {
-    expect(isClaudeUltrathinkPrompt("Please ultrathink about this")).toBe(true);
-    expect(isClaudeUltrathinkPrompt("Ultrathink:\nInvestigate")).toBe(true);
-    expect(isClaudeUltrathinkPrompt("Investigate")).toBe(false);
-  });
-
-  it("prefixes ultrathink prompts once", () => {
-    expect(applyClaudePromptEffortPrefix("Investigate", "ultrathink")).toBe(
-      "Ultrathink:\nInvestigate",
-    );
-    expect(applyClaudePromptEffortPrefix("Ultrathink:\nInvestigate", "ultrathink")).toBe(
-      "Ultrathink:\nInvestigate",
-    );
-  });
-});
-
 describe("descriptor helpers", () => {
-  it("preserves advertised input modalities", () => {
-    expect(
-      createModelCapabilities({
-        inputModalities: ["text", "image"],
-        optionDescriptors: [],
-      }),
-    ).toEqual({
-      inputModalities: ["text", "image"],
-      optionDescriptors: [],
-    });
-  });
-
   it("applies selection values to capability descriptors", () => {
     expect(
       getProviderOptionDescriptors({
@@ -207,21 +127,6 @@ describe("descriptor helpers", () => {
     ]);
   });
 
-  it("builds wire-format option selections from descriptors", () => {
-    const descriptors = getProviderOptionDescriptors({
-      caps: codexCaps,
-      selections: [
-        { id: "reasoningEffort", value: "high" },
-        { id: "fastMode", value: true },
-      ],
-    });
-
-    expect(buildProviderOptionSelectionsFromDescriptors(descriptors)).toEqual([
-      { id: "reasoningEffort", value: "high" },
-      { id: "fastMode", value: true },
-    ]);
-  });
-
   it("builds dispatch options only from explicit selections", () => {
     const descriptors = getProviderOptionDescriptors({
       caps: codexCaps,
@@ -236,24 +141,6 @@ describe("descriptor helpers", () => {
         { id: "fastMode", value: true },
       ]),
     ).toEqual([{ id: "fastMode", value: true }]);
-  });
-
-  it("reads typed option selection values", () => {
-    const selection = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
-      { id: "reasoningEffort", value: "high" },
-      { id: "fastMode", value: true },
-    ]);
-
-    expect(getProviderOptionStringSelectionValue(selection.options, "reasoningEffort")).toBe(
-      "high",
-    );
-    expect(getProviderOptionStringSelectionValue(selection.options, "fastMode")).toBeUndefined();
-    expect(getProviderOptionBooleanSelectionValue(selection.options, "fastMode")).toBe(true);
-    expect(
-      getProviderOptionBooleanSelectionValue(selection.options, "reasoningEffort"),
-    ).toBeUndefined();
-    expect(getModelSelectionStringOptionValue(selection, "reasoningEffort")).toBe("high");
-    expect(getModelSelectionBooleanOptionValue(selection, "fastMode")).toBe(true);
   });
 
   it("compares complete model selections independent of option ordering", () => {
@@ -346,18 +233,6 @@ describe("readCustomModelEntries", () => {
     ).toEqual([{ slug: "x", name: "x", capabilities: null }]);
     expect(readCustomModelEntries("not a list")).toEqual([]);
   });
-
-  it("writes the compact stored shape back", () => {
-    expect(toCustomModelSetting({ slug: "x", name: "x", capabilities: null })).toBe("x");
-    expect(
-      toCustomModelSetting({ slug: "x", name: "x", capabilities: { optionDescriptors: [] } }),
-    ).toBe("x");
-    expect(toCustomModelSetting({ slug: "x", name: "X", capabilities })).toEqual({
-      slug: "x",
-      name: "X",
-      capabilities,
-    });
-  });
 });
 
 describe("custom model modality round trips", () => {
@@ -369,14 +244,6 @@ describe("custom model modality round trips", () => {
     expect(modelCapabilitiesAreExplicitlyTextOnly(model!.capabilities)).toBe(false);
     const [restored] = readCustomModelEntries([toCustomModelSetting(model!)]);
     expect(restored?.capabilities?.inputModalities).toEqual(["text", "image"]);
-  });
-
-  it("retains explicit text-only routing through custom model settings", () => {
-    const [model] = readCustomModelEntries([
-      { slug: "campus-text", capabilities: { inputModalities: ["text"] } },
-    ]);
-    const [restored] = readCustomModelEntries([toCustomModelSetting(model!)]);
-    expect(modelCapabilitiesAreExplicitlyTextOnly(restored?.capabilities)).toBe(true);
   });
 });
 

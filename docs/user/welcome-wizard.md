@@ -10,7 +10,7 @@ Add projects when you need them using **Add Project** in the command palette. Ex
 
 ## Guided tour (experimental)
 
-The guided tour is off by default. To try it, turn on **Settings → General → Experimental → Guided tour**, then choose **Start tour**. It works in the desktop app and in a browser connected to a TritonAI server. With the experiment enabled, **Getting started** in the sidebar and **Open getting started** in the command palette reopen your saved chapters.
+The guided tour is available in Nightly and development builds, and is off by default. Stable releases do not offer it. To try it in Nightly, turn on **Settings → General → Experimental → Guided tour**, then choose **Start tour**. It works in the desktop app and in a browser connected to a TritonAI server. With the experiment enabled, **Getting started** in the sidebar and **Open getting started** in the command palette reopen your saved chapters.
 
 The chapters follow you through a practice conversation, account connections, files, Ideas, and optional computer use. Practice asking a question, sending a follow-up, and checking the answer against the original notes. Exercises prepare an editable Supervised draft; you decide when to send it. Outlook or Gmail tasks need a connected account with email reading available. Opening a draft or an unsuccessful request does not complete an exercise.
 

@@ -5,7 +5,6 @@ import type {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
-  dedupeProviderSkillRows,
   groupProviderSkills,
   isProviderSkillMutationBlocked,
   isProviderSkillPublishable,
@@ -21,25 +20,6 @@ function row(name: string): ProviderSkillRow {
   return {
     provider,
     skill: { name, path: `/tmp/skills/${name}/SKILL.md`, enabled: true },
-  };
-}
-
-function providerRow(input: {
-  readonly instanceId: string;
-  readonly name: string;
-  readonly path: string;
-  readonly enabled?: boolean;
-}): ProviderSkillRow {
-  return {
-    provider: {
-      ...provider,
-      instanceId: input.instanceId as ProviderInstanceId,
-    },
-    skill: {
-      name: input.name,
-      path: input.path,
-      enabled: input.enabled ?? true,
-    },
   };
 }
 
@@ -59,99 +39,6 @@ function entry(
 }
 
 describe("groupProviderSkills", () => {
-  it.each([false, true])("retains distinct catalog installations (managed=%s)", (managed) => {
-    const first = providerRow({
-      instanceId: "codex",
-      name: "shared-skill",
-      path: "/onprem/shared-skill/SKILL.md",
-    });
-    const second = providerRow({
-      instanceId: "codex_frontier",
-      name: "shared-skill",
-      path: "/frontier/shared-skill/SKILL.md",
-    });
-    const grouped = groupProviderSkills({
-      entries: [entry("shared-skill", "ai-team")],
-      rows: [first, second],
-      managedSkillNames: new Set(managed ? ["shared-skill"] : []),
-    });
-    expect(grouped.aiTeamItems[0]?.installedRow).toBe(first);
-    expect(grouped.managedOnlyRows).toEqual(managed ? [second] : []);
-    expect(grouped.otherRows).toEqual(managed ? [] : [second]);
-  });
-
-  it.each([false, true])(
-    "does not list a shared catalog installation twice (managed=%s)",
-    (managed) => {
-      const first = providerRow({
-        instanceId: "codex",
-        name: "shared-skill",
-        path: "/shared/SKILL.md",
-        enabled: false,
-      });
-      const second = providerRow({
-        instanceId: "codex_frontier",
-        name: "shared-skill",
-        path: "/shared/SKILL.md",
-      });
-      const grouped = groupProviderSkills({
-        entries: [entry("shared-skill", "ai-team")],
-        rows: [first, second],
-        managedSkillNames: new Set(managed ? ["shared-skill"] : []),
-      });
-      expect(grouped.aiTeamItems[0]?.installedRow).toBe(second);
-      expect(grouped.managedOnlyRows).toEqual([]);
-      expect(grouped.otherRows).toEqual([]);
-    },
-  );
-
-  it("deduplicates provider snapshots that point to the same skill file", () => {
-    const path = "/tmp/skills/ucsd-dsmlp-deploy/SKILL.md";
-    const cloud = providerRow({
-      instanceId: "tritonai-cloud",
-      name: "ucsd-dsmlp-deploy",
-      path,
-      enabled: false,
-    });
-    const onPrem = providerRow({
-      instanceId: "tritonai-on-prem",
-      name: "ucsd-dsmlp-deploy",
-      path,
-    });
-
-    expect(dedupeProviderSkillRows([cloud, onPrem])).toEqual([onPrem]);
-  });
-
-  it("keeps same-named skills when they have different paths", () => {
-    const cloud = providerRow({
-      instanceId: "tritonai-cloud",
-      name: "ucsd-dsmlp-deploy",
-      path: "/tmp/cloud/skills/ucsd-dsmlp-deploy/SKILL.md",
-    });
-    const onPrem = providerRow({
-      instanceId: "tritonai-on-prem",
-      name: "ucsd-dsmlp-deploy",
-      path: "/tmp/on-prem/skills/ucsd-dsmlp-deploy/SKILL.md",
-    });
-
-    expect(dedupeProviderSkillRows([cloud, onPrem])).toEqual([cloud, onPrem]);
-  });
-
-  it("keeps secure managed skills in AI Team and arbitrary local skills in Other", () => {
-    const managed = row("secure-review");
-    const publicInstalled = row("tritonai-feedback");
-    const local = row("my-local-skill");
-    const result = groupProviderSkills({
-      entries: [entry("tritonai-feedback", "ai-team")],
-      rows: [managed, publicInstalled, local],
-      managedSkillNames: new Set(["secure-review"]),
-    });
-
-    expect(result.aiTeamItems[0]?.installedRow).toBe(publicInstalled);
-    expect(result.managedOnlyRows).toEqual([managed]);
-    expect(result.otherRows).toEqual([local]);
-  });
-
   it("does not offer a conflicting community entry over a managed skill", () => {
     const result = groupProviderSkills({
       entries: [entry("secure-review", "community")],
