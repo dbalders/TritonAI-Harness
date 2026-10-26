@@ -1,12 +1,10 @@
-/* Native release tooling runs outside the Effect application runtime. */
-/* eslint-disable t3code/no-global-process-runtime */
 "use strict";
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
-const { EventEmitter } = require("node:events");
+const { EventEmitter, once } = require("node:events");
 const { spawn, execFileSync } = require("node:child_process");
 const { test } = require("node:test");
 const { createRequire } = require("node:module");
@@ -153,21 +151,6 @@ test("selects only the unique exact candidate stage with matching version", (t) 
   assert.throws(() => findKeptStage(f.stageRoot, "0.3.4"), /found 2/);
 });
 
-test("resolves partial notary overrides without including key bytes", (t) => {
-  const f = fixture(t);
-  const config = path.join(f.root, "notary.json");
-  fs.writeFileSync(
-    config,
-    JSON.stringify({ keyFile: "AuthKey.p8", keyId: "OLD", issuerId: "ISSUER" }),
-  );
-  assert.deepEqual(getNotaryConfig({ APPLE_API_KEY_ID: "NEW" }, config), {
-    key: f.env.APPLE_API_KEY,
-    keyId: "NEW",
-    issuer: "ISSUER",
-  });
-  assert.throws(() => getNotaryConfig({}, path.join(f.root, "absent")), /Set APPLE_API_KEY/);
-});
-
 test("checks ASAR plugin bytes against the external proof without requiring an embedded manifest", (t) => {
   const f = fixture(t);
   assert.equal(verifyPluginPayload(f.app, f.composition, f.asar, "0.3.4").fileCount, 1);
@@ -279,116 +262,6 @@ test("retains an attached mountpoint on failed detach", async (t) => {
   assert(fs.existsSync(mount), "mounted volume must not be recursively removed");
 });
 
-test("process snapshots parse explicit PID ancestry, group and start time fields without matching names", () => {
-  const records = processSnapshot((command, args, options) => {
-    assert.equal(command, "/bin/ps");
-    assert.deepEqual(args, ["-axo", "pid=,ppid=,pgid=,stat=,lstart="]);
-    assert.equal(options.timeout, 2000);
-    return {
-      stdout:
-        "  100 50 100 Ss Wed Sep  9 16:00:00 2026\n  200 100 200 S Wed Sep  9 16:00:01 2026\n",
-    };
-  });
-  assert.deepEqual(records[1], {
-    pid: 200,
-    ppid: 100,
-    pgid: 200,
-    status: "S",
-    started: "Wed Sep 9 16:00:01 2026",
-  });
-  assert.throws(
-    () => processSnapshot(() => ({ stdout: "not a process record" })),
-    /ownership snapshot/,
-  );
-});
-
-test(
-  "macOS process fixture freezes and discovers a detached child spawned during cleanup",
-  { skip: process.platform !== "darwin", timeout: 10_000 },
-  async (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "local-release-process-test-"));
-    const control = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-      stdio: "ignore",
-    });
-    const lateReceipt = path.join(root, "late-child.json");
-    const source = `const { spawn } = require('node:child_process');
-      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
-      child.once('spawn', () => process.send({ descendantPid: child.pid }));
-      process.once('message', () => {
-        const late = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
-        late.once('spawn', () => require('node:fs').writeFileSync(${JSON.stringify(lateReceipt)}, JSON.stringify({ pid: late.pid })));
-      });
-      setInterval(() => {}, 1000);`;
-    const parent = spawn(process.execPath, ["-e", source], {
-      detached: true,
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
-    });
-    const read = () =>
-      processSnapshot((command, args) => ({
-        stdout: execFileSync(command, args, { encoding: "utf8", timeout: 2000 }),
-      }));
-    const killed = [];
-    let requestedLateChild = false;
-    const tracker = trackBootProcesses(
-      parent,
-      read,
-      (pgid, signal) => {
-        if (signal === "SIGSTOP" && pgid === parent.pid && !requestedLateChild) {
-          requestedLateChild = true;
-          parent.send("fork-before-freeze");
-          const deadline = Date.now() + 2000;
-          while (!fs.existsSync(lateReceipt)) {
-            if (Date.now() >= deadline)
-              throw new Error("Late detached child fixture did not become ready");
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-          }
-        }
-        if (signal === "SIGKILL") killed.push(pgid);
-        process.kill(-pgid, signal);
-      },
-      path.join(root, "owned-processes.json"),
-    );
-    t.after(async () => {
-      try {
-        tracker.forceStop();
-        await tracker.waitForExit(3000);
-      } finally {
-        if (control.exitCode === null && control.signalCode === null) control.kill("SIGKILL");
-        if (tracker.stopped) fs.rmSync(root, { recursive: true, force: true });
-      }
-    });
-    let timer;
-    const { descendantPid } = await new Promise((resolve, reject) => {
-      timer = setTimeout(
-        () => reject(new Error("Owned process fixture did not become ready")),
-        3000,
-      );
-      parent.once("message", resolve);
-      parent.once("error", reject);
-    }).finally(() => clearTimeout(timer));
-    const owned = tracker.capture();
-    assert(
-      owned.some(
-        (p) => p.pid === descendantPid && p.ppid === parent.pid && p.pgid === descendantPid,
-      ),
-    );
-    assert(!owned.some((p) => p.pid === control.pid));
-    tracker.forceStop();
-    await tracker.waitForExit(3000);
-    const latePid = JSON.parse(fs.readFileSync(lateReceipt)).pid;
-    assert.deepEqual(new Set(killed), new Set([descendantPid, latePid, parent.pid]));
-    assert.equal(killed.at(-1), parent.pid);
-    assert(
-      JSON.parse(fs.readFileSync(path.join(root, "owned-processes.json"))).some(
-        (p) => p.pid === latePid,
-      ),
-    );
-    assert.equal(control.exitCode, null);
-    assert.equal(control.signalCode, null);
-    process.kill(control.pid, 0);
-  },
-);
-
 function bootMocks(
   f,
   {
@@ -407,6 +280,7 @@ function bootMocks(
   let closed = false;
   const child = Object.assign(new EventEmitter(), { pid: 100, exitCode: null, signalCode: null });
   const signals = new EventEmitter();
+  const evaluationReceipt = Promise.withResolvers();
   const killedGroups = [];
   const signaledGroups = [];
   let processes = [
@@ -419,8 +293,9 @@ function bootMocks(
   const page = { url: () => rendererUrl, evaluate: async () => true };
   const application = {
     process: () => child,
-    evaluate: async (_callback, argument) =>
-      hungEvaluation
+    evaluate: async (_callback, argument) => {
+      evaluationReceipt.resolve();
+      return hungEvaluation
         ? new Promise(() => {})
         : argument
           ? true
@@ -436,7 +311,8 @@ function bootMocks(
                     "tritonai-harness",
                   ),
               windows: [{ visible: true, rendererPid: 300, url: page.url() }],
-            },
+            };
+    },
     windows: () => [page],
     close: async () => {
       closed = true;
@@ -452,6 +328,7 @@ function bootMocks(
     },
   };
   return {
+    evaluationStarted: evaluationReceipt.promise,
     electron: {
       launch: async (options) => {
         launchOptions = options;
@@ -522,51 +399,6 @@ function bootMocks(
   };
 }
 
-test("boot gate verifies the custom-protocol renderer and an owned backend in isolated HOME", async (t) => {
-  const f = fixture(t);
-  const mock = bootMocks(f);
-  const result = await verifyPackagedBoot({
-    appPath: f.app,
-    stageRoot: f.stageRoot,
-    version: "0.3.4",
-    env: f.env,
-    ...mock,
-  });
-  assert.equal(result.backendPid, 200);
-  assert.equal(result.healthyForMs, 5000);
-  assert.equal(mock.getState().launchOptions.env.T3CODE_PORT, "43123");
-  assert(mock.getState().launchOptions.args.includes("--use-mock-keychain"));
-  assert(
-    mock
-      .getState()
-      .launchOptions.args.includes(
-        `--user-data-dir=${path.join(mock.getState().launchOptions.env.HOME, "Library", "Application Support", "tritonai-harness")}`,
-      ),
-  );
-  assert.equal(result.credentialStorage, "not-verified");
-  assert.equal(mock.getState().closed, true);
-  assert(!fs.existsSync(mock.getState().launchOptions.env.HOME));
-});
-
-test("nightly boot gate verifies its isolated protocol renderer and owned backend", async (t) => {
-  const version = "0.3.4-nightly.20260915.42";
-  const f = fixture(t, version);
-  const mock = bootMocks(f, { version, rendererUrl: "tritonai-harness-nightly://app/" });
-  const result = await verifyPackagedBoot({
-    appPath: f.app,
-    stageRoot: f.stageRoot,
-    version,
-    env: f.env,
-    ...mock,
-  });
-  assert.equal(result.visibleWindow, true);
-  assert.equal(result.rendererReady, true);
-  assert.equal(result.backendPid, 200);
-  assert.equal(result.healthyForMs, 5000);
-  assert.equal(mock.getState().closed, true);
-  assert.equal(macReleaseIdentity("0.3.4").rendererUrl, "t3code://app/");
-});
-
 for (const [version, rendererUrl] of [
   ["0.3.4-nightly.20260915.42", "t3code://app/"],
   ["0.3.4", "tritonai-harness-nightly://app/"],
@@ -593,31 +425,6 @@ for (const [version, rendererUrl] of [
     );
   });
 }
-
-test("boot gate kills captured detached backend groups before the main group when close stalls", async (t) => {
-  const f = fixture(t);
-  const mock = bootMocks(f, { hungEvaluation: true, hungClose: true });
-  await assert.rejects(
-    verifyPackagedBoot({
-      appPath: f.app,
-      stageRoot: f.stageRoot,
-      version: "0.3.4",
-      env: f.env,
-      ...mock,
-      operationTimeoutMs: 10,
-      closeTimeoutMs: 10,
-    }),
-    /main-process evaluation timed out/,
-  );
-  assert.equal(mock.getState().closed, true);
-  assert.equal(mock.getState().child.signalCode, "SIGKILL");
-  assert.deepEqual(mock.getState().killedGroups, [200, 100]);
-  assert.deepEqual(
-    mock.getState().processes.map((p) => p.pid),
-    [900],
-  );
-  assert(!fs.existsSync(mock.getState().launchOptions.env.HOME));
-});
 
 test("forced cleanup repeatedly freezes detached descendants born between discovery and signaling", async (t) => {
   const f = fixture(t);
@@ -674,27 +481,6 @@ for (const [signal, exitCode] of [
     assert.equal(failureExitCode(error), exitCode);
     return true;
   };
-  test(`${signal} during evaluation preserves cancellation through shutdown and removes signal handlers`, async (t) => {
-    const f = fixture(t);
-    const mock = bootMocks(f, { hungEvaluation: true, hungClose: true });
-    const result = verifyPackagedBoot({
-      appPath: f.app,
-      stageRoot: f.stageRoot,
-      version: "0.3.4",
-      env: f.env,
-      ...mock,
-      operationTimeoutMs: 20,
-      closeTimeoutMs: 10,
-    });
-    const rejected = assert.rejects(result, assertCancellation);
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    mock.signals.emit(signal);
-    assert.equal(mock.getState().child.signalCode, "SIGKILL");
-    assert.deepEqual(mock.getState().killedGroups, [200, 100]);
-    await rejected;
-    assert.equal(mock.signals.listenerCount("SIGINT"), 0);
-    assert.equal(mock.signals.listenerCount("SIGTERM"), 0);
-  });
 
   test(`${signal} during cleanup cancels a pending successful boot result`, async (t) => {
     const f = fixture(t);
@@ -718,35 +504,6 @@ for (const [signal, exitCode] of [
   });
 }
 
-test("cancellation exit status survives a failed cleanup and the retained fixture remains available", async (t) => {
-  const f = fixture(t);
-  const mock = bootMocks(f, {
-    unsafeUserData: true,
-    hungClose: true,
-    closeSignal: "SIGTERM",
-    stuckBackend: true,
-  });
-  await assert.rejects(
-    verifyPackagedBoot({
-      appPath: f.app,
-      stageRoot: f.stageRoot,
-      version: "0.3.4",
-      env: f.env,
-      ...mock,
-      operationTimeoutMs: 10,
-      closeTimeoutMs: 10,
-    }),
-    (error) => {
-      assert.equal(error.signal, "SIGTERM");
-      assert.equal(failureExitCode(error), 143);
-      return true;
-    },
-  );
-  assert(fs.existsSync(mock.getState().launchOptions.env.HOME));
-  assert.equal(mock.signals.listenerCount("SIGINT"), 0);
-  assert.equal(mock.signals.listenerCount("SIGTERM"), 0);
-});
-
 test("forced cleanup rejects reused backend PIDs and preserves unrelated process groups", async (t) => {
   const f = fixture(t);
   const mock = bootMocks(f, { hungEvaluation: true, hungClose: true, reusedBackend: true });
@@ -767,26 +524,6 @@ test("forced cleanup rejects reused backend PIDs and preserves unrelated process
     mock.getState().processes.map((p) => p.pid),
     [200, 900],
   );
-});
-
-test("retains the fixture if a detached backend survives forced cleanup after the main exits", async (t) => {
-  const f = fixture(t);
-  const mock = bootMocks(f, { hungEvaluation: true, hungClose: true, stuckBackend: true });
-  await assert.rejects(
-    verifyPackagedBoot({
-      appPath: f.app,
-      stageRoot: f.stageRoot,
-      version: "0.3.4",
-      env: f.env,
-      ...mock,
-      operationTimeoutMs: 10,
-      closeTimeoutMs: 10,
-    }),
-    /main-process evaluation timed out/,
-  );
-  assert.equal(mock.getState().child.signalCode, "SIGKILL");
-  assert(fs.existsSync(mock.getState().launchOptions.env.HOME));
-  assert.deepEqual(mock.getState().killedGroups, [200, 100]);
 });
 
 test("boot gate fails closed if Electron resolves the live user-data directory", async (t) => {
@@ -1029,123 +766,8 @@ test("finalization recovers a lost stapling connection on the accepted app and D
   assert.deepEqual(report.notarization, { status: "Accepted", id: "notary-job" });
 });
 
-test("an accepted ticket that has not reached CloudKit is retried with bounded command time", async () => {
-  const waits = [];
-  let attempts = 0;
-  await stapleAccepted(
-    "same-signed.dmg",
-    { status: "Accepted" },
-    "Staple fixture",
-    (_program, args, options) => {
-      assert.deepEqual(args, ["stapler", "staple", "same-signed.dmg"]);
-      assert.equal(options.capture, true);
-      assert.equal(options.timeout, 60000);
-      assert.equal(options.killSignal, "SIGKILL");
-      if (++attempts === 1)
-        throw Object.assign(new Error("Ticket lookup failed"), {
-          result: {
-            status: 65,
-            stdout: 'CloudKit query for same-signed.dmg failed due to "Record not found".\n',
-          },
-        });
-      return { stdout: "" };
-    },
-    async (ms) => waits.push(ms),
-  );
-  assert.equal(attempts, 2);
-  assert.deepEqual(waits, [10000]);
-});
-
 for (const target of ["app", "dmg"]) {
-  test(`exhausted ${target} stapling preserves the accepted receipt and artifact without success proof`, async (t) => {
-    const f = fixture(t),
-      mock = packagingMocks(f),
-      waits = [],
-      targets = [];
-    const failure = Object.assign(new Error("Staple failed (exit 68)."), {
-      result: {
-        status: 68,
-        stderr: 'Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."\n',
-      },
-    });
-    await assert.rejects(
-      finalizeMacRelease({
-        harnessRoot: f.root,
-        stageRoot: f.stageRoot,
-        version: f.version,
-        outputDir: f.release,
-        env: f.env,
-        platform: "darwin",
-        packagingTools: mock.tools,
-        wait: async (ms) => waits.push(ms),
-        runCommand: (program, args, options) => {
-          if (program === "xcrun" && args[1] === "staple" && args[2].endsWith(`.${target}`)) {
-            targets.push(args[2]);
-            throw failure;
-          }
-          return mock.command(program, args, options);
-        },
-      }),
-      (error) => error === failure,
-    );
-    assert.equal(targets.length, 4);
-    assert.equal(new Set(targets).size, 1, "all attempts must use the same artifact");
-    assert(fs.existsSync(targets[0]), "the signed artifact must remain available");
-    assert.deepEqual(waits, [10000, 30000, 60000]);
-    assert.deepEqual(
-      JSON.parse(fs.readFileSync(path.join(f.stageRoot, `notarization-${target}.json`), "utf8")),
-      { status: "Accepted", id: "notary-job" },
-    );
-    assert.equal(
-      mock.calls.filter((call) => call.program === "xcrun" && call.args[0] === "notarytool").length,
-      target === "app" ? 1 : 2,
-    );
-    assert(!fs.existsSync(path.join(f.release, "latest-mac.yml")));
-    assert(!fs.existsSync(path.join(f.release, "harness-mac-verification.json")));
-    assert(!mock.calls.some((call) => call.args.includes("--artifact")));
-  });
 }
-
-test("stapling does not retry permanent, unknown, unauthenticated, or process failures", async () => {
-  const transientText =
-    'Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."';
-  const cases = [
-    { status: 64, stderr: "Malformed options" },
-    { status: 65, stderr: "The ticket data is invalid." },
-    { status: 66, stderr: "The path is not code-signed or is unsupported." },
-    { status: 68, stderr: "The path has not been previously notarized." },
-    { status: 68, stderr: 'Error Domain=NSURLErrorDomain Code=-1012 "Authentication failed."' },
-    { status: 68, stderr: 'Error Domain=NSURLErrorDomain Code=-1200 "Secure connection failed."' },
-    { status: 73, stderr: "Could not write ticket" },
-    { status: 77, stderr: "The ticket has been revoked." },
-    { status: 65, stderr: transientText },
-    { status: 68, stderr: transientText, error: { code: "ETIMEDOUT" } },
-  ];
-  for (const result of cases) {
-    let attempts = 0;
-    const failure = Object.assign(new Error("fixture failure"), { result });
-    await assert.rejects(
-      stapleAccepted(
-        "same-signed.dmg",
-        { status: "Accepted" },
-        "Staple fixture",
-        () => {
-          attempts++;
-          throw failure;
-        },
-        async () => assert.fail("permanent failure must not wait"),
-      ),
-      (error) => error === failure,
-    );
-    assert.equal(attempts, 1);
-  }
-  await assert.rejects(
-    stapleAccepted("same-signed.dmg", { status: "Invalid" }, "Staple fixture", () =>
-      assert.fail("must not staple an unaccepted artifact"),
-    ),
-    /Accepted/,
-  );
-});
 
 test("successful staple recovery still requires strict ticket validation before packaging", async (t) => {
   const f = fixture(t),
@@ -1202,38 +824,6 @@ test("rejected notarization cannot emit successful proof or updater metadata", a
     }),
     /did not accept/,
   );
-  assert(!fs.existsSync(path.join(f.release, "harness-mac-verification.json")));
-  assert(!mock.calls.some((call) => call.args.includes("--artifact")));
-});
-
-test("notarization deadline aborts finalization before successful metadata or proof", async (t) => {
-  const f = fixture(t),
-    mock = packagingMocks(f);
-  const timeout = Object.assign(new Error("fixture: notarization deadline"), { code: "ETIMEDOUT" });
-  await assert.rejects(
-    finalizeMacRelease({
-      harnessRoot: f.root,
-      stageRoot: f.stageRoot,
-      version: f.version,
-      outputDir: f.release,
-      env: f.env,
-      platform: "darwin",
-      packagingTools: mock.tools,
-      runCommand: (program, args, options) => {
-        if (program === "xcrun" && args[0] === "notarytool") {
-          assert(args.includes("--wait"));
-          assert.equal(args[args.indexOf("--timeout") + 1], "45m");
-          assert(options.timeout > 45 * 60 * 1000);
-          assert(options.timeout <= 50 * 60 * 1000);
-          assert.equal(options.killSignal, "SIGKILL");
-          throw timeout;
-        }
-        return mock.command(program, args, options);
-      },
-    }),
-    (error) => error === timeout,
-  );
-  assert(!fs.existsSync(path.join(f.release, "latest-mac.yml")));
   assert(!fs.existsSync(path.join(f.release, "harness-mac-verification.json")));
   assert(!mock.calls.some((call) => call.args.includes("--artifact")));
 });

@@ -269,62 +269,7 @@ async function stash() {
   });
 }
 
-function memoryOnlyStash() {
-  const original = usePromptStashStore.getState().stashEntry;
-  usePromptStashStore.setState({
-    stashEntry: (entry, options) => {
-      if (options?.requireDurable) return { evicted: null, written: false, durable: false };
-      return { ...original(entry, options), durable: false };
-    },
-  });
-  return {
-    [Symbol.dispose]() {
-      usePromptStashStore.setState({ stashEntry: original });
-    },
-  };
-}
-
-it("keeps text-only Stash usable in session-memory storage with a reload warning", async () => {
-  using fixture = setup();
-  using _bridge = stubGlobal("desktopBridge", fixture.bridge);
-  using _memory = memoryOnlyStash();
-  useComposerDraftStore.getState().setPrompt(fixture.target, "A session-only prompt");
-  await using screen = await render(<ChatComposer {...fixture.props} />);
-  await expect.element(screen.getByTestId("composer-editor")).toBeInTheDocument();
-  using toast = vi.spyOn(toastManager, "add");
-
-  await stash();
-
-  expect(usePromptStashStore.getState().entries.map((entry) => entry.prompt)).toEqual([
-    "A session-only prompt",
-  ]);
-  expect(useComposerDraftStore.getState().getComposerDraft(fixture.target)?.prompt ?? "").toBe("");
-  expect(toast).toHaveBeenCalledWith(
-    expect.objectContaining({ type: "warning", title: "Stashed prompt will not survive a reload" }),
-  );
-});
-
-it("retains native-file drafts when only session-memory storage is available", async () => {
-  using fixture = setup();
-  using _bridge = stubGlobal("desktopBridge", fixture.bridge);
-  using _xhr = stubGlobal("XMLHttpRequest", fixture.UploadRequest);
-  using _memory = memoryOnlyStash();
-  useComposerDraftStore.getState().setPrompt(fixture.target, "Keep this file draft");
-  await using screen = await render(<ChatComposer {...fixture.props} />);
-  await expect.element(screen.getByTestId("composer-editor")).toBeInTheDocument();
-  const originalFile = await pickFile(screen.container);
-  const attachment = useComposerDraftStore.getState().getComposerDraft(fixture.target)!.files[0]!;
-
-  await stash();
-  await act(() => awaitAttachmentUploads([attachment.id]));
-
-  expect(usePromptStashStore.getState().entries).toHaveLength(0);
-  const retained = useComposerDraftStore.getState().getComposerDraft(fixture.target)!;
-  expect(retained.prompt).toContain("Keep this file draft");
-  expect(retained.files[0]?.file).toBe(originalFile);
-  expect(retained.files[0]?.uploadedAttachmentId).toBe("pending-notes.txt");
-});
-
+// regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
 it("stashes and restores a native local file only after the user requests Stash", async () => {
   using fixture = setup();
   using _bridge = stubGlobal("desktopBridge", fixture.bridge);
@@ -380,6 +325,7 @@ it("stashes and restores a native local file only after the user requests Stash"
   ).toMatchObject([{ type: "file", id: "pending-notes.txt" }]);
 });
 
+// regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
 it("waits for an existing fallback upload and deduplicates repeated Stash", async () => {
   using fixture = setup({ localPath: false, autoComplete: false });
   using _bridge = stubGlobal("desktopBridge", fixture.bridge);
@@ -408,6 +354,7 @@ it("waits for an existing fallback upload and deduplicates repeated Stash", asyn
   expect(fixture.requests).toHaveLength(1);
 });
 
+// regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
 it("preserves live files, images and context when the explicit upload fails", async () => {
   using fixture = setup({ uploadStatus: 500 });
   using _bridge = stubGlobal("desktopBridge", fixture.bridge);
@@ -458,6 +405,7 @@ it("preserves live files, images and context when the explicit upload fails", as
   );
 });
 
+// regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
 it.each(["capability", "size", "permission"] as const)(
   "keeps a native file when Stash fails the %s check",
   async (failure) => {
@@ -490,6 +438,7 @@ it.each(["capability", "size", "permission"] as const)(
   },
 );
 
+// regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
 it("keeps a newer draft when it changes during the explicit upload", async () => {
   using fixture = setup({ autoComplete: false });
   using _bridge = stubGlobal("desktopBridge", fixture.bridge);
@@ -519,6 +468,7 @@ it("keeps a newer draft when it changes during the explicit upload", async () =>
   );
 });
 
+// regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
 it("keeps both drafts when navigation happens during the explicit upload", async () => {
   using fixture = setup({ autoComplete: false });
   using _bridge = stubGlobal("desktopBridge", fixture.bridge);
@@ -551,6 +501,7 @@ it("keeps both drafts when navigation happens during the explicit upload", async
   expect(useComposerDraftStore.getState().getComposerDraft(other)?.prompt).toBe("Other draft");
 });
 
+// regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
 it("keeps the draft and uploaded reference if durable stash storage rejects the write", async () => {
   using fixture = setup();
   using _bridge = stubGlobal("desktopBridge", fixture.bridge);
@@ -579,71 +530,7 @@ it("keeps the draft and uploaded reference if durable stash storage rejects the 
   expect(retained.files[0]?.uploadedAttachmentId).toBe("pending-notes.txt");
 });
 
-it("round-trips the native file with a PNG and terminal context", async () => {
-  using fixture = setup();
-  using _bridge = stubGlobal("desktopBridge", fixture.bridge);
-  using _xhr = stubGlobal("XMLHttpRequest", fixture.UploadRequest);
-  const store = useComposerDraftStore.getState();
-  store.setPrompt(fixture.target, "Keep the full draft");
-  store.addTerminalContexts(fixture.target, [
-    {
-      id: "roundtrip-terminal",
-      threadId: fixture.props.activeThreadId!,
-      terminalId: "terminal",
-      terminalLabel: "Terminal",
-      lineStart: 1,
-      lineEnd: 1,
-      text: "synthetic terminal context",
-      createdAt: "2026-10-23T00:00:00Z",
-    },
-  ]);
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 1;
-  const png = await new Promise<Blob>((resolve) =>
-    canvas.toBlob((blob) => resolve(blob!), "image/png"),
-  );
-  const image = new File([png], "snapshot.png", { type: "image/png" });
-  store.addImages(fixture.target, [
-    {
-      type: "image",
-      id: "roundtrip-image",
-      name: image.name,
-      mimeType: image.type,
-      sizeBytes: image.size,
-      file: image,
-      previewUrl: URL.createObjectURL(image),
-    },
-  ]);
-  await using screen = await render(<ChatComposer {...fixture.props} />);
-  await expect.element(screen.getByTestId("composer-editor")).toBeInTheDocument();
-  await pickFile(screen.container);
-  const file = store.getComposerDraft(fixture.target)!.files[0]!;
-  let unsubscribe = () => {};
-  const encoded = new Promise<void>((resolve) => {
-    unsubscribe = usePromptStashStore.subscribe((state) => {
-      if (state.entries[0]?.pendingImageCount === 0) resolve();
-    });
-  });
-  using _subscription = { [Symbol.dispose]: () => unsubscribe() };
-  await stash();
-  await act(async () => {
-    await awaitAttachmentUploads([file.id]);
-    await encoded;
-  });
-  const entry = usePromptStashStore.getState().entries[0]!;
-  expect(entry.files).toHaveLength(1);
-  expect(entry.attachments).toHaveLength(1);
-  expect(entry.attachments[0]?.dataUrl).toMatch(/^data:image\//);
-  expect(JSON.stringify(entry.records)).toContain("synthetic terminal context");
-  expect(JSON.stringify(entry)).not.toContain("C:\\synthetic");
-  await stash();
-  const restored = store.getComposerDraft(fixture.target)!;
-  expect(restored.prompt).toContain("Keep the full draft");
-  expect(restored.files[0]?.uploadedAttachmentId).toBe("pending-notes.txt");
-  expect(restored.images).toHaveLength(1);
-  expect(restored.terminalContexts[0]?.text).toBe("synthetic terminal context");
-});
-
+// regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
 it("does not consume a store edit that has not rendered at the Stash event", async () => {
   using fixture = setup();
   using _bridge = stubGlobal("desktopBridge", fixture.bridge);

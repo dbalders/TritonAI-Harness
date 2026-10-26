@@ -204,7 +204,7 @@ const TIMEOUT_RESULT: ShellResult = {
   transportFailure: "timeout",
 };
 
-export const formatWslShellTransportFailureReason = (
+const formatWslShellTransportFailureReason = (
   failure: ShellResult["transportFailure"],
   subject = "Node.js",
 ): string | null => {
@@ -223,7 +223,7 @@ export const formatWslShellTransportFailureReason = (
 // Reuse the SSH remote resolver so WSL and SSH discover version-managed Node
 // the same way. Passing the engine range lets the resolver fall through to
 // version managers like nvm when a system node exists but is too old.
-export const buildWslNodeEnvPreamble = (
+const buildWslNodeEnvPreamble = (
   nodeEngineRange?: string | null,
 ): string => `${buildRemoteNodeEnvScript({ nodeEngineRange: nodeEngineRange ?? null })}
 ensure_remote_node_path || true
@@ -491,7 +491,7 @@ export const parseWslRuntimeRoot = (stdout: string): string | null => {
 
 const NODE_PTY_BINARY_MISSING_EXIT_CODE = 4;
 
-export const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
+const formatNodePtyProbeFailureReason = (exitCode: number): string | null =>
   exitCode === NODE_PTY_BINARY_MISSING_EXIT_CODE
     ? "WSL support is missing from this TritonAI Harness build: the packaged Linux node-pty binary was not included. Install a build that includes WSL support."
     : null;
@@ -565,7 +565,7 @@ export interface ToolchainReport {
   readonly nodeVersion: string | null;
 }
 
-export const parseToolchainReport = (stdout: string): ToolchainReport => {
+const parseToolchainReport = (stdout: string): ToolchainReport => {
   const lines = stdout
     .split("\n")
     .map((line) => line.trim())
@@ -580,7 +580,7 @@ export const parseToolchainReport = (stdout: string): ToolchainReport => {
   return { missingTools, nodeVersion };
 };
 
-export const parseNodePath = (stdout: string): string | null => {
+const parseNodePath = (stdout: string): string | null => {
   const path = stdout
     .split("\n")
     .map((line) => line.trim())
@@ -590,7 +590,7 @@ export const parseNodePath = (stdout: string): string | null => {
   return path ?? null;
 };
 
-export const parseNodeVersion = (stdout: string): string | null => {
+const parseNodeVersion = (stdout: string): string | null => {
   const version = stdout
     .split("\n")
     .map((line) => line.trim())
@@ -610,7 +610,7 @@ export const parseResolvedPath = (stdout: string): string | null => {
   return resolvedPath.length > 0 ? resolvedPath : null;
 };
 
-export const formatMissingToolsReason = (
+const formatMissingToolsReason = (
   report: ToolchainReport,
   requiredRange: string | null,
 ): string | null => {
@@ -940,7 +940,7 @@ const invalidateWslRuntimeImpl = Effect.fn("desktop.wsl.invalidateRuntimeImpl")(
   });
 });
 
-export const probeWslDistros: Effect.Effect<
+const probeWslDistros: Effect.Effect<
   readonly WslDistro[],
   DesktopWslDistroListError,
   ChildProcessSpawner.ChildProcessSpawner

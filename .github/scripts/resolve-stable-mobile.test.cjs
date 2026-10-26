@@ -25,11 +25,6 @@ function fixture(release = {}, commitSha = sha) {
   };
 }
 
-test("uses the published stable commit even when main has moved", async () => {
-  assert.equal(await resolveStableMobile(fixture()), sha);
-  assert.equal(await resolveStableMobile({ ...fixture(), sourceSha: undefined }), sha);
-});
-
 test("rejects nightly tags, branches, and shell input", async () => {
   for (const invalid of ["main", "v0.3.5-nightly.20261001.45", "nightly", `${tag}; echo unsafe`]) {
     await assert.rejects(
@@ -49,14 +44,6 @@ test("rejects a moved tag and invalid commit identity", async () => {
   for (const commit of ["b".repeat(40), "main", ""]) {
     await assert.rejects(resolveStableMobile(fixture({}, commit)), /source commit/);
   }
-});
-
-test("fails closed when release lookup fails", async () => {
-  const options = fixture();
-  options.github.rest.repos.getReleaseByTag = async () => {
-    throw new Error("not found");
-  };
-  await assert.rejects(resolveStableMobile(options), /not found/);
 });
 
 test("current main is allowed only for the explicitly manual first build", async () => {

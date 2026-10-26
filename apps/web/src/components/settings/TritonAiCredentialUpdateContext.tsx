@@ -1,5 +1,5 @@
 import type { DesktopBridge } from "@t3tools/contracts";
-import { createContext, useCallback, useEffect, useState, type ReactNode } from "react";
+import { createContext, useEffect, useState, type ReactNode } from "react";
 import { usePrimaryEnvironment } from "../../state/environments";
 
 type UpdateCredentials = DesktopBridge["updateTritonAiCredentials"];
@@ -10,7 +10,7 @@ export const TritonAiCredentialUpdateContext = createContext<{
   readonly updateCredentials: UpdateCredentials;
 } | null>(null);
 
-export function useTritonAiCredentialUpdate(update: UpdateCredentials, connected: boolean) {
+function useTritonAiCredentialUpdate(update: UpdateCredentials, connected: boolean) {
   const [phase, setPhase] = useState<UpdatePhase>("idle");
   const updateCredentials: UpdateCredentials = async (input) => {
     setPhase("saving");

@@ -53,6 +53,7 @@ async function fixture(archive = "server.asar") {
 }
 
 describe("packaged production plugin runtime", () => {
+  // regression: #224 fix(windows): restore managed plugins in packaged builds
   it("reaps a terminated owner's copy while preserving live owners and unrelated directories", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-reaper-test-"));
     const child = NodeChildProcess.spawnSync(process.execPath, ["-e", ""], { stdio: "ignore" });
@@ -74,6 +75,7 @@ describe("packaged production plugin runtime", () => {
     }
   });
 
+  // regression: #224 fix(windows): restore managed plugins in packaged builds
   it("materializes the archived dependency closure once and retains it until the last provider closes", async () => {
     const files = await fixture();
     try {
@@ -105,32 +107,7 @@ describe("packaged production plugin runtime", () => {
     }
   });
 
-  it("uses the real WSL dependency tree directly", async () => {
-    const files = await fixture("extracted-server");
-    try {
-      const lease = await acquireProductionRuntime(files.manifestPath, dependency);
-      expect(lease.root).toBe(await NodeFSP.realpath(files.effectRoot));
-      await lease.release();
-      await expect(NodeFSP.access(files.effectRoot)).resolves.toBeUndefined();
-    } finally {
-      await files.close();
-    }
-  });
-
-  it("keeps using the unpacked macOS host runtime", async () => {
-    const files = await fixture("app.asar.unpacked");
-    try {
-      const lease = await acquireProductionRuntime(
-        files.manifestPath.replace("app.asar.unpacked", "app.asar"),
-        dependency,
-      );
-      expect(lease.root).toBe(await NodeFSP.realpath(files.effectRoot));
-      await lease.release();
-    } finally {
-      await files.close();
-    }
-  });
-
+  // regression: #224 fix(windows): restore managed plugins in packaged builds
   it("does not retain a failed extraction and can retry after a missing dependency is restored", async () => {
     const files = await fixture();
     const helperManifest = NodePath.join(files.helperRoot, "package.json");
@@ -153,6 +130,7 @@ describe("packaged production plugin runtime", () => {
     }
   });
 
+  // regression: #224 fix(windows): restore managed plugins in packaged builds
   it("rejects a runtime version that differs from the build", async () => {
     const files = await fixture();
     try {

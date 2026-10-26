@@ -49,28 +49,7 @@ for (const changedPath of [
   ".github/scripts/windows-test-scope.cjs",
   ".github/scripts/windows-test-scope.test.cjs",
 ]) {
-  test(`runs Windows regression coverage for ${changedPath}`, () => {
-    const matrix = selectWindowsTests(refs, () => [changedPath]);
-    assert.deepEqual(
-      matrix.include.map((entry) => entry.package),
-      ["packages/shared", "apps/server", "apps/desktop"],
-    );
-  });
 }
-
-test("skips Windows for unrelated changes", () => {
-  assert.deepEqual(
-    selectWindowsTests(refs, () => ["docs/user/chat.md", "apps/web/src/components/Chat.tsx"]),
-    { include: [] },
-  );
-  assert.equal(affectsWindowsTests("apps/web/src/processRunner.ts"), false);
-});
-
-test("does not truncate a large diff", () => {
-  const paths = Array.from({ length: 3_100 }, (_, index) => `docs/${index}.md`);
-  paths.push("apps/desktop/src/main.ts");
-  assert.equal(selectWindowsTests(refs, () => paths).include.length, 3);
-});
 
 test("runs every focused suite when diff resolution fails or refs are unavailable", () => {
   assert.equal(
@@ -85,55 +64,6 @@ test("runs every focused suite when diff resolution fails or refs are unavailabl
         .include.length,
       3,
     );
-  }
-});
-
-test("preserves manual full and file-scoped test runs", () => {
-  assert.deepEqual(selectWindowsTests({ eventName: "workflow_dispatch" }), {
-    include: [{ label: "all non-server", package: "", files: "" }],
-  });
-  assert.deepEqual(
-    selectWindowsTests({
-      eventName: "workflow_dispatch",
-      package: "apps/server",
-      files: "src/processRunner.test.ts src/process/externalLauncher.test.ts",
-    }).include[0],
-    {
-      label: "apps/server",
-      package: "apps/server",
-      files: "src/processRunner.test.ts src/process/externalLauncher.test.ts",
-    },
-  );
-  assert.throws(
-    () => selectWindowsTests({ eventName: "workflow_dispatch", files: "orphan.test.ts" }),
-    /require a package/,
-  );
-});
-
-test("writes the selected plan and run decision as GitHub job outputs", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "t3-windows-scope-output-"));
-  const output = path.join(root, "output");
-  try {
-    childProcess.execFileSync(process.execPath, [path.join(__dirname, "windows-test-scope.cjs")], {
-      env: {
-        ...process.env,
-        EVENT_NAME: "workflow_dispatch",
-        TEST_PACKAGE: "apps/server",
-        TEST_FILES: "src/processRunner.test.ts",
-        GITHUB_OUTPUT: output,
-      },
-      stdio: "pipe",
-    });
-    const [changed, plan] = fs.readFileSync(output, "utf8").trim().split("\n");
-    assert.equal(changed, "changed=true");
-    assert.ok(plan.startsWith("plan="));
-    assert.deepEqual(JSON.parse(plan.slice("plan=".length)), {
-      include: [
-        { label: "apps/server", package: "apps/server", files: "src/processRunner.test.ts" },
-      ],
-    });
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

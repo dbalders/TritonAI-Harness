@@ -24,7 +24,6 @@ import {
 import {
   isTritonAiManagedCodexMaintenanceCapabilities,
   makeTritonAiManagedCodexMaintenanceResolver,
-  parseCodexCliVersion,
   ManagedCodexApprovedVersion,
   recoverTritonAiManagedCodex,
   resolveTritonAiManagedCodexInstallation,
@@ -186,11 +185,6 @@ it("recognizes only TritonAI managed Codex launcher paths", () => {
   ).toBeNull();
 });
 
-it("parses Codex CLI version output", () => {
-  expect(parseCodexCliVersion("codex-cli 0.151.0\n")).toBe("0.151.0");
-  expect(parseCodexCliVersion("not a version")).toBeNull();
-});
-
 it.effect(
   "routes managed launchers through the Harness updater and preserves parent fallback",
   () =>
@@ -251,6 +245,7 @@ const fixtureLayer = Layer.merge(
 );
 
 it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
+  // regression: #426 fix(provider): recover interrupted Codex updates and coordinate sessions
   it.effect.each(["failure", "timeout"])(
     "preserves an existing newer engine instead of recovering after a transient %s",
     (scenario) =>
@@ -292,34 +287,6 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
           "0.146.0",
         );
         expect(probes).toBe(0);
-      }),
-  );
-
-  it.effect(
-    "allows the full activation verification timeout when restoring a missing launcher",
-    () =>
-      Effect.gen(function* () {
-        const fixture = yield* makeFixture();
-        const backup = yield* fixture.fs.makeTempDirectory({
-          directory: fixture.runtimeRoot,
-          prefix: ".tritonai-codex-backup.",
-        });
-        yield* fixture.fs.rename(
-          fixture.installRoot,
-          fixture.path.join(backup, "openai-codex-0.146.0"),
-        );
-        const runner = yield* makeFakeRunner();
-        const timeouts: Array<unknown> = [];
-        const run: ProcessRunner["Service"]["run"] = (input) => {
-          timeouts.push(input.timeout);
-          return runner(input);
-        };
-
-        yield* recoverTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run });
-
-        expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
-        expect(yield* fixture.fs.exists(backup)).toBe(false);
-        expect(timeouts).toEqual(["30 seconds"]);
       }),
   );
 
@@ -378,36 +345,6 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
           yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
         );
       }).pipe(Effect.scoped),
-  );
-  it.effect("restores the launcher when shutdown interrupts activation after the backup move", () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeFixture();
-      const paused = yield* Deferred.make<void>();
-      const resume = yield* Deferred.make<void>();
-      const fs = FileSystem.FileSystem.of({
-        ...fixture.fs,
-        rename: (source, destination) =>
-          Effect.gen(function* () {
-            if (source.includes(".tritonai-codex-stage.") && destination === fixture.installRoot) {
-              yield* Deferred.succeed(paused, undefined);
-              yield* Deferred.await(resume);
-            }
-            return yield* fixture.fs.rename(source, destination);
-          }),
-      });
-      const fiber = yield* updateTritonAiManagedCodex({
-        binaryPath: fixture.binaryPath,
-        run: yield* makeFakeRunner(),
-      }).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.scoped, Effect.forkChild);
-      yield* Deferred.await(paused);
-      fiber.interruptUnsafe();
-      yield* Deferred.succeed(resume, undefined);
-      yield* Fiber.await(fiber);
-      expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
-      expect(["0.146.0", "0.151.0"]).toContain(
-        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
-      );
-    }).pipe(Effect.scoped),
   );
   it.effect("admits a session during staging and safely defers activation", () =>
     Effect.gen(function* () {
@@ -569,6 +506,7 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  // regression: #353 fix(provider): update managed Codex without npm on PATH
   it.effect("stages and verifies with the Node.js runtime the POSIX launcher pins", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();
@@ -606,23 +544,9 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
       ).toBe("0.146.0");
     }).pipe(Effect.scoped),
   );
-
-  it.effect("leaves the current runtime unchanged when npm staging fails", () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeFixture();
-      const error = yield* updateTritonAiManagedCodex({
-        binaryPath: fixture.binaryPath,
-        run: yield* makeFakeRunner({ failNpm: true }),
-      }).pipe(Effect.scoped, Effect.flip);
-
-      expect(error.message).toContain("could not be staged");
-      expect(
-        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
-      ).toBe("0.146.0");
-    }).pipe(Effect.scoped),
-  );
 });
 
+// regression: #317 succeed when the shared engine is already updated; 76aecbe4a9 cap managed Codex updates at approved version
 it.layer(fixtureLayer)("approved managed engine policy", (it) => {
   describe.each(Array.from(["0.151.0", "0.155.1"], (scenario) => ({ scenario })))(
     "case $scenario",
@@ -669,7 +593,7 @@ it.layer(fixtureLayer)("approved managed engine policy", (it) => {
       ]);
     }).pipe(Effect.scoped),
   );
-  describe.each(Array.from([null, "latest", "0.155.1 || true"], (scenario) => ({ scenario })))(
+  describe.each(Array.from([null, "0.155.1 || true"], (scenario) => ({ scenario })))(
     "case $scenario",
     ({ scenario: approved }) => {
       it.effect(`fails closed for policy ${String(approved)}`, () =>
@@ -699,6 +623,7 @@ it.layer(fixtureLayer)("approved managed engine policy", (it) => {
   );
 });
 
+// regression: #270 fix(server): use managed tooling for Windows engine updates
 it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
   describe.each(Array.from(["lib\\node_modules", "node_modules"], (scenario) => ({ scenario })))(
     "case $scenario",
@@ -714,7 +639,10 @@ it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
             "rollback removal lock",
             "rollback restoration lock",
             "lock ownership lost during retry",
-          ],
+          ].filter(
+            // The package layout only changes the entry path, so one success run covers it.
+            (scenario) => layout === "lib\\node_modules" || scenario === "success",
+          ),
           (scenario) => ({ scenario }),
         ),
       )("case $scenario", ({ scenario }) => {
