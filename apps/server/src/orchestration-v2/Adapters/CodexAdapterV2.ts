@@ -24,6 +24,7 @@ import {
 import { registerBrowserNavigationGate } from "../../preview/BrowserNavigationGate.ts";
 import { registerIntegrationWriteGate } from "../../integrations/IntegrationWriteApproval.ts";
 import * as ExternalContent from "../../integrations/ExternalContent.ts";
+import { codexDynamicIntegrationToolName } from "../../integrations/IntegrationRegistry.ts";
 import * as IntegrationCodexRuntime from "../../provider/IntegrationCodexRuntime.ts";
 import {
   UCSD_AI_BASE_URL_ENV,
@@ -1946,6 +1947,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const externalContent = yield* Effect.serviceOption(ExternalContent.ExternalContent);
   const previewBroker = Option.getOrUndefined(
     yield* Effect.serviceOption(PreviewAutomationBroker.PreviewAutomationBroker),
   );
@@ -2018,6 +2020,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
       function* (input) {
         yield* assertModelAllowed(input.modelSelection.model);
         const scope = yield* Scope.Scope;
+        let currentChannel: object | undefined;
         const flatCatalogs = new Map<string, CodexFlatToolCatalog>();
         const flatToolApprovals = new Map<
           string,
@@ -2033,6 +2036,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             instanceId: adapterOptions.instanceId,
             integrationOnly,
             includeIntegrations: integrationOnly,
+            ...(currentChannel ? { channel: currentChannel } : {}),
             ...(disclosedToolNames === undefined ? {} : { disclosedToolNames }),
             ...(customModel(model) && previewBroker ? { broker: previewBroker } : {}),
           }).pipe(
@@ -2054,8 +2058,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }),
                 ),
               );
+        if (integrationOnly && Option.isNone(externalContent))
+          return yield* toProtocolError(
+            "The integration-only runtime has no external-content authority service.",
+          );
+        const inheritedCeiling =
+          integrationOnly && Option.isSome(externalContent)
+            ? yield* externalContent.value.toolCeiling(`thread:${input.threadId}`)
+            : undefined;
         const initialCatalog = integrationOnly
-          ? yield* prepareFlatCatalog(input.threadId, input.modelSelection.model)
+          ? yield* prepareFlatCatalog(
+              input.threadId,
+              input.modelSelection.model,
+              inheritedCeiling?.map(codexDynamicIntegrationToolName),
+            )
           : undefined;
         const integrationSession = integrationOnly
           ? yield* mcpSessions.read(input.threadId)
@@ -2101,6 +2117,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               : []),
           ],
         });
+        currentChannel = client;
+        initialCatalog?.bindChannel(client);
         const additionalContextByThread = yield* Ref.make(
           new Map<
             string,
@@ -7568,6 +7586,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         };
 
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
+          externalContentChannel: client,
           instanceId: adapterOptions.instanceId,
           driver: CODEX_PROVIDER,
           providerSessionId: input.providerSessionId,

@@ -2288,6 +2288,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       >;
       readonly afterNotification?: (method: string, payload: unknown) => Effect.Effect<void>;
       readonly interceptRawRequests?: boolean;
+      readonly runtimeChannel?: object;
     } = {},
   ) =>
     Effect.gen(function* () {
@@ -2313,40 +2314,39 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 Effect.map((client) =>
                   withCodexReplayChildMetadata(client, transcript, readChildMetadata),
                 ),
-                Effect.map(
-                  (client) =>
-                    ({
-                      ...client,
-                      raw: replayHooks.interceptRawRequests
-                        ? {
-                            ...client.raw,
-                            request: (method, params) =>
-                              onRequest(method, params).pipe(
-                                Effect.andThen(client.raw.request(method, params)),
-                              ),
-                          }
-                        : client.raw,
-                      handleServerNotification: (method, handler) =>
-                        client.handleServerNotification(method, (payload) =>
-                          handler(payload).pipe(
-                            Effect.andThen(
-                              () => replayHooks.afterNotification?.(method, payload) ?? Effect.void,
+                Effect.map((client) =>
+                  Object.assign(replayHooks.runtimeChannel ?? {}, {
+                    ...client,
+                    raw: replayHooks.interceptRawRequests
+                      ? {
+                          ...client.raw,
+                          request: (method, params) =>
+                            onRequest(method, params).pipe(
+                              Effect.andThen(client.raw.request(method, params)),
                             ),
+                        }
+                      : client.raw,
+                    handleServerNotification: (method, handler) =>
+                      client.handleServerNotification(method, (payload) =>
+                        handler(payload).pipe(
+                          Effect.andThen(
+                            () => replayHooks.afterNotification?.(method, payload) ?? Effect.void,
                           ),
                         ),
-                      handleServerRequest: (method, handler) =>
-                        client.handleServerRequest(method, (payload) =>
-                          handler(payload).pipe(
-                            Effect.tap((result) =>
-                              method === "item/tool/call" ? onToolResponse(result) : Effect.void,
-                            ),
+                      ),
+                    handleServerRequest: (method, handler) =>
+                      client.handleServerRequest(method, (payload) =>
+                        handler(payload).pipe(
+                          Effect.tap((result) =>
+                            method === "item/tool/call" ? onToolResponse(result) : Effect.void,
                           ),
                         ),
-                      request: (method, params) =>
-                        onRequest(method, params).pipe(
-                          Effect.andThen(client.request(method, params)),
-                        ),
-                    }) satisfies CodexClient.CodexAppServerClient["Service"],
+                      ),
+                    request: (method, params) =>
+                      onRequest(method, params).pipe(
+                        Effect.andThen(client.request(method, params)),
+                      ),
+                  } satisfies CodexClient.CodexAppServerClient["Service"]),
                 ),
                 Effect.provide(context),
               ),
@@ -2601,8 +2601,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
         };
         yield* sessions.set(credential);
+        const runtimeChannel = {};
         // Protocol replay only: the separate native launcher canary proves actual enforcement.
         yield* (yield* ExternalContent.ExternalContent).establish({
+          channel: runtimeChannel,
           caller: {
             ownerId: `thread:${threadId}`,
             providerSessionId: credential.providerSessionId,
@@ -2950,6 +2952,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 Object.assign(response.frame, { result });
             }).pipe(Effect.andThen(Deferred.succeed(toolDone, undefined))),
           {
+            runtimeChannel,
             interceptRawRequests: stopping,
             beforeEmitInbound: (entry) =>
               entry.label === "fixture-result-consumed"

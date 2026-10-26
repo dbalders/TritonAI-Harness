@@ -3485,6 +3485,7 @@ export class RegistryRuntime {
     input: unknown,
     caller: ExternalContent.ExternalContentCaller,
     context: IntegrationInvocationContext,
+    channel?: object,
   ): Promise<ExternalToolResult> {
     if (
       context.approvalOwner &&
@@ -3501,7 +3502,7 @@ export class RegistryRuntime {
       manifest.tools.some((tool) => tool.name === name),
     );
     if (!entry) throw operationError("not_found", "The integration tool is unavailable.");
-    const invocation = await this.#externalContent.admit(caller, name);
+    const invocation = await this.#externalContent.admit(caller, name, channel);
     invocation.assertCurrent();
     let source: ExternalToolSource = {
       integrationId: entry.manifest.id,

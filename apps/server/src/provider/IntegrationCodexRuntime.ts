@@ -193,7 +193,11 @@ export const open = Effect.fn("IntegrationCodexRuntime.open")(function* (input: 
   if (!live || input.expiresAt <= now)
     return yield* new IntegrationCodexRuntimeError({ reason: "startup" });
   const scopeId = NodeCrypto.randomUUID();
+  const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+    Effect.provide(clientContext),
+  );
   yield* content.establish({
+    channel: client,
     caller: input.caller,
     scopeId,
     boundaryDigest: NodeCrypto.createHash("sha256")
@@ -203,7 +207,5 @@ export const open = Effect.fn("IntegrationCodexRuntime.open")(function* (input: 
     expiresAt: input.expiresAt,
     isCurrent: () => live,
   });
-  return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
-    Effect.provide(clientContext),
-  );
+  return client;
 });

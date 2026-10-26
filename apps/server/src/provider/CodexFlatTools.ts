@@ -37,6 +37,7 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
   readonly instanceId: ProviderInstanceId;
   readonly integrationOnly?: boolean;
   readonly includeIntegrations?: boolean;
+  readonly channel?: object;
   readonly disclosedToolNames?: ReadonlyArray<string>;
   readonly broker?: PreviewAutomationBroker.PreviewAutomationBroker["Service"];
 }) {
@@ -47,6 +48,7 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
   >();
   const runPromise = Effect.runPromiseWith(context);
   const registry = Integrations.getIntegrationRegistryOptional();
+  let channel = input.channel;
   const integrationAccess = session?.capabilities?.has("integrations.invoke") === true;
   const pluginRuntime =
     registry && integrationAccess && input.includeIntegrations !== false && !input.integrationOnly
@@ -219,10 +221,18 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
             ...(approvalInvocation ? { invocation: approvalInvocation } : {}),
           },
         },
+        channel,
       );
     },
   };
   return {
+    bindChannel: (value: object) => {
+      if (channel && channel !== value)
+        throw new IntegrationToolUnavailableError(
+          "The native tool catalog is already bound to a different IPC channel.",
+        );
+      channel = value;
+    },
     options,
     activeSession,
     fingerprint: computeDynamicToolFingerprint(disclosed),

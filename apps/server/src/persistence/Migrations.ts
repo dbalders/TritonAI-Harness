@@ -5,6 +5,7 @@ import Migration0070 from "./Migrations/070_ProjectBriefArchives.ts";
 import Migration0071 from "./Migrations/071_ProjectOverviews.ts";
 import Migration0072 from "./Migrations/072_ProjectNextStepDismissals.ts";
 import Migration0078 from "./Migrations/078_ExternalContent.ts";
+import Migration0079 from "./Migrations/079_ExternalContentInheritance.ts";
 /**
  * Migration runner with an inline loader.
  *
@@ -178,6 +179,7 @@ export const migrationEntries = [
   [76, "RepairClientSettlementTimestamps", UpstreamMigration0066],
   [77, "WebhookDedupe", UpstreamMigration0067],
   [78, "ExternalContent", Migration0078],
+  [79, "ExternalContentInheritance", Migration0079],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

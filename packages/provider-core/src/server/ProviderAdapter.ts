@@ -548,6 +548,8 @@ export type ProviderAdapterV2SubagentOutcome = {
 };
 
 export interface ProviderAdapterV2SessionRuntime {
+  /** Private host IPC identity. Never serialize it into provider or client metadata. */
+  readonly externalContentChannel?: object;
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
   readonly providerSessionId: ProviderSessionId;

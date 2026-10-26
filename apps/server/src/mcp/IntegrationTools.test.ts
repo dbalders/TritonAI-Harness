@@ -162,6 +162,44 @@ it.effect("awaits the canonical registry catalog before the MCP layer becomes av
   ),
 );
 
+it.effect(
+  "production MCP hides plugins even from a valid thread bearer without native channel attestation",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const authorized = invocation(new Set(["integrations.invoke"]));
+        const enabled = Context.getUnsafe(server.tools[0]!.annotations, McpSchema.EnabledWhen);
+        expect(
+          yield* Effect.sync(() => enabled({} as never)).pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
+          ),
+        ).toBe(false);
+        const failure = yield* server
+          .callTool({ name: fixtureTool.name, arguments: {} })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
+            Effect.provideService(McpSchema.McpServerClient, client),
+            Effect.flip,
+          );
+        expect(failure).toBeInstanceOf(McpSchema.InvalidParams);
+      }).pipe(
+        Effect.provide(
+          registrationLayer(new Set(), async () => registryWith([fixtureTool])).pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                McpServer.McpServer.layer,
+                Layer.succeed(ThreadManagementService.ThreadManagementService, {
+                  getThreadShell: () => Effect.succeed(null),
+                } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+);
+
 it.effect("fails MCP startup when a catalog tool is reserved", () =>
   Effect.gen(function* () {
     const exit = yield* Effect.exit(

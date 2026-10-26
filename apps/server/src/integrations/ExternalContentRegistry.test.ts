@@ -77,6 +77,7 @@ const fixture = Effect.fn("ExternalContentRegistry.fixture")(function* (
   const externalContent = yield* makeExternalContentRegistry().pipe(
     Effect.provideService(ExternalContent.ExternalContent, service),
   );
+  const channel = Object.freeze({});
   let reads = 0;
   let writes = 0;
   const provider: IntegrationProvider = {
@@ -97,6 +98,7 @@ const fixture = Effect.fn("ExternalContentRegistry.fixture")(function* (
     connect: async () => ({ kind: "connected", flowId: "synthetic-only", message: "Connected." }),
     disconnect: async () => {},
     invoke: async (name, input, context) => {
+      expect(Object.values(context ?? {})).not.toContain(channel);
       if (name.endsWith(".write")) {
         await context!.beginCommit!();
         writes++;
@@ -118,6 +120,7 @@ const fixture = Effect.fn("ExternalContentRegistry.fixture")(function* (
   };
   if (!options.noBoundary)
     yield* service.establish({
+      channel,
       caller,
       scopeId: "registry-scope",
       boundaryDigest: "a".repeat(64),
@@ -142,10 +145,11 @@ const fixture = Effect.fn("ExternalContentRegistry.fixture")(function* (
   return {
     registry,
     service,
+    channel,
     counters: () => ({ reads, writes }),
     invoke: (name: string, id = "doc-1") =>
       Effect.tryPromise({
-        try: () => registry.invokeToolForAgent(name, { id }, caller, context),
+        try: () => registry.invokeToolForAgent(name, { id }, caller, context, channel),
         catch: (cause) => new FixtureFailure({ cause }),
       }),
   };
@@ -195,6 +199,33 @@ it.effect("both control-looking content and cursors remain data with host source
   ),
 );
 
+it.effect("matching caller IDs over a different channel cannot reach the provider", () =>
+  test(
+    Effect.gen(function* () {
+      const state = yield* fixture();
+      for (const channel of [undefined, { ...state.channel }]) {
+        const failure = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              state.registry.invokeToolForAgent(
+                "external.fixture.read",
+                { id: "doc-1" },
+                caller,
+                { signal: new AbortController().signal, approvalOwner: owner },
+                channel,
+              ),
+            catch: (cause) => new FixtureFailure({ cause }),
+          }),
+        );
+        expect(failure).toMatchObject({ cause: { reason: "runtime_unverified" } });
+      }
+      expect(state.counters()).toEqual({ reads: 0, writes: 0 });
+      yield* state.invoke("external.fixture.read");
+      expect(state.counters()).toEqual({ reads: 1, writes: 0 });
+    }),
+  ),
+);
+
 it.effect("a malicious read and Full Access boolean cannot authorize a later write", () =>
   test(
     Effect.gen(function* () {
@@ -203,11 +234,17 @@ it.effect("a malicious read and Full Access boolean cannot authorize a later wri
       const failure = yield* Effect.flip(
         Effect.tryPromise({
           try: () =>
-            state.registry.invokeToolForAgent("external.fixture.write", { id: "doc-1" }, caller, {
-              signal: new AbortController().signal,
-              approvalOwner: owner,
-              writeApproved: true,
-            }),
+            state.registry.invokeToolForAgent(
+              "external.fixture.write",
+              { id: "doc-1" },
+              caller,
+              {
+                signal: new AbortController().signal,
+                approvalOwner: owner,
+                writeApproved: true,
+              },
+              state.channel,
+            ),
           catch: (cause) => new FixtureFailure({ cause }),
         }),
       );

@@ -55,6 +55,8 @@ export interface ExternalContentCaller {
 
 /** Only the host runtime that actually owns enforcement may install this lease. Never an RPC input. */
 export interface ExternalContentRuntimeBoundary {
+  /** Actual host IPC client identity; serialized caller fields cannot reproduce this reference. */
+  readonly channel: object;
   readonly caller: ExternalContentCaller;
   readonly scopeId: string;
   readonly boundaryDigest: string;
@@ -74,6 +76,7 @@ export interface ExternalContentRegistry {
   readonly admit: (
     caller: ExternalContentCaller,
     toolName: string,
+    channel?: object,
   ) => Promise<ExternalContentInvocation>;
   readonly record: (
     invocation: ExternalContentInvocation,
@@ -118,12 +121,23 @@ interface InvocationState {
 export class ExternalContent extends Context.Service<
   ExternalContent,
   {
+    readonly inherit: (
+      sourceOwnerId: string,
+      targetOwnerId: string,
+    ) => Effect.Effect<void, ExternalContentDenied | ExternalContentPersistenceError>;
+    readonly toolCeiling: (
+      ownerId: string,
+    ) => Effect.Effect<
+      ReadonlyArray<string> | undefined,
+      ExternalContentDenied | ExternalContentPersistenceError
+    >;
     readonly assertUnexposed: (
       ownerId: string,
     ) => Effect.Effect<void, ExternalContentDenied | ExternalContentPersistenceError>;
     readonly assertInference: (
       caller: ExternalContentCaller,
       requireBoundary?: boolean,
+      channel?: object,
     ) => Effect.Effect<void, ExternalContentDenied | ExternalContentPersistenceError>;
     readonly establish: (
       runtime: ExternalContentRuntimeBoundary,
@@ -132,6 +146,7 @@ export class ExternalContent extends Context.Service<
     readonly admit: (
       caller: ExternalContentCaller,
       toolName: string,
+      channel?: object,
     ) => Effect.Effect<
       ExternalContentInvocation,
       ExternalContentDenied | ExternalContentPersistenceError
@@ -197,6 +212,106 @@ const make = Effect.gen(function* () {
   };
 
   return ExternalContent.of({
+    toolCeiling: Effect.fn("ExternalContent.toolCeiling")(function* (ownerId) {
+      const row = yield* persistence(readRow(ownerId));
+      return row && row.exposure_version > 0
+        ? yield* persistence(decodeTools(row.allowed_tools_json))
+        : undefined;
+    }),
+    inherit: Effect.fn("ExternalContent.inherit")(function* (sourceOwnerId, targetOwnerId) {
+      if (!identity(sourceOwnerId) || !identity(targetOwnerId))
+        return yield* new ExternalContentDenied({ reason: "invalid_boundary" });
+      if (sourceOwnerId === targetOwnerId) return;
+      let retained: ActiveBoundary | undefined;
+      let inheritedVersion = 0;
+      yield* persistence(
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const source = yield* readRow(sourceOwnerId);
+            if (!source || source.exposure_version === 0) return;
+            const seen = (yield* sql<{
+              source_exposure_version: number;
+              source_tools_json: string;
+            }>`
+          SELECT source_exposure_version, source_tools_json FROM external_content_inheritance
+          WHERE source_owner_id = ${sourceOwnerId} AND target_owner_id = ${targetOwnerId}
+        `)[0];
+            if (
+              seen?.source_exposure_version === source.exposure_version &&
+              seen.source_tools_json === source.allowed_tools_json
+            )
+              return;
+            const target = yield* readRow(targetOwnerId);
+            const sourceTools = yield* decodeTools(source.allowed_tools_json);
+            const priorTools =
+              target && target.exposure_version > 0
+                ? new Set(yield* decodeTools(target.allowed_tools_json))
+                : undefined;
+            const tools = yield* encodeTools(
+              sourceTools.filter((tool) => !priorTools || priorTools.has(tool)),
+            );
+            const sources = yield* sql<{ source_json: string; origin_invocation_id: string }>`
+          SELECT source_json, origin_invocation_id FROM external_content_exposures WHERE owner_id = ${sourceOwnerId}
+          ORDER BY exposure_version DESC LIMIT 8
+        `;
+            if (sources.length === 0)
+              return yield* new ExternalContentDenied({ reason: "invalid_boundary" });
+            const incoming = [];
+            for (const entry of sources) {
+              if (!identity(entry.origin_invocation_id))
+                return yield* new ExternalContentDenied({ reason: "invalid_boundary" });
+              const known = yield* sql`SELECT 1 FROM external_content_exposures
+                WHERE owner_id = ${targetOwnerId} AND origin_invocation_id = ${entry.origin_invocation_id}`;
+              if (known.length === 0) incoming.push(entry);
+            }
+            const live = active.get(targetOwnerId);
+            retained =
+              live &&
+              target &&
+              currentRuntime(live.runtime, clock.currentTimeMillisUnsafe()) &&
+              live.runtime.scopeId === target.scope_id &&
+              live.scopeVersion === target.scope_version &&
+              tools === target.allowed_tools_json
+                ? live
+                : undefined;
+            // A narrower ceiling requires a new process. Equal ceilings can keep their verified
+            // channel, but newly inherited exposure still invalidates every earlier write approval.
+            if (!retained) {
+              active.delete(targetOwnerId);
+              replacements.delete(targetOwnerId);
+            }
+            const scopeId = retained?.runtime.scopeId ?? (yield* crypto.randomUUIDv4());
+            let version = target?.exposure_version ?? 0;
+            const scopeVersion = retained?.scopeVersion ?? (target?.scope_version ?? 0) + 1;
+            yield* sql`INSERT INTO external_content_scopes
+          (owner_id, scope_id, scope_version, exposure_version, provider_session_id, provider_instance_id, boundary_digest, allowed_tools_json)
+          VALUES (${targetOwnerId}, ${scopeId}, ${scopeVersion}, ${version},
+            ${retained?.runtime.caller.providerSessionId ?? "inherited"},
+            ${retained?.runtime.caller.providerInstanceId ?? "inherited"},
+            ${retained?.runtime.boundaryDigest ?? "0".repeat(64)}, ${tools})
+          ON CONFLICT(owner_id) DO UPDATE SET scope_id = excluded.scope_id,
+            scope_version = excluded.scope_version, provider_session_id = excluded.provider_session_id,
+            provider_instance_id = excluded.provider_instance_id, boundary_digest = excluded.boundary_digest,
+            allowed_tools_json = excluded.allowed_tools_json`;
+            for (const entry of incoming.toReversed()) {
+              const encoded = yield* encodeSource(yield* decodeSource(entry.source_json));
+              const id = yield* crypto.randomUUIDv4();
+              version++;
+              yield* sql`INSERT INTO external_content_exposures
+            (invocation_id, owner_id, scope_id, exposure_version, source_json, received_at, origin_invocation_id)
+            VALUES (${id}, ${targetOwnerId}, ${scopeId}, ${version}, ${encoded}, ${clock.currentTimeMillisUnsafe()}, ${entry.origin_invocation_id})`;
+            }
+            yield* sql`UPDATE external_content_scopes SET exposure_version = ${version} WHERE owner_id = ${targetOwnerId}`;
+            inheritedVersion = version;
+            yield* sql`INSERT INTO external_content_inheritance (source_owner_id, target_owner_id, source_exposure_version, source_tools_json)
+          VALUES (${sourceOwnerId}, ${targetOwnerId}, ${source.exposure_version}, ${source.allowed_tools_json})
+          ON CONFLICT(source_owner_id, target_owner_id) DO UPDATE SET source_exposure_version = excluded.source_exposure_version, source_tools_json = excluded.source_tools_json`;
+          }),
+        ),
+      );
+      if (retained && active.get(targetOwnerId) === retained)
+        retained.exposureVersion = Math.max(retained.exposureVersion, inheritedVersion);
+    }),
     assertUnexposed: Effect.fn("ExternalContent.assertUnexposed")(function* (ownerId) {
       const row = yield* persistence(readRow(ownerId));
       if (row && row.exposure_version > 0)
@@ -205,11 +320,13 @@ const make = Effect.gen(function* () {
     assertInference: Effect.fn("ExternalContent.assertInference")(function* (
       caller,
       requireBoundary = false,
+      channel,
     ) {
       const row = yield* persistence(readRow(caller.ownerId));
       const boundary = active.get(caller.ownerId);
       if (!requireBoundary && !boundary && (!row || row.exposure_version === 0)) return;
-      if (!boundary) return yield* new ExternalContentDenied({ reason: "runtime_unverified" });
+      if (!boundary || boundary.runtime.channel !== channel)
+        return yield* new ExternalContentDenied({ reason: "runtime_unverified" });
       yield* Effect.try({
         try: () => assertBoundary(boundary, caller),
         catch: () => new ExternalContentDenied({ reason: "scope_changed" }),
@@ -229,6 +346,8 @@ const make = Effect.gen(function* () {
       const tools = [...new Set(input.allowedTools)].sort();
       if (
         !Object.values(caller).every(identity) ||
+        typeof input.channel !== "object" ||
+        input.channel === null ||
         !identity(input.scopeId) ||
         !/^[a-f0-9]{64}$/u.test(input.boundaryDigest) ||
         tools.length > 512 ||
@@ -284,10 +403,11 @@ const make = Effect.gen(function* () {
         active.delete(ownerId);
         replacements.delete(ownerId);
       }),
-    admit: Effect.fn("ExternalContent.admit")(function* (input, toolName) {
+    admit: Effect.fn("ExternalContent.admit")(function* (input, toolName, channel) {
       const caller = Object.freeze({ ...input });
       const boundary = active.get(caller.ownerId);
-      if (!boundary) return yield* new ExternalContentDenied({ reason: "runtime_unverified" });
+      if (!boundary || boundary.runtime.channel !== channel)
+        return yield* new ExternalContentDenied({ reason: "runtime_unverified" });
       yield* Effect.try({
         try: () => assertBoundary(boundary, caller),
         catch: () => new ExternalContentDenied({ reason: "scope_changed" }),
@@ -369,9 +489,9 @@ const make = Effect.gen(function* () {
               return yield* new ExternalContentDenied({ reason: "scope_changed" });
             const version = row.exposure_version + 1;
             yield* sql`INSERT INTO external_content_exposures
-              (invocation_id, owner_id, scope_id, exposure_version, source_json, received_at)
+              (invocation_id, owner_id, scope_id, exposure_version, source_json, received_at, origin_invocation_id)
               VALUES (${invocation.invocationId}, ${state.caller.ownerId}, ${row.scope_id},
-                ${version}, ${encodedSource}, ${clock.currentTimeMillisUnsafe()})`;
+                ${version}, ${encodedSource}, ${clock.currentTimeMillisUnsafe()}, ${invocation.invocationId})`;
             yield* sql`UPDATE external_content_scopes SET exposure_version = ${version}
               WHERE owner_id = ${state.caller.ownerId}`;
             return version;

@@ -6,7 +6,7 @@ export const makeExternalContentRegistry = Effect.fn("makeExternalContentRegistr
   const service = yield* ExternalContent.ExternalContent;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   return {
-    admit: (caller, toolName) => runPromise(service.admit(caller, toolName)),
+    admit: (caller, toolName, channel) => runPromise(service.admit(caller, toolName, channel)),
     record: (invocation, source, result) => runPromise(service.record(invocation, source, result)),
   } satisfies ExternalContent.ExternalContentRegistry;
 });

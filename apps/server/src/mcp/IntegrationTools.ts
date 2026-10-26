@@ -157,7 +157,7 @@ export function toolRegistration(
                     new OrchestratorMcpFailure({
                       code: "capability_denied",
                       message:
-                        "Plugin writes require per-call approval in a managed thread. Outside MCP clients can use read tools.",
+                        "Plugin calls require a verified integration-only session with per-call write approval.",
                     }),
                   ),
             ),
@@ -166,5 +166,6 @@ export function toolRegistration(
   };
 }
 
-export const activeToolAvailable = (name: string) =>
-  Boolean(Integrations.getIntegrationRegistryOptional()?.isToolAvailableSync(name));
+// Bearer identity does not attest the caller's native tool ceiling. Until MCP has
+// that boundary, plugin results only travel over the verified private Codex IPC channel.
+export const activeToolAvailable = (_name: string) => false;

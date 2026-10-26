@@ -167,6 +167,7 @@ const layerRunExecutionServiceProvided = RunExecutionService.layer.pipe(
 );
 
 const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pipe(
+  Layer.provide(ExternalContent.layer),
   Layer.provide(
     Layer.mergeAll(
       layerContextHandoffServiceProvided,

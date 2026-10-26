@@ -23,6 +23,7 @@ import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
+import * as ExternalContent from "../integrations/ExternalContent.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -111,6 +112,7 @@ export const layer: Layer.Layer<
   | ProviderSessionManager.ProviderSessionManagerV2
   | RunExecutionService.RunExecutionServiceV2
   | RuntimePolicy.RuntimePolicyV2
+  | ExternalContent.ExternalContent
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
@@ -128,6 +130,7 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
+    const externalContent = yield* ExternalContent.ExternalContent;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
 
     // These callbacks outlive startup while a run drains background work. Build
@@ -539,25 +542,60 @@ export const layer: Layer.Layer<
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
       );
+      const handoffTransfers = new Set(handoffs.map((handoff) => handoff.transferId));
+      const sourceThreads = new Set([
+        ...(run.ordinal === 1 && projection.thread.lineage.parentThreadId
+          ? [projection.thread.lineage.parentThreadId]
+          : []),
+        ...(message.senderThreadId ? [message.senderThreadId] : []),
+        ...projection.contextTransfers
+          .filter(
+            (transfer) =>
+              transfer.targetThreadId === input.threadId &&
+              (transfer.targetRunId === run.id ||
+                handoffTransfers.has(transfer.id) ||
+                transfer.type === "subagent_result"),
+          )
+          .map((transfer) => transfer.sourceThreadId),
+        ...handoffs.flatMap(
+          (handoff) => handoff.history?.messages.map((entry) => entry.threadId) ?? [],
+        ),
+      ]);
       const sessionResult = yield* Effect.result(
-        providerSessions.open({
-          threadId: projection.thread.id,
-          providerSessionId,
-          modelSelection: run.modelSelection,
-          runtimePolicy: resolvedRuntimePolicy,
-          ...(existingSessionProjection === undefined
-            ? {}
-            : { resumeFromSession: existingSessionProjection }),
-          ...(providerThread.nativeThreadRef?.nativeId == null
-            ? {}
-            : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
-          ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
-            ? {}
-            : {
-                initialProviderItemIdentityVersion:
-                  providerThread.nativeMetadata.itemIdentityVersion,
+        Effect.forEach(
+          sourceThreads,
+          (source) => externalContent.inherit(`thread:${source}`, `thread:${input.threadId}`),
+          { discard: true },
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderSessionManager.ProviderSessionOpenError({
+                instanceId: run.providerInstanceId,
+                providerSessionId,
+                cause,
               }),
-        }),
+          ),
+          Effect.andThen(() =>
+            providerSessions.open({
+              threadId: projection.thread.id,
+              providerSessionId,
+              modelSelection: run.modelSelection,
+              runtimePolicy: resolvedRuntimePolicy,
+              ...(existingSessionProjection === undefined
+                ? {}
+                : { resumeFromSession: existingSessionProjection }),
+              ...(providerThread.nativeThreadRef?.nativeId == null
+                ? {}
+                : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
+              ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
+                ? {}
+                : {
+                    initialProviderItemIdentityVersion:
+                      providerThread.nativeMetadata.itemIdentityVersion,
+                  }),
+            }),
+          ),
+        ),
       );
       const settleStartFailure = Effect.fn("ProviderTurnStartService.settleStartFailure")(
         function* (failed: {

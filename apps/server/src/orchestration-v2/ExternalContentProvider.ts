@@ -36,6 +36,7 @@ export const protectAdapter = Effect.fn("ExternalContentProvider.protectAdapter"
                     providerInstanceId: runtime.instanceId,
                   },
                   true,
+                  runtime.externalContentChannel,
                 )
                 .pipe(
                   Effect.mapError(
@@ -59,18 +60,32 @@ export const protectAdapter = Effect.fn("ExternalContentProvider.protectAdapter"
           const guard = (threadId: string | null | undefined) => {
             const ownerId = `thread:${threadId ?? input.threadId}`;
             owners.add(ownerId);
-            return content.assertInference(caller(ownerId)).pipe(
+            return content
+              .assertInference(caller(ownerId), false, runtime.externalContentChannel)
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterProtocolError({
+                      driver: adapter.driver,
+                      detail:
+                        "This conversation contains external content and requires a verified integration-only runtime. Its history and next action were withheld.",
+                      cause,
+                    }),
+                ),
+              );
+          };
+          const inherit = (source: string | undefined, target: string) =>
+            (source ? content.inherit(`thread:${source}`, `thread:${target}`) : Effect.void).pipe(
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterProtocolError({
                     driver: adapter.driver,
                     detail:
-                      "This conversation contains external content and requires a verified integration-only runtime. Its history and next action were withheld.",
+                      "External-content context could not inherit its source's tool ceiling. Its delivery was withheld.",
                     cause,
                   }),
               ),
             );
-          };
           return {
             ...runtime,
             ensureThread: (next) =>
@@ -80,9 +95,15 @@ export const protectAdapter = Effect.fn("ExternalContentProvider.protectAdapter"
                 Effect.andThen(() => runtime.resumeThread(next)),
               ),
             startTurn: (next) =>
-              guard(next.threadId).pipe(Effect.andThen(() => runtime.startTurn(next))),
+              inherit(next.message.senderThreadId, next.threadId).pipe(
+                Effect.andThen(guard(next.threadId)),
+                Effect.andThen(() => runtime.startTurn(next)),
+              ),
             steerTurn: (next) =>
-              guard(next.threadId).pipe(Effect.andThen(() => runtime.steerTurn(next))),
+              inherit(next.message.senderThreadId, next.threadId).pipe(
+                Effect.andThen(guard(next.threadId)),
+                Effect.andThen(() => runtime.steerTurn(next)),
+              ),
             ...(runtime.compactThread === undefined
               ? {}
               : {
@@ -93,7 +114,13 @@ export const protectAdapter = Effect.fn("ExternalContentProvider.protectAdapter"
               ? {}
               : {
                   injectHistory: (next) =>
-                    guard(next.providerThread.appThreadId).pipe(
+                    Effect.forEach(
+                      new Set(next.messages.map((entry) => entry.threadId)),
+                      (source) =>
+                        inherit(source, next.providerThread.appThreadId ?? input.threadId),
+                      { discard: true },
+                    ).pipe(
+                      Effect.andThen(guard(next.providerThread.appThreadId)),
                       Effect.andThen(() => runtime.injectHistory!(next)),
                     ),
                 }),
