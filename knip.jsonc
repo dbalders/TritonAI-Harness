@@ -28,6 +28,7 @@
         "analytics-report.ts",
         "knip-schemas.ts",
         "mobile-native-client.ts",
+        "prepare-plugin-sandbox.ts",
         "setup-worktree.ts",
         "sign-macos.ts",
         "verify-windows-desktop-artifact.ts",
