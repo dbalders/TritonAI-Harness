@@ -197,7 +197,7 @@ function isSection(value: string): value is IdeaSection {
   return IDEA_SECTIONS.some((section) => section === value);
 }
 
-const STARTER_TITLES = new Map(
+const STARTER_TITLES = new Map<string, string>(
   STARTER_IDEAS.map((starter) => [`starter:${starter.id}`, starter.title] as const),
 );
 const STARTER_KEYS = new Set(STARTER_TITLES.keys());
