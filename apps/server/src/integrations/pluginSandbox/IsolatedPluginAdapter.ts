@@ -89,6 +89,7 @@ export async function loadIsolatedPluginIntegration(input: {
     {
       readonly capabilities: readonly string[];
       readonly generation: number;
+      readonly credentialGeneration: number;
       readonly expires: number;
     }
   >();
@@ -223,18 +224,21 @@ export async function loadIsolatedPluginIntegration(input: {
   const persist = async (
     encoded: string | null,
     context: IntegrationLifecycleContext | undefined,
-    expectedGeneration = generation,
+    expectedGeneration: number,
+    expectedCredentialGeneration: number,
   ) => {
     open();
-    if (generation !== expectedGeneration)
-      failure("The plugin connection changed before credential persistence.");
+    const current = () =>
+      generation === expectedGeneration &&
+      integrationCredentialGeneration(pluginId) === expectedCredentialGeneration &&
+      !integrationCredentialMutationPending(pluginId);
+    if (!current()) failure("The plugin connection changed before credential persistence.");
     if (!context) failure("The host did not admit this credential change.");
     context.signal.throwIfAborted();
     const signal = await context.beginCommit();
     signal.throwIfAborted();
     open();
-    if (generation !== expectedGeneration)
-      failure("The plugin connection changed before credential persistence.");
+    if (!current()) failure("The plugin connection changed before credential persistence.");
     invalidate();
     try {
       await Effect.runPromise(
@@ -281,10 +285,16 @@ export async function loadIsolatedPluginIntegration(input: {
     },
     async prepare(context) {
       open();
-      const { credential } = await read();
+      const expectedGeneration = generation;
+      const { credential, credentialGeneration } = await read();
       if (credential?.migrate) {
         await verifyCredential(credential.apiKey, context.signal);
-        await persist(encode(credential.apiKey, credential.capabilities), context);
+        await persist(
+          encode(credential.apiKey, credential.capabilities),
+          context,
+          expectedGeneration,
+          credentialGeneration,
+        );
       }
     },
     async connect(requested, context, submission) {
@@ -294,14 +304,19 @@ export async function loadIsolatedPluginIntegration(input: {
       if (!context) failure("The connection flow has no host authority.");
       context.signal.throwIfAborted();
       if (!submission) {
-        const { credential } = await read();
+        const { credential, credentialGeneration } = await read();
         if (credential) {
           await verifyCredential(credential.apiKey, context.signal);
           if (
             credential.migrate ||
             JSON.stringify(granted) !== JSON.stringify(credential.capabilities)
           )
-            await persist(encode(credential.apiKey, granted), context, expectedGeneration);
+            await persist(
+              encode(credential.apiKey, granted),
+              context,
+              expectedGeneration,
+              credentialGeneration,
+            );
           return {
             kind: "connected",
             flowId: NodeCrypto.randomUUID(),
@@ -311,7 +326,12 @@ export async function loadIsolatedPluginIntegration(input: {
         for (const [key, flow] of flows) if (flow.expires <= Date.now()) flows.delete(key);
         if (flows.size >= 8) failure("Too many pending plugin connection flows.");
         const flowId = NodeCrypto.randomUUID();
-        flows.set(flowId, { capabilities: granted, generation, expires: Date.now() + 600_000 });
+        flows.set(flowId, {
+          capabilities: granted,
+          generation,
+          credentialGeneration,
+          expires: Date.now() + 600_000,
+        });
         return {
           kind: "api_key",
           flowId,
@@ -329,18 +349,27 @@ export async function loadIsolatedPluginIntegration(input: {
         submission.kind !== "api_key" ||
         !flow ||
         flow.generation !== generation ||
+        flow.credentialGeneration !== integrationCredentialGeneration(pluginId) ||
+        integrationCredentialMutationPending(pluginId) ||
         flow.expires <= Date.now() ||
         JSON.stringify(flow.capabilities) !== JSON.stringify(granted)
       )
         failure("The API key flow expired or changed.");
       const credential = apiKey(submission.value);
       await verifyCredential(credential, context.signal);
-      await persist(encode(credential, flow.capabilities), context, flow.generation);
+      await persist(
+        encode(credential, flow.capabilities),
+        context,
+        flow.generation,
+        flow.credentialGeneration,
+      );
       return { kind: "connected", flowId: submission.flowId, message: `${label} connected.` };
     },
     async disconnect(context) {
       open();
-      if ((await read()).encoded !== null) await persist(null, context);
+      const expectedGeneration = generation;
+      const { encoded, credentialGeneration } = await read();
+      if (encoded !== null) await persist(null, context, expectedGeneration, credentialGeneration);
       else invalidate();
     },
     async invoke(toolName, value, context) {

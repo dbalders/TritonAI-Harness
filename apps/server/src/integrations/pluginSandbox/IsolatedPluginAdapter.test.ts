@@ -1,11 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Fixtures retain exact reviewed policy bytes without depending on a second checkout.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
-import { expect, it } from "vite-plus/test";
+import { expect } from "vite-plus/test";
+import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { canonicalJson, type JsonValue } from "@t3tools/shared/pluginSdkContract";
 import type * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import { scopeIntegrationSecretStore } from "../IntegrationSecretStore.ts";
 import { PluginBrokerChannel } from "./PluginBrokerChannel.ts";
 import {
   loadIsolatedPluginIntegration,
@@ -353,3 +355,72 @@ it("revokes a pending precondition when the connection closes without admitting 
   await rejected;
   expect(f.commits).toHaveLength(0);
 });
+
+it.effect("rejects an API-key flow after another host client replaces its credential", () =>
+  Effect.gen(function* () {
+    const f = yield* Effect.promise(() => fixture());
+    const flow = yield* Effect.promise(() => f.provider.connect!(f.capabilities, f.context));
+    const scoped = scopeIntegrationSecretStore(f.secrets, "synthetic-api-key");
+    const replacement = JSON.stringify({
+      apiKey: "newer-host-owned-key",
+      capabilities: f.capabilities,
+    });
+    yield* scoped.set("connection", new TextEncoder().encode(replacement));
+    yield* Effect.promise(() =>
+      expect(
+        f.provider.connect!(f.capabilities, f.context, {
+          kind: "api_key",
+          flowId: flow.flowId,
+          value: key,
+        }),
+      ).rejects.toThrow("expired or changed"),
+    );
+    expect(f.commits).toHaveLength(0);
+    expect(
+      new TextDecoder().decode(f.values.get("integration-synthetic-api-key--connection")),
+    ).toBe(replacement);
+  }),
+);
+
+it.effect("rechecks the shared credential generation after asynchronous API-key verification", () =>
+  Effect.gen(function* () {
+    const entered = Promise.withResolvers<void>();
+    const verified = Promise.withResolvers<JsonValue>();
+    const f = yield* Effect.promise(() =>
+      fixture("kuali-build", async () => {
+        entered.resolve();
+        return verified.promise;
+      }),
+    );
+    const flow = yield* Effect.promise(() => f.provider.connect!(f.capabilities, f.context));
+    const submission = f.provider.connect!(f.capabilities, f.context, {
+      kind: "api_key",
+      flowId: flow.flowId,
+      value: key,
+    });
+    const rejected = expect(submission).rejects.toThrow("changed before credential persistence");
+    yield* Effect.promise(() =>
+      Promise.race([
+        entered.promise,
+        submission.then(() => {
+          throw new Error("Unexpected early connection");
+        }),
+      ]),
+    );
+    const replacement = JSON.stringify({
+      version: 1,
+      apiKey: "newer-host-owned-key",
+      capabilities: f.capabilities,
+    });
+    yield* scopeIntegrationSecretStore(f.secrets, "kuali-build").set(
+      "api-key",
+      new TextEncoder().encode(replacement),
+    );
+    verified.resolve({ apps: [] });
+    yield* Effect.promise(() => rejected);
+    expect(f.commits).toHaveLength(0);
+    expect(new TextDecoder().decode(f.values.get("integration-kuali-build--api-key"))).toBe(
+      replacement,
+    );
+  }),
+);
