@@ -127,7 +127,11 @@ export function reviewIntegrationInput(input: Json): string {
       return;
     }
     for (const [key, child] of Object.entries(value)) {
-      if (RAW_CREDENTIAL_FIELDS.has(key.replace(/[-_\s]/gu, "").toLowerCase()))
+      const normalized = key.replace(/[-_\s]/gu, "").toLowerCase();
+      if (
+        RAW_CREDENTIAL_FIELDS.has(normalized) ||
+        /^[a-z][a-z0-9]*(?:password|passphrase|secret|token|apikey)$/u.test(normalized)
+      )
         throw new Error(
           "This plugin write contains a raw credential field. Configure credentials in the connection before requesting approval.",
         );
