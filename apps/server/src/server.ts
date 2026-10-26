@@ -5,6 +5,7 @@ import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay
 import * as Random from "effect/Random";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as ExternalContent from "./integrations/ExternalContent.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
@@ -532,6 +533,7 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
 
 const IntegrationRegistryStartupLive = IntegrationRegistry.startupLayer.pipe(
   Layer.provide(Layer.mergeAll(ServerSecretStore.layer, layerServerSettings)),
+  Layer.provideMerge(ExternalContent.layer.pipe(Layer.provide(SqlitePersistence.layerConfig))),
 );
 
 // This named observational adapter reads only the application's existing cached inventory.

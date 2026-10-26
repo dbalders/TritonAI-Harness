@@ -4,6 +4,7 @@ import Migration0069 from "./Migrations/069_ProjectBriefDispatches.ts";
 import Migration0070 from "./Migrations/070_ProjectBriefArchives.ts";
 import Migration0071 from "./Migrations/071_ProjectOverviews.ts";
 import Migration0072 from "./Migrations/072_ProjectNextStepDismissals.ts";
+import Migration0078 from "./Migrations/078_ExternalContent.ts";
 /**
  * Migration runner with an inline loader.
  *
@@ -176,6 +177,7 @@ export const migrationEntries = [
   [75, "CodexUsageNativeTurnIndex", UpstreamMigration0065],
   [76, "RepairClientSettlementTimestamps", UpstreamMigration0066],
   [77, "WebhookDedupe", UpstreamMigration0067],
+  [78, "ExternalContent", Migration0078],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/ai";
 
 import * as Integrations from "../integrations/IntegrationRegistry.ts";
+import { ExternalToolResultError } from "../integrations/ExternalContent.ts";
 import type { IntegrationProviderTool } from "../integrations/IntegrationRegistry.ts";
 import { integrationToolJsonSchema } from "../integrations/IntegrationTool.ts";
 import {
@@ -85,9 +86,20 @@ export function toolRegistration(
           isAvailable(definition.name)
           ? Effect.tryPromise({
               try: (signal) =>
-                Integrations.getIntegrationRegistry().invokeTool(
+                Integrations.getIntegrationRegistry().invokeToolForAgent(
                   definition.name,
                   payload,
+                  {
+                    ownerId: invocation.thread
+                      ? `thread:${invocation.thread.threadId}`
+                      : `mcp-client:${invocation.client?.sessionId ?? "unbound"}`,
+                    providerSessionId:
+                      invocation.thread?.providerSessionId ??
+                      invocation.client?.sessionId ??
+                      "unbound",
+                    providerInstanceId:
+                      invocation.thread?.providerInstanceId ?? "external-mcp-client",
+                  },
                   integrationToolInvocationContext(definition, signal, invocation.thread),
                 ),
               catch: (cause) => new IntegrationToolInvocationError({ cause }),
@@ -112,6 +124,14 @@ export function toolRegistration(
           }).pipe(Effect.andThen(Effect.failCause(cause))),
         ),
         Effect.catch((error) => {
+          if (error.cause instanceof ExternalToolResultError)
+            return Effect.succeed(
+              new McpSchema.CallToolResult({
+                isError: true,
+                structuredContent: error.cause.result,
+                content: [{ type: "text", text: JSON.stringify(error.cause.result) }],
+              }),
+            );
           const failure = describeIntegrationToolFailure(error.cause);
           return Effect.succeed(
             new McpSchema.CallToolResult({

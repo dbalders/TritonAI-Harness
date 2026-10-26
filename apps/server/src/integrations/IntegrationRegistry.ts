@@ -10,6 +10,8 @@ import {
   type IntegrationPollResult,
   type IntegrationSummary,
   type IntegrationsListResult,
+  type ExternalToolSource,
+  type ExternalToolResult,
 } from "@t3tools/contracts";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as Duration from "effect/Duration";
@@ -25,6 +27,9 @@ import * as NodePath from "node:path";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ExternalContent from "./ExternalContent.ts";
+import { makeExternalContentRegistry } from "./externalContentRegistryAdapter.ts";
+import { describeIntegrationToolFailure } from "./IntegrationToolFailure.ts";
 import { loadBuiltinIntegrations } from "./builtins.ts";
 import {
   isIntegrationId,
@@ -279,6 +284,7 @@ export type IntegrationToolAvailability =
     };
 
 export interface RegistryRuntimeOptions {
+  readonly externalContent?: ExternalContent.ExternalContentRegistry;
   readonly providerStatusTimeoutMs?: number;
   readonly providerOperationTimeoutMs?: number;
   /** Defaults to the isolated `__document-text` process extractor. */
@@ -948,6 +954,7 @@ export class RegistryRuntime {
   readonly #providerSummaryRefreshWork = new Map<IntegrationProvider, Set<Promise<void>>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
   readonly #documentText: IntegrationDocumentTextExtractor;
+  readonly #externalContent: ExternalContent.ExternalContentRegistry | undefined;
   #closing = false;
   #closePromise: Promise<void> | null = null;
 
@@ -970,6 +977,7 @@ export class RegistryRuntime {
       options.providerOperationTimeoutMs ?? DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS;
     this.#onProviderFault = options.onProviderFault;
     this.#documentText = options.documentText ?? makeDocumentTextExtractor();
+    this.#externalContent = options.externalContent;
     if (
       !Number.isSafeInteger(this.#providerStatusTimeoutMs) ||
       this.#providerStatusTimeoutMs <= 0 ||
@@ -3469,6 +3477,74 @@ export class RegistryRuntime {
     input: unknown,
     context?: IntegrationInvocationContext,
   ): Promise<Record<string, unknown>> {
+    return this.#invokeTool(name, input, context);
+  }
+
+  async invokeToolForAgent(
+    name: string,
+    input: unknown,
+    caller: ExternalContent.ExternalContentCaller,
+    context: IntegrationInvocationContext,
+  ): Promise<ExternalToolResult> {
+    if (
+      context.approvalOwner &&
+      (context.approvalOwner.kind === "settings" ||
+        caller.ownerId !== `thread:${context.approvalOwner.threadId}` ||
+        caller.providerSessionId !== context.approvalOwner.providerSessionId ||
+        caller.providerInstanceId !== context.approvalOwner.providerInstanceId)
+    )
+      throw new ExternalContent.ExternalContentDenied({ reason: "scope_changed" });
+    if (!this.#externalContent)
+      throw new ExternalContent.ExternalContentDenied({ reason: "runtime_unverified" });
+    await this.#ready;
+    const entry = [...this.#catalog.values()].find(({ manifest }) =>
+      manifest.tools.some((tool) => tool.name === name),
+    );
+    if (!entry) throw operationError("not_found", "The integration tool is unavailable.");
+    const invocation = await this.#externalContent.admit(caller, name);
+    invocation.assertCurrent();
+    let source: ExternalToolSource = {
+      integrationId: entry.manifest.id,
+      integrationVersion: entry.manifest.version,
+      toolName: name,
+      connectionGeneration: this.#connectionGeneration(entry.manifest.id),
+    };
+    let outcome: { isError: boolean; data: Record<string, unknown> };
+    try {
+      const data = await this.#invokeTool(name, input, context, {
+        invocation,
+        observeSource: (current) => {
+          source = current;
+        },
+      });
+      outcome = { isError: false, data };
+    } catch (error) {
+      const failure = describeIntegrationToolFailure(error);
+      outcome = { isError: true, data: { error: failure.code, message: failure.text } };
+    }
+    if (
+      this.#closing ||
+      source.connectionGeneration !== this.#connectionGeneration(source.integrationId)
+    )
+      throw new ExternalContent.ExternalContentDenied({ reason: "scope_changed" });
+    const result = await this.#externalContent.record(invocation, source, outcome);
+    if (result.isError) throw new ExternalContent.ExternalToolResultError(result);
+    return result;
+  }
+
+  #connectionGeneration(id: string): string {
+    return `${this.#authorizationIncarnation}:${this.#authorizationGenerations.get(id) ?? 0}:${integrationCredentialGeneration(id)}`;
+  }
+
+  async #invokeTool(
+    name: string,
+    input: unknown,
+    context?: IntegrationInvocationContext,
+    external?: {
+      readonly invocation: ExternalContent.ExternalContentInvocation;
+      readonly observeSource: (source: ExternalToolSource) => void;
+    },
+  ): Promise<Record<string, unknown>> {
     let submitted;
     try {
       submitted = snapshotIntegrationInput(input === undefined ? {} : input);
@@ -3558,6 +3634,12 @@ export class RegistryRuntime {
         }
         const generation = this.#authorizationGenerations.get(manifest.id) ?? 0;
         const credentialGeneration = integrationCredentialGeneration(manifest.id);
+        external?.observeSource({
+          integrationId: manifest.id,
+          integrationVersion: manifest.version,
+          toolName: name,
+          connectionGeneration: this.#connectionGeneration(manifest.id),
+        });
         const stableAuthority = () =>
           (this.#authorizationGenerations.get(manifest.id) ?? 0) === generation &&
           integrationCredentialGeneration(manifest.id) === credentialGeneration &&
@@ -3654,6 +3736,7 @@ export class RegistryRuntime {
             effectiveDigest: effective.digest,
             payload,
             expiresAt,
+            ...(external ? { externalContent: external.invocation.review } : {}),
           });
           try {
             assertIntegrationWriteReviewSize(review);
@@ -3674,6 +3757,7 @@ export class RegistryRuntime {
               "The plugin write was not approved. No external change was admitted.",
             );
           validateAdmission = () => {
+            external?.invocation.assertCurrent(true);
             const selected = ownRecordValue(this.#state.installed, manifest.id);
             if (
               signal.aborted ||
@@ -3695,6 +3779,7 @@ export class RegistryRuntime {
           validateAdmission();
         }
         const invokeProvider = (providerContext?: IntegrationLifecycleContext) => {
+          external?.invocation.assertCurrent();
           if (this.#faultedProviders.has(provider)) throw new ProviderFaultedError();
           if (
             signal.aborted ||
@@ -3903,11 +3988,13 @@ export const startupLayer = Layer.effectDiscard(
     const config = yield* ServerConfig.ServerConfig;
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     const settingsService = yield* ServerSettings.ServerSettingsService;
+    const externalContent = yield* makeExternalContentRegistry();
     const settings = yield* settingsService.getSettings;
     const skillMaterializer = new CodexIntegrationSkillMaterializer(
       resolveIntegrationCodexHomes(config.baseDir, settings),
     );
-    const runFork = Effect.runForkWith(yield* Effect.context<never>());
+    const context = yield* Effect.context<never>();
+    const runFork = Effect.runForkWith(context);
     const builtinIntegrations = yield* Effect.promise(() =>
       loadBuiltinIntegrations(secrets, {
         includeFixtures: process.env.TRITONAI_ENABLE_INTEGRATION_FIXTURES === "1",
@@ -3919,6 +4006,7 @@ export const startupLayer = Layer.effectDiscard(
         builtinIntegrations,
         skillMaterializer,
         {
+          externalContent,
           onProviderFault: (fault) => {
             runFork(logProviderFault(fault));
           },

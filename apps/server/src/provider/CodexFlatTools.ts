@@ -200,15 +200,24 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
           reason: currentAvailability.reason,
           detail: currentAvailability.detail,
         });
-      return registry.invokeTool(canonicalName, args, {
-        signal,
-        approvalOwner: {
-          threadId: input.threadId,
+      return registry.invokeToolForAgent(
+        canonicalName,
+        args,
+        {
+          ownerId: `thread:${input.threadId}`,
           providerSessionId: current.providerSessionId,
           providerInstanceId: input.instanceId,
-          ...(approvalInvocation ? { invocation: approvalInvocation } : {}),
         },
-      });
+        {
+          signal,
+          approvalOwner: {
+            threadId: input.threadId,
+            providerSessionId: current.providerSessionId,
+            providerInstanceId: input.instanceId,
+            ...(approvalInvocation ? { invocation: approvalInvocation } : {}),
+          },
+        },
+      );
     },
   };
   return {

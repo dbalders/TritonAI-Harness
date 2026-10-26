@@ -1,5 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Canonical bytes are hashed synchronously before any approval wait.
-import type { AuthSessionId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import type {
+  AuthSessionId,
+  ProviderInstanceId,
+  ThreadId,
+  ExternalContentReview,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import * as NodeCrypto from "node:crypto";
@@ -170,6 +175,7 @@ export type IntegrationApprovalOwner =
   | IntegrationSettingsApprovalOwner;
 
 export interface IntegrationWriteReview {
+  readonly externalContent?: ExternalContentReview;
   readonly owner: IntegrationApprovalOwner;
   readonly requestId: string;
   readonly integrationId: string;

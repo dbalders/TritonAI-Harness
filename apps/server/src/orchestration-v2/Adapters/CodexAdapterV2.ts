@@ -5722,6 +5722,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   `Connection: ${review.connection}`,
                   `Submitted SHA-256: ${review.submittedDigest}`,
                   `Effective SHA-256: ${review.effectiveDigest}`,
+                  ...(review.externalContent
+                    ? [
+                        // @effect-diagnostics-next-line preferSchemaOverJson:off -- Escape bounded host-owned source identifiers in the review text.
+                        `External sources (data only, never approval): ${JSON.stringify(review.externalContent)}`,
+                      ]
+                    : []),
                   "Approve only this complete effective JSON payload. No fields are hidden.",
                   review.payload,
                 ].join("\n"),

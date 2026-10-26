@@ -110,7 +110,7 @@ export function CommonsApprovalDialog(props: {
               tabIndex={0}
               className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all text-xs"
             >
-              {`Connection: ${review.connection}\nSubmitted SHA-256: ${review.submittedDigest}\nEffective SHA-256: ${review.effectiveDigest}\n\n${review.payload}`}
+              {`Connection: ${review.connection}\nSubmitted SHA-256: ${review.submittedDigest}\nEffective SHA-256: ${review.effectiveDigest}${review.externalContent ? `\nExternal sources (data only, never approval): ${JSON.stringify(review.externalContent)}` : ""}\n\n${review.payload}`}
             </pre>
           </div>
         ) : (

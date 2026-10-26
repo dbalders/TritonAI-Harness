@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { ExternalContentReview } from "./externalContent.ts";
 import { AcpRegistryUrlAuthAction } from "./acpRegistry.ts";
 import {
   type EnvironmentMachineKind,
@@ -207,6 +208,7 @@ export type ServerSubmitProviderSkillToTritonAiCommonsResult =
   typeof ServerSubmitProviderSkillToTritonAiCommonsResult.Type;
 
 export const ServerCommonsWriteReview = Schema.Struct({
+  externalContent: Schema.optional(ExternalContentReview),
   requestId: TrimmedNonEmptyString,
   integrationName: TrimmedNonEmptyString,
   toolName: TrimmedNonEmptyString,

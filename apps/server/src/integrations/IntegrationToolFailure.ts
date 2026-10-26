@@ -1,5 +1,6 @@
 import { IntegrationOperationError } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { ExternalContentDenied, ExternalContentPersistenceError } from "./ExternalContent.ts";
 
 const MAX_FAILURE_TEXT_LENGTH = 2_000;
 
@@ -43,6 +44,8 @@ function bounded(text: string): string {
 }
 
 const isIntegrationOperationError = Schema.is(IntegrationOperationError);
+const isExternalContentDenied = Schema.is(ExternalContentDenied);
+const isExternalContentPersistenceError = Schema.is(ExternalContentPersistenceError);
 
 function isProviderPublicError(error: unknown): error is Error {
   return (
@@ -60,6 +63,10 @@ function isProviderPublicError(error: unknown): error is Error {
  * causes, and cancellations, stays generic so remote bodies and submitted values never leak.
  */
 export function describeIntegrationToolFailure(error: unknown): IntegrationToolFailure {
+  if (isExternalContentDenied(error))
+    return { code: `external_content_${error.reason}`, text: error.message };
+  if (isExternalContentPersistenceError(error))
+    return { code: "external_content_receipt_failed", text: error.message };
   if (error instanceof IntegrationToolUnavailableError) {
     return { code: "integration_tool_unavailable", text: error.message };
   }
