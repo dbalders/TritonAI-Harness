@@ -55,11 +55,7 @@ export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;
   readonly capabilities: ReadonlySet<McpCapability>;
   readonly issuedAt: number;
-  /**
-   * Immutable absolute expiry for registry-issued bearer credentials.
-   * Synthetic in-process invocation contexts may omit it because they are not
-   * resolved from a bearer token.
-   */
+  /** Optional absolute expiry. Registry-issued bearer credentials have none; they expire by liveness. */
   readonly expiresAt?: number;
   /** Namespaces idempotency keys so two callers reusing a clientRequestId cannot collide. */
   readonly requestNamespace: string;

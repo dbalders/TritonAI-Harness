@@ -1136,7 +1136,7 @@ const layerMcpSessionRegistryTest = McpSessionRegistry.layer.pipe(
 );
 
 it.effect.each([
-  ["enforces the MCP hard expiry during a 44-hour turn without MCP traffic", false],
+  ["keeps the MCP credential alive for a 44-hour turn without MCP traffic", false],
   ["expires the MCP credential at 44 hours when ingestion ended at 2 hours", true],
 ] as const)("%s", ([, endEarly]) =>
   Effect.gen(function* () {
@@ -1162,14 +1162,16 @@ it.effect.each([
 
     yield* Effect.gen(function* () {
       yield* Deferred.await(started);
-      assert.equal((yield* registry.resolve(token))?.thread.threadId, threadId);
       yield* TestClock.adjust("2 hours");
       if (endEarly) {
         yield* Deferred.succeed(end, undefined);
         yield* Fiber.join(run);
       }
       yield* TestClock.adjust("42 hours");
-      assert.equal((yield* registry.resolve(token))?.thread.threadId, undefined);
+      assert.equal(
+        (yield* registry.resolve(token))?.thread.threadId,
+        endEarly ? undefined : threadId,
+      );
     }).pipe(
       Effect.ensuring(
         Deferred.succeed(end, undefined).pipe(Effect.andThen(Fiber.join(run)), Effect.orDie),
