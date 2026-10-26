@@ -10,14 +10,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, Idea, IdeaFeedbackKind, IdeasFeedbackInput } from "@t3tools/contracts";
-import {
-  ChevronDownIcon,
-  ChevronRightIcon,
-  ClockIcon,
-  EllipsisIcon,
-  SparklesIcon,
-  XIcon,
-} from "lucide-react";
+import { ChevronRightIcon, ClockIcon, EllipsisIcon, SparklesIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isElectron } from "../../env";
 import { useClientSettings } from "../../hooks/useSettings";
@@ -308,10 +301,7 @@ function IdeaGroupList({
   ideas,
   ...actions
 }: IdeaActions & { group: IdeaGroup; ideas: ReadonlyArray<Idea> }) {
-  const [expanded, setExpanded] = useState(false);
   if (ideas.length === 0) return null;
-  const shown = expanded ? ideas : ideas.slice(0, group.initialCount);
-  const more = ideas.length - shown.length;
   return (
     <section aria-label={group.title} className="flex flex-col gap-1">
       <h2 className="flex items-baseline gap-1.5 px-2 text-sm font-semibold text-foreground">
@@ -319,23 +309,12 @@ function IdeaGroupList({
         <span className="font-normal text-muted-foreground">{ideas.length}</span>
       </h2>
       <ul className="flex flex-col divide-y divide-border/70">
-        {shown.map((idea) => (
+        {ideas.map((idea) => (
           <li key={idea.id} className="py-0.5">
             <IdeaRow idea={idea} {...actions} />
           </li>
         ))}
       </ul>
-      {more > 0 ? (
-        <Button
-          size="xs"
-          variant="ghost-muted"
-          className="ms-11 self-start"
-          onClick={() => setExpanded(true)}
-        >
-          <ChevronDownIcon />
-          Show {more} more
-        </Button>
-      ) : null}
     </section>
   );
 }

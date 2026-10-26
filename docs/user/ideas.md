@@ -10,7 +10,7 @@ Ideas are listed in two groups. **For you** has ideas from your own work and too
 
 **Things to try** has plugins and skills that appeared since you started using Ideas, and ready-made ideas that need no project, plus ideas for plugins you have connected, such as a digest of your recent email. A new installation starts with these.
 
-Each group shows a few ideas at first; **Show more** lists the rest. Each idea is one row: the task, one line about it, and what it is based on. Ideas never cite a thread, note, or file that does not exist, and every idea is ready to send as written, with nothing to fill in. To keep the page varied, no more than two ideas at a time are about the same project or tool. Ideas based on your work or tools are replaced after about three days, since the work moves on.
+Each idea is one row: the task, one line about it, and what it is based on. Ideas never cite a thread, note, or file that does not exist, and every idea is ready to send as written, with nothing to fill in. To keep the page varied, no more than two ideas at a time are about the same project or tool. Ideas based on your work or tools are replaced after about three days, since the work moves on.
 
 ## Use an idea
 

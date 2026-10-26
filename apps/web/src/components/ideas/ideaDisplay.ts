@@ -8,14 +8,12 @@ export interface IdeaGroup {
   readonly id: string;
   readonly title: string;
   readonly sections: ReadonlyArray<IdeaSection>;
-  /** Rows shown before "Show more". */
-  readonly initialCount: number;
 }
 
 /** The user's own work first, then things to try. */
 export const IDEA_GROUPS: ReadonlyArray<IdeaGroup> = [
-  { id: "for-you", title: "For you", sections: ["continue", "projects", "tools"], initialCount: 4 },
-  { id: "to-try", title: "Things to try", sections: ["new", "starter"], initialCount: 3 },
+  { id: "for-you", title: "For you", sections: ["continue", "projects", "tools"] },
+  { id: "to-try", title: "Things to try", sections: ["new", "starter"] },
 ];
 
 /** The group's ideas, in the order of its sections, keeping the server's order within each. */
