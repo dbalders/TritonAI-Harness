@@ -28,6 +28,7 @@ import {
   type DailyMemoryGenerationResult,
   TextGeneration,
 } from "../textGeneration/TextGeneration.ts";
+import * as ExternalContent from "../integrations/ExternalContent.ts";
 import * as DailyMemory from "./DailyMemory.ts";
 import { installMemorySkill, memorySkillName, renderMemorySkill } from "./memoryVault.ts";
 
@@ -150,13 +151,41 @@ const makeHarness = (options: {
           Effect.sync(() => calls.push(input.day)).pipe(Effect.andThen(generate(input))),
       }),
     ).pipe(
-      Layer.provideMerge(SqlitePersistenceMemory),
+      Layer.provideMerge(ExternalContent.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory))),
       Layer.provideMerge(ServerConfig.layerTest(baseDir, baseDir)),
     );
     return { baseDir, codexHome, calls, layer, fs, path };
   });
 
 it.layer(NodeServices.layer)("DailyMemory", (it) => {
+  it.effect("fences unknown inbox notes before Memory inference", () =>
+    Effect.gen(function* () {
+      let exposed = false;
+      let content: ExternalContent.ExternalContent["Service"];
+      const { baseDir, calls, layer, fs, path } = yield* makeHarness({
+        memoryEnabled: true,
+        generate: (input) =>
+          Effect.gen(function* () {
+            exposed = yield* content.hasExposure.pipe(Effect.orDie);
+            return summaryFor(input);
+          }),
+      });
+      const inbox = path.join(baseDir, "memory/general/Inbox/3f2a");
+      yield* fs.makeDirectory(inbox, { recursive: true });
+      const file = path.join(inbox, "2026-09-28-1200-external.md");
+      yield* fs.writeFileString(file, "Synthetic unverified imported note");
+      yield* fs.utimes(file, NOON_28, NOON_28);
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        content = yield* ExternalContent.ExternalContent;
+        const memory = yield* DailyMemory.make;
+        yield* memory.runCatchUp;
+        assert.isTrue(exposed);
+        assert.deepEqual(calls, ["2026-09-28"]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   it.effect("removes only its generated ambient memory skill before startup completes", () =>
     Effect.gen(function* () {
       const { baseDir, codexHome, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });

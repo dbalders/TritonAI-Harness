@@ -447,6 +447,9 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  const inputOwner = (context: IdeasContext) =>
+    `ideas-input:${NodeCrypto.createHash("sha256").update(formatIdeasContext(context)).digest("hex")}`;
+
   const insertIdeas = Effect.fn("ideas.insertIdeas")(function* (
     ideas: ReadonlyArray<CandidateIdea>,
     nowIso: string,
@@ -461,18 +464,7 @@ export const make = Effect.gen(function* () {
         sources: idea.sources,
         action: idea.action,
       });
-      if (context) {
-        // The model saw the whole batch context; its own source selection cannot narrow lineage.
-        for (const thread of context.threads)
-          yield* externalContent.inherit(`thread:${thread.id}`, `idea:${ideaId}`);
-        if (context.notes.length > 0 || context.files.length > 0)
-          yield* externalContent.markUnverified(`idea:${ideaId}`, {
-            kind: "derived",
-            artifactKind: "idea",
-            artifactId: ideaId,
-            contentDigest: NodeCrypto.createHash("sha256").update(content).digest("hex"),
-          });
-      }
+      if (context) yield* externalContent.inherit(inputOwner(context), `idea:${ideaId}`);
       yield* sql`
         INSERT INTO ideas (idea_id, idea_key, section, content_json, status, created_at, updated_at, provenance_recorded)
         VALUES (${ideaId}, ${idea.key}, ${idea.section}, ${content}, 'active', ${nowIso}, ${nowIso}, 1)
@@ -1020,6 +1012,18 @@ export const make = Effect.gen(function* () {
       note = "You've reached today's limit for new suggestions, so these are starter ideas.";
     } else {
       const settings = yield* settingsService.getSettings;
+      const owner = inputOwner(context);
+      for (const thread of context.threads)
+        yield* externalContent.inherit(`thread:${thread.id}`, owner);
+      if (context.notes.length > 0 || context.files.length > 0)
+        yield* externalContent.markUnverified(owner, {
+          kind: "derived",
+          artifactKind: "idea",
+          artifactId: owner,
+          contentDigest: NodeCrypto.createHash("sha256")
+            .update(formatIdeasContext(context))
+            .digest("hex"),
+        });
       const result = yield* generateIdeas({
         cwd: config.stateDir,
         count: count + 3,

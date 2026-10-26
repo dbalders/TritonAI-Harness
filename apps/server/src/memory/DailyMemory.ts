@@ -36,6 +36,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as ExternalContent from "../integrations/ExternalContent.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
@@ -68,6 +69,7 @@ import {
   registerMemoryDevice,
   removeGeneratedFile,
   removeMemorySkill,
+  sha256Bytes,
   writeGeneratedFile,
   writePartialProgress,
   writeSummaryProgress,
@@ -480,6 +482,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* ServerSettingsService;
   const textGeneration = yield* TextGeneration;
+  const externalContent = yield* ExternalContent.ExternalContent;
   const environment = yield* ServerEnvironment;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -609,6 +612,20 @@ export const make = Effect.gen(function* () {
         detail: "Text generation does not support daily memory.",
       });
     }
+    const owner = `memory:${descriptor.environmentId}:${day}`;
+    for (const thread of threads)
+      yield* externalContent.inherit(`thread:${thread.threadId}`, owner);
+    if (processedNotes.length > 0 || includedInboxNotes.length > 0)
+      yield* externalContent.markUnverified(owner, {
+        kind: "derived",
+        artifactKind: "memory",
+        artifactId: `${descriptor.environmentId}:${day}`,
+        contentDigest: sha256Bytes(
+          new TextEncoder().encode(
+            [...processedNotes, ...includedInboxNotes].map(formatInboxNote).join("\n\n"),
+          ),
+        ),
+      });
     const summary = yield* generateDailyMemory({
       cwd: vault.root,
       day,

@@ -39,7 +39,6 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as TextGeneration from "./TextGeneration.ts";
 import * as ExternalContent from "../integrations/ExternalContent.ts";
 import * as NativePrompt from "./NativePromptGeneration.ts";
-import { codexAppServerEnvironment } from "../provider/CodexProvider.ts";
 import { isolatedCodexHelpAuth } from "./CodexHelpAuth.ts";
 import { withCodexHelpAuthOwner } from "./CodexHelpAuthOwner.ts";
 import { readCodexHelpTransport } from "./CodexHelpTransport.ts";
@@ -265,9 +264,15 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 
-  // Help gets a separate launch path: never reuse arbitrary CLI overrides or a
-  // user's Codex home. In particular, a read-only sandbox alone is insufficient.
-  const runCodexHelpJson: TextGenerationOperations.Runner = (request) =>
+  // Isolated helpers retain only the selected transport, without ambient tools or instructions.
+  const runIsolatedCodexJson = <S extends Schema.Top>(
+    request: Omit<TextGenerationOperations.Request<S>, "operation"> & {
+      readonly operation:
+        | TextGenerationOperations.Operation
+        | "generateDailyMemory"
+        | "generateIdeas";
+    },
+  ): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.scoped(
       Effect.gen(function* () {
         const operation = request.operation;
@@ -479,7 +484,18 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             : undefined;
         if (defaultGateway) {
           providerArgs.push(
-            ...makeTritonAiCodexConfigArgs(effectiveEnvironment, requestAnalytics.headers("help")),
+            ...makeTritonAiCodexConfigArgs(
+              effectiveEnvironment,
+              requestAnalytics.headers(
+                operation === "generateIdeas"
+                  ? "ideas"
+                  : operation === "generateDailyMemory"
+                    ? "memory"
+                    : operation === "generateHelp"
+                      ? "help"
+                      : "generation",
+              ),
+            ),
           );
         } else {
           if (sourceHome) {
@@ -556,6 +572,10 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             outputSchema: request.outputSchema,
             modelSelection: { ...request.modelSelection, model },
             environment: env,
+            imagePaths: yield* materializeImageAttachments(
+              request.attachments,
+              request.modelSelection,
+            ),
             configArgs: [
               ...providerArgs,
               "-c",
@@ -570,7 +590,12 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
                 ? ["-c", `service_tier=${encodeCodexConfigString(serviceTier)}`]
                 : []),
             ],
-            timeoutMs: CODEX_TIMEOUT_MS,
+            timeoutMs:
+              operation === "generateDailyMemory"
+                ? DAILY_MEMORY_TIMEOUT_MS
+                : operation === "generateIdeas"
+                  ? IDEAS_TIMEOUT_MS
+                  : CODEX_TIMEOUT_MS,
           }).pipe(
             Effect.provideService(ExternalContent.ExternalContent, content.value),
             Effect.provideService(ServerConfig.ServerConfig, serverConfig),
@@ -730,93 +755,16 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         detail:
           "The prompt-only runtime cannot investigate a checkout. Supply the review context explicitly.",
       });
+    if (serverConfig.integrationCodexRuntime)
+      return yield* runIsolatedCodexJson({
+        operation,
+        cwd,
+        prompt,
+        outputSchema: outputSchemaJson,
+        modelSelection,
+        attachments,
+      });
     const imagePaths = yield* materializeImageAttachments(attachments, modelSelection);
-    if (serverConfig.integrationCodexRuntime) {
-      if (Option.isNone(content))
-        return yield* new TextGenerationError({
-          operation,
-          detail: "The verified prompt-only runtime has no host authority service.",
-        });
-      return yield* Effect.gen(function* () {
-        const resolved = resolveRuntime ? yield* resolveRuntime : undefined;
-        const effectiveConfig = resolved?.config ?? codexConfig;
-        const effectiveEnvironment = resolved?.environment ?? resolvedEnvironment;
-        const env = {
-          ...codexAppServerEnvironment(effectiveEnvironment),
-          ...(effectiveConfig.homePath
-            ? {
-                CODEX_HOME: expandHomePath(
-                  effectiveConfig.homePath,
-                  yield* HostProcess.HomeDirectory,
-                ),
-              }
-            : {}),
-        };
-        const models = yield* getModels;
-        const model =
-          models.find((candidate) => candidate.slug === modelSelection.model)?.slug ??
-          models.find(
-            (candidate) =>
-              !candidate.isCustom && codexModelFamily(candidate.slug) === modelSelection.model,
-          )?.slug ??
-          modelSelection.model;
-        const reasoningEffort =
-          getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
-          DEFAULT_TEXT_GENERATION_REASONING_EFFORT;
-        const serviceTier = resolved ? undefined : getCodexServiceTierOptionValue(modelSelection);
-        return yield* NativePrompt.run({
-          operation,
-          prompt,
-          outputSchema: outputSchemaJson,
-          modelSelection: { ...modelSelection, model },
-          environment: env,
-          imagePaths,
-          configArgs: [
-            ...makeTritonAiCodexConfigArgs(
-              effectiveEnvironment,
-              requestAnalytics.headers(
-                operation === "generateIdeas"
-                  ? "ideas"
-                  : operation === "generateDailyMemory"
-                    ? "memory"
-                    : "generation",
-              ),
-            ),
-            "-c",
-            "model_providers.ucsd.supports_websockets=false",
-            "-c",
-            "features.enable_request_compression=false",
-            "-c",
-            `model_reasoning_effort=${encodeCodexConfigString(reasoningEffort)}`,
-            ...(serviceTier ? ["-c", `service_tier=${encodeCodexConfigString(serviceTier)}`] : []),
-            ...(options?.modelCatalogPath
-              ? ["-c", `model_catalog_json=${encodeCodexConfigString(options.modelCatalogPath)}`]
-              : []),
-          ],
-          timeoutMs:
-            operation === "generateDailyMemory"
-              ? DAILY_MEMORY_TIMEOUT_MS
-              : operation === "generateIdeas"
-                ? IDEAS_TIMEOUT_MS
-                : CODEX_TIMEOUT_MS,
-        });
-      }).pipe(
-        Effect.provideService(ExternalContent.ExternalContent, content.value),
-        Effect.provideService(ServerConfig.ServerConfig, serverConfig),
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
-        Effect.provideService(Crypto.Crypto, crypto),
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, commandSpawner),
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation,
-              detail: "Verified prompt-only generation failed. No coding runtime was substituted.",
-              cause,
-            }),
-        ),
-      );
-    }
     const schemaJson = yield* encodeJsonForOperation(
       operation,
       toJsonSchemaObject(outputSchemaJson),
@@ -1080,7 +1028,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     ...TextGenerationOperations.fromRunner(
       "CodexTextGeneration",
       (request) =>
-        request.operation === "generateHelp" ? runCodexHelpJson(request) : runCodexJson(request),
+        request.operation === "generateHelp"
+          ? runIsolatedCodexJson(request)
+          : runCodexJson(request),
       { help: { promptOnly: true } },
     ),
     generateDailyMemory,

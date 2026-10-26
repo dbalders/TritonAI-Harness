@@ -37,6 +37,7 @@ import { availableStarters } from "./starterIdeas.ts";
 const GENERAL_STARTERS = availableStarters(new Set());
 
 const NOW = Date.parse("2026-10-13T16:00:00.000Z");
+const NOW_DATE = new Date(NOW);
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -117,12 +118,40 @@ const makeHarness = (
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(baseDir, baseDir)),
     );
-    return { calls, events, layer };
+    return { calls, events, layer, baseDir };
   });
 
 const titles = (snapshot: IdeasSnapshot) => snapshot.ideas.map((idea) => idea.title);
 
 it.layer(NodeServices.layer)("Ideas", (it) => {
+  it.effect("fences unknown project inputs before Ideas inference", () =>
+    Effect.gen(function* () {
+      let exposed = false;
+      let content: ExternalContent.ExternalContent["Service"];
+      const { layer, baseDir, calls } = yield* makeHarness(() =>
+        Effect.gen(function* () {
+          exposed = yield* content.hasExposure.pipe(Effect.orDie);
+          return [];
+        }),
+      );
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        content = yield* ExternalContent.ExternalContent;
+        yield* seedWork;
+        const fs = yield* FileSystem.FileSystem;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE projection_projects SET workspace_root=${baseDir} WHERE project_id='project-1'`;
+        yield* fs.writeFileString(`${baseDir}/unverified.md`, "Synthetic external input");
+        yield* fs.utimes(`${baseDir}/unverified.md`, NOW_DATE, NOW_DATE);
+        const ideas = yield* Ideas.make;
+        yield* ideas.suggestMore;
+        yield* ideas.awaitIdle;
+        assert.isTrue(exposed);
+        assert.include(calls[0]!.context, "unverified.md");
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect(
     "carries every input thread's provenance before an idea can populate another thread",
     () =>
