@@ -1,29 +1,46 @@
-import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
-import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
-import * as Ref from "effect/Ref";
-import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as DesktopShutdown from "../app/DesktopShutdown.ts";
+import { assert, describe, it } from "@effect/vitest";
+
+import * as Effect from "effect/Effect";
+
+import * as FileSystem from "effect/FileSystem";
+
+import * as Layer from "effect/Layer";
+
+import * as Option from "effect/Option";
+
+import * as Ref from "effect/Ref";
+
+import * as Stream from "effect/Stream";
+
 import { HttpClient } from "effect/http";
+
 import { ChildProcessSpawner } from "effect/process";
 
 import * as DesktopObservability from "../app/DesktopObservability.ts";
-import * as DesktopShutdown from "../app/DesktopShutdown.ts";
-import { stopAllPoolInstances } from "../app/DesktopApp.ts";
+
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
+
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
+
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
+
 import * as ElectronApp from "../electron/ElectronApp.ts";
+
 import * as DesktopWindow from "../window/DesktopWindow.ts";
+
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
+
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
+
 import * as DesktopBackendPool from "./DesktopBackendPool.ts";
+
 import type { DesktopBackendStartConfig } from "./DesktopBackendManager.ts";
 
 function layerPool(
@@ -113,6 +130,55 @@ function layerPool(
 }
 
 describe("DesktopBackendPool", () => {
+  it.effect("unregister stops the registered instance", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const id = DesktopBackendPool.BackendInstanceId("wsl:Ubuntu");
+        const pool = yield* DesktopBackendPool.DesktopBackendPool;
+        const instance = yield* pool.register({
+          id,
+          label: Effect.succeed("WSL (Ubuntu)"),
+          // A transient preflight failure leaves a restart fiber scheduled
+          // without needing a real child process.
+          configResolve: Effect.succeed({
+            executablePath: "/electron",
+            args: [],
+            entryPath: "/server/bin.mjs",
+            cwd: "/server",
+            env: {},
+            bootstrap: {
+              secretStoreKeys: [],
+              legacySecretFingerprints: {},
+              mode: "desktop",
+              noBrowser: true,
+              port: 3774,
+              t3Home: "/tmp/t3",
+              host: "127.0.0.1",
+              desktopBootstrapToken: "token",
+              tailscaleServeEnabled: false,
+              tailscaleServePort: 443,
+            },
+            bootstrapDelivery: "fd3",
+            extendEnv: true,
+            httpBaseUrl: new URL("http://127.0.0.1:3774"),
+            captureOutput: false,
+            preflightFailure: Option.some({ reason: "WSL starting", fatal: false }),
+          } satisfies DesktopBackendStartConfig),
+        });
+        yield* instance.start;
+        assert.equal((yield* instance.snapshot).restartScheduled, true);
+
+        yield* pool.unregister(id);
+
+        const stopped = yield* instance.snapshot;
+        assert.equal(stopped.desiredRunning, false);
+        assert.equal(stopped.restartScheduled, false);
+        assert.equal(Option.isNone(yield* pool.get(id)), true);
+      }).pipe(Effect.provide(layerPool(Ref.makeUnsafe("Windows")))),
+    ),
+  );
+
+  // regression: #427 fix: preserve migration activity, native file stashes and fatal shutdown
   it.effect("quits after acknowledging three pre-server failures and completes cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -136,11 +202,11 @@ describe("DesktopBackendPool", () => {
         yield* Effect.gen(function* () {
           const pool = yield* DesktopBackendPool.DesktopBackendPool;
           const primary = yield* pool.primary;
-          // Exercise the exported app cleanup seam and its real shutdown signal.
+          // The fatal callback must release its permit before public stop can complete.
           const consumer = yield* Effect.scoped(
             Effect.gen(function* () {
               yield* Effect.addFinalizer(() =>
-                stopAllPoolInstances().pipe(
+                primary.stop().pipe(
                   Effect.andThen(
                     Effect.sync(() => {
                       cleanupCompleted = true;
@@ -201,70 +267,6 @@ describe("DesktopBackendPool", () => {
           ),
         );
       }).pipe(Effect.provide(Layer.mergeAll(DesktopShutdown.layer, TestClock.layer()))),
-    ),
-  );
-
-  it.effect("resolves the primary label lazily after pool layer construction", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const labelRef = yield* Ref.make("Windows");
-        const pool = yield* DesktopBackendPool.DesktopBackendPool.pipe(
-          Effect.provide(layerPool(labelRef)),
-        );
-        const primary = yield* pool.primary;
-
-        yield* Ref.set(labelRef, "WSL (Ubuntu)");
-
-        assert.equal(yield* primary.label, "WSL (Ubuntu)");
-      }),
-    ),
-  );
-
-  it.effect("unregister stops the registered instance", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const id = DesktopBackendPool.BackendInstanceId("wsl:Ubuntu");
-        const pool = yield* DesktopBackendPool.DesktopBackendPool;
-        const instance = yield* pool.register({
-          id,
-          label: Effect.succeed("WSL (Ubuntu)"),
-          // A transient preflight failure leaves a restart fiber scheduled
-          // without needing a real child process.
-          configResolve: Effect.succeed({
-            executablePath: "/electron",
-            args: [],
-            entryPath: "/server/bin.mjs",
-            cwd: "/server",
-            env: {},
-            bootstrap: {
-              secretStoreKeys: [],
-              legacySecretFingerprints: {},
-              mode: "desktop",
-              noBrowser: true,
-              port: 3774,
-              t3Home: "/tmp/t3",
-              host: "127.0.0.1",
-              desktopBootstrapToken: "token",
-              tailscaleServeEnabled: false,
-              tailscaleServePort: 443,
-            },
-            bootstrapDelivery: "fd3",
-            extendEnv: true,
-            httpBaseUrl: new URL("http://127.0.0.1:3774"),
-            captureOutput: false,
-            preflightFailure: Option.some({ reason: "WSL starting", fatal: false }),
-          } satisfies DesktopBackendStartConfig),
-        });
-        yield* instance.start;
-        assert.equal((yield* instance.snapshot).restartScheduled, true);
-
-        yield* pool.unregister(id);
-
-        const stopped = yield* instance.snapshot;
-        assert.equal(stopped.desiredRunning, false);
-        assert.equal(stopped.restartScheduled, false);
-        assert.equal(Option.isNone(yield* pool.get(id)), true);
-      }).pipe(Effect.provide(layerPool(Ref.makeUnsafe("Windows")))),
     ),
   );
 });

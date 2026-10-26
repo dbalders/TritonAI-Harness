@@ -168,7 +168,7 @@ jobs:
         run: vp run test:release-inputs
 
       - name: Release publication guards
-        run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs
+        run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs .github/scripts/select-stable-plugin-configuration.test.cjs
 
   prepare_managed_plugins:
     name: Prepare immutable managed plugin composition
@@ -232,10 +232,16 @@ jobs:
           name: managed-plugin-composition
           path: .release-input/plugins
 
+      - name: Select configuration for the stable plugin composition
+        shell: bash
+        env:
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
+          SHARED_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
+        run: node .github/scripts/select-stable-plugin-configuration.cjs
+
       - name: Execute managed plugin configuration validation
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
-          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
         run: |
           node scripts/validate-managed-plugin-configuration.ts \
             --receipt .release-input/managed-plugin-validation-receipt.json
@@ -279,17 +285,23 @@ jobs:
           name: managed-plugin-composition
           path: .release-input/plugins
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Select configuration for the stable plugin composition
+        shell: bash
+        env:
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
+          SHARED_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
+        run: node .github/scripts/select-stable-plugin-configuration.cjs
+
       - name: Build matching managed WSL runtime
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
-          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
         run: |
           set -euo pipefail
           node scripts/update-release-package-versions.ts "$RELEASE_VERSION"
           vp run --filter t3 build
-          VP_NODE_VERSION=26.8.2 node apps/server/scripts/cli.ts build-exe --verbose
+          VP_NODE_VERSION=26.12.1 node apps/server/scripts/cli.ts build-exe --verbose
           cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml
           mkdir -p cli-resource-monitor/linux-x64
           cp native/resource-monitor/target/release/t3-resource-monitor cli-resource-monitor/linux-x64/
@@ -462,12 +474,18 @@ jobs:
             Select-Object -Unique
           "PSModulePath=$($modulePathEntries -join ';')" >> $env:GITHUB_ENV
 
+      - name: Select configuration for the stable plugin composition
+        shell: bash
+        env:
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
+          SHARED_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
+        run: node .github/scripts/select-stable-plugin-configuration.cjs
+
       - id: build_desktop
         name: Build desktop artifact
         shell: bash
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
-          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
           UCSD_AI_BASE_URL: ${{ secrets.NIGHTLY_UCSD_AI_BASE_URL }}
           T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
@@ -635,10 +653,16 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         run: node scripts/update-release-package-versions.ts "$RELEASE_VERSION"
+      - name: Select configuration for the stable plugin composition
+        shell: bash
+        env:
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
+          SHARED_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
+        run: node .github/scripts/select-stable-plugin-configuration.cjs
+
       - name: Prepare source once
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
-          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.RELEASE_PLUGIN_CONFIGURATION_JSON }}
           UCSD_AI_BASE_URL: ${{ secrets.NIGHTLY_UCSD_AI_BASE_URL }}
           T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: ${{ steps.resource_monitor_cache.outputs.cache-hit == 'true' }}
         run: |-

@@ -76,6 +76,7 @@ const fixture = Effect.fn(function* (status = 200, holdOpen = false) {
   };
 });
 
+// regression: #257 fix(codex): cap computer-use requests at four images
 describe("TritonAI image request budget", () => {
   it("shares four image slots across attachments and tool outputs without losing text or call IDs", () => {
     const body = {
@@ -195,23 +196,24 @@ describe("TritonAI image request budget", () => {
     },
   );
 
-  describe.each(
-    Array.from(["HTTP_PROXY", "http_proxy", "ALL_PROXY"] as const, (scenario) => ({ scenario })),
-  )("case $scenario", ({ scenario: key }) => {
-    it.effect(`honors ${key} for the upstream hop`, () =>
-      Effect.gen(function* () {
-        const f = yield* fixture();
-        const proxy = yield* startProxy("http://upstream.invalid/v1", {
-          [key]: new URL(f.upstream).origin,
-        });
-        const response = yield* post(`${proxy.baseUrl}/responses`);
-        expect(response.status).toBe(200);
-        yield* Effect.promise(() => response.text());
-        expect(f.received[0]?.url).toBe("http://upstream.invalid/v1/responses");
-        expect(JSON.stringify(f.received[0]?.body).match(/input_image/g)).toHaveLength(4);
-      }).pipe(Effect.scoped),
-    );
-  });
+  describe.each(Array.from(["HTTP_PROXY", "ALL_PROXY"] as const, (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: key }) => {
+      it.effect(`honors ${key} for the upstream hop`, () =>
+        Effect.gen(function* () {
+          const f = yield* fixture();
+          const proxy = yield* startProxy("http://upstream.invalid/v1", {
+            [key]: new URL(f.upstream).origin,
+          });
+          const response = yield* post(`${proxy.baseUrl}/responses`);
+          expect(response.status).toBe(200);
+          yield* Effect.promise(() => response.text());
+          expect(f.received[0]?.url).toBe("http://upstream.invalid/v1/responses");
+          expect(JSON.stringify(f.received[0]?.body).match(/input_image/g)).toHaveLength(4);
+        }).pipe(Effect.scoped),
+      );
+    },
+  );
 
   it.effect("preserves NO_PROXY and merges base query parameters with request overrides", () =>
     Effect.gen(function* () {

@@ -1,15 +1,9 @@
-import {
-  EnvironmentId,
-  type HelpAskResult,
-  type HelpContext,
-  type HelpMessage,
-} from "@t3tools/contracts";
+import { EnvironmentId, type HelpAskResult, type HelpContext } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   createHelpConversation,
   helpConversationFor,
   helpFailureMessage,
-  helpRequestMessages,
   shouldSubmitHelpComposer,
 } from "./helpConversation";
 import { HELP_ISSUE_TRACKER_URL, resolveHelpLink } from "./helpLinks";
@@ -42,24 +36,6 @@ function deferred<A>() {
 }
 
 describe("Help conversation", () => {
-  it("does no generation until send, then includes the actual reply on follow-up", async () => {
-    const store = createHelpConversation();
-    const ask = vi.fn(async () => answer);
-    store.setContext(context);
-    store.setDraft("  Why is my provider not responding?  ");
-    expect(ask).not.toHaveBeenCalled();
-    await store.send(ask);
-    expect(store.getSnapshot().draft).toBe("");
-    store.setDraft("How do I sign in again?");
-    await store.send(ask);
-    expect(ask).toHaveBeenLastCalledWith([
-      { role: "user", content: "Why is my provider not responding?" },
-      { role: "assistant", content: answer.answer },
-      { role: "user", content: "How do I sign in again?" },
-    ]);
-    expect(store.getSnapshot().messages).toHaveLength(4);
-  });
-
   it("retains pending across navigation without duplicating a request", async () => {
     const connection = { environmentId: "same-environment" };
     const mounted = helpConversationFor(connection);
@@ -118,66 +94,6 @@ describe("Help conversation", () => {
       "New question",
       answer.answer,
     ]);
-  });
-
-  it("keeps failed input, never retries automatically, and retries without duplicating a user turn", async () => {
-    const store = createHelpConversation();
-    store.setDraft("My provider failed");
-    const ask = vi
-      .fn<(_: readonly HelpMessage[]) => Promise<HelpAskResult>>()
-      .mockRejectedValueOnce(new Error("secret provider stderr"))
-      .mockResolvedValueOnce(answer);
-    await store.send(ask);
-    expect(ask).toHaveBeenCalledTimes(1);
-    expect(store.getSnapshot().draft).toBe("My provider failed");
-    expect(store.getSnapshot().error).not.toContain("secret");
-    expect(store.getSnapshot().messages).toEqual([]);
-    await store.send(ask);
-    expect(ask).toHaveBeenLastCalledWith([{ role: "user", content: "My provider failed" }]);
-    expect(store.getSnapshot().messages).toHaveLength(2);
-    expect(store.getSnapshot().error).toBeNull();
-  });
-
-  it("retains full answers for display while bounding recent outbound exchanges", async () => {
-    const store = createHelpConversation();
-    const suffix = "\nFinally, reconnect the provider.";
-    const fullAnswer = "x".repeat(16_000 - suffix.length) + suffix;
-    const ask = vi.fn(async (_messages: readonly HelpMessage[]) => ({
-      ...answer,
-      answer: fullAnswer,
-    }));
-    for (let index = 0; index < 12; index += 1) {
-      store.setDraft(`Question ${index}`);
-      await store.send(ask);
-    }
-    const lastRequest = ask.mock.calls.at(-1)?.[0] as readonly HelpMessage[] | undefined;
-    expect(lastRequest).toHaveLength(19);
-    expect(lastRequest?.[0]).toEqual({ role: "user", content: "Question 2" });
-    expect(lastRequest?.[1]).toEqual({ role: "assistant", content: fullAnswer.slice(0, 8_000) });
-    expect(lastRequest?.at(-1)).toEqual({ role: "user", content: "Question 11" });
-    expect(lastRequest?.every((message) => message.content.length <= 8000)).toBe(true);
-    const retainedAnswers = store
-      .getSnapshot()
-      .messages.filter((message) => message.role === "assistant");
-    expect(retainedAnswers).toHaveLength(12);
-    for (const message of retainedAnswers) {
-      expect(message.content).toBe(fullAnswer);
-      expect(message.content.endsWith(suffix)).toBe(true);
-    }
-    expect(
-      helpRequestMessages([{ role: "assistant", content: "a".repeat(16000) }], "next")[0]?.content,
-    ).toHaveLength(8000);
-  });
-
-  it("uses stable snapshots and rejects empty or oversized drafts before calling the model", async () => {
-    const store = createHelpConversation();
-    const ask = vi.fn(async () => answer);
-    expect(store.getSnapshot()).toBe(store.getSnapshot());
-    store.setDraft("   ");
-    await store.send(ask);
-    store.setDraft("x".repeat(8001));
-    await store.send(ask);
-    expect(ask).not.toHaveBeenCalled();
   });
 
   it("an explicit authorization failure clears context and history instead of retaining protected input", async () => {

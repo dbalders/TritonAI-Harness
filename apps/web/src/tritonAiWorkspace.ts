@@ -1,5 +1,5 @@
 export const TRITONAI_FIRST_RUN_PROMPT = "How does TritonAI Harness work, and how can it help me?";
-export const TRITONAI_FIRST_RUN_WORKSPACE = "~/TritonAI";
+const TRITONAI_FIRST_RUN_WORKSPACE = "~/TritonAI";
 
 const TRITONAI_APP_BASE_NAME = "TritonAI Harness";
 

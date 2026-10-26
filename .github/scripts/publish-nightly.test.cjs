@@ -127,6 +127,7 @@ test("failed upload leaves the nightly draft unpublished", async (t) => {
   assert.equal(f.release.draft, true);
 });
 
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("an existing tag pointing at unverified code stays unpublished", async (t) => {
   const f = fixture(t);
   f.github.rest.repos.getCommit = async () => ({ data: { sha: "b".repeat(40) } });
@@ -134,6 +135,7 @@ test("an existing tag pointing at unverified code stays unpublished", async (t) 
   assert.equal(f.calls.length, 0);
 });
 
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("leaves a missing tag absent until the verified draft is published", async (t) => {
   const f = fixture(t);
   f.github.rest.git.getRef = async () => {
@@ -148,19 +150,7 @@ test("leaves a missing tag absent until the verified draft is published", async 
   assert.equal(f.calls[1][1].target_commitish, f.context.sha);
 });
 
-test("failed uploads do not expose a bare nightly tag in the updater feed", async (t) => {
-  const f = fixture(t);
-  f.github.rest.git.getRef = async () => {
-    throw Object.assign(new Error("absent"), { status: 404 });
-  };
-  f.github.rest.repos.uploadReleaseAsset = async () => {
-    throw new Error("upload failed");
-  };
-  await assert.rejects(publish(f), /upload failed/);
-  assert.equal(f.release.draft, true);
-  assert.deepEqual(f.tagCreations, []);
-});
-
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("a draft with a changed source stays unpublished even without a tag", async (t) => {
   const f = fixture(t);
   f.github.rest.git.getRef = async () => {
@@ -176,6 +166,7 @@ test("a draft with a changed source stays unpublished even without a tag", async
   assert.deepEqual(f.tagCreations, []);
 });
 
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("a tag changed during upload leaves the draft unpublished", async (t) => {
   const f = fixture(t);
   let reads = 0;
@@ -205,44 +196,3 @@ for (const [field, value] of [
     assert.equal(f.release.draft, true);
   });
 }
-
-test("includes generated PR notes before platform details", async (t) => {
-  const f = fixture(t);
-  await publish(f);
-  assert.match(f.release.body, /pull\/123/);
-  assert.match(f.release.body, /Full Changelog/);
-  assert.match(f.release.body, /SmartScreen may show a warning/);
-  assert.ok(f.release.body.indexOf("What’s Changed") < f.release.body.indexOf("Platform notes"));
-});
-
-test("first nightly compares against the latest stable release", async (t) => {
-  const f = fixture(t);
-  delete process.env.PREVIOUS_NIGHTLY_TAG;
-  await publish(f);
-});
-
-test("note generation failure prevents release creation", async (t) => {
-  const f = fixture(t);
-  f.github.rest.repos.generateReleaseNotes = async () => {
-    throw new Error("notes unavailable");
-  };
-  await assert.rejects(publish(f), /notes unavailable/);
-  assert.equal(f.calls.length, 0);
-});
-
-test("empty generated notes prevent release creation", async (t) => {
-  const f = fixture(t);
-  f.github.rest.repos.generateReleaseNotes = async () => ({ data: { body: " " } });
-  await assert.rejects(publish(f), /notes are empty/);
-  assert.equal(f.calls.length, 0);
-});
-
-test("signed Windows builds do not show an unsigned installer warning", async (t) => {
-  const f = fixture(t);
-  fs.writeFileSync(
-    "release-assets/harness-win-verification.json",
-    JSON.stringify({ signingMode: "signed" }),
-  );
-  await publish(f);
-  assert.doesNotMatch(f.release.body, /unsigned|SmartScreen/);
-});

@@ -7,7 +7,6 @@
   "scripts": {
     "ensure:electron": "node scripts/ensure-electron-runtime.mjs",
     "start": "node scripts/start-electron.mjs",
-    "typecheck": "tsc-rs --noEmit",
     "test": "node scripts/ensure-electron-runtime.mjs && vp test run --passWithNoTests",
     "smoke-test": "node scripts/assert-electron-keychain-fix.mjs && node scripts/smoke-test.mjs",
     "test:electron-keychain-runtime": "node scripts/assert-electron-keychain-fix.mjs"

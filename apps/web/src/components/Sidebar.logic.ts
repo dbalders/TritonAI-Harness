@@ -25,7 +25,6 @@ import {
 import type { SidebarThreadSummary, Thread } from "../types";
 import { normalizeSearchText } from "../lib/utils";
 import { isLatestRunSettled } from "../session-logic";
-import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -44,7 +43,7 @@ export function shouldNavigateAfterThreadPark(input: {
 }
 
 const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
-export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
+const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
 
 export function resolveSidebarRowAccessibility(input: {
   readonly title: string;
@@ -562,7 +561,7 @@ export function buildMultiSelectThreadContextMenuItems(input: {
   ];
 }
 
-export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
+function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
   return thread.lineage.relationshipToParent === "subagent";
 }
 
@@ -599,17 +598,6 @@ export function filterSidebarV2VisibleThreads<
       (scopedProjectKeys === null ||
         scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
   );
-}
-
-export function getSidebarForkParentThreadId(
-  thread: Pick<SidebarThreadSummary, "forkedFrom" | "lineage">,
-) {
-  if (thread.lineage.relationshipToParent !== "fork") {
-    return null;
-  }
-  return thread.forkedFrom?.type === "run"
-    ? thread.forkedFrom.threadId
-    : thread.lineage.parentThreadId;
 }
 
 export function buildBulkTitleRegenerationContextMenuItem(input: {
@@ -683,15 +671,7 @@ export interface ThreadJumpHintVisibilityController {
   dispose: () => void;
 }
 
-export function resolveSidebarStageBadgeLabel(input: {
-  primaryServerVersion: string | null | undefined;
-  fallbackStageLabel: string;
-}): string | null {
-  const stageLabel = resolveServerBackedAppStageLabel(input);
-  return stageLabel;
-}
-
-export function createThreadJumpHintVisibilityController(input: {
+function createThreadJumpHintVisibilityController(input: {
   delayMs: number;
   onVisibilityChange: (visible: boolean) => void;
   setTimeoutFn?: typeof globalThis.setTimeout;
@@ -1021,10 +1001,6 @@ export function resolveSidebarV2TopStatus(input: {
   return input.isUnread ? "done" : null;
 }
 
-export function shouldShowSidebarV2Duration(status: SidebarThreadStatus): boolean {
-  return status === "working";
-}
-
 export function firstValidTimestampMs(
   ...candidates: ReadonlyArray<string | null | undefined>
 ): number {
@@ -1045,9 +1021,9 @@ export {
 
 /** Project sections are activity-oriented: once the stable project grouping
     has narrowed the list, the most recently used thread belongs at the top. */
-export function sortThreadsByActivityForSidebar<
-  T extends { readonly id: string } & ThreadSortInput,
->(threads: readonly T[]): T[] {
+function sortThreadsByActivityForSidebar<T extends { readonly id: string } & ThreadSortInput>(
+  threads: readonly T[],
+): T[] {
   return sortThreads(threads, "updated_at");
 }
 
@@ -1202,14 +1178,6 @@ export function resolveWorkingStartedAt(
   return resolveThreadWorkingStartedAt(thread);
 }
 
-export function formatWorkingDurationLabel(elapsedMs: number): string {
-  const seconds = Number.isFinite(elapsedMs) ? Math.max(0, Math.floor(elapsedMs / 1000)) : 0;
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
-
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {
@@ -1349,7 +1317,7 @@ export function getFallbackThreadIdAfterDelete<
     )[0]?.id ?? null
   );
 }
-export function getProjectSortTimestamp(
+function getProjectSortTimestamp(
   project: SidebarProject,
   projectThreads: readonly ThreadSortInput[],
   sortOrder: Exclude<SidebarProjectSortOrder, "manual">,
