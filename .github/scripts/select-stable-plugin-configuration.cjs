@@ -4,8 +4,8 @@ const path = require("node:path");
 // Nightly and stable share credential storage, but each build receives only the
 // configuration selected by its immutable plugin composition.
 function selectConfiguration(manifest, serialized) {
-  if (typeof serialized !== "string" || Buffer.byteLength(serialized, "utf8") > 16 * 1024) {
-    throw new Error("Shared plugin configuration is missing or exceeds the size limit.");
+  if (typeof serialized !== "string") {
+    throw new Error("Shared plugin configuration is missing.");
   }
   let shared;
   try {

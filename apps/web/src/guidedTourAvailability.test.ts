@@ -10,6 +10,7 @@ afterEach(() => {
 });
 
 it.each([
+  ["Alpha", "0.4.1", false],
   ["Latest", "0.4.1", false],
   ["Nightly", "0.4.1-nightly.20261026.1", true],
   ["Dev", "0.4.1", true],

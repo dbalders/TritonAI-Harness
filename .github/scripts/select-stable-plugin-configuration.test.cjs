@@ -51,6 +51,15 @@ test("selected plugins still require object configuration without revealing valu
   }
 });
 
+test("unselected plugin configuration does not consume the Stable size budget", () => {
+  const full = JSON.stringify({ ...shared, tableau: { padding: "x".repeat(16 * 1024) } });
+  assert.ok(Buffer.byteLength(full, "utf8") > 16 * 1024);
+  assert.equal(
+    selectConfiguration(stable, full),
+    selectConfiguration(stable, JSON.stringify(shared)),
+  );
+});
+
 test("CLI masks transformed credentials before export and prevents newline injection", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stable-plugin-config-"));
   try {
