@@ -172,6 +172,24 @@ it.effect("does not keep credentials of other threads alive", () =>
   }),
 );
 
+it.effect("bearer traffic alone does not keep a credential alive", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeRegistry(() => timestamp);
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-bearer-only"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: McpSessionRegistry.providerSessionCapabilities(),
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+
+    timestamp += 99;
+    expect(yield* registry.resolve(token)).toBeDefined();
+    timestamp += 2;
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
 it.effect("only a trusted touch restores an expired token with its original scope", () =>
   Effect.gen(function* () {
     let timestamp = 1_000;
