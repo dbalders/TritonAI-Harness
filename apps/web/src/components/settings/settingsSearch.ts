@@ -1,4 +1,4 @@
-import { HOSTED_APP_CHANNEL } from "~/branding";
+import { GUIDED_TOUR_AVAILABLE, HOSTED_APP_CHANNEL } from "~/branding";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -162,6 +162,7 @@ export function filterAvailableSettingsSearchItems(
   const items: ReadonlyArray<SettingsSearchItem> = SETTINGS_SEARCH_ITEMS;
   return items.filter(
     (item) =>
+      (item.id !== "experimental-guided-tour" || GUIDED_TOUR_AVAILABLE) &&
       (item.id !== "environment-identification" || availability.hasStageArtwork) &&
       (!item.cloudOnly || availability.hasCloudPublicConfig) &&
       (!item.environmentOnly || availability.hasEnvironment) &&
@@ -186,6 +187,7 @@ export function searchSettings(
 
   return items
     .flatMap((item, index) => {
+      if (item.id === "experimental-guided-tour" && !GUIDED_TOUR_AVAILABLE) return [];
       if (!isElectron && item.desktopOnly === true) return [];
       if (item.releaseChannelOnly && !isElectron && HOSTED_APP_CHANNEL === null) return [];
       if (item.macOnly && !isMacPlatform(platform)) return [];

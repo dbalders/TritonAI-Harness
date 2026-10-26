@@ -52,6 +52,7 @@ import {
 } from "~/state/session";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { GUIDED_TOUR_AVAILABLE } from "~/branding";
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
 
@@ -84,7 +85,10 @@ function getClientSettingsSnapshot(): ClientSettings {
 }
 
 function replaceClientSettingsSnapshot(settings: ClientSettings): void {
-  clientSettingsSnapshot = settings;
+  clientSettingsSnapshot =
+    !GUIDED_TOUR_AVAILABLE && settings.experimentalGuidedTourEnabled
+      ? { ...settings, experimentalGuidedTourEnabled: false }
+      : settings;
   emitClientSettingsChange();
 }
 

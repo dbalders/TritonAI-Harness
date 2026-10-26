@@ -17,6 +17,14 @@ import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 const persistenceMocks = vi.hoisted(() => ({
   getClientSettings: vi.fn<() => Promise<ClientSettings | null>>(),
   setClientSettings: vi.fn<(settings: ClientSettings) => Promise<void>>(),
+  guidedTourAvailable: true,
+}));
+
+vi.mock("~/branding", async (original) => ({
+  ...(await original<typeof import("~/branding")>()),
+  get GUIDED_TOUR_AVAILABLE() {
+    return persistenceMocks.guidedTourAvailable;
+  },
 }));
 
 vi.mock("~/localApi", () => ({
@@ -24,6 +32,7 @@ vi.mock("~/localApi", () => ({
 }));
 
 beforeEach(() => {
+  persistenceMocks.guidedTourAvailable = true;
   persistenceMocks.getClientSettings.mockReset().mockResolvedValue(null);
   persistenceMocks.setClientSettings.mockReset().mockResolvedValue(undefined);
   __resetClientSettingsPersistenceForTests();
@@ -41,6 +50,27 @@ describe("client settings hydration", () => {
   };
   const onboardingCompletedAt = "2026-09-05T12:00:00.000Z";
   const complete = (current: ClientSettings) => ({ ...current, onboardingCompletedAt });
+
+  it("disables a previously enabled tour on Stable while preserving saved progress and work", async () => {
+    persistenceMocks.guidedTourAvailable = false;
+    const saved = { ...savedSettings, experimentalGuidedTourEnabled: true };
+    persistenceMocks.getClientSettings.mockResolvedValueOnce(saved);
+    await ensureClientSettingsHydrated();
+    expect(getClientSettings()).toEqual({ ...saved, experimentalGuidedTourEnabled: false });
+    await persistClientSettingsPatch({ experimentalGuidedTourEnabled: true });
+    expect(getClientSettings().experimentalGuidedTourEnabled).toBe(false);
+    expect(persistenceMocks.setClientSettings).toHaveBeenLastCalledWith({
+      ...saved,
+      experimentalGuidedTourEnabled: false,
+    });
+  });
+
+  it("retains an enabled tour on Nightly", async () => {
+    const saved = { ...savedSettings, experimentalGuidedTourEnabled: true };
+    persistenceMocks.getClientSettings.mockResolvedValueOnce(saved);
+    await ensureClientSettingsHydrated();
+    expect(getClientSettings()).toEqual(saved);
+  });
 
   it("waits for saved model preferences before applying the first server edit", async () => {
     const provider = ProviderInstanceId.make("codex_work");
