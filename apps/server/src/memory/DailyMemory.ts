@@ -1,7 +1,7 @@
 import { getManagedCodexSettings } from "../managedPolicy.ts";
 /**
  * DailyMemory - writes this device's daily notes into the general memory
- * vault, and keeps the Codex memory skill in step with the Memory setting.
+ * vault. Reuse through Ideas and project history retains the host's provenance boundary.
  *
  * The summarizer remembers the last day it finished. On startup, every hour,
  * and when Memory is turned on, it summarizes each finished day after that
@@ -62,14 +62,12 @@ import {
   findMemoryDevice,
   generalVaultPaths,
   type GeneralVaultPaths,
-  installMemorySkill,
   type MemoryDevice,
   readPartialProgress,
   readSummaryProgress,
   registerMemoryDevice,
   removeGeneratedFile,
   removeMemorySkill,
-  renderMemorySkill,
   writeGeneratedFile,
   writePartialProgress,
   writeSummaryProgress,
@@ -490,6 +488,17 @@ export const make = Effect.gen(function* () {
   const descriptor = yield* environment.getDescriptor;
   const status = yield* Ref.make<SummarizerStatus>({ state: "idle", message: null });
   const lock = yield* Semaphore.make(1);
+  const removeAutomaticSkill = Effect.fn("DailyMemory.removeAutomaticSkill")(function* () {
+    const settings = yield* settingsService.getSettings;
+    const home = yield* resolveCodexHomeLayout(getManagedCodexSettings(settings));
+    return yield* removeMemorySkill({
+      skillsDirectory: path.join(home.sharedHomePath, "skills"),
+      vaultPath: vault.root,
+    });
+  });
+  // An ambient skill could feed synced integration text to an ordinary coding runtime.
+  // Remove the old host-generated path before any new client turn can start.
+  yield* removeAutomaticSkill();
 
   const provide = <A, E>(
     effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | SqlClient.SqlClient>,
@@ -719,10 +728,9 @@ export const make = Effect.gen(function* () {
       const codexHome = (yield* resolveCodexHomeLayout(getManagedCodexSettings(settings)).pipe(
         Effect.provideService(Path.Path, path),
       )).sharedHomePath;
-      const skillsDirectory = path.join(codexHome, "skills");
+      yield* removeAutomaticSkill();
 
       if (!settings.memoryEnabled) {
-        yield* provide(removeMemorySkill({ skillsDirectory, vaultPath: vault.root }));
         yield* Ref.set(status, { state: "idle", message: null });
         return;
       }
@@ -739,17 +747,6 @@ export const make = Effect.gen(function* () {
       );
       const ownPaths = devicePaths(path, vault, device);
       yield* provide(ensureGeneralVault(vault, device));
-      yield* provide(
-        installMemorySkill({
-          skillsDirectory,
-          vaultPath: vault.root,
-          contents: renderMemorySkill({
-            vaultPath: vault.root,
-            sessionsPath: path.join(codexHome, "sessions"),
-            device,
-          }),
-        }),
-      );
 
       const today = localDayAt(nowMs);
       const progress = yield* provide(readSummaryProgress(ownPaths));

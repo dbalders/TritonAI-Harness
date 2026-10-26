@@ -267,7 +267,7 @@ export function MemorySettingsSection() {
         serverScoped
         settingKeys={["memoryEnabled"]}
         {...searchableSetting("memory")}
-        description="Keep daily summaries of your threads that Codex agents can look back on."
+        description="Keep daily summaries and project history to review and reuse through Ideas and project next steps."
         status={
           connectedEnvironments.length
             ? `${connectedEnvironments.filter((environment) => environment.serverConfig?.settings.memoryEnabled).length} of ${connectedEnvironments.length} connected environments on`

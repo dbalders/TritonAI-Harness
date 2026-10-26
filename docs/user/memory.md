@@ -1,6 +1,6 @@
 # Memory
 
-Memory keeps a daily summary of your threads in a folder of Markdown notes, and lets Codex agents look back through it when earlier work matters.
+Memory keeps a daily summary of your threads in a folder of Markdown notes. Review project history and use Ideas or project next steps to bring earlier work into a new draft.
 
 Memory is on by default for new and existing installations, including Nightly. When you install an update that adds Memory, it starts automatically unless you have explicitly turned it off. The setting is under **Settings > General > Memory**. Choose **All environments** to turn Memory on or off across connected computers, or select one environment to change it separately. **Mixed** means the connected computers have different settings. Offline computers keep their settings until you reconnect and apply the change.
 
@@ -41,6 +41,8 @@ A generated note is only deleted from OneDrive when sync has verified which comp
 
 ## How agents use it
 
-When Memory is on, Codex agents get a `tritonai-memory-…` skill that points to the folder. Each vault has its own skill, so Stable and Nightly can share a Codex home without overwriting or removing each other's memory skill. Agents read the notes when you ask about earlier work, and they only write to memory when you ask them to remember something or close out work. Agent notes go to this computer's inbox folder.
+Open a project to review its history and suggested next steps. A suggestion opens a draft for you to review before sending. Ideas can also use memory notes as background.
 
-Turning Memory off stops new notes and removes the skill. Your notes stay in the folder.
+Agents no longer automatically search the note folder through a Memory skill. Old notes can contain text returned by connected services, so their reuse must retain the same access limits as their sources. Harness removes its previously generated Memory skill; your own skills and notes stay intact.
+
+Turning Memory off stops new summaries. Existing notes stay in the folder, and **Open folder** remains available.
