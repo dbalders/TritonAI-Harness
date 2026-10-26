@@ -17,7 +17,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { HtmlRenderDialog } from "./HtmlRenderDialog";
 import { observeResize } from "~/lib/observeResize";
 
-const MIN_URL_LIFE_MS = 5 * 60_000;
+const MIN_URL_LIFE_MS = 15_000;
 
 export function HtmlRenderFrame(props: {
   readonly environmentId: EnvironmentId;

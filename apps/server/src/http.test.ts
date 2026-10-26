@@ -768,6 +768,7 @@ describe("assetResponseHeaders", () => {
       "Content-Security-Policy",
     );
   });
+
   it("serves inline attachment documents with their declared mime type", () => {
     expect(
       assetResponseHeaders("/attachments/upload.bin", { mimeType: "application/pdf" }),

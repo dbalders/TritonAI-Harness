@@ -42,7 +42,7 @@ const commandFailure = (result: {
   );
 };
 
-const MIN_URL_LIFE_MS = 5 * 60_000;
+const MIN_URL_LIFE_MS = 15_000;
 const fullscreenSupported =
   typeof HTMLElement !== "undefined" && "popover" in HTMLElement.prototype;
 

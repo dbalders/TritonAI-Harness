@@ -304,6 +304,15 @@ export class AssetGitHubMediaUrlValidationError extends Schema.TaggedError<Asset
   }
 }
 
+export class AssetSessionUnavailableError extends Schema.TaggedError<AssetSessionUnavailableError>()(
+  "AssetSessionUnavailableError",
+  {},
+) {
+  override get message(): string {
+    return "Your session is no longer active. Reconnect before opening this file.";
+  }
+}
+
 export const AssetAccessError = Schema.Union([
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
@@ -319,5 +328,6 @@ export const AssetAccessError = Schema.Union([
   AssetProjectFaviconNotFoundError,
   AssetGitHubMediaUrlValidationError,
   AssetSigningKeyLoadError,
+  AssetSessionUnavailableError,
 ]);
 export type AssetAccessError = typeof AssetAccessError.Type;

@@ -10,7 +10,7 @@ import { ChevronRightIcon, DownloadIcon, Trash2Icon, WrapTextIcon, XIcon } from 
 import { Check, Code2, Copy, Eye, Table2 } from "lucide";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
-import { useAssetUrlRefresh } from "~/assets/assetUrls";
+import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { MorphIcon } from "~/components/MorphIcon";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -19,6 +19,7 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useClientSettings, updateClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 
+import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { AudioPreview } from "./AudioPreview";
 import { BrowserDocumentFrame } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
@@ -32,7 +33,7 @@ import {
 
 const SourcePreview = lazy(() => import("./ReadOnlySourcePreview"));
 
-const STALE_URL_MS = 5 * 60_000;
+const STALE_URL_MS = 15_000;
 
 export function ReadOnlySourcePreview(props: { name: string; text: string }) {
   return (
@@ -81,6 +82,10 @@ export function AttachmentFilePreview(props: {
     props.file ? null : (props.asset?.environmentId ?? null),
     props.file ? null : resource,
   );
+  const videoAsset = useAssetUrlState(
+    !props.file && kind === "video" ? (props.asset?.environmentId ?? null) : null,
+    !props.file && kind === "video" ? resource : null,
+  );
   const prepareDownload = useAssetUrlRefresh(props.asset?.environmentId ?? null, downloadResource);
   const [saving, setSaving] = useState(false);
   const [localUrl, setLocalUrl] = useState<string | null>(null);
@@ -99,7 +104,7 @@ export function AttachmentFilePreview(props: {
     return () => URL.revokeObjectURL(url);
   }, [props.file]);
   useEffect(() => {
-    if (props.file) return;
+    if (props.file || kind === "video") return;
     let cancelled = false;
     // oxlint-disable-next-line react/set-state-in-effect -- A new preview request clears its previous URL and error.
     setRemoteUrl(null);
@@ -119,8 +124,14 @@ export function AttachmentFilePreview(props: {
       cancelled = true;
     };
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry must reauthorize the remote file.
-  }, [props.file, refresh, revision]);
-  const url = props.file ? localUrl : remoteUrl;
+  }, [props.file, refresh, revision, kind]);
+  const url = props.file
+    ? localUrl
+    : kind === "video"
+      ? videoAsset._tag === "Success"
+        ? videoAsset.url
+        : null
+      : remoteUrl;
   const needsText = kind === "text" || kind === "markdown" || (kind === "html" && !rendered);
   useEffect(() => {
     if (!needsText || !url) return;
@@ -157,7 +168,13 @@ export function AttachmentFilePreview(props: {
     });
     return () => controller.abort();
   }, [url, needsText, revision, props.sizeBytes, props.file, refresh]);
-  const failure = error ?? (needsText ? contentError : null);
+  const failure =
+    error ??
+    (!props.file && kind === "video" && videoAsset._tag === "Failure"
+      ? "The video is unavailable. Reconnect and try again."
+      : needsText
+        ? contentError
+        : null);
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
   const showsRawText =
     failure === null &&
@@ -199,66 +216,74 @@ export function AttachmentFilePreview(props: {
     });
   };
 
-  const body = failure ? (
-    <FileSurfaceFailure
-      message={failure}
-      onRetry={() => {
-        setError(null);
-        setRevision((value) => value + 1);
-      }}
-    />
-  ) : !url || (needsText && !content) ? (
-    <FileSurfaceLoading />
-  ) : needsText && content ? (
-    delimiter && rendered ? (
-      <DelimitedTablePreview name={props.name} text={content.text} delimiter={delimiter} />
-    ) : kind === "markdown" && rendered ? (
-      <ScrollArea className="min-h-0 flex-1">
-        <ChatMarkdown text={content.text} cwd={undefined} className="mx-auto max-w-4xl px-6 py-5" />
-      </ScrollArea>
+  const body =
+    kind === "video" ? (
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
+        <MediaVideoPlayer
+          src={url}
+          sourceFailed={failure !== null}
+          label={props.name}
+          revision={String(revision)}
+          className="max-h-full max-w-full"
+          onRetry={async () => {
+            const renewed = await refresh();
+            if (renewed === null) throw new Error("The video is unavailable.");
+          }}
+        />
+      </div>
+    ) : failure ? (
+      <FileSurfaceFailure
+        message={failure}
+        onRetry={() => {
+          setError(null);
+          setRevision((value) => value + 1);
+        }}
+      />
+    ) : !url || (needsText && !content) ? (
+      <FileSurfaceLoading />
+    ) : needsText && content ? (
+      delimiter && rendered ? (
+        <DelimitedTablePreview name={props.name} text={content.text} delimiter={delimiter} />
+      ) : kind === "markdown" && rendered ? (
+        <ScrollArea className="min-h-0 flex-1">
+          <ChatMarkdown
+            text={content.text}
+            cwd={undefined}
+            className="mx-auto max-w-4xl px-6 py-5"
+          />
+        </ScrollArea>
+      ) : (
+        <ReadOnlySourcePreview name={props.name} text={content.text} />
+      )
+    ) : kind === "pdf" || kind === "html" ? (
+      <BrowserDocumentFrame
+        src={url}
+        title={props.name}
+        pdf={kind === "pdf"}
+        htmlRender={props.htmlRender === true}
+        threadRef={props.threadRef}
+      />
+    ) : kind === "audio" ? (
+      <AudioPreview src={url} name={props.name} onError={() => setError("Unable to load audio.")} />
+    ) : kind === "image" ? (
+      // oxlint-disable-next-line t3code/require-centered-scroll-gutter -- The image is capped at max-h-full max-w-full, so this never scrolls.
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+        <img
+          src={url}
+          alt={props.name}
+          className="max-h-full max-w-full object-contain"
+          onError={() => setError("Unable to load image.")}
+        />
+      </div>
     ) : (
-      <ReadOnlySourcePreview name={props.name} text={content.text} />
-    )
-  ) : kind === "pdf" || kind === "html" ? (
-    <BrowserDocumentFrame
-      src={url}
-      title={props.name}
-      pdf={kind === "pdf"}
-      htmlRender={props.htmlRender === true}
-      threadRef={props.threadRef}
-    />
-  ) : kind === "audio" ? (
-    <AudioPreview src={url} name={props.name} onError={() => setError("Unable to load audio.")} />
-  ) : kind === "video" ? (
-    <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
-      <video
-        controls
-        playsInline
-        src={url}
-        aria-label={props.name}
-        className="max-h-full max-w-full"
-        onError={() => setError("Unable to load video.")}
-      />
-    </div>
-  ) : kind === "image" ? (
-    // oxlint-disable-next-line t3code/require-centered-scroll-gutter -- The image is capped at max-h-full max-w-full, so this never scrolls.
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
-      <img
-        src={url}
-        alt={props.name}
-        className="max-h-full max-w-full object-contain"
-        onError={() => setError("Unable to load image.")}
-      />
-    </div>
-  ) : (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
-      <p className="text-sm font-medium">No preview for this file</p>
-      <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
-        Save it to open in an app that supports {props.name.split(".").at(-1) || "this format"}{" "}
-        files.
-      </p>
-    </div>
-  );
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
+        <p className="text-sm font-medium">No preview for this file</p>
+        <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+          Save it to open in an app that supports {props.name.split(".").at(-1) || "this format"}{" "}
+          files.
+        </p>
+      </div>
+    );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
@@ -281,7 +306,18 @@ export function AttachmentFilePreview(props: {
           <FileSurfaceAction
             label={renderedToggleLabel(renderedMode, rendered)}
             pressed={rendered}
-            onPress={() => setRendered((value) => !value)}
+            onPress={() => {
+              if (
+                kind === "html" &&
+                !rendered &&
+                !props.file &&
+                Date.now() - authorizedAt.current > STALE_URL_MS
+              ) {
+                setRemoteUrl(null);
+                setRevision((value) => value + 1);
+              }
+              setRendered((value) => !value);
+            }}
           >
             <MorphIcon
               className="size-3.5"

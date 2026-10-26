@@ -1,85 +1,53 @@
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-
-import * as Clock from "effect/Clock";
-import * as Context from "effect/Context";
-
-import { HttpRouter } from "effect/http";
-import { base64UrlEncode } from "../auth/utils.ts";
-import { signPayload } from "../auth/utils.ts";
-import { layerAssetRoute } from "../http.ts";
-
 // @effect-diagnostics nodeBuiltinImport:off - tests inject swaps at the native open boundary.
 import * as NodeServices from "@effect/platform-node/NodeServices";
-
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
-
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeFSP from "node:fs/promises";
-
 import {
   AssetAccessError,
+  AuthSessionId,
   AssetPreviewTypeValidationError,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
-
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
-
 import { MCP_APP_MAX_HTML_BYTES } from "@t3tools/shared/mcpApp";
-
 import { describe, expect, it } from "@effect/vitest";
-
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-
 import * as Effect from "effect/Effect";
-
 import * as FileSystem from "effect/FileSystem";
-
 import * as Layer from "effect/Layer";
-
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
-
 import * as Path from "effect/Path";
-
 import * as PlatformError from "effect/PlatformError";
-
 import * as Schema from "effect/Schema";
-
 import * as TestClock from "effect/testing/TestClock";
-
-import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/http";
-
+import { HttpClient, HttpClientResponse, HttpRouter, HttpServerResponse } from "effect/http";
 import { vi } from "vite-plus/test";
-
+import { base64UrlEncode, signPayload } from "../auth/utils.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 import * as ServerConfig from "../config.ts";
-
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
-
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
-
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
-
-import { assetFileResponse } from "../http.ts";
-
+import { assetFileResponse, layerAssetRoute } from "../http.ts";
 import {
   ASSET_ROUTE_PREFIX,
-  issueAssetUrl,
+  issueAssetUrl as issueBoundAssetUrl,
   readMcpAppHtml,
   resolveAsset,
   type ResolvedAsset,
 } from "./AssetAccess.ts";
-
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import * as HtmlPreviewTestkit from "./HtmlPreview.testkit.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
-
 import * as GitHubCredentials from "@t3tools/source-control-github/server/GitHubCredentials";
-
 import { githubMediaResponse } from "./GitHubMediaFetch.ts";
-
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -87,20 +55,64 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, open: vi.fn(actual.open), realpath: vi.fn(actual.realpath) };
 });
 
+const sessionA = AuthSessionId.make("asset-client-a");
+const sessionB = AuthSessionId.make("asset-client-b");
+const assetSession = (sessionId: AuthSessionId): AuthSessions.AuthSessionRecord => ({
+  sessionId,
+  subject: sessionId,
+  scopes: ["orchestration:read"],
+  method: "bearer-access-token",
+  client: {
+    label: null,
+    ipAddress: null,
+    userAgent: null,
+    deviceType: "desktop",
+    os: null,
+    browser: null,
+  },
+  issuedAt: DateTime.makeUnsafe(0),
+  expiresAt: DateTime.makeUnsafe("2100-01-01T00:00:00Z"),
+  lastConnectedAt: null,
+  revokedAt: null,
+});
+class AssetTestSessions extends Context.Service<
+  AssetTestSessions,
+  Map<AuthSessionId, AuthSessions.AuthSessionRecord>
+>()("t3/assets/AssetAccess.test/AssetTestSessions") {}
+const layerAssetSessions = Layer.effect(
+  AssetTestSessions,
+  Effect.sync(
+    () =>
+      new Map([
+        [sessionA, assetSession(sessionA)],
+        [sessionB, assetSession(sessionB)],
+      ]),
+  ),
+);
+const layerSessionRepository = Layer.unwrap(
+  Effect.gen(function* () {
+    const sessions = yield* AssetTestSessions;
+    return Layer.mock(AuthSessions.AuthSessionRepository)({
+      getById: ({ sessionId }) =>
+        Effect.sync(() => Option.fromUndefinedOr(sessions.get(sessionId))),
+    });
+  }),
+).pipe(Layer.provideMerge(layerAssetSessions));
+const issueAssetUrl = (
+  input: Omit<Parameters<typeof issueBoundAssetUrl>[0], "sessionId"> & {
+    readonly sessionId?: AuthSessionId;
+  },
+) => issueBoundAssetUrl({ ...input, sessionId: input.sessionId ?? sessionA });
+
 const layerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-asset-access-test-",
 });
-
 const screenshotPng = new Uint8Array(24);
-
 screenshotPng.set([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
 ]);
-
 new DataView(screenshotPng.buffer).setUint32(16, 390);
-
 new DataView(screenshotPng.buffer).setUint32(20, 844);
-
 const screenshotItem = {
   id: TurnItemId.make("tool-screenshot"),
   type: "dynamic_tool" as const,
@@ -148,6 +160,7 @@ const oversizedScreenshotItem = {
 
 const layerTest = Layer.mergeAll(
   HtmlPreviewTestkit.layer,
+  layerSessionRepository,
   NodeHttpPlatform.layer,
   Layer.mock(Orchestrator.OrchestratorV2)({
     getTurnItem: ({ itemId }) =>
@@ -170,6 +183,308 @@ const layerTest = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 describe("AssetAccess", () => {
+  it.effect(
+    "revokes copied sensitive URLs with their issuer without revoking another session",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-asset-revocation-" });
+        yield* fs.writeFileString(path.join(root, "report.html"), "<p>Synthetic report</p>");
+        const resource = { _tag: "draft-workspace-file" as const, cwd: root, path: "report.html" };
+        const a = yield* issueAssetUrl({ resource, workspaceRoot: root, sessionId: sessionA });
+        const b = yield* issueAssetUrl({ resource, workspaceRoot: root, sessionId: sessionB });
+        const resolve = (url: string) => {
+          const suffix = url.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+          const separator = suffix.indexOf("/");
+          return resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+        };
+        expect(yield* resolve(a.relativeUrl)).not.toBeNull();
+        expect(yield* resolve(b.relativeUrl)).not.toBeNull();
+        const sessions = yield* AssetTestSessions;
+        sessions.set(sessionA, { ...assetSession(sessionA), revokedAt: yield* DateTime.now });
+        expect(yield* resolve(a.relativeUrl)).toBeNull();
+        expect(yield* resolve(b.relativeUrl)).not.toBeNull();
+        const error = yield* issueAssetUrl({
+          resource,
+          workspaceRoot: root,
+          sessionId: sessionA,
+        }).pipe(Effect.flip);
+        expect(error._tag).toBe("AssetSessionUnavailableError");
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect(
+    "expires sensitive URLs at two minutes and caps them at the issuing session expiry",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-asset-expiry-" });
+        yield* fs.writeFileString(path.join(root, "report.html"), "<p>Synthetic</p>");
+        const input = {
+          resource: { _tag: "draft-workspace-file" as const, cwd: root, path: "report.html" },
+          workspaceRoot: root,
+        };
+        yield* TestClock.setTime(1_000);
+        const result = yield* issueAssetUrl(input);
+        expect(result.expiresAt).toBe(121_000);
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const separator = suffix.indexOf("/");
+        const resolve = resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+        yield* TestClock.adjust("119999 millis");
+        expect(yield* resolve).not.toBeNull();
+        yield* TestClock.adjust("1 millis");
+        expect(yield* resolve).toBeNull();
+        const now = yield* Clock.currentTimeMillis;
+        const sessions = yield* AssetTestSessions;
+        sessions.set(sessionA, {
+          ...assetSession(sessionA),
+          expiresAt: DateTime.makeUnsafe(now + 30_000),
+        });
+        expect((yield* issueAssetUrl(input)).expiresAt).toBe(now + 30_000);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("refuses old sensitive bearer URLs that lack session binding", () =>
+    Effect.gen(function* () {
+      const store = yield* ServerSecretStore.ServerSecretStore;
+      const key = yield* store.getOrCreateRandom("asset-access-signing-key", 32);
+      const claims = base64UrlEncode(
+        JSON.stringify({
+          version: 1,
+          kind: "attachment",
+          attachmentId: "unused",
+          expiresAt: (yield* Clock.currentTimeMillis) + 60_000,
+        }),
+      );
+      expect(
+        yield* resolveAsset(`${claims}.${signPayload(claims, key)}`, "unused.html"),
+      ).toBeNull();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("serves downloads through the HTTP route without reopening the validated path", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-route-" });
+      const file = path.join(root, "deck.pptx");
+      const bytes = new Uint8Array([80, 75, 3, 4, 0, 255]);
+      yield* fs.writeFile(file, bytes);
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: "deck.pptx",
+          disposition: "attachment",
+        },
+        workspaceRoot: root,
+      });
+      const canonicalFile = yield* fs.realPath(file);
+      const originalLstat = NodeFSP.lstat;
+      let inspections = 0;
+      let swapped = false;
+      using _lstat = vi.spyOn(NodeFSP, "lstat").mockImplementation(async (...args) => {
+        const info = await originalLstat(...args);
+        if (args[0] === canonicalFile && ++inspections === 2) {
+          // Replace the path after the guard's last inspection, keeping its open descriptor valid.
+          await NodeFSP.rename(canonicalFile, path.join(root, "original.pptx"));
+          await NodeFSP.writeFile(canonicalFile, "replacement must not be downloaded");
+          swapped = true;
+        }
+        return info;
+      });
+      const services = yield* Layer.build(
+        HttpRouter.serve(layerAssetRoute, { disableListenLog: true }).pipe(
+          Layer.provideMerge(NodeHttpServer.layerTest),
+        ),
+      );
+      const client = Context.get(services, HttpClient.HttpClient);
+      const response = yield* client.get(result.relativeUrl);
+      expect(swapped).toBe(true);
+      expect(response.status).toBe(200);
+      expect(response.headers["content-disposition"]).toContain("attachment;");
+      expect(new Uint8Array(yield* response.arrayBuffer)).toEqual(bytes);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(layerTest, Layer.mock(GitHubCredentials.GitHubCredentials)({})),
+      ),
+    ),
+  );
+
+  it.effect("downloads unsupported files as exact, identity-checked attachments", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-file-download-" });
+      const bytes = new Uint8Array([80, 75, 3, 4, 0, 255, 10, 42]);
+      for (const name of [
+        "deck.pptx",
+        "report.docx",
+        "workbook.xlsx",
+        "archive.zip",
+        "data.unknown",
+      ]) {
+        const file = path.join(root, name);
+        yield* fs.writeFile(file, bytes);
+        for (const resource of [
+          {
+            _tag: "workspace-file",
+            threadId: ThreadId.make("thread-1"),
+            path: name,
+            disposition: "attachment",
+          },
+          {
+            _tag: "media-file",
+            threadId: ThreadId.make("thread-1"),
+            path: file,
+            disposition: "attachment",
+          },
+          { _tag: "draft-workspace-file", cwd: root, path: name, disposition: "attachment" },
+          { _tag: "draft-workspace-file", cwd: root, path: file, disposition: "attachment" },
+        ] as const) {
+          const result = yield* issueAssetUrl({ resource, workspaceRoot: root });
+          const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+          const separator = suffix.indexOf("/");
+          const token = suffix.slice(0, separator);
+          const assetName = suffix.slice(separator + 1);
+          const asset: ResolvedAsset | null = yield* resolveAsset(token, assetName);
+          if (
+            asset?.kind !== "file" ||
+            asset.file === undefined ||
+            asset.downloadName === undefined ||
+            asset.mimeType === undefined
+          ) {
+            throw new Error("Expected a file download with a validated descriptor and filename");
+          }
+          expect(asset.disposition).toBe("attachment");
+          expect(asset.downloadName).toBe(name);
+          expect(asset.mimeType).toBe("application/octet-stream");
+          const response = HttpServerResponse.toWeb(
+            yield* assetFileResponse({
+              path: asset.path,
+              file: asset.file,
+              mimeType: asset.mimeType,
+              fileName: asset.downloadName,
+              download: asset.disposition === "attachment",
+            }),
+          );
+          expect(response.headers.get("content-disposition")).toContain("attachment;");
+          expect(new Uint8Array(yield* Effect.promise(() => response.arrayBuffer()))).toEqual(
+            bytes,
+          );
+          expect(yield* resolveAsset(token, "sibling.zip")).toBeNull();
+          expect(yield* resolveAsset(`${token}tampered`, assetName)).toBeNull();
+        }
+      }
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: "deck.pptx",
+          disposition: "attachment",
+        },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separator = suffix.indexOf("/");
+      yield* fs.rename(path.join(root, "deck.pptx"), path.join(root, "old-deck.pptx"));
+      yield* fs.writeFileString(path.join(root, "deck.pptx"), "replacement");
+      expect(
+        yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1)),
+      ).toBeNull();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("keeps download traversal and preview-type restrictions independent", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-file-download-boundary-" });
+      yield* fs.writeFile(path.join(root, "data.bin"), new Uint8Array([0, 1, 2]));
+      const request = {
+        _tag: "workspace-file" as const,
+        threadId: ThreadId.make("thread-1"),
+        path: "data.bin",
+      };
+      expect(
+        yield* issueAssetUrl({ resource: request, workspaceRoot: root }).pipe(
+          Effect.match({
+            onSuccess: () => "unexpected success",
+            onFailure: (error) => error._tag,
+          }),
+        ),
+      ).toBe("AssetPreviewTypeValidationError");
+      expect(
+        yield* issueAssetUrl({
+          resource: { ...request, path: "../data.bin", disposition: "attachment" },
+          workspaceRoot: root,
+        }).pipe(
+          Effect.match({
+            onSuccess: () => "unexpected success",
+            onFailure: (error) => error._tag,
+          }),
+        ),
+      ).toBe("AssetWorkspacePathValidationError");
+      const result = yield* issueAssetUrl({
+        resource: { ...request, disposition: "attachment" },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separator = suffix.indexOf("/");
+      const token = suffix.slice(0, separator);
+      expect(yield* resolveAsset(token, "%2e%2e%2fdata.bin")).toBeNull();
+      yield* TestClock.adjust("2 hours");
+      expect(yield* resolveAsset(token, suffix.slice(separator + 1))).toBeNull();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.skipIf(!symlinksSupported)(
+    "downloads from symlinked roots but rejects links outside the workspace",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-file-download-symlink-" });
+        const root = path.join(parent, "root");
+        const alias = path.join(parent, "alias");
+        yield* fs.makeDirectory(root);
+        yield* fs.symlink(root, alias);
+        yield* fs.writeFile(path.join(root, "data.bin"), new Uint8Array([0, 1, 2]));
+        yield* fs.symlink(path.join(root, "data.bin"), path.join(root, "friendly name.zip"));
+        const resource = {
+          _tag: "workspace-file" as const,
+          threadId: ThreadId.make("thread-1"),
+          path: "friendly name.zip",
+          disposition: "attachment" as const,
+        };
+        const result = yield* issueAssetUrl({ resource, workspaceRoot: alias });
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const separator = suffix.indexOf("/");
+        const asset = yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+        expect(asset).toMatchObject({
+          kind: "file",
+          downloadName: "friendly name.zip",
+          disposition: "attachment",
+        });
+        yield* fs.writeFileString(path.join(parent, "outside.bin"), "outside");
+        yield* fs.symlink(path.join(parent, "outside.bin"), path.join(root, "escape.bin"));
+        expect(
+          yield* issueAssetUrl({
+            resource: { ...resource, path: "escape.bin" },
+            workspaceRoot: alias,
+          }).pipe(
+            Effect.match({
+              onSuccess: () => "unexpected success",
+              onFailure: (error) => error._tag,
+            }),
+          ),
+        ).toBe("AssetWorkspaceAssetNotFoundError");
+      }).pipe(Effect.provide(layerTest)),
+  );
+
   describe("readMcpAppHtml", () => {
     it.effect("accepts snapshots at the stored HTML byte limit", () =>
       Effect.gen(function* () {
@@ -216,7 +531,6 @@ describe("AssetAccess", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
     );
 
-    // regression: #17026 apply host color scheme to saved MCP apps
     it.effect("preserves filesystem failures instead of reporting oversized HTML", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -409,47 +723,6 @@ describe("AssetAccess", () => {
           }
         }
       }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  // Resolving `file://attacker.test/share/cat.jpg` from an agent's markdown sent the
-  // Windows user's NTLM credentials to attacker.test.
-  it.effect("never resolves a network media path outside the thread's project", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const resolved: Array<string> = [];
-      const recordingFileSystem = FileSystem.FileSystem.of({
-        ...fs,
-        realPath: (requestedPath) => {
-          resolved.push(requestedPath);
-          return Effect.fail(
-            PlatformError.systemError({
-              _tag: "NotFound",
-              module: "FileSystem",
-              method: "realPath",
-              pathOrDescriptor: requestedPath,
-            }),
-          );
-        },
-      });
-      const share = "//nas.test/share/project";
-      for (const resource of [
-        {
-          _tag: "media-file",
-          threadId: ThreadId.make("thread-1"),
-          path: "//attacker.test/s/a.png",
-        },
-        { _tag: "draft-workspace-file", cwd: share, path: "//attacker.test/s/a.png" },
-        { _tag: "media-file", threadId: ThreadId.make("thread-1"), path: `${share}/a.png` },
-      ] as const) {
-        const error = yield* issueAssetUrl({ resource, workspaceRoot: share }).pipe(
-          Effect.provideService(FileSystem.FileSystem, recordingFileSystem),
-          Effect.flip,
-        );
-        expect(error._tag).toBe("AssetWorkspaceAssetNotFoundError");
-      }
-      expect(resolved).toEqual([path.resolve(`${share}/a.png`)]);
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -652,46 +925,6 @@ describe("AssetAccess", () => {
           ),
         ).toBeNull();
       }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("versions media by file changes rather than by re-signing", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-media-revision-" });
-      for (const disposition of ["inline", "attachment"] as const) {
-        const filePath = path.join(root, `recording-${disposition}.mp4`);
-        yield* fs.writeFileString(filePath, "original");
-        yield* Effect.promise(() => NodeFSP.utimes(filePath, 1_000, 1_000));
-        const input = {
-          resource: {
-            _tag: "media-file" as const,
-            threadId: ThreadId.make("thread-1"),
-            path: filePath,
-            ...(disposition === "attachment" ? { disposition } : {}),
-          },
-        };
-        const original = yield* issueAssetUrl(input);
-        expect(original.fileRevision).toEqual(expect.any(String));
-
-        yield* TestClock.adjust("1 minute");
-        const renewed = yield* issueAssetUrl(input);
-        expect(renewed.relativeUrl).not.toBe(original.relativeUrl);
-        expect(renewed.fileRevision).toBe(original.fileRevision);
-
-        yield* fs.writeFileString(filePath, "modified");
-        yield* Effect.promise(() => NodeFSP.utimes(filePath, 2_000, 2_000));
-        const edited = yield* issueAssetUrl(input);
-        expect(edited.fileRevision).not.toBe(original.fileRevision);
-
-        const replacement = path.join(root, "replacement.mp4");
-        yield* fs.writeFileString(replacement, "modified");
-        yield* Effect.promise(() => NodeFSP.utimes(replacement, 2_000, 2_000));
-        yield* fs.rename(replacement, filePath);
-        const replaced = yield* issueAssetUrl(input);
-        expect(replaced.fileRevision).not.toBe(edited.fileRevision);
-      }
-    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("keeps in-place edits readable but requires a new URL after atomic replacement", () =>
@@ -914,7 +1147,13 @@ describe("AssetAccess", () => {
       const expiresAt = (yield* Clock.currentTimeMillis) + 60_000;
       const legacyToken = (attachmentId: string) => {
         const encodedPayload = base64UrlEncode(
-          JSON.stringify({ version: 1, kind: "attachment", attachmentId, expiresAt }),
+          JSON.stringify({
+            version: 1,
+            kind: "attachment",
+            attachmentId,
+            expiresAt,
+            issuerSessionId: sessionA,
+          }),
         );
         return `${encodedPayload}.${signPayload(encodedPayload, signingSecret)}`;
       };
@@ -937,6 +1176,34 @@ describe("AssetAccess", () => {
         disposition: "attachment",
         downloadName: `${htmlAttachmentId}.html`,
       });
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("gives HTML URLs a two-minute lifetime without expiry bucketing", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const attachmentId = "thread-1-00000000-0000-4000-8000-000000000001-html";
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(config.attachmentsDir, `${attachmentId}.html`),
+        "<p>render</p>",
+      );
+      const bucketMs = 30 * 60 * 1000;
+      const issue = issueAssetUrl({
+        resource: { _tag: "attachment", attachmentId, disposition: "inline" },
+      });
+      yield* TestClock.setTime(bucketMs + 1);
+      const first = yield* issue;
+      yield* TestClock.adjust("20 minutes");
+      const second = yield* issue;
+      yield* TestClock.adjust("10 minutes");
+      const next = yield* issue;
+
+      expect(second.relativeUrl).not.toBe(first.relativeUrl);
+      expect(first.expiresAt).toBe(bucketMs + 1 + 120_000);
+      expect(next.expiresAt).toBe(2 * bucketMs + 1 + 120_000);
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -967,7 +1234,6 @@ describe("AssetAccess", () => {
       ).toMatchObject({ kind: "file", path: attachmentPath, disposition: "attachment" });
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("issues project favicon capabilities with a signed fallback", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -999,7 +1265,7 @@ describe("AssetAccess", () => {
           faviconSuffix.slice(0, faviconSeparatorIndex),
           faviconSuffix.slice(faviconSeparatorIndex + 1),
         ),
-      ).toEqual({ kind: "file", path: canonicalFaviconPath });
+      ).toEqual({ kind: "file", path: canonicalFaviconPath, cacheable: true });
 
       yield* fileSystem.writeFileString(faviconPath, updatedFavicon);
       const updatedFaviconResult = yield* issueAssetUrl({
@@ -1054,12 +1320,12 @@ describe("AssetAccess", () => {
       expect(result.relativeUrl).toMatch(/\/v[0-9a-f]{64}-custom\.png$/);
       expect(
         yield* resolveAsset(suffix.slice(0, separatorIndex), suffix.slice(separatorIndex + 1)),
-      ).toEqual({ kind: "file", path: canonicalPath });
+      ).toEqual({ kind: "file", path: canonicalPath, cacheable: true });
       const tamperedSuffixResult = yield* resolveAsset(
         suffix.slice(0, separatorIndex),
         "sibling.png",
       );
-      expect(tamperedSuffixResult).toEqual({ kind: "file", path: canonicalPath });
+      expect(tamperedSuffixResult).toEqual({ kind: "file", path: canonicalPath, cacheable: true });
       expect(tamperedSuffixResult).not.toEqual({ kind: "file", path: canonicalSiblingPath });
     }).pipe(Effect.provide(layerTest)),
   );
@@ -1136,223 +1402,82 @@ describe("AssetAccess", () => {
       }
     }).pipe(Effect.provide(layerTest)),
   );
-
-  // regression: #433 offer open and download actions for unsupported files
-  it.effect("serves downloads through the HTTP route without reopening the validated path", () =>
+  it.effect("never resolves a network media path outside the thread's project", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-download-route-" });
-      const file = path.join(root, "deck.pptx");
-      const bytes = new Uint8Array([80, 75, 3, 4, 0, 255]);
-      yield* fs.writeFile(file, bytes);
-      const result = yield* issueAssetUrl({
-        resource: {
-          _tag: "workspace-file",
-          threadId: ThreadId.make("thread-1"),
-          path: "deck.pptx",
-          disposition: "attachment",
-        },
-        workspaceRoot: root,
-      });
-      const canonicalFile = yield* fs.realPath(file);
-      const originalLstat = NodeFSP.lstat;
-      let inspections = 0;
-      let swapped = false;
-      using _lstat = vi.spyOn(NodeFSP, "lstat").mockImplementation(async (...args) => {
-        const info = await originalLstat(...args);
-        if (args[0] === canonicalFile && ++inspections === 2) {
-          // Replace the path after the guard's last inspection, keeping its open descriptor valid.
-          await NodeFSP.rename(canonicalFile, path.join(root, "original.pptx"));
-          await NodeFSP.writeFile(canonicalFile, "replacement must not be downloaded");
-          swapped = true;
-        }
-        return info;
-      });
-      const services = yield* Layer.build(
-        HttpRouter.serve(layerAssetRoute, { disableListenLog: true }).pipe(
-          Layer.provideMerge(NodeHttpServer.layerTest),
-        ),
-      );
-      const client = Context.get(services, HttpClient.HttpClient);
-      const response = yield* client.get(result.relativeUrl);
-      expect(swapped).toBe(true);
-      expect(response.status).toBe(200);
-      expect(response.headers["content-disposition"]).toContain("attachment;");
-      expect(new Uint8Array(yield* response.arrayBuffer)).toEqual(bytes);
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(
-        Layer.mergeAll(layerTest, Layer.mock(GitHubCredentials.GitHubCredentials)({})),
-      ),
-    ),
-  );
-
-  // regression: #433 offer open and download actions for unsupported files
-  it.effect("downloads unsupported files as exact, identity-checked attachments", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-file-download-" });
-      const bytes = new Uint8Array([80, 75, 3, 4, 0, 255, 10, 42]);
-      for (const name of ["deck.pptx", "data.unknown"]) {
-        const file = path.join(root, name);
-        yield* fs.writeFile(file, bytes);
-        for (const resource of [
-          {
-            _tag: "workspace-file",
-            threadId: ThreadId.make("thread-1"),
-            path: name,
-            disposition: "attachment",
-          },
-          {
-            _tag: "media-file",
-            threadId: ThreadId.make("thread-1"),
-            path: file,
-            disposition: "attachment",
-          },
-          { _tag: "draft-workspace-file", cwd: root, path: name, disposition: "attachment" },
-          { _tag: "draft-workspace-file", cwd: root, path: file, disposition: "attachment" },
-        ] as const) {
-          const result = yield* issueAssetUrl({ resource, workspaceRoot: root });
-          const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-          const separator = suffix.indexOf("/");
-          const token = suffix.slice(0, separator);
-          const assetName = suffix.slice(separator + 1);
-          const asset: ResolvedAsset | null = yield* resolveAsset(token, assetName);
-          if (
-            asset?.kind !== "file" ||
-            asset.file === undefined ||
-            asset.downloadName === undefined ||
-            asset.mimeType === undefined
-          ) {
-            throw new Error("Expected a file download with a validated descriptor and filename");
-          }
-          expect(asset.disposition).toBe("attachment");
-          expect(asset.downloadName).toBe(name);
-          expect(asset.mimeType).toBe("application/octet-stream");
-          const response = HttpServerResponse.toWeb(
-            yield* assetFileResponse({
-              path: asset.path,
-              file: asset.file,
-              mimeType: asset.mimeType,
-              fileName: asset.downloadName,
-              download: asset.disposition === "attachment",
+      const resolved: Array<string> = [];
+      const recordingFileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        realPath: (requestedPath) => {
+          resolved.push(requestedPath);
+          return Effect.fail(
+            PlatformError.systemError({
+              _tag: "NotFound",
+              module: "FileSystem",
+              method: "realPath",
+              pathOrDescriptor: requestedPath,
             }),
           );
-          expect(response.headers.get("content-disposition")).toContain("attachment;");
-          expect(new Uint8Array(yield* Effect.promise(() => response.arrayBuffer()))).toEqual(
-            bytes,
-          );
-          expect(yield* resolveAsset(token, "sibling.zip")).toBeNull();
-          expect(yield* resolveAsset(`${token}tampered`, assetName)).toBeNull();
-        }
+        },
+      });
+      const share = "//nas.test/share/project";
+      for (const resource of [
+        {
+          _tag: "media-file",
+          threadId: ThreadId.make("thread-1"),
+          path: "//attacker.test/s/a.png",
+        },
+        { _tag: "draft-workspace-file", cwd: share, path: "//attacker.test/s/a.png" },
+        { _tag: "media-file", threadId: ThreadId.make("thread-1"), path: `${share}/a.png` },
+      ] as const) {
+        const error = yield* issueAssetUrl({ resource, workspaceRoot: share }).pipe(
+          Effect.provideService(FileSystem.FileSystem, recordingFileSystem),
+          Effect.flip,
+        );
+        expect(error._tag).toBe("AssetWorkspaceAssetNotFoundError");
       }
-      const result = yield* issueAssetUrl({
-        resource: {
-          _tag: "workspace-file",
-          threadId: ThreadId.make("thread-1"),
-          path: "deck.pptx",
-          disposition: "attachment",
-        },
-        workspaceRoot: root,
-      });
-      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-      const separator = suffix.indexOf("/");
-      yield* fs.rename(path.join(root, "deck.pptx"), path.join(root, "old-deck.pptx"));
-      yield* fs.writeFileString(path.join(root, "deck.pptx"), "replacement");
-      expect(
-        yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1)),
-      ).toBeNull();
+      expect(resolved).toEqual([path.resolve(`${share}/a.png`)]);
     }).pipe(Effect.provide(layerTest)),
   );
 
-  // regression: #433 offer open and download actions for unsupported files
-  it.effect("keeps download traversal and preview-type restrictions independent", () =>
+  it.effect("versions media by file changes rather than by re-signing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-file-download-boundary-" });
-      yield* fs.writeFile(path.join(root, "data.bin"), new Uint8Array([0, 1, 2]));
-      const request = {
-        _tag: "workspace-file" as const,
-        threadId: ThreadId.make("thread-1"),
-        path: "data.bin",
-      };
-      expect(
-        yield* issueAssetUrl({ resource: request, workspaceRoot: root }).pipe(
-          Effect.match({
-            onSuccess: () => "unexpected success",
-            onFailure: (error) => error._tag,
-          }),
-        ),
-      ).toBe("AssetPreviewTypeValidationError");
-      expect(
-        yield* issueAssetUrl({
-          resource: { ...request, path: "../data.bin", disposition: "attachment" },
-          workspaceRoot: root,
-        }).pipe(
-          Effect.match({
-            onSuccess: () => "unexpected success",
-            onFailure: (error) => error._tag,
-          }),
-        ),
-      ).toBe("AssetWorkspacePathValidationError");
-      const result = yield* issueAssetUrl({
-        resource: { ...request, disposition: "attachment" },
-        workspaceRoot: root,
-      });
-      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-      const separator = suffix.indexOf("/");
-      const token = suffix.slice(0, separator);
-      expect(yield* resolveAsset(token, "%2e%2e%2fdata.bin")).toBeNull();
-      yield* TestClock.adjust("2 hours");
-      expect(yield* resolveAsset(token, suffix.slice(separator + 1))).toBeNull();
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  // regression: #433 offer open and download actions for unsupported files
-  it.effect.skipIf(!symlinksSupported)(
-    "downloads from symlinked roots but rejects links outside the workspace",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const parent = yield* fs.makeTempDirectoryScoped({ prefix: "t3-file-download-symlink-" });
-        const root = path.join(parent, "root");
-        const alias = path.join(parent, "alias");
-        yield* fs.makeDirectory(root);
-        yield* fs.symlink(root, alias);
-        yield* fs.writeFile(path.join(root, "data.bin"), new Uint8Array([0, 1, 2]));
-        yield* fs.symlink(path.join(root, "data.bin"), path.join(root, "friendly name.zip"));
-        const resource = {
-          _tag: "workspace-file" as const,
-          threadId: ThreadId.make("thread-1"),
-          path: "friendly name.zip",
-          disposition: "attachment" as const,
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-media-revision-" });
+      for (const disposition of ["inline", "attachment"] as const) {
+        const filePath = path.join(root, `recording-${disposition}.mp4`);
+        yield* fs.writeFileString(filePath, "original");
+        yield* Effect.promise(() => NodeFSP.utimes(filePath, 1_000, 1_000));
+        const input = {
+          resource: {
+            _tag: "media-file" as const,
+            threadId: ThreadId.make("thread-1"),
+            path: filePath,
+            ...(disposition === "attachment" ? { disposition } : {}),
+          },
         };
-        const result = yield* issueAssetUrl({ resource, workspaceRoot: alias });
-        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
-        const separator = suffix.indexOf("/");
-        const asset = yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
-        expect(asset).toMatchObject({
-          kind: "file",
-          downloadName: "friendly name.zip",
-          disposition: "attachment",
-        });
-        yield* fs.writeFileString(path.join(parent, "outside.bin"), "outside");
-        yield* fs.symlink(path.join(parent, "outside.bin"), path.join(root, "escape.bin"));
-        expect(
-          yield* issueAssetUrl({
-            resource: { ...resource, path: "escape.bin" },
-            workspaceRoot: alias,
-          }).pipe(
-            Effect.match({
-              onSuccess: () => "unexpected success",
-              onFailure: (error) => error._tag,
-            }),
-          ),
-        ).toBe("AssetWorkspaceAssetNotFoundError");
-      }).pipe(Effect.provide(layerTest)),
+        const original = yield* issueAssetUrl(input);
+        expect(original.fileRevision).toEqual(expect.any(String));
+
+        yield* TestClock.adjust("1 minute");
+        const renewed = yield* issueAssetUrl(input);
+        expect(renewed.relativeUrl).not.toBe(original.relativeUrl);
+        expect(renewed.fileRevision).toBe(original.fileRevision);
+
+        yield* fs.writeFileString(filePath, "modified");
+        yield* Effect.promise(() => NodeFSP.utimes(filePath, 2_000, 2_000));
+        const edited = yield* issueAssetUrl(input);
+        expect(edited.fileRevision).not.toBe(original.fileRevision);
+
+        const replacement = path.join(root, "replacement.mp4");
+        yield* fs.writeFileString(replacement, "modified");
+        yield* Effect.promise(() => NodeFSP.utimes(replacement, 2_000, 2_000));
+        yield* fs.rename(replacement, filePath);
+        const replaced = yield* issueAssetUrl(input);
+        expect(replaced.fileRevision).not.toBe(edited.fileRevision);
+      }
+    }).pipe(Effect.provide(layerTest)),
   );
 });

@@ -11,7 +11,16 @@ public final class T3NativeControlsModule: Module {
   private var videoPresentation: T3NativeVideoPresentation?
   private var filePresentation: T3NativeFilePresentation?
 
+  private struct VideoRequest {
+    let url: URL
+    let title: String
+    let sourceIdentifier: String
+    let identifier: String
+    let renewable: Bool
+  }
+
   public func definition() -> ModuleDefinition {
+    Events("videoRefreshRequired")
     Constants {
       if #available(iOS 26.0, *) {
         return [
@@ -45,12 +54,10 @@ public final class T3NativeControlsModule: Module {
       Events("onMetricsChange")
     }
 
-    AsyncFunction("presentVideo") { (url: URL, title: String, sourceIdentifier: String, identifier: String, promise: Promise) in
+    AsyncFunction("presentVideo") { (url: URL, title: String, sourceIdentifier: String, identifier: String, renewable: Bool, promise: Promise) in
       try self.presentVideo(
-        url: url,
-        title: title,
-        sourceIdentifier: sourceIdentifier,
-        identifier: identifier,
+        VideoRequest(url: url, title: title, sourceIdentifier: sourceIdentifier,
+                     identifier: identifier, renewable: renewable),
         promise: promise
       )
     }.runOnQueue(.main)
@@ -119,6 +126,14 @@ public final class T3NativeControlsModule: Module {
   @MainActor
   func dismissVideo(identifier: String) async {
     dismissVideoPresentation(identifier: identifier)
+  }
+
+  @JS
+  @MainActor
+  func updateVideo(url: String, identifier: String) async {
+    guard let url = URL(string: url), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+      url.host != nil, videoPresentation?.identifier == identifier else { return }
+    videoPresentation?.replaceURL(url)
   }
 
   // expo-video activates the session for inline playback but never deactivates
@@ -232,7 +247,10 @@ public final class T3NativeControlsModule: Module {
     try? scene.write(toFile: readyPath, atomically: true, encoding: .utf8)
   }
 
-  private func presentVideo(url: URL, title: String, sourceIdentifier: String, identifier: String, promise: Promise) throws {
+  private func presentVideo(_ request: VideoRequest, promise: Promise) throws {
+    let (url, title, sourceIdentifier, identifier, renewable) = (
+      request.url, request.title, request.sourceIdentifier, request.identifier, request.renewable
+    )
     let isPlayableURL = url.isFileURL
       ? FileManager.default.isReadableFile(atPath: url.path)
       : (["https", "http"].contains(url.scheme?.lowercased() ?? "") && url.host != nil)
@@ -246,7 +264,15 @@ public final class T3NativeControlsModule: Module {
         userInfo: [NSLocalizedDescriptionKey: "The video preview is no longer available."]
       )
     }
-    let presentation = T3NativeVideoPresentation(identifier: identifier, url: url, title: title) { [weak self] error in
+    let requestRefresh: (() -> Void)? = renewable ? { [weak self] in
+      self?.sendEvent("videoRefreshRequired", ["identifier": identifier])
+    } : nil
+    let presentation = T3NativeVideoPresentation(
+      identifier: identifier,
+      url: url,
+      title: title,
+      requestRefresh: requestRefresh
+    ) { [weak self] error in
       self?.videoPresentation = nil
       if let error { promise.reject(error) } else { promise.resolve(nil) }
     }

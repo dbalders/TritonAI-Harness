@@ -17,9 +17,6 @@ import { attachmentDocumentPresentation } from "./attachmentDocumentPresentation
 
 const isLocalUri = (uri: string) => /^(file|content):/.test(uri);
 
-/** Signed asset URLs live for an hour; treat anything older than this as worth re-minting. */
-const STALE_URL_MS = 5 * 60_000;
-
 /**
  * Captured bytes never resolve against the workspace.
  */
@@ -50,8 +47,7 @@ export function useAttachmentDocument(input: {
   const table = content && delimiter ? parseDelimitedPreview(content.text, delimiter) : null;
   const [error, setError] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
-  const textReadUrl = useRef<{ uri: string; authorizedAt: number } | null>(null);
-  const [rendered, setRendered] = useState(true);
+  const [rendered, setRenderedState] = useState(true);
   const presentation = attachmentDocumentPresentation({
     kind,
     hasTable: table !== null,
@@ -62,6 +58,18 @@ export function useAttachmentDocument(input: {
   const [sharing, setSharing] = useState(false);
   const uri = input.attachment ? localUri : remoteUri;
   const attachment = input.attachment;
+  const setRendered = (value: boolean) => {
+    if (value === rendered) return;
+    if (!attachment && kind === "html") {
+      // Clear before the mode change can mount a new viewer or start a source read.
+      setRemoteUri(null);
+      setContent(null);
+      setContentError(null);
+      setError(null);
+      setRevision((current) => current + 1);
+    }
+    setRenderedState(value);
+  };
   useEffect(() => {
     if (attachment) return;
     let cancelled = false;
@@ -69,12 +77,10 @@ export function useAttachmentDocument(input: {
     // oxlint-disable-next-line react/set-state-in-effect -- A new preview request clears its previous URL and error.
     setRemoteUri(null);
     setError(null);
-    textReadUrl.current = null;
     void refresh()
       .then((url) => {
         if (cancelled) return;
         if (!url) throw new Error("Reconnect to this environment and try again.");
-        textReadUrl.current = { uri: url, authorizedAt: Date.now() };
         setRemoteUri(url);
       })
       .catch((cause: unknown) => {
@@ -124,28 +130,13 @@ export function useAttachmentDocument(input: {
     setContentError(null);
     const response = isLocalUri(uri)
       ? Promise.resolve().then(() => ({ ok: true, body: new File(uri).readableStream() }))
-      : (async () => {
-          // A signed URL minted when the file opened may have expired by the time the user
-          // switches to source; reauthorize before fetching instead of reading a stale link.
-          const authorized = textReadUrl.current;
-          let target = authorized?.uri ?? uri;
-          if (!authorized || Date.now() - authorized.authorizedAt > STALE_URL_MS) {
-            const refreshed = await refresh();
-            if (!refreshed) throw new Error("Reconnect to this environment and try again.");
-            target = refreshed;
-            if (!controller.signal.aborted) {
-              // Keep the source-read URL and its age together without restarting active media.
-              textReadUrl.current = { uri: refreshed, authorizedAt: Date.now() };
-            }
-          }
-          return fetch(target, {
-            signal: controller.signal,
-            headers: {
-              ...(sizeBytes > 0 ? { Range: `bytes=0-${FILE_TEXT_PREVIEW_MAX_BYTES}` } : {}),
-              ...(revision > 0 ? { "Cache-Control": "no-cache" } : {}),
-            },
-          });
-        })();
+      : fetch(uri, {
+          signal: controller.signal,
+          headers: {
+            ...(sizeBytes > 0 ? { Range: `bytes=0-${FILE_TEXT_PREVIEW_MAX_BYTES}` } : {}),
+            ...(revision > 0 ? { "Cache-Control": "no-cache" } : {}),
+          },
+        });
     void response
       .then((value) => readFilePreviewResponse(value, controller.signal))
       .then((value) => {
@@ -156,7 +147,7 @@ export function useAttachmentDocument(input: {
           setContentError(cause instanceof Error ? cause.message : "Could not read this file.");
       });
     return () => controller.abort();
-  }, [uri, needsText, revision, sizeBytes, refresh]);
+  }, [uri, needsText, revision, sizeBytes]);
   const share = async () => {
     if (!uri || sharing) return;
     setSharing(true);

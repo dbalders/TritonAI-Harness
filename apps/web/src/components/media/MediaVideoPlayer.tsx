@@ -1,13 +1,22 @@
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import { PlayIcon, RotateCwIcon, TriangleAlertIcon } from "lucide-react";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { cn } from "../../lib/utils";
 import { prepareVideoFirstFrame } from "../../lib/videoFirstFrame";
 import { Button } from "../ui/button";
 import { OpenMediaLink } from "./OpenMediaLink";
 import { MediaActions, type MediaActionSource } from "./MediaActions";
+
+function mayPlayVideo(video: HTMLVideoElement): boolean {
+  // Native fullscreen can hide the inline page while the video stays visible.
+  return (
+    !document.hidden ||
+    document.fullscreenElement?.contains(video) === true ||
+    ("webkitDisplayingFullscreen" in video && video.webkitDisplayingFullscreen === true)
+  );
+}
 
 interface MediaVideoPlayerProps {
   readonly src: string | null;
@@ -49,27 +58,40 @@ export function MediaVideoPlayer({
   const [playbackSource, setPlaybackSource] = useState<{
     src: string;
     revision: string | null;
+    resourceKey: string;
   } | null>(null);
   const [playingVideo, setPlayingVideo] = useState<HTMLVideoElement | null>(null);
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const [failedResourceKey, setFailedResourceKey] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [preloadedSrc, setPreloadedSrc] = useState<string | null>(null);
+  const [resume, setResume] = useState<{ time: number; playing: boolean; rate: number } | null>(
+    null,
+  );
+  const resourceKey = JSON.stringify([
+    actionsSource?.asset ?? actionsSource?.reference ?? originalUrl ?? label,
+    revision,
+  ]);
+  const automaticRecovery = useRef({ resourceKey, used: false });
   const src = playbackSource?.src ?? latestSrc;
   const sourceRevision = playbackSource === null ? revision : playbackSource.revision;
-  const failed = src !== null ? failedSrc === src : sourceFailed;
+  const sourceResourceKey = playbackSource?.resourceKey ?? resourceKey;
+  const failed = failedResourceKey === sourceResourceKey || (src === null && sourceFailed);
   const preloaded = preloadedSrc === src || typeof IntersectionObserver === "undefined";
 
-  // Re-signing must not reload a loaded source. Changed files load once playback pauses.
+  if (playbackSource === null && latestSrc !== null) {
+    setPlaybackSource({ src: latestSrc, revision, resourceKey });
+  }
+
+  // A renewed capability is held for recovery; replacing a buffered source would reload it.
+  // Changed files refresh once playback pauses.
   if (
     playbackSource !== null &&
     playbackSource.revision !== revision &&
     (latestSrc !== null || sourceFailed) &&
     (video === null || playingVideo !== video)
   ) {
-    setPlaybackSource(
-      revision !== null && latestSrc !== null ? { src: latestSrc, revision } : null,
-    );
+    setPlaybackSource(null);
   }
 
   useEffect(() => {
@@ -93,11 +115,9 @@ export function MediaVideoPlayer({
   useEffect(() => {
     if (!video) return;
     const pauseWhenHidden = () => {
-      // Native fullscreen can hide the inline page while this video is still visible.
-      const fullscreen =
-        document.fullscreenElement?.contains(video) ||
-        ("webkitDisplayingFullscreen" in video && video.webkitDisplayingFullscreen === true);
-      if (document.hidden && !fullscreen) video.pause();
+      if (mayPlayVideo(video)) return;
+      video.pause();
+      setResume((current) => (current === null ? null : { ...current, playing: false }));
     };
     document.addEventListener("visibilitychange", pauseWhenHidden);
     document.addEventListener("fullscreenchange", pauseWhenHidden);
@@ -110,18 +130,28 @@ export function MediaVideoPlayer({
     };
   }, [video]);
 
-  const retry = async () => {
+  const retry = async (manual = false) => {
     if (retrying) return;
+    if (manual) automaticRecovery.current = { resourceKey, used: true };
     setRetrying(true);
+    if (video)
+      setResume(
+        (current) =>
+          current ?? {
+            time: video.currentTime,
+            playing: playingVideo === video,
+            rate: video.playbackRate,
+          },
+      );
     const result = await settlePromise(async () => {
       await onRetry?.();
     });
     if (AsyncResult.isSuccess(result)) {
       setPlaybackSource(null);
-      setFailedSrc(null);
+      setFailedResourceKey(null);
       setLoadAttempt((current) => current + 1);
     } else {
-      setFailedSrc(src);
+      setFailedResourceKey(sourceResourceKey);
     }
     setRetrying(false);
   };
@@ -150,7 +180,7 @@ export function MediaVideoPlayer({
                 size="sm"
                 variant="secondary"
                 disabled={retrying}
-                onClick={() => void retry()}
+                onClick={() => void retry(true)}
               >
                 <RotateCwIcon />
                 {retrying ? "Retrying…" : "Retry video"}
@@ -178,19 +208,49 @@ export function MediaVideoPlayer({
           )}
           style={style}
           onLoadedMetadata={(event) => {
-            prepareVideoFirstFrame(event.currentTarget);
-            if (sourceRevision !== null) setPlaybackSource({ src, revision: sourceRevision });
+            const element = event.currentTarget;
+            setPlaybackSource({ src, revision: sourceRevision, resourceKey: sourceResourceKey });
+            const pending = resume;
+            setResume(null);
+            if (pending === null) {
+              prepareVideoFirstFrame(element);
+              return;
+            }
+            element.currentTime = Number.isFinite(pending.time) ? pending.time : 0;
+            element.playbackRate = pending.rate;
+            if (pending.playing && mayPlayVideo(element))
+              void element.play().catch(() => undefined);
+            else element.pause();
           }}
           onPlay={(event) => {
             setPlayingVideo(event.currentTarget);
-            setPlaybackSource({ src, revision: sourceRevision });
+            setPlaybackSource({ src, revision: sourceRevision, resourceKey: sourceResourceKey });
           }}
           onPause={() => setPlayingVideo(null)}
           onEnded={() => setPlayingVideo(null)}
           onError={() => {
-            setPlayingVideo(null);
-            setPlaybackSource(null);
-            if (latestSrc === null || src === latestSrc) setFailedSrc(src);
+            if (automaticRecovery.current.resourceKey !== sourceResourceKey) {
+              automaticRecovery.current = { resourceKey: sourceResourceKey, used: false };
+            }
+            if (latestSrc !== null && src !== latestSrc) {
+              if (video)
+                setResume(
+                  (current) =>
+                    current ?? {
+                      time: video.currentTime,
+                      playing: playingVideo === video,
+                      rate: video.playbackRate,
+                    },
+                );
+              setPlaybackSource(null);
+              setPlayingVideo(null);
+            } else if (!automaticRecovery.current.used && src !== null && onRetry) {
+              automaticRecovery.current.used = true;
+              void retry();
+            } else {
+              setPlayingVideo(null);
+              setFailedResourceKey(sourceResourceKey);
+            }
           }}
         />
       ) : (

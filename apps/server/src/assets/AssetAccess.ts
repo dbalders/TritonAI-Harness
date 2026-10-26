@@ -7,6 +7,8 @@ import {
   AssetProjectFaviconNotFoundError,
   AssetProjectFaviconResolutionError,
   AssetSigningKeyLoadError,
+  AssetSessionUnavailableError,
+  AuthSessionId,
   AssetWorkspaceAssetInspectionError,
   AssetWorkspaceAssetNotFoundError,
   AssetWorkspaceContextNotFoundError,
@@ -56,6 +58,7 @@ import {
   timingSafeEqualBase64Url,
 } from "../auth/utils.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -76,9 +79,8 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 export const ASSET_ROUTE_PREFIX = "/api/assets";
 
 const SIGNING_SECRET_NAME = "asset-access-signing-key";
-const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
+const ASSET_TOKEN_TTL_MS = 2 * 60 * 1000;
 const PROJECT_FAVICON_TOKEN_BUCKET_MS = 30 * 60 * 1000;
-const HTML_ATTACHMENT_TOKEN_BUCKET_MS = 30 * 60 * 1000;
 const PROJECT_FAVICON_VERSION_PREFIX = "v";
 const PROJECT_FAVICON_ICNS_MIN_SIZE = 96;
 const INLINE_VIDEO_MIME_TYPE_PATTERN = /^video\/[\w!#$&^.+-]+$/i;
@@ -110,6 +112,7 @@ const AssetClaimsSchema = Schema.Union([
     workspaceRoot: Schema.String,
     baseRelativePath: Schema.String,
     expiresAt: Schema.Number,
+    issuerSessionId: Schema.optionalKey(AuthSessionId),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
@@ -117,6 +120,7 @@ const AssetClaimsSchema = Schema.Union([
     workspaceRoot: Schema.String,
     relativePath: Schema.String,
     expiresAt: Schema.Number,
+    issuerSessionId: Schema.optionalKey(AuthSessionId),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
@@ -126,6 +130,7 @@ const AssetClaimsSchema = Schema.Union([
     inode: Schema.String,
     downloadName: Schema.optionalKey(Schema.String),
     expiresAt: Schema.Number,
+    issuerSessionId: Schema.optionalKey(AuthSessionId),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
@@ -136,6 +141,7 @@ const AssetClaimsSchema = Schema.Union([
     mimeType: Schema.optionalKey(Schema.String),
     renderIntent: Schema.optionalKey(Schema.Literal("mcp-app")),
     expiresAt: Schema.Number,
+    issuerSessionId: Schema.optionalKey(AuthSessionId),
   }),
   Schema.Struct({
     version: Schema.Literal(2),
@@ -146,6 +152,7 @@ const AssetClaimsSchema = Schema.Union([
     mimeType: Schema.optionalKey(Schema.String),
     renderIntent: Schema.optionalKey(Schema.Literal("mcp-app")),
     expiresAt: Schema.Number,
+    issuerSessionId: Schema.optionalKey(AuthSessionId),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
@@ -153,18 +160,21 @@ const AssetClaimsSchema = Schema.Union([
     workspaceRoot: Schema.String,
     relativePath: Schema.NullOr(Schema.String),
     expiresAt: Schema.Number,
+    issuerSessionId: Schema.optionalKey(AuthSessionId),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("project-favicon-external"),
     filePath: Schema.String,
     expiresAt: Schema.Number,
+    issuerSessionId: Schema.optionalKey(AuthSessionId),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("native-app-icon"),
     app: ToolActivityNativeAppReference,
     expiresAt: Schema.Number,
+    issuerSessionId: Schema.optionalKey(AuthSessionId),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
@@ -173,6 +183,7 @@ const AssetClaimsSchema = Schema.Union([
     itemId: TurnItemId,
     index: Schema.Number,
     expiresAt: Schema.Number,
+    issuerSessionId: Schema.optionalKey(AuthSessionId),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
@@ -181,6 +192,7 @@ const AssetClaimsSchema = Schema.Union([
     url: Schema.String,
     cwd: Schema.String,
     expiresAt: Schema.Number,
+    issuerSessionId: Schema.optionalKey(AuthSessionId),
   }),
 ]);
 type AssetClaims = typeof AssetClaimsSchema.Type;
@@ -192,6 +204,7 @@ const encodeAssetClaims = Schema.encodeSync(AssetClaimsJson);
 export type ResolvedAsset =
   | {
       readonly kind: "file";
+      readonly cacheable?: boolean;
       readonly path: string;
       readonly disposition?: "inline" | "attachment";
       readonly downloadName?: string;
@@ -202,6 +215,7 @@ export type ResolvedAsset =
     }
   | {
       readonly kind: "bytes";
+      readonly cacheable?: boolean;
       readonly bytes: Uint8Array;
       readonly mimeType: string;
     }
@@ -279,7 +293,7 @@ const projectFaviconAsset = Effect.fn("AssetAccess.projectFaviconAsset")(functio
   filePath: string,
 ) {
   if (!filePath.toLowerCase().endsWith(".icns")) {
-    return { kind: "file", path: filePath } satisfies ResolvedAsset;
+    return { kind: "file", path: filePath, cacheable: true } satisfies ResolvedAsset;
   }
   const fileSystem = yield* FileSystem.FileSystem;
   const bytes = yield* fileSystem.readFile(filePath).pipe(
@@ -290,7 +304,12 @@ const projectFaviconAsset = Effect.fn("AssetAccess.projectFaviconAsset")(functio
   );
   const png = bytes ? extractIcnsPng(bytes, PROJECT_FAVICON_ICNS_MIN_SIZE) : null;
   return png
-    ? ({ kind: "bytes", bytes: png, mimeType: "image/png" } satisfies ResolvedAsset)
+    ? ({
+        kind: "bytes",
+        bytes: png,
+        mimeType: "image/png",
+        cacheable: true,
+      } satisfies ResolvedAsset)
     : null;
 });
 
@@ -589,6 +608,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
 
 export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (input: {
   readonly resource: AssetResource;
+  readonly sessionId: AuthSessionId;
   readonly workspaceRoot?: string;
   readonly attachmentDisposition?: "inline" | "attachment";
   readonly attachmentFileName?: string;
@@ -926,13 +946,21 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       PROJECT_FAVICON_TOKEN_BUCKET_MS;
     claims = { ...claims, expiresAt };
   }
-  if (claims.kind === "attachment" && claims.mimeType === "text/html") {
-    // HTML pages never change, so mints in the same window sign the same URL and a reload
-    // can answer it from the browser cache. Images keep a new URL per mint, since their
-    // load-error retries rely on one.
-    expiresAt =
-      Math.ceil(expiresAt / HTML_ATTACHMENT_TOKEN_BUCKET_MS) * HTML_ATTACHMENT_TOKEN_BUCKET_MS;
-    claims = { ...claims, expiresAt };
+  if (claims.kind !== "project-favicon" && claims.kind !== "project-favicon-external") {
+    const sessions = yield* AuthSessions.AuthSessionRepository;
+    const session = yield* sessions
+      .getById({ sessionId: input.sessionId })
+      .pipe(Effect.mapError(() => new AssetSessionUnavailableError()));
+    const now = yield* Clock.currentTimeMillis;
+    if (
+      Option.isNone(session) ||
+      session.value.revokedAt !== null ||
+      session.value.expiresAt.epochMilliseconds <= now
+    ) {
+      return yield* new AssetSessionUnavailableError();
+    }
+    expiresAt = Math.min(expiresAt, session.value.expiresAt.epochMilliseconds);
+    claims = { ...claims, expiresAt, issuerSessionId: input.sessionId };
   }
   const encodedPayload = base64UrlEncode(encodeAssetClaims(claims));
   const token = `${encodedPayload}.${signPayload(encodedPayload, signingSecret)}`;
@@ -962,6 +990,21 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
 
   const claims = decodeClaims(encodedPayload);
   if (!claims || claims.expiresAt <= (yield* Clock.currentTimeMillis)) return null;
+
+  if (claims.kind !== "project-favicon" && claims.kind !== "project-favicon-external") {
+    // Old bearer-only URLs are deliberately invalidated when session binding ships.
+    if (claims.issuerSessionId === undefined) return null;
+    const sessions = yield* AuthSessions.AuthSessionRepository;
+    const session = yield* sessions
+      .getById({ sessionId: claims.issuerSessionId })
+      .pipe(Effect.orElseSucceed(() => Option.none()));
+    if (
+      Option.isNone(session) ||
+      session.value.revokedAt !== null ||
+      session.value.expiresAt.epochMilliseconds <= (yield* Clock.currentTimeMillis)
+    )
+      return null;
+  }
 
   if (claims.kind === "attachment") {
     const config = yield* ServerConfig.ServerConfig;
