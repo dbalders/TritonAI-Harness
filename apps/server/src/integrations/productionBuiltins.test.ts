@@ -6,7 +6,6 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { EFFECT_HOST_PEER_RANGE } from "@t3tools/shared/pluginHostRuntime";
-import { canonicalJson, type JsonValue } from "@t3tools/shared/pluginSdkContract";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import effectPackageJson from "effect/package.json" with { type: "json" };
@@ -221,111 +220,6 @@ function skillsOnlyManifest() {
 }
 
 describe("production built-in package verification", () => {
-  it("loads a novel composed provider through the generic factory with scoped inputs", async () => {
-    const { root, plugin } = await fixture();
-    const secretNames: string[] = [];
-    let provider: { readonly close?: () => Promise<void> } | undefined;
-    try {
-      const loaded = await loadProductionPackageForTest(root, plugin, secretStore(secretNames), {
-        endpoint: "https://api.example.test",
-      });
-      provider = loaded.provider;
-      expect(loaded.provider?.id).toBe("future-provider");
-      expect(
-        (
-          loaded.provider as typeof loaded.provider & {
-            readonly configuration: unknown;
-            readonly credential: () => Promise<string | null>;
-          }
-        ).configuration,
-      ).toEqual({ endpoint: "https://api.example.test" });
-      await expect(
-        (
-          loaded.provider as typeof loaded.provider & {
-            readonly credential: () => Promise<string | null>;
-          }
-        ).credential(),
-      ).resolves.toBe("host-secret");
-      expect(secretNames).toEqual(["integration-future-provider--oauth"]);
-    } finally {
-      await provider?.close?.();
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects missing, asynchronous, and mismatched provider factories", async () => {
-    const cases = [
-      {
-        source:
-          'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" }; export { manifest };',
-        message: "does not export its provider factory",
-      },
-      {
-        source:
-          'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" }; export { manifest }; export async function createIntegrationProvider() { return { id: manifest.provider }; }',
-        message: "provider factory must be synchronous",
-      },
-      {
-        source:
-          'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" }; export { manifest }; export function createIntegrationProvider() { return { id: "wrong-provider" }; }',
-        message: "provider does not match its composed manifest",
-      },
-      {
-        source:
-          'import packageManifest from "../.tritonai-plugin/plugin.json" with { type: "json" }; export const manifest = { ...packageManifest, id: "other-provider" }; export function createIntegrationProvider() { return { id: "future-provider" }; }',
-        message: "exports do not match its composed manifest",
-      },
-    ] as const;
-    for (const entry of cases) {
-      const { root, plugin } = await fixture(
-        "4.0.0-beta.78",
-        {},
-        {
-          moduleSource: entry.source,
-        },
-      );
-      try {
-        await expect(loadProductionPackageForTest(root, plugin, secretStore(), {})).rejects.toThrow(
-          entry.message,
-        );
-      } finally {
-        await NodeFSP.rm(root, { recursive: true, force: true });
-      }
-    }
-  });
-
-  it("consumes a rejected asynchronous factory while preserving the synchronous-only error", async () => {
-    const { root, plugin } = await fixture(
-      "4.0.0-beta.78",
-      {},
-      {
-        moduleSource: [
-          'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" };',
-          "export { manifest };",
-          "export async function createIntegrationProvider() {",
-          "  await Promise.resolve();",
-          '  throw new Error("late async factory failure");',
-          "}",
-        ].join("\n"),
-      },
-    );
-    const unhandledRejections: Array<unknown> = [];
-    const onUnhandledRejection = (reason: unknown): void => {
-      unhandledRejections.push(reason);
-    };
-    process.on("unhandledRejection", onUnhandledRejection);
-    try {
-      await expect(loadProductionPackageForTest(root, plugin, secretStore(), {})).rejects.toThrow(
-        "provider factory must be synchronous",
-      );
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(unhandledRejections).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandledRejection);
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("loads a skills-only package without a provider distribution", async () => {
     const { root, plugin } = await fixture(
       null,
@@ -389,145 +283,56 @@ describe("production built-in package verification", () => {
     }
   });
 
-  it("retains a provider snapshot for deferred imports and removes it exactly once on close", async () => {
-    const moduleSource = [
-      'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" };',
-      "export { manifest };",
-      "export class FixtureProvider {",
-      "  constructor() {",
-      "    this.id = manifest.provider;",
-      "    this.tools = [];",
-      '    this.snapshotRootUrl = new URL("..", import.meta.url).href;',
-      "    this.closeCalls = 0;",
-      "  }",
-      '  async status() { return { state: "not_connected", accountLabel: null, grantedCapabilities: [], message: null }; }',
-      "  async invoke() { return null; }",
-      '  async deferredValue() { return (await import("./deferred.js")).value; }',
-      "  async close() { this.closeCalls += 1; }",
-      "}",
-      "export function createIntegrationProvider() { return new FixtureProvider(); }",
-    ].join("\n");
+  it("quarantines legacy provider code before module initialization", async () => {
+    const marker = "__f06LegacyAdmission";
+    const globals = globalThis as unknown as Record<string, unknown>;
+    const secretNames: string[] = [];
     const { root, plugin } = await fixture(
       "4.0.0-beta.78",
       {},
       {
-        extraFiles: [["dist/deferred.js", 'export const value = "loaded-after-return";']],
-        moduleSource,
+        moduleSource: `globalThis[${JSON.stringify(marker)}] = true;\nexport function createIntegrationProvider() { throw Error("must not execute"); }`,
       },
     );
-    let provider:
-      | {
-          readonly close: () => Promise<void>;
-          readonly closeCalls: number;
-          readonly deferredValue: () => Promise<string>;
-          readonly snapshotRootUrl: string;
-        }
-      | undefined;
-    try {
-      const loaded = await loadProductionPackageForTest(root, plugin, secretStore(), {});
-      provider = loaded.provider as typeof provider;
-      expect(provider).toBeDefined();
-      const snapshotRoot = NodeURL.fileURLToPath(provider!.snapshotRootUrl);
-      const snapshotParent = NodePath.dirname(snapshotRoot);
-      await expect(NodeFSP.access(snapshotParent)).resolves.toBeUndefined();
-      await expect(provider!.deferredValue()).resolves.toBe("loaded-after-return");
-
-      await provider!.close();
-      await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
-      await provider!.close();
-      expect(provider!.closeCalls).toBe(1);
-    } finally {
-      await provider?.close().catch(() => undefined);
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("removes the retained snapshot when the original provider close fails", async () => {
-    const moduleSource = [
-      'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" };',
-      "export { manifest };",
-      "export class FixtureProvider {",
-      "  constructor() {",
-      "    this.id = manifest.provider;",
-      "    this.tools = [];",
-      '    this.snapshotRootUrl = new URL("..", import.meta.url).href;',
-      "    this.closeCalls = 0;",
-      "  }",
-      '  async status() { return { state: "not_connected", accountLabel: null, grantedCapabilities: [], message: null }; }',
-      "  async invoke() { return null; }",
-      '  async close() { this.closeCalls += 1; throw new Error("fixture close failed"); }',
-      "}",
-      "export function createIntegrationProvider() { return new FixtureProvider(); }",
-    ].join("\n");
-    const { root, plugin } = await fixture("4.0.0-beta.78", {}, { moduleSource });
-    let provider:
-      | {
-          readonly close: () => Promise<void>;
-          readonly closeCalls: number;
-          readonly snapshotRootUrl: string;
-        }
-      | undefined;
-    try {
-      const loaded = await loadProductionPackageForTest(root, plugin, secretStore(), {});
-      provider = loaded.provider as typeof provider;
-      const snapshotParent = NodePath.dirname(NodeURL.fileURLToPath(provider!.snapshotRootUrl));
-
-      await expect(provider!.close()).rejects.toThrow("fixture close failed");
-      await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(provider!.close()).rejects.toThrow("fixture close failed");
-      expect(provider!.closeCalls).toBe(1);
-    } finally {
-      await provider?.close().catch(() => undefined);
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("closes earlier provider snapshots when a later production package fails", async () => {
-    const moduleSource = [
-      'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" };',
-      "export { manifest };",
-      "export class FixtureProvider {",
-      "  constructor() {",
-      "    this.id = manifest.provider;",
-      "    this.tools = [];",
-      '    this.snapshotRootUrl = new URL("..", import.meta.url).href;',
-      "    this.closeCalls = 0;",
-      "  }",
-      '  async status() { return { state: "not_connected", accountLabel: null, grantedCapabilities: [], message: null }; }',
-      "  async invoke() { return null; }",
-      '  async close() { this.closeCalls += 1; throw new Error("fixture cleanup failed"); }',
-      "}",
-      "export function createIntegrationProvider() { return new FixtureProvider(); }",
-    ].join("\n");
-    const { root, plugin } = await fixture("4.0.0-beta.78", {}, { moduleSource });
-    const startupFailure = new Error("later package failed");
-    let provider:
-      | {
-          readonly closeCalls: number;
-          readonly snapshotRootUrl: string;
-        }
-      | undefined;
-    let snapshotParent = "";
     try {
       await expect(
-        loadProductionPackagesForTest([
-          async () => {
-            const loaded = await loadProductionPackageForTest(root, plugin, secretStore(), {});
-            provider = loaded.provider as typeof provider;
-            snapshotParent = NodePath.dirname(NodeURL.fileURLToPath(provider!.snapshotRootUrl));
-            return loaded;
-          },
-          async () => {
-            throw startupFailure;
-          },
-        ]),
-      ).rejects.toBe(startupFailure);
-      expect(provider?.closeCalls).toBe(1);
-      expect(snapshotParent).not.toBe("");
-      await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
+        loadProductionPackageForTest(root, plugin, secretStore(secretNames), {}),
+      ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+      expect(globals[marker]).toBeUndefined();
+      expect(secretNames).toEqual([]);
     } finally {
+      delete globals[marker];
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("closes an earlier admitted provider when a later production package fails", async () => {
+    let closed = 0;
+    const earlier: IntegrationPackage = {
+      manifest: validateIntegrationManifest(skillsOnlyManifest()),
+      provider: {
+        id: "fixture",
+        tools: [],
+        status: async () => ({
+          state: "not_connected",
+          accountLabel: null,
+          grantedCapabilities: [],
+          message: null,
+        }),
+        invoke: async () => null,
+        close: async () => {
+          closed++;
+        },
+      },
+    };
+    const failure = new Error("later package failed");
+    await expect(
+      loadProductionPackagesForTest([
+        () => Promise.resolve(earlier),
+        () => Promise.reject(failure),
+      ]),
+    ).rejects.toBe(failure);
+    expect(closed).toBe(1);
   });
 
   it("reports only admitted providers and tolerates an unwritable boot receipt", async () => {
@@ -572,107 +377,22 @@ describe("production built-in package verification", () => {
     ).resolves.toEqual([retained]);
   });
 
-  it("keeps an admitted sealed plugin when later SDK descriptor and configuration admission fail", async () => {
-    const validFiles = await testFiles(sdkGoldenRoot);
-    const artifactDescriptor = validFiles.find(({ path }) => path === "artifact.json");
-    expect(artifactDescriptor?.sha256).toBe(
-      "40944f4fda76fcd05dbb3ced7e035ba7a74dab9221906597df2971f44d38c86a",
+  it("quarantines SDK1 packages while retaining a later providerless package", async () => {
+    const sdk = composition(await testFiles(sdkGoldenRoot), "synthetic-api-key");
+    const data = await fixture(
+      null,
+      {},
+      { includeDistribution: false, manifest: skillsOnlyManifest() },
     );
-    const validPlugin = composition(validFiles, "synthetic-api-key");
-    const invalidRoot = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-invalid-sdk-plugin-"),
-    );
-    const configurationRoot = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-invalid-sdk-configuration-"),
-    );
-    let admitted: IntegrationPackage | undefined;
     try {
-      await NodeFSP.cp(sdkGoldenRoot, invalidRoot, { recursive: true });
-      const descriptorPath = NodePath.join(invalidRoot, "artifact.json");
-      const descriptor = JSON.parse(await NodeFSP.readFile(descriptorPath, "utf8")) as Record<
-        string,
-        unknown
-      >;
-      descriptor.format = "tritonai.plugin-artifact/unsupported";
-      await NodeFSP.writeFile(descriptorPath, `${canonicalJson(descriptor as JsonValue)}\n`);
-      const invalidFiles = await testFiles(invalidRoot);
-      const invalidPlugin = composition(invalidFiles, "synthetic-api-key");
-      await NodeFSP.cp(sdkGoldenRoot, configurationRoot, { recursive: true });
-      const configurationManifestPath = NodePath.join(
-        configurationRoot,
-        ".tritonai-plugin",
-        "plugin.json",
-      );
-      const configurationManifest = JSON.parse(
-        await NodeFSP.readFile(configurationManifestPath, "utf8"),
-      ) as Record<string, unknown>;
-      const requiredConfiguration = {
-        $schema: "https://json-schema.org/draft/2020-12/schema",
-        type: "object",
-        properties: { requiredValue: { type: "string" } },
-        required: ["requiredValue"],
-        additionalProperties: false,
-      };
-      configurationManifest.configurationSchema = requiredConfiguration;
-      const configurationManifestBytes = Buffer.from(
-        `${canonicalJson(configurationManifest as JsonValue)}\n`,
-      );
-      await NodeFSP.writeFile(configurationManifestPath, configurationManifestBytes);
-      const configurationDescriptorPath = NodePath.join(configurationRoot, "artifact.json");
-      const configurationDescriptor = JSON.parse(
-        await NodeFSP.readFile(configurationDescriptorPath, "utf8"),
-      ) as {
-        configurationSchema: string;
-        files: Array<{ path: string; sha256: string; size: number }>;
-      };
-      configurationDescriptor.configurationSchema = sha256(
-        Buffer.from(canonicalJson(requiredConfiguration as JsonValue)),
-      );
-      const manifestFile = configurationDescriptor.files.find(
-        ({ path }) => path === ".tritonai-plugin/plugin.json",
-      );
-      if (!manifestFile) throw new Error("Golden SDK artifact manifest record is missing.");
-      manifestFile.sha256 = sha256(configurationManifestBytes);
-      manifestFile.size = configurationManifestBytes.byteLength;
-      await NodeFSP.writeFile(
-        configurationDescriptorPath,
-        `${canonicalJson(configurationDescriptor as unknown as JsonValue)}\n`,
-      );
-      const configurationFiles = await testFiles(configurationRoot);
-      const configurationPlugin = composition(configurationFiles, "synthetic-api-key");
-      const descriptorFailure = () =>
-        loadProductionPackageForTest(invalidRoot, invalidPlugin, secretStore(), {}, "24.13.1");
-      const configurationFailure = () =>
-        loadProductionPackageForTest(
-          configurationRoot,
-          configurationPlugin,
-          secretStore(),
-          {},
-          "24.13.1",
-        );
-      await expect(descriptorFailure()).rejects.toBeInstanceOf(PluginSdkQuarantineError);
-      await expect(configurationFailure()).rejects.toBeInstanceOf(PluginSdkQuarantineError);
-
-      const loaded = await loadProductionPackagesForTest([
-        async () => {
-          admitted = await loadProductionPackageForTest(
-            sdkGoldenRoot,
-            validPlugin,
-            secretStore(),
-            {},
-            "24.13.1",
-          );
-          return admitted;
-        },
-        descriptorFailure,
-        configurationFailure,
+      const packages = await loadProductionPackagesForTest([
+        () => loadProductionPackageForTest(sdkGoldenRoot, sdk, secretStore(), {}, "24.13.1"),
+        () => loadProductionPackageForTest(data.root, data.plugin, secretStore(), {}),
       ]);
-      expect(loaded).toHaveLength(1);
-      expect(loaded[0]?.provider?.id).toBe("synthetic-api-key");
+      expect(packages.map((item) => item.manifest.id)).toEqual([data.plugin.id]);
+      expect(packages[0]?.provider).toBeUndefined();
     } finally {
-      await admitted?.provider?.close?.().catch(() => undefined);
-      await NodeFSP.rm(invalidRoot, { recursive: true, force: true });
-      await NodeFSP.rm(configurationRoot, { recursive: true, force: true });
+      await NodeFSP.rm(data.root, { recursive: true, force: true });
     }
   });
 

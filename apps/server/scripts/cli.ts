@@ -76,10 +76,6 @@ const emitManagedBuildResources = Effect.fn("emitManagedBuildResources")(functio
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(path.join(serverDir, "dist"), { recursive: true });
-  yield* fs.writeFileString(
-    path.join(serverDir, "dist/plugin-module-loader.cjs"),
-    "exports.importPluginModule = (specifier) => import(specifier);\n",
-  );
   const managedConfig = loadManagedHarnessConfigForBuild(repoRoot);
   yield* fs.writeFileString(
     path.join(serverDir, "dist/tritonai-managed-config.json"),

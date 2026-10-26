@@ -4,7 +4,6 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
-import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
 
 import {
@@ -15,12 +14,10 @@ import { hasPluginSdkArtifact } from "@t3tools/shared/pluginSdkArtifact";
 import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import type { IntegrationPackage, IntegrationProvider } from "./IntegrationRegistry.ts";
-import { scopeIntegrationSecretStore } from "./IntegrationSecretStore.ts";
+import type { IntegrationPackage } from "./IntegrationRegistry.ts";
 import { validateIntegrationManifest } from "./manifest.ts";
 import { loadPluginSdkIntegration, PluginSdkQuarantineError } from "./pluginSdk/adapter.ts";
 import { acquireProductionRuntime, type ProductionRuntimeLease } from "./productionRuntime.ts";
-import { importPluginModule } from "./importPluginModule.ts";
 import { createMacPluginSandboxRuntime } from "./pluginSandbox/MacPluginSandboxRuntime.ts";
 import type { IsolatedPluginRuntime } from "./pluginSandbox/IsolatedPluginAdapter.ts";
 
@@ -54,14 +51,6 @@ interface ProductionComposition {
     readonly commit: string;
   };
   readonly packages: ReadonlyArray<CompositionPackage>;
-}
-
-interface IntegrationPluginModule {
-  readonly createIntegrationProvider?: (input: {
-    readonly secrets: ReturnType<typeof scopeIntegrationSecretStore>;
-    readonly configuration: unknown;
-  }) => IntegrationProvider;
-  readonly manifest: unknown;
 }
 
 const buildComposition =
@@ -396,72 +385,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    Boolean(value) &&
-    (typeof value === "object" || typeof value === "function") &&
-    typeof (value as { readonly then?: unknown }).then === "function"
-  );
-}
-
-function retainSnapshotUntilProviderClose(
-  provider: IntegrationProvider,
-  snapshot: ProductionPackageSnapshot,
-): IntegrationProvider {
-  const originalClose =
-    typeof provider.close === "function" ? provider.close.bind(provider) : undefined;
-  let closePromise: Promise<void> | undefined;
-  const boundMethods = new Map<PropertyKey, (...args: ReadonlyArray<unknown>) => unknown>();
-
-  const close = (): Promise<void> => {
-    closePromise ??= (async () => {
-      let providerCloseFailed = false;
-      let providerCloseError: unknown;
-      try {
-        await originalClose?.();
-      } catch (error) {
-        providerCloseFailed = true;
-        providerCloseError = error;
-      }
-
-      let snapshotCleanupFailed = false;
-      let snapshotCleanupError: unknown;
-      try {
-        await snapshot.close();
-      } catch (error) {
-        snapshotCleanupFailed = true;
-        snapshotCleanupError = error;
-      }
-
-      if (providerCloseFailed && snapshotCleanupFailed) {
-        throw new AggregateError(
-          [providerCloseError, snapshotCleanupError],
-          "Provider close and built-in plugin snapshot cleanup both failed.",
-        );
-      }
-      if (providerCloseFailed) throw providerCloseError;
-      if (snapshotCleanupFailed) throw snapshotCleanupError;
-    })();
-    return closePromise;
-  };
-
-  return new Proxy({} as IntegrationProvider, {
-    get(_target, property) {
-      if (property === "close") return close;
-      const value = Reflect.get(provider, property, provider) as unknown;
-      if (typeof value !== "function") return value;
-      const existing = boundMethods.get(property);
-      if (existing) return existing;
-      const bound = value.bind(provider) as (...args: ReadonlyArray<unknown>) => unknown;
-      boundMethods.set(property, bound);
-      return bound;
-    },
-    has(_target, property) {
-      return property === "close" || property in provider;
-    },
-  });
-}
-
 function validateBuildConfiguration(
   composition: ProductionComposition,
   value: unknown,
@@ -527,43 +450,9 @@ async function loadProductionPackage(
     return { manifest: packageManifest, bundledFiles };
   }
 
-  const snapshot = await materializeProductionPackageSnapshot(plugin, verifiedFiles);
-  let retainSnapshot = false;
-  try {
-    const moduleUrl = NodeURL.pathToFileURL(NodePath.join(snapshot.root, "dist", "index.js")).href;
-    const loaded = (await importPluginModule(moduleUrl)) as IntegrationPluginModule;
-    const exportedManifest = validateIntegrationManifest(loaded.manifest);
-    if (!NodeUtil.isDeepStrictEqual(exportedManifest, packageManifest)) {
-      throw new Error(`Built-in plugin ${plugin.id} exports do not match its composed manifest.`);
-    }
-    if (typeof loaded.createIntegrationProvider !== "function") {
-      throw new Error(`Built-in plugin ${plugin.id} does not export its provider factory.`);
-    }
-    const created = loaded.createIntegrationProvider({
-      secrets: scopeIntegrationSecretStore(secrets, packageManifest.id),
-      configuration,
-    });
-    if (isPromiseLike(created)) {
-      // The factory contract is synchronous, but an async function has already started by the time
-      // its thenable result is observable. Consume a late rejection so a malformed plugin cannot
-      // turn this deterministic startup validation error into an unhandled process rejection.
-      void Promise.resolve(created).catch(() => undefined);
-      throw new Error(`Built-in plugin ${plugin.id} provider factory must be synchronous.`);
-    }
-    if (!isRecord(created) || created.id !== packageManifest.provider) {
-      throw new Error(
-        `Built-in plugin ${plugin.id} provider does not match its composed manifest.`,
-      );
-    }
-    const provider = retainSnapshotUntilProviderClose(
-      created as unknown as IntegrationProvider,
-      snapshot,
-    );
-    retainSnapshot = true;
-    return { manifest: packageManifest, bundledFiles, provider };
-  } finally {
-    if (!retainSnapshot) await snapshot.close();
-  }
+  throw new PluginSdkQuarantineError(
+    new Error("Legacy provider code requires an isolated broker contract."),
+  );
 }
 
 export async function loadProductionPackageForTest(
