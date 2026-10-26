@@ -11,6 +11,7 @@ import type { JsonObject, JsonValue } from "@t3tools/shared/pluginSdkContract";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import { runMacPluginWorker } from "./PluginSandboxWorker.ts";
+import { IntegrationProviderPublicError } from "../IntegrationRegistry.ts";
 
 function nativeTest(name: string, run: (runtime: string) => Promise<void>) {
   it.live(name, (context) =>
@@ -260,6 +261,67 @@ nativeTest(
     await f.entered.promise;
     f.controller.abort();
     await rejected;
+  },
+);
+
+nativeTest("retains the host's committed receipt after cancellation", async (runtime) => {
+  await using f = await fixture(runtime, "return broker.request(tool+'.v1',input);", "", "write");
+  const commitTail = new AbortController();
+  const receipt = Promise.withResolvers<JsonValue>();
+  f.input.context.beginCommit = async () => {
+    f.state.commits++;
+    return commitTail.signal;
+  };
+  let transportSignal: AbortSignal | undefined;
+  f.state.transport = (_parameters, signal) => {
+    transportSignal = signal;
+    return receipt.promise;
+  };
+  const result = runMacPluginWorker(f.input).then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  await f.entered.promise;
+  f.controller.abort();
+  const transportWasAborted = transportSignal?.aborted;
+  receipt.resolve({ actualReceipt: "confirmed" });
+  const outcome = await result;
+  expect(transportWasAborted).toBe(false);
+  expect(outcome).toEqual({ value: { actualReceipt: "confirmed" } });
+  expect(f.state.commits).toBe(1);
+});
+
+nativeTest(
+  "retains trusted unchanged and ambiguous host failures after worker cancellation",
+  async (runtime) => {
+    for (const hostFailure of [
+      new IntegrationProviderPublicError("Synthetic refusal", { unchanged: true }),
+      new Error("Synthetic ambiguous transport"),
+    ]) {
+      await using f = await fixture(
+        runtime,
+        "return broker.request(tool+'.v1',input);",
+        "",
+        "write",
+      );
+      const receipt = Promise.withResolvers<JsonValue>();
+      const tail = new AbortController();
+      f.input.context.beginCommit = async () => tail.signal;
+      f.state.transport = () => receipt.promise;
+      const result = runMacPluginWorker(f.input).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await f.entered.promise;
+      f.controller.abort();
+      receipt.reject(hostFailure);
+      const outcome = await result;
+      if (hostFailure instanceof IntegrationProviderPublicError) {
+        expect(outcome).toEqual({ error: hostFailure });
+      } else {
+        expect(outcome).toMatchObject({ error: { cause: hostFailure } });
+      }
+    }
   },
 );
 

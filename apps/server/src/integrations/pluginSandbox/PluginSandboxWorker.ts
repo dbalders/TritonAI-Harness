@@ -2,7 +2,10 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 import { isRecord, type JsonObject, type JsonValue } from "@t3tools/shared/pluginSdkContract";
-import type { IntegrationInvocationContext } from "../IntegrationRegistry.ts";
+import {
+  IntegrationProviderPublicError,
+  type IntegrationInvocationContext,
+} from "../IntegrationRegistry.ts";
 import { snapshotIntegrationInput } from "../IntegrationWriteApproval.ts";
 import { PluginBrokerChannel } from "./PluginBrokerChannel.ts";
 import {
@@ -179,12 +182,26 @@ export async function runMacPluginWorker(input: {
       phase = "closed";
       void (async () => {
         try {
-          decoder.end();
-          if (failure !== undefined) throw failure;
-          if (!finished) throw new Error("Plugin sandbox exited without a complete result.");
+          try {
+            decoder.end();
+          } catch (cause) {
+            failure ??= cause;
+          }
+          if (failure !== undefined || !finished) {
+            const committed = await channel.committedResult();
+            if (committed !== null) {
+              resolve(committed.value);
+              return;
+            }
+            throw failure ?? new Error("Plugin sandbox exited without a complete result.");
+          }
           resolve(await channel.completeInvocation(result));
         } catch (cause) {
-          reject(new Error("Plugin sandbox invocation failed.", { cause }));
+          reject(
+            cause instanceof IntegrationProviderPublicError
+              ? cause
+              : new Error("Plugin sandbox invocation failed.", { cause }),
+          );
         } finally {
           channel.revoke();
         }

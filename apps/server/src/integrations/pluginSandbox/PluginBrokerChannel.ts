@@ -142,15 +142,19 @@ export class PluginBrokerChannel {
     }
     this.#assertCurrent();
     signal.throwIfAborted();
-    const transportSignal = AbortSignal.any([signal, this.#shutdown.signal]);
+    const transportSignal = invocation.committed
+      ? signal
+      : AbortSignal.any([signal, this.#shutdown.signal]);
     const result = await this.#execute({
       binding: this.#binding,
       operation,
       parameters: invocation.input,
       signal: transportSignal,
     });
-    this.#assertCurrent();
-    transportSignal.throwIfAborted();
+    if (!invocation.committed) {
+      this.#assertCurrent();
+      transportSignal.throwIfAborted();
+    }
     const validated = validateJsonValue(result, "Plugin broker result");
     encodePluginBrokerFrame(validated);
     return validated;
@@ -163,12 +167,24 @@ export class PluginBrokerChannel {
       if (!invocation.used || !invocation.pending) {
         throw new Error("Plugin worker did not execute its admitted operation.");
       }
-      await invocation.pending;
+      const hostResult = await invocation.pending;
+      if (invocation.committed) return hostResult;
       this.#assertCurrent();
       if (!invocation.committed) invocation.context.signal.throwIfAborted();
       const result = validateJsonValue(workerResult, "Plugin worker result");
       encodePluginBrokerFrame(result);
       return result;
+    } finally {
+      this.#invocation = null;
+    }
+  }
+
+  async committedResult(): Promise<{ readonly value: JsonValue } | null> {
+    const invocation = this.#invocation;
+    if (!invocation?.committed || !invocation.pending) return null;
+    try {
+      // Worker termination cannot replace an admitted host operation's actual settlement.
+      return { value: await invocation.pending };
     } finally {
       this.#invocation = null;
     }

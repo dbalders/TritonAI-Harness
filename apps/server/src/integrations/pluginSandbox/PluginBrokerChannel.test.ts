@@ -87,7 +87,7 @@ it("executes the host snapshot only after commit admission and pins the host cha
   expect(Object.isFrozen(f.requests[0]?.parameters)).toBe(true);
   expect(f.requests[0]?.binding).toEqual(f.binding);
   expect(await f.channel.completeInvocation({ projected: "synthetic result" })).toEqual({
-    projected: "synthetic result",
+    changed: true,
   });
 });
 
@@ -118,7 +118,7 @@ it("compares the same F05 canonical bytes for nested numeric object keys", async
   await expect(f.channel.operation(f.request(JSON.parse(JSON.stringify(input))))).resolves.toEqual({
     changed: true,
   });
-  await expect(f.channel.completeInvocation({ success: true })).resolves.toEqual({ success: true });
+  await expect(f.channel.completeInvocation({ success: true })).resolves.toEqual({ changed: true });
   expect(f.requests).toHaveLength(1);
 });
 
