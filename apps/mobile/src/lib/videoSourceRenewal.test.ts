@@ -133,6 +133,31 @@ it.each([false, true])(
   },
 );
 
+it.each([false, true])(
+  "honors native playing=%s chosen while the renewed source loads",
+  async (requested) => {
+    const { player, loader, options } = fixture();
+    await loader.replace("signed:first", options);
+    player.pause.mockClear();
+    let intent = !requested;
+    player.playing = intent;
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    player.replaceAsync.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const pending = loader.replace("signed:renewed", { ...options, playingIntent: () => intent });
+    await entered.promise;
+    const internalPauses = player.pause.mock.calls.length;
+    intent = requested;
+    release.resolve();
+    expect(await pending).toBe(true);
+    expect(internalPauses).toBe(0);
+    expect(player.playing).toBe(requested);
+  },
+);
+
 it.each([
   { platform: "android", appState: "inactive", focused: true, paused: false, expected: false },
   { platform: "android", appState: "background", focused: false, paused: false, expected: false },

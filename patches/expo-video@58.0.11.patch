@@ -71,16 +71,50 @@ diff --git a/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/an
 diff --git a/ios/VideoPlayer.swift b/ios/VideoPlayer.swift
 --- a/ios/VideoPlayer.swift
 +++ b/ios/VideoPlayer.swift
-@@ -24,6 +24,7 @@
+@@ -24,6 +24,8 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
      }
    }
    private(set) var isPlaying = false
 +  private(set) var playbackRequested = false
++  private var playbackIntentObserver: NSObjectProtocol?
    private(set) var status: PlayerStatus = .idle
 -
 +
    var playbackRate: Float = 1.0 {
-@@ -388,15 +389,31 @@
+@@ -183,6 +185,19 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+-
++
+   private override init(_ ref: AVPlayer) {
+     super.init(ref)
++    playbackIntentObserver = NotificationCenter.default.addObserver(
++      forName: AVPlayer.rateDidChangeNotification, object: ref, queue: .main
++    ) { [weak self, weak ref] notification in
++      guard let self, let ref else { return }
++      let reason = notification.userInfo?[AVPlayer.rateDidChangeReasonKey]
++        as? AVPlayer.RateDidChangeReason
++      // Loading and failure transitions must not replace a native control's play intent.
++      if reason == .setRateCalled {
++        self.playbackRequested = ref.rate > 0
++      } else if reason == .audioSessionInterrupted || reason == .appBackgrounded {
++        self.playbackRequested = false
++      }
++    }
+     observer = VideoPlayerObserver(owner: self, videoSourceLoader: videoSourceLoader)
+     observer?.registerDelegate(delegate: self)
+     VideoManager.shared.register(videoPlayer: self)
+@@ -341,6 +356,10 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
+       return
+     }
+-
++
++    if let playbackIntentObserver {
++      NotificationCenter.default.removeObserver(playbackIntentObserver)
++      self.playbackIntentObserver = nil
++    }
+     observer?.notifyPlayerDeinit(player: self)
+     observer?.cleanup()
+     observer = nil
+@@ -388,6 +407,15 @@ internal final class VideoPlayer: SharedRef<AVPlayer>, Hashable, VideoPlayerObse
      status = newStatus
    }
 -
@@ -97,24 +131,6 @@ diff --git a/ios/VideoPlayer.swift b/ios/VideoPlayer.swift
    func onIsPlayingChanged(player: AVPlayer, oldIsPlaying: Bool?, newIsPlaying: Bool) {
      let payload = IsPlayingEventPayload(isPlaying: newIsPlaying, oldIsPlaying: oldIsPlaying)
      safeEmit(event: "playingChange", payload: payload)
-     isPlaying = newIsPlaying
-+    if newIsPlaying { playbackRequested = true }
--
-+
-     VideoManager.shared.setAppropriateAudioSessionOrWarn()
-   }
--
-+
-   func onRateChanged(player: AVPlayer, oldRate: Float?, newRate: Float) {
-+    // AVPlayer keeps the requested rate while buffering; failure can zero it without a user pause.
-+    if newRate != 0 {
-+      playbackRequested = true
-+    } else if player.status != .failed && player.currentItem?.status != .failed && status != .error {
-+      playbackRequested = false
-+    }
-     if #available(iOS 16.0, tvOS 16.0, *) {
-       if player.defaultRate != playbackRate {
-         // User changed the playback speed in the native controls. Update the desiredRate variable
 diff --git a/ios/VideoModule.swift b/ios/VideoModule.swift
 --- a/ios/VideoModule.swift
 +++ b/ios/VideoModule.swift

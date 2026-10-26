@@ -111,6 +111,11 @@ it("holds an attachment video source until an expired request needs a newer capa
   await screen.getByLabelText("renewal.webm").click();
   await video.play();
   video.pause();
+  for (const temporary of [{ _tag: "Loading" }, { _tag: "Failure" }] as const) {
+    await act(() => registry.set(state.assetUrl!, temporary));
+    expect(screen.container.querySelector("video")).toBe(video);
+    expect(video.src).toBe(urls[0]);
+  }
   for (const url of urls.slice(1)) {
     video.currentTime = 7;
     if (video.seeking)

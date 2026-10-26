@@ -216,70 +216,74 @@ export function AttachmentFilePreview(props: {
     });
   };
 
-  const body = failure ? (
-    <FileSurfaceFailure
-      message={failure}
-      onRetry={() => {
-        setError(null);
-        setRevision((value) => value + 1);
-        if (!props.file && kind === "video")
-          void refresh().catch(() => setError("The video is unavailable."));
-      }}
-    />
-  ) : !url || (needsText && !content) ? (
-    <FileSurfaceLoading />
-  ) : needsText && content ? (
-    delimiter && rendered ? (
-      <DelimitedTablePreview name={props.name} text={content.text} delimiter={delimiter} />
-    ) : kind === "markdown" && rendered ? (
-      <ScrollArea className="min-h-0 flex-1">
-        <ChatMarkdown text={content.text} cwd={undefined} className="mx-auto max-w-4xl px-6 py-5" />
-      </ScrollArea>
-    ) : (
-      <ReadOnlySourcePreview name={props.name} text={content.text} />
-    )
-  ) : kind === "pdf" || kind === "html" ? (
-    <BrowserDocumentFrame
-      src={url}
-      title={props.name}
-      pdf={kind === "pdf"}
-      htmlRender={props.htmlRender === true}
-      threadRef={props.threadRef}
-    />
-  ) : kind === "audio" ? (
-    <AudioPreview src={url} name={props.name} onError={() => setError("Unable to load audio.")} />
-  ) : kind === "video" ? (
-    <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
-      <MediaVideoPlayer
-        src={url}
-        label={props.name}
-        revision={String(revision)}
-        className="max-h-full max-w-full"
-        onRetry={async () => {
-          const renewed = await refresh();
-          if (renewed === null) throw new Error("The video is unavailable.");
+  const body =
+    kind === "video" ? (
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-black">
+        <MediaVideoPlayer
+          src={url}
+          sourceFailed={failure !== null}
+          label={props.name}
+          revision={String(revision)}
+          className="max-h-full max-w-full"
+          onRetry={async () => {
+            const renewed = await refresh();
+            if (renewed === null) throw new Error("The video is unavailable.");
+          }}
+        />
+      </div>
+    ) : failure ? (
+      <FileSurfaceFailure
+        message={failure}
+        onRetry={() => {
+          setError(null);
+          setRevision((value) => value + 1);
         }}
       />
-    </div>
-  ) : kind === "image" ? (
-    // oxlint-disable-next-line t3code/require-centered-scroll-gutter -- The image is capped at max-h-full max-w-full, so this never scrolls.
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
-      <img
+    ) : !url || (needsText && !content) ? (
+      <FileSurfaceLoading />
+    ) : needsText && content ? (
+      delimiter && rendered ? (
+        <DelimitedTablePreview name={props.name} text={content.text} delimiter={delimiter} />
+      ) : kind === "markdown" && rendered ? (
+        <ScrollArea className="min-h-0 flex-1">
+          <ChatMarkdown
+            text={content.text}
+            cwd={undefined}
+            className="mx-auto max-w-4xl px-6 py-5"
+          />
+        </ScrollArea>
+      ) : (
+        <ReadOnlySourcePreview name={props.name} text={content.text} />
+      )
+    ) : kind === "pdf" || kind === "html" ? (
+      <BrowserDocumentFrame
         src={url}
-        alt={props.name}
-        className="max-h-full max-w-full object-contain"
-        onError={() => setError("Unable to load image.")}
+        title={props.name}
+        pdf={kind === "pdf"}
+        htmlRender={props.htmlRender === true}
+        threadRef={props.threadRef}
       />
-    </div>
-  ) : (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
-      <p className="text-sm font-medium">No preview for this file</p>
-      <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
-        Save it to open in an app that supports {props.name.split(".").at(-1) || "this format"}{" "}
-        files.
-      </p>
-    </div>
-  );
+    ) : kind === "audio" ? (
+      <AudioPreview src={url} name={props.name} onError={() => setError("Unable to load audio.")} />
+    ) : kind === "image" ? (
+      // oxlint-disable-next-line t3code/require-centered-scroll-gutter -- The image is capped at max-h-full max-w-full, so this never scrolls.
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+        <img
+          src={url}
+          alt={props.name}
+          className="max-h-full max-w-full object-contain"
+          onError={() => setError("Unable to load image.")}
+        />
+      </div>
+    ) : (
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
+        <p className="text-sm font-medium">No preview for this file</p>
+        <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
+          Save it to open in an app that supports {props.name.split(".").at(-1) || "this format"}{" "}
+          files.
+        </p>
+      </div>
+    );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">

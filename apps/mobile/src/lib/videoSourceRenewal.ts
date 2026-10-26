@@ -48,10 +48,14 @@ export function makeVideoSourceRenewal(player: Player) {
       const current = () => !disposed && request === generation && !options.signal.aborted;
       const replacing = queue.then(async () => {
         if (!current()) return false;
-        player.pause();
+        if (options.playingIntent === undefined) player.pause();
         await player.replaceAsync({ uri, contentType: "progressive" });
         if (!current()) return false;
         const playback = resume;
+        const shouldPlay =
+          playback === null
+            ? options.playInitially
+            : (options.playingIntent?.() ?? playback.playing);
         if (playback !== null) {
           player.currentTime = Number.isFinite(playback.time) ? playback.time : 0;
           player.playbackRate = playback.rate;
@@ -59,7 +63,7 @@ export function makeVideoSourceRenewal(player: Player) {
         loaded = true;
         resume = null;
         // Expo's iOS rate setter writes AVPlayer.rate and can start a paused item.
-        if ((playback?.playing ?? options.playInitially) && options.canPlay()) player.play();
+        if (shouldPlay && options.canPlay()) player.play();
         else player.pause();
         return true;
       });
