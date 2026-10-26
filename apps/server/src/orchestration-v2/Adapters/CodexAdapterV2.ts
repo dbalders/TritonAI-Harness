@@ -23,6 +23,8 @@ import {
 } from "../../provider/managedCodexRuntime.ts";
 import { registerBrowserNavigationGate } from "../../preview/BrowserNavigationGate.ts";
 import { registerIntegrationWriteGate } from "../../integrations/IntegrationWriteApproval.ts";
+import * as ExternalContent from "../../integrations/ExternalContent.ts";
+import * as IntegrationCodexRuntime from "../../provider/IntegrationCodexRuntime.ts";
 import {
   UCSD_AI_BASE_URL_ENV,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -1370,6 +1372,12 @@ export interface CodexAppServerClientFactoryShape {
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
     readonly appServerArgs?: ReadonlyArray<string>;
+    readonly integrationBoundary?: {
+      readonly nativeTools: ReadonlyArray<string>;
+      readonly allowedTools: ReadonlyArray<string>;
+      readonly expiresAt: number;
+      readonly modelCatalogPath?: string;
+    };
   }) => Effect.Effect<
     CodexClient.CodexAppServerClient["Service"],
     ProviderAdapter.ProviderAdapterOpenSessionError,
@@ -1634,6 +1642,8 @@ export const layerAppServerClientFactory: Layer.Layer<
     const runtimeFs = yield* FileSystem.FileSystem;
     const runtimePath = yield* Path.Path;
     const requestAnalytics = yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics;
+    const integrationContent = yield* Effect.serviceOption(ExternalContent.ExternalContent);
+    const integrationConfig = yield* Effect.serviceOption(ServerConfig);
 
     return CodexAppServerClientFactory.of({
       open: Effect.fn("CodexAdapterV2.open")(function* (input) {
@@ -1660,6 +1670,61 @@ export const layerAppServerClientFactory: Layer.Layer<
           .filter(Boolean)
           .join(",");
         const childEnvironment = { ...environment, NO_PROXY: noProxy, no_proxy: noProxy };
+        if (input.integrationBoundary) {
+          if (Option.isNone(integrationContent) || Option.isNone(integrationConfig))
+            return yield* new ProviderAdapter.ProviderAdapterOpenSessionError({
+              driver: CODEX_PROVIDER,
+              providerSessionId: input.providerSessionId,
+              cause: new IntegrationCodexRuntime.IntegrationCodexRuntimeError({
+                reason: "unavailable",
+              }),
+            });
+          const logger = makeCodexAppServerProtocolLogger({
+            nativeEventLogger,
+            threadId: input.threadId,
+            providerSessionId: input.providerSessionId,
+          });
+          return yield* IntegrationCodexRuntime.open({
+            caller: {
+              ownerId: `thread:${input.threadId}`,
+              providerSessionId: input.providerSessionId,
+              providerInstanceId: input.instanceId,
+            },
+            nativeTools: input.integrationBoundary.nativeTools,
+            allowedTools: input.integrationBoundary.allowedTools,
+            expiresAt: input.integrationBoundary.expiresAt,
+            environment: childEnvironment,
+            configArgs: [
+              ...makeTritonAiCodexConfigArgs(providerEnvironment, requestAnalytics.headers("chat")),
+              "-c",
+              "model_providers.ucsd.supports_websockets=false",
+              "-c",
+              "features.enable_request_compression=false",
+              ...(input.integrationBoundary.modelCatalogPath
+                ? [
+                    "-c",
+                    `model_catalog_json=${encodeCodexConfigString(input.integrationBoundary.modelCatalogPath)}`,
+                  ]
+                : []),
+            ],
+            ...(logger ? { clientOptions: { logIncoming: true, logOutgoing: true, logger } } : {}),
+          }).pipe(
+            Effect.provideService(ExternalContent.ExternalContent, integrationContent.value),
+            Effect.provideService(ServerConfig, integrationConfig.value),
+            Effect.provideService(FileSystem.FileSystem, runtimeFs),
+            Effect.provideService(Path.Path, runtimePath),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provideService(Scope.Scope, scope),
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterOpenSessionError({
+                  driver: CODEX_PROVIDER,
+                  providerSessionId: input.providerSessionId,
+                  cause,
+                }),
+            ),
+          );
+        }
         const binaryPath = yield* resolveManagedCodexLaunchPath({
           binaryPath: input.settings.binaryPath,
           homeDirectory: yield* HostProcess.HomeDirectory,
@@ -1911,10 +1976,32 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         )
       : Effect.void;
 
-  return ProviderAdapter.ProviderAdapterV2.of({
+  const integrationOnly = adapterOptions.settings.sessionPurpose === "integrations";
+  const capabilities = integrationOnly
+    ? {
+        ...CodexProviderCapabilitiesV2,
+        sessions: {
+          ...CodexProviderCapabilitiesV2.sessions,
+          supportsMultipleProviderThreadsPerSession: false,
+        },
+        threads: {
+          ...CodexProviderCapabilitiesV2.threads,
+          canForkThread: false,
+          canForkFromTurn: false,
+          canForkFromSubagentThread: false,
+        },
+        tools: { ...CodexProviderCapabilitiesV2.tools, supportsMcpTools: false },
+        subagents: {
+          ...CodexProviderCapabilitiesV2.subagents,
+          supportsSubagents: false,
+          canForkSubagentThread: false,
+        },
+      }
+    : CodexProviderCapabilitiesV2;
+  const adapter = ProviderAdapter.ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CODEX_PROVIDER,
-    getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+    getCapabilities: () => Effect.succeed(capabilities),
     planSelectionTransition: (selection) =>
       Effect.succeed(
         selection.current.instanceId === selection.target.instanceId &&
@@ -1944,6 +2031,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           makeCodexFlatToolCatalog({
             threadId,
             instanceId: adapterOptions.instanceId,
+            integrationOnly,
+            includeIntegrations: integrationOnly,
             ...(disclosedToolNames === undefined ? {} : { disclosedToolNames }),
             ...(customModel(model) && previewBroker ? { broker: previewBroker } : {}),
           }).pipe(
@@ -1965,6 +2054,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }),
                 ),
               );
+        const initialCatalog = integrationOnly
+          ? yield* prepareFlatCatalog(input.threadId, input.modelSelection.model)
+          : undefined;
+        const integrationSession = integrationOnly
+          ? yield* mcpSessions.read(input.threadId)
+          : undefined;
+        if (
+          integrationOnly &&
+          (!integrationSession || integrationSession.providerSessionId !== input.providerSessionId)
+        )
+          return yield* toProtocolError(
+            "The integration-only session has no active host tool binding.",
+          );
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
@@ -1972,6 +2074,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
           environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          ...(initialCatalog && integrationSession
+            ? {
+                integrationBoundary: {
+                  nativeTools: initialCatalog.names,
+                  allowedTools: initialCatalog.canonicalNames,
+                  expiresAt:
+                    integrationSession.expiresAt ??
+                    (yield* Clock.currentTimeMillis) + 8 * 60 * 60 * 1000,
+                  ...(adapterOptions.modelCatalogPath
+                    ? { modelCatalogPath: adapterOptions.modelCatalogPath }
+                    : {}),
+                },
+              }
+            : {}),
           appServerArgs: [
             ...(customModel(input.modelSelection.model) ? ["-c", 'web_search="disabled"'] : []),
             ...(adapterOptions.modelCatalogPath
@@ -2057,13 +2173,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }),
         );
         const now = yield* DateTime.now;
-        const session = providerSession({
-          providerSessionId: input.providerSessionId,
-          providerInstanceId: adapterOptions.instanceId,
-          cwd: input.runtimePolicy.cwd,
-          model: input.modelSelection.model,
-          now,
-        });
+        const session = {
+          ...providerSession({
+            providerSessionId: input.providerSessionId,
+            providerInstanceId: adapterOptions.instanceId,
+            cwd: input.runtimePolicy.cwd,
+            model: input.modelSelection.model,
+            now,
+          }),
+          capabilities,
+        };
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         const rateLimitSnapshot = yield* Ref.make<CodexRateLimitSnapshot | undefined>(undefined);
         const limitedTurnItems = yield* Ref.make(
@@ -7150,10 +7269,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 codexInput,
                 runtimePolicy: turnInput.runtimePolicy,
                 modelSelection: turnInput.modelSelection,
-                hasT3Mcp: mcpSession !== undefined,
-                browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
-                deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
-                ...(serverConfig.computerUseState
+                hasT3Mcp: !integrationOnly && mcpSession !== undefined,
+                browserToolsAvailable:
+                  !integrationOnly && (mcpSession?.browserToolsAvailable ?? true),
+                deviceToolsAvailable:
+                  !integrationOnly && (mcpSession?.capabilities?.has("device") ?? false),
+                ...(!integrationOnly && serverConfig.computerUseState
                   ? { computerUseState: serverConfig.computerUseState }
                   : {}),
                 omitServiceTier: adapterOptions.resolveRuntime !== undefined,
@@ -7506,14 +7627,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 threadInput.modelSelection?.model ?? input.modelSelection.model,
               );
               yield* ensureInitialized;
-              const catalog = yield* prepareFlatCatalog(
-                threadInput.threadId,
-                threadInput.modelSelection.model,
-              );
+              if (integrationOnly && threadInput.threadId !== input.threadId)
+                return yield* toProtocolError(
+                  "Integration-only runtimes cannot attach another conversation.",
+                );
+              const catalog =
+                initialCatalog ??
+                (yield* prepareFlatCatalog(threadInput.threadId, threadInput.modelSelection.model));
               const startParams = {
                 ...codexThreadRuntimeParams({
-                  computerUseMcp: serverConfig.computerUseMcp,
-                  mcpSession: yield* mcpSessions.read(threadInput.threadId),
+                  computerUseMcp: integrationOnly ? undefined : serverConfig.computerUseMcp,
+                  mcpSession: integrationOnly
+                    ? undefined
+                    : yield* mcpSessions.read(threadInput.threadId),
                   modelSelection: threadInput.modelSelection,
                   runtimePolicy: threadInput.runtimePolicy,
                 }),
@@ -7565,6 +7691,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* assertModelAllowed(
                 threadInput.modelSelection?.model ?? input.modelSelection.model,
               );
+              if (integrationOnly)
+                return yield* toProtocolError(
+                  "Restore integration-only history through a fresh host-validated context; native cold resume is unavailable.",
+                );
               if (
                 threadInput.modelSelection &&
                 textOnlyModel(threadInput.modelSelection.model) &&
@@ -8708,4 +8838,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         ),
     ),
   });
+  return integrationOnly
+    ? { ...adapter, openExternalContentSession: adapter.openSession }
+    : adapter;
 });

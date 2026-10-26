@@ -123,6 +123,7 @@ export class ExternalContent extends Context.Service<
     ) => Effect.Effect<void, ExternalContentDenied | ExternalContentPersistenceError>;
     readonly assertInference: (
       caller: ExternalContentCaller,
+      requireBoundary?: boolean,
     ) => Effect.Effect<void, ExternalContentDenied | ExternalContentPersistenceError>;
     readonly establish: (
       runtime: ExternalContentRuntimeBoundary,
@@ -201,10 +202,13 @@ const make = Effect.gen(function* () {
       if (row && row.exposure_version > 0)
         return yield* new ExternalContentDenied({ reason: "runtime_unverified" });
     }),
-    assertInference: Effect.fn("ExternalContent.assertInference")(function* (caller) {
+    assertInference: Effect.fn("ExternalContent.assertInference")(function* (
+      caller,
+      requireBoundary = false,
+    ) {
       const row = yield* persistence(readRow(caller.ownerId));
       const boundary = active.get(caller.ownerId);
-      if (!boundary && (!row || row.exposure_version === 0)) return;
+      if (!requireBoundary && !boundary && (!row || row.exposure_version === 0)) return;
       if (!boundary) return yield* new ExternalContentDenied({ reason: "runtime_unverified" });
       yield* Effect.try({
         try: () => assertBoundary(boundary, caller),

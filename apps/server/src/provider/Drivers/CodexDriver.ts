@@ -228,6 +228,11 @@ export const CodexDriver: ProviderDriver<
       ...(isManagedGateway
         ? { continuationKey: `${homeLayout.continuationKey}:tritonai:${instanceId}` }
         : {}),
+      ...(config.sessionPurpose === "integrations"
+        ? {
+            continuationKey: `${homeLayout.continuationKey}:${isManagedGateway ? `tritonai:${instanceId}:` : ""}integrations-v1`,
+          }
+        : {}),
     };
     const stampIdentity = withInstanceIdentity({
       instanceId,

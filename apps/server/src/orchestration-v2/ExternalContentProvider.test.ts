@@ -107,6 +107,41 @@ it.effect("refuses provider opening before any native startup can restore expose
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
+it.effect("a provider startup declaration cannot substitute for an actual host runtime lease", () =>
+  Effect.gen(function* () {
+    const { adapter, calls } = fixture();
+    const protectedAdapter = yield* ExternalContentProvider.protectAdapter({
+      ...adapter,
+      openExternalContentSession: adapter.openSession,
+    });
+    const error = yield* Effect.flip(protectedAdapter.openSession(openInput));
+    expect(error._tag).toBe("ProviderAdapterOpenSessionError");
+    expect(calls).toEqual(["open"]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.effect("a coding replacement cannot borrow a previous process's unused integration lease", () =>
+  Effect.gen(function* () {
+    const content = yield* ExternalContent.ExternalContent;
+    yield* content.establish({
+      caller,
+      scopeId: "previous-native-scope",
+      boundaryDigest: "c".repeat(64),
+      allowedTools: ["fixture.read"],
+      expiresAt: 10_000,
+      isCurrent: () => true,
+    });
+    const { adapter, calls } = fixture();
+    const protectedAdapter = yield* ExternalContentProvider.protectAdapter(adapter);
+    const runtime = yield* protectedAdapter.openSession(openInput);
+    expect(yield* Effect.flip(content.admit(caller, "fixture.read"))).toMatchObject({
+      reason: "runtime_unverified",
+    });
+    yield* runtime.startTurn(turn);
+    expect(calls).toEqual(["open", "start"]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
 it.effect("revocation stops restoration, inference and approvals but preserves interruption", () =>
   Effect.gen(function* () {
     const { adapter, calls } = fixture();

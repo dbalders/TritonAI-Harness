@@ -11,7 +11,12 @@ export const protectAdapter = Effect.fn("ExternalContentProvider.protectAdapter"
   return {
     ...adapter,
     openSession: (input) =>
-      content.assertUnexposed(`thread:${input.threadId}`).pipe(
+      (adapter.openExternalContentSession
+        ? Effect.void
+        : content
+            .revoke(`thread:${input.threadId}`)
+            .pipe(Effect.andThen(content.assertUnexposed(`thread:${input.threadId}`)))
+      ).pipe(
         Effect.mapError(
           (cause) =>
             new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -20,7 +25,30 @@ export const protectAdapter = Effect.fn("ExternalContentProvider.protectAdapter"
               cause,
             }),
         ),
-        Effect.andThen(() => adapter.openSession(input)),
+        Effect.andThen(() => (adapter.openExternalContentSession ?? adapter.openSession)(input)),
+        Effect.tap((runtime) =>
+          adapter.openExternalContentSession
+            ? content
+                .assertInference(
+                  {
+                    ownerId: `thread:${input.threadId}`,
+                    providerSessionId: runtime.providerSessionId,
+                    providerInstanceId: runtime.instanceId,
+                  },
+                  true,
+                )
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProviderAdapter.ProviderAdapterOpenSessionError({
+                        driver: adapter.driver,
+                        providerSessionId: input.providerSessionId,
+                        cause,
+                      }),
+                  ),
+                )
+            : Effect.void,
+        ),
         Effect.map((runtime): ProviderAdapter.ProviderAdapterV2SessionRuntime => {
           const owners = new Set([`thread:${input.threadId}`]);
           const caller = (ownerId: string) => ({

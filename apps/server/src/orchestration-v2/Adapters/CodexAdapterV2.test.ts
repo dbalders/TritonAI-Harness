@@ -3,6 +3,9 @@ import * as Clock from "effect/Clock";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as TritonAiRequestAnalytics from "../../telemetry/TritonAiRequestAnalytics.ts";
 import * as IntegrationRegistry from "../../integrations/IntegrationRegistry.ts";
+import * as ExternalContent from "../../integrations/ExternalContent.ts";
+import { makeExternalContentRegistry } from "../../integrations/externalContentRegistryAdapter.ts";
+import * as Sqlite from "../../persistence/Sqlite.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 import type { PreviewAutomationInvokeInput } from "../../mcp/PreviewAutomationBroker.ts";
@@ -2517,46 +2520,53 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           pluginJournalGate.entered = journalEntered.resolve;
           pluginJournalGate.wait = releaseJournal.promise;
         }
+        const externalContent = yield* makeExternalContentRegistry();
         let invocations = 0;
         const registry = yield* Effect.acquireRelease(
           Effect.sync(
             () =>
-              new IntegrationRegistry.RegistryRuntime(root, [
-                {
-                  manifest,
-                  bundledFiles: { ".tritonai-plugin/plugin.json": JSON.stringify(manifest) },
-                  provider: {
-                    id: "v2-dispatch-fixture",
-                    tools: [
-                      {
-                        name: toolName,
-                        description: "Write fixture.",
-                        input: EmptyIntegrationToolInput,
-                        readOnly: false,
-                        openWorld: false,
+              new IntegrationRegistry.RegistryRuntime(
+                root,
+                [
+                  {
+                    manifest,
+                    bundledFiles: { ".tritonai-plugin/plugin.json": JSON.stringify(manifest) },
+                    provider: {
+                      id: "v2-dispatch-fixture",
+                      tools: [
+                        {
+                          name: toolName,
+                          description: "Write fixture.",
+                          input: EmptyIntegrationToolInput,
+                          readOnly: false,
+                          openWorld: false,
+                        },
+                      ],
+                      status: async () => ({
+                        state: "connected",
+                        accountLabel: "Fixture",
+                        grantedCapabilities: ["records.write"],
+                        message: null,
+                      }),
+                      connect: async () => ({
+                        kind: "connected",
+                        flowId: "fixture",
+                        message: "Connected.",
+                      }),
+                      disconnect: async () => undefined,
+                      invoke: async (_name, _args, context) => {
+                        assert.isTrue(context?.writeApproved);
+                        await context?.beginCommit?.();
+                        invocations++;
+                        return { changed: true };
                       },
-                    ],
-                    status: async () => ({
-                      state: "connected",
-                      accountLabel: "Fixture",
-                      grantedCapabilities: ["records.write"],
-                      message: null,
-                    }),
-                    connect: async () => ({
-                      kind: "connected",
-                      flowId: "fixture",
-                      message: "Connected.",
-                    }),
-                    disconnect: async () => undefined,
-                    invoke: async (_name, _args, context) => {
-                      assert.isTrue(context?.writeApproved);
-                      await context?.beginCommit?.();
-                      invocations++;
-                      return { changed: true };
                     },
                   },
-                },
-              ]),
+                ],
+                undefined,
+                undefined,
+                { externalContent },
+              ),
           ),
           (value) => Effect.promise(() => value.close()),
         );
@@ -2591,6 +2601,19 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
         };
         yield* sessions.set(credential);
+        // Protocol replay only: the separate native launcher canary proves actual enforcement.
+        yield* (yield* ExternalContent.ExternalContent).establish({
+          caller: {
+            ownerId: `thread:${threadId}`,
+            providerSessionId: credential.providerSessionId,
+            providerInstanceId: credential.providerInstanceId,
+          },
+          scopeId: `replay-${name}`,
+          boundaryDigest: "e".repeat(64),
+          allowedTools: [toolName],
+          expiresAt: credential.expiresAt,
+          isCurrent: () => true,
+        });
         const preamble = codexReplayPreamble({
           nativeThreadId,
           nativeTurnId,
@@ -2604,24 +2627,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 id: 2,
                 method: "thread/start",
                 params: {
+                  cwd: "/workspace",
+                  model: "gpt-5.4",
                   config: CodexAdapterV2.CODEX_THREAD_CONFIG,
-                  dynamicTools: [
-                    tritonAiCommonsDynamicToolDefinition,
-                    ...(scenario === "undisclosed"
-                      ? []
-                      : [
+                  ...(scenario === "undisclosed"
+                    ? {}
+                    : {
+                        dynamicTools: [
                           {
                             name: dynamicName,
                             description:
                               "Write fixture. Integration plugin tool: fixture.records.write.",
                             inputSchema: { type: "object", additionalProperties: false },
                           },
-                        ]),
-                  ].map(({ name, description, inputSchema }) => ({
-                    name,
-                    description,
-                    inputSchema,
-                  })),
+                        ],
+                      }),
                 },
               },
             };
@@ -2919,7 +2939,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                         Object.assign(expected.frame, { params });
                     }),
           undefined,
-          {},
+          { settings: { ...DEFAULT_CODEX_SETTINGS, sessionPurpose: "integrations" } },
           (result) =>
             Effect.sync(() => {
               toolResult = result;
@@ -3093,7 +3113,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }),
     ).pipe(
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          ExternalContent.layer.pipe(
+            Layer.provide(Layer.mergeAll(Sqlite.layerMemory, NodeServices.layer)),
+          ),
+        ),
       ),
     ),
   );

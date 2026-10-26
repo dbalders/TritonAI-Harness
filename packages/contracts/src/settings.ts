@@ -675,6 +675,21 @@ const CustomModelMetadataMap = Schema.Record(TrimmedNonEmptyString, CustomModelM
 
 export const CodexSettings = makeProviderSettingsSchema(
   {
+    sessionPurpose: Schema.optionalKey(Schema.Literals(["coding", "integrations"])).pipe(
+      Schema.annotateKey({
+        title: "Agent purpose",
+        description:
+          "Coding uses workspace tools. Integrations requires the environment's reviewed integration-only runtime and presents each external write for approval.",
+        providerSettingsForm: {
+          control: "select",
+          options: [
+            { value: "coding", label: "Coding" },
+            { value: "integrations", label: "Integrations" },
+          ],
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
     setupMode: Schema.optionalKey(Schema.Literals(["managed", "existing"])).pipe(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
@@ -685,7 +700,8 @@ export const CodexSettings = makeProviderSettingsSchema(
     binaryPath: makeBinaryPathSetting("codex").pipe(
       Schema.annotateKey({
         title: "Binary path",
-        description: "Path to the Codex binary used by this instance.",
+        description:
+          "Coding executable. Integration-only sessions use the environment's pinned runtime.",
         providerSettingsForm: { placeholder: "codex", clearWhenEmpty: "omit" },
       }),
     ),
@@ -719,7 +735,8 @@ export const CodexSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
         title: "Launch arguments",
-        description: "Additional CLI arguments passed to codex app-server on session start.",
+        description:
+          "Additional CLI arguments for coding sessions. Integration-only sessions use fixed launch settings.",
       }),
     ),
     customModels: Schema.Array(CustomModelSetting).pipe(
@@ -732,7 +749,7 @@ export const CodexSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs"],
+    order: ["sessionPurpose", "binaryPath", "homePath", "shadowHomePath", "launchArgs"],
   },
 );
 export type CodexSettings = typeof CodexSettings.Type;

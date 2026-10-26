@@ -35,6 +35,8 @@ class CodexFlatToolSetupError extends Schema.TaggedError<CodexFlatToolSetupError
 export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(function* (input: {
   readonly threadId: ThreadId;
   readonly instanceId: ProviderInstanceId;
+  readonly integrationOnly?: boolean;
+  readonly includeIntegrations?: boolean;
   readonly disclosedToolNames?: ReadonlyArray<string>;
   readonly broker?: PreviewAutomationBroker.PreviewAutomationBroker["Service"];
 }) {
@@ -47,7 +49,7 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
   const registry = Integrations.getIntegrationRegistryOptional();
   const integrationAccess = session?.capabilities?.has("integrations.invoke") === true;
   const pluginRuntime =
-    registry && integrationAccess
+    registry && integrationAccess && input.includeIntegrations !== false && !input.integrationOnly
       ? yield* Effect.acquireRelease(
           Effect.tryPromise({
             try: () => registry.prepareSkillRuntime(),
@@ -63,7 +65,7 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
         )
       : null;
   const bindings =
-    registry && integrationAccess
+    registry && integrationAccess && input.includeIntegrations !== false
       ? registry.toolDefinitions().flatMap((definition) => {
           const dynamicName = Integrations.codexDynamicIntegrationToolName(definition.name);
           if (
@@ -85,12 +87,12 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
         })
       : [];
   const preview =
-    session?.browserToolsAvailable && input.broker
+    !input.integrationOnly && session?.browserToolsAvailable && input.broker
       ? yield* getCodexPreviewDynamicToolDefinitions
       : [];
   const definitions = [
     ...preview,
-    ...(integrationAccess ? [tritonAiCommonsDynamicToolDefinition] : []),
+    ...(integrationAccess && !input.integrationOnly ? [tritonAiCommonsDynamicToolDefinition] : []),
     ...bindings,
   ];
   if (new Set(definitions.map((definition) => definition.name)).size !== definitions.length) {
@@ -225,6 +227,9 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
     activeSession,
     fingerprint: computeDynamicToolFingerprint(disclosed),
     names: disclosed.map((definition) => definition.name),
+    canonicalNames: bindings
+      .filter((binding) => disclosed.some((tool) => tool.name === binding.name))
+      .map((binding) => binding.canonicalName),
     skills: pluginRuntime?.skills ?? [],
     registry,
   };

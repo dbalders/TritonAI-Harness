@@ -94,6 +94,12 @@ export class ServerConfig extends Context.Service<
     readonly resourceMonitorPath?: string | undefined;
     readonly computerUseMcp?: DesktopMcpServerConfiguration | undefined;
     readonly computerUseState?: DesktopComputerUseState | undefined;
+    /** Host composition pin. Never read from provider settings, model output or an artifact's self-report. */
+    readonly integrationCodexRuntime?: {
+      readonly binaryPath: string;
+      readonly sha256: string;
+      readonly contractSha256: string;
+    };
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
