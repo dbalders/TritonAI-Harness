@@ -51,6 +51,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { listEnabledIntegrations } from "../integrations/IntegrationRegistry.ts";
+import { ExternalContent } from "../integrations/ExternalContent.ts";
 import { localDayAt } from "../memory/memoryDays.ts";
 import { findMemoryDevice, generalVaultPaths } from "../memory/memoryVault.ts";
 import * as PublicSkillRepository from "../provider/publicSkillRepository.ts";
@@ -159,6 +160,7 @@ interface IdeaRow {
   readonly ideaKey: string;
   readonly section: string;
   readonly contentJson: string;
+  readonly provenanceRecorded: number;
   readonly status: IdeaStatus;
   readonly previousStatus: IdeaStatus | null;
   readonly createdAt: string;
@@ -258,6 +260,7 @@ const ideaColumns = (sql: SqlClient.SqlClient) => sql`
   idea_key AS "ideaKey",
   section,
   content_json AS "contentJson",
+  provenance_recorded AS "provenanceRecorded",
   status,
   previous_status AS "previousStatus",
   created_at AS "createdAt",
@@ -277,6 +280,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* ServerSettingsService;
   const textGeneration = yield* TextGeneration;
+  const externalContent = yield* ExternalContent;
   const environment = yield* ServerEnvironment;
   const skills = yield* Effect.serviceOption(PublicSkillRepository.PublicSkillRepository);
   const analytics = yield* Effect.serviceOption(AnalyticsService);
@@ -446,8 +450,10 @@ export const make = Effect.gen(function* () {
   const insertIdeas = Effect.fn("ideas.insertIdeas")(function* (
     ideas: ReadonlyArray<CandidateIdea>,
     nowIso: string,
+    context?: IdeasContext,
   ) {
     for (const idea of ideas) {
+      const ideaId = NodeCrypto.randomUUID();
       const content = encodeContent({
         icon: idea.icon,
         title: idea.title,
@@ -455,9 +461,21 @@ export const make = Effect.gen(function* () {
         sources: idea.sources,
         action: idea.action,
       });
+      if (context) {
+        // The model saw the whole batch context; its own source selection cannot narrow lineage.
+        for (const thread of context.threads)
+          yield* externalContent.inherit(`thread:${thread.id}`, `idea:${ideaId}`);
+        if (context.notes.length > 0 || context.files.length > 0)
+          yield* externalContent.markUnverified(`idea:${ideaId}`, {
+            kind: "derived",
+            artifactKind: "idea",
+            artifactId: ideaId,
+            contentDigest: NodeCrypto.createHash("sha256").update(content).digest("hex"),
+          });
+      }
       yield* sql`
-        INSERT INTO ideas (idea_id, idea_key, section, content_json, status, created_at, updated_at)
-        VALUES (${NodeCrypto.randomUUID()}, ${idea.key}, ${idea.section}, ${content}, 'active', ${nowIso}, ${nowIso})
+        INSERT INTO ideas (idea_id, idea_key, section, content_json, status, created_at, updated_at, provenance_recorded)
+        VALUES (${ideaId}, ${idea.key}, ${idea.section}, ${content}, 'active', ${nowIso}, ${nowIso}, 1)
       `;
     }
   });
@@ -1044,7 +1062,8 @@ export const make = Effect.gen(function* () {
     const added = [...picked, ...fill];
     // Stamped after the model call, so a visit during the run doesn't hide them from the badge.
     const addedAt = toIso(yield* Clock.currentTimeMillis);
-    yield* insertIdeas(added, addedAt);
+    yield* insertIdeas(picked, addedAt, context);
+    yield* insertIdeas(fill, addedAt);
     yield* trim(addedAt);
     yield* writeState("last_generated_at", addedAt);
     yield* writeState("activity_fingerprint", yield* activityFingerprint);
@@ -1181,6 +1200,22 @@ export const make = Effect.gen(function* () {
     const visible = row.status === "active" || row.status === "opened";
     switch (input.kind) {
       case "opened": {
+        const openedContent = decodeContent(row.contentJson);
+        if (Option.isNone(openedContent))
+          return yield* new IdeasError({ message: "That idea is no longer available." });
+        if (row.provenanceRecorded !== 1 && !row.ideaKey.startsWith("starter:"))
+          yield* externalContent.markUnverified(`idea:${row.ideaId}`, {
+            kind: "derived",
+            artifactKind: "idea",
+            artifactId: row.ideaId,
+            contentDigest: NodeCrypto.createHash("sha256").update(row.contentJson).digest("hex"),
+          });
+        const targetThreadId =
+          openedContent.value.action.kind === "resume-thread"
+            ? openedContent.value.action.threadId
+            : input.draftThreadId;
+        if (targetThreadId !== undefined)
+          yield* externalContent.inherit(`idea:${row.ideaId}`, `thread:${targetThreadId}`);
         if (!visible) return true;
         // Opening again must not erase the evidence that the first draft was sent.
         if (row.openedAt !== null) {

@@ -19,10 +19,20 @@ export const ExternalToolSource = Schema.Struct({
 });
 export type ExternalToolSource = typeof ExternalToolSource.Type;
 
+export const ExternalDerivedSource = Schema.Struct({
+  kind: Schema.Literal("derived"),
+  artifactKind: Schema.Literals(["idea", "memory", "project-overview", "legacy-history"]),
+  artifactId: Identity,
+  contentDigest: Schema.optional(Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))),
+});
+export type ExternalDerivedSource = typeof ExternalDerivedSource.Type;
+
+export const ExternalContentSource = Schema.Union([ExternalToolSource, ExternalDerivedSource]);
+
 export const ExternalContentReview = Schema.Struct({
   scope: ExternalContentScope,
   /** Host identifiers only. Source text never becomes an approval instruction. */
-  sources: Schema.Array(ExternalToolSource).check(Schema.isMaxLength(8)),
+  sources: Schema.Array(ExternalContentSource).check(Schema.isMaxLength(8)),
 });
 export type ExternalContentReview = typeof ExternalContentReview.Type;
 

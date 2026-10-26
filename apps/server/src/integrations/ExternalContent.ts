@@ -1,5 +1,7 @@
 import {
-  ExternalToolSource,
+  ExternalContentSource,
+  type ExternalDerivedSource,
+  type ExternalToolSource,
   type ExternalContentReview,
   type ExternalToolResult,
 } from "@t3tools/contracts";
@@ -129,6 +131,10 @@ export class ExternalContent extends Context.Service<
       sourceOwnerId: string,
       targetOwnerId: string,
     ) => Effect.Effect<void, ExternalContentDenied | ExternalContentPersistenceError>;
+    readonly markUnverified: (
+      ownerId: string,
+      source: ExternalDerivedSource,
+    ) => Effect.Effect<void, ExternalContentDenied | ExternalContentPersistenceError>;
     readonly toolCeiling: (
       ownerId: string,
     ) => Effect.Effect<
@@ -180,7 +186,7 @@ const sameCaller = (left: ExternalContentCaller, right: ExternalContentCaller) =
   left.providerInstanceId === right.providerInstanceId;
 
 const isDenied = Schema.is(ExternalContentDenied);
-const sourceCodec = Schema.fromJsonString(ExternalToolSource);
+const sourceCodec = Schema.fromJsonString(ExternalContentSource);
 const toolsCodec = Schema.fromJsonString(Schema.Array(Schema.String));
 const decodeSource = Schema.decodeUnknownEffect(sourceCodec);
 const encodeSource = Schema.encodeEffect(sourceCodec);
@@ -224,6 +230,40 @@ const make = Effect.gen(function* () {
       return row && row.exposure_version > 0
         ? yield* persistence(decodeTools(row.allowed_tools_json))
         : undefined;
+    }),
+    markUnverified: Effect.fn("ExternalContent.markUnverified")(function* (ownerId, source) {
+      if (!identity(ownerId))
+        return yield* new ExternalContentDenied({ reason: "invalid_boundary" });
+      const encoded = yield* persistence(encodeSource(source));
+      active.delete(ownerId);
+      replacements.delete(ownerId);
+      yield* persistence(
+        sql.withTransaction(
+          Effect.gen(function* () {
+            const prior = yield* readRow(ownerId);
+            const existing = yield* sql`SELECT 1 FROM external_content_exposures
+              WHERE owner_id = ${ownerId} AND source_json = ${encoded} LIMIT 1`;
+            if (existing.length > 0 && prior?.allowed_tools_json === "[]") return;
+            const scopeId = yield* crypto.randomUUIDv4();
+            const invocationId = yield* crypto.randomUUIDv4();
+            const version = (prior?.exposure_version ?? 0) + 1;
+            yield* sql`INSERT INTO external_content_scopes
+              (owner_id, scope_id, scope_version, exposure_version, provider_session_id,
+                provider_instance_id, boundary_digest, allowed_tools_json)
+              VALUES (${ownerId}, ${scopeId}, ${(prior?.scope_version ?? 0) + 1}, ${version},
+                'unverified', 'unverified', ${"0".repeat(64)}, '[]')
+              ON CONFLICT(owner_id) DO UPDATE SET scope_id = excluded.scope_id,
+                scope_version = excluded.scope_version, exposure_version = excluded.exposure_version,
+                provider_session_id = excluded.provider_session_id,
+                provider_instance_id = excluded.provider_instance_id,
+                boundary_digest = excluded.boundary_digest, allowed_tools_json = '[]'`;
+            yield* sql`INSERT INTO external_content_exposures
+              (invocation_id, owner_id, scope_id, exposure_version, source_json, received_at, origin_invocation_id)
+              VALUES (${invocationId}, ${ownerId}, ${scopeId}, ${version}, ${encoded},
+                ${clock.currentTimeMillisUnsafe()}, ${invocationId})`;
+          }),
+        ),
+      );
     }),
     inherit: Effect.fn("ExternalContent.inherit")(function* (sourceOwnerId, targetOwnerId) {
       if (!identity(sourceOwnerId) || !identity(targetOwnerId))
@@ -489,6 +529,8 @@ const make = Effect.gen(function* () {
       });
       const encodedSource = yield* persistence(encodeSource(source));
       const sourceSnapshot = yield* persistence(decodeSource(encodedSource));
+      if (!("integrationId" in sourceSnapshot))
+        return yield* new ExternalContentDenied({ reason: "invalid_boundary" });
       const exposureVersion = yield* persistence(
         sql.withTransaction(
           Effect.gen(function* () {

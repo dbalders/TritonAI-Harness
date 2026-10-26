@@ -52,6 +52,33 @@ const test = <E>(
   >,
 ) => body.pipe(Effect.provide(layer), Effect.scoped);
 
+it.effect("keeps unverified derived content data-only through restart and inheritance", () =>
+  test(
+    Effect.gen(function* () {
+      const service = yield* ExternalContent.ExternalContent;
+      const derived = {
+        kind: "derived",
+        artifactKind: "memory",
+        artifactId: "synthetic-day",
+        contentDigest: "b".repeat(64),
+      } as const;
+      yield* service.markUnverified("memory:fixture", derived);
+      yield* service.markUnverified("memory:fixture", derived);
+      const restarted = yield* freshService;
+      yield* restarted.inherit("memory:fixture", caller.ownerId);
+      expect(yield* restarted.toolCeiling(caller.ownerId)).toEqual([]);
+      expect(yield* Effect.flip(restarted.assertUnexposed(caller.ownerId))).toMatchObject({
+        reason: "runtime_unverified",
+      });
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql<{
+        source_json: string;
+      }>`SELECT source_json FROM external_content_exposures WHERE owner_id = ${caller.ownerId}`;
+      expect(rows.map((row) => JSON.parse(row.source_json))).toEqual([derived]);
+    }),
+  ),
+);
+
 it.effect("refuses external content when no runtime boundary has actually been installed", () =>
   test(
     Effect.gen(function* () {

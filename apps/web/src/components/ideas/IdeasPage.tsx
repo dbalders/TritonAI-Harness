@@ -164,23 +164,13 @@ export function IdeasPage() {
 
   const handleOpen = async (idea: Idea) => {
     setActionError(null);
-    // An existing thread's message identities are the baseline for noticing the send, so the
-    // open is recorded before its composer can send anything.
-    if (idea.action.kind === "resume-thread") {
-      if (!(await runFeedback(idea, "opened"))) return;
-      await openDraft(idea);
-      return;
-    }
-    const opened = await openDraft(idea);
-    if (!opened) {
-      setActionError("Add a project first, then open this idea.");
-      return;
-    }
-    void runFeedback(
-      idea,
-      "opened",
-      opened.draftThreadId === null ? {} : { draftThreadId: opened.draftThreadId },
+    const opened = await openDraft(idea, (draftThreadId) =>
+      runFeedback(idea, "opened", draftThreadId === null ? {} : { draftThreadId }),
     );
+    if (!opened) {
+      setActionError((current) => current ?? "Add a project first, then open this idea.");
+      return;
+    }
   };
 
   const handleSuggestMore = async () => {
