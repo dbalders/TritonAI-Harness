@@ -5722,7 +5722,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   `Connection: ${review.connection}`,
                   `Submitted SHA-256: ${review.submittedDigest}`,
                   `Effective SHA-256: ${review.effectiveDigest}`,
-                  "Approve only this effective JSON payload. Credential fields are redacted; remaining text is complete.",
+                  "Approve only this complete effective JSON payload. No fields are hidden.",
                   review.payload,
                 ].join("\n"),
               },

@@ -66,7 +66,7 @@ function setup(initial: Omit<ServerCommonsApprovalState, "reviewId">) {
 describe("Commons sharing review", () => {
   it("waits for the live subscription and cancels an early close before a submission id exists", async () => {
     using fixture = setup({ submissionId: "old", review: null });
-    fixture.registry.set(state.approval!, AsyncResult.waiting(AsyncResult.success(null)));
+    fixture.registry.set(state.approval!, AsyncResult.initial(false));
     const onReady = vi.fn();
     const onUnavailable = vi.fn();
     await using screen = await render(
@@ -80,7 +80,9 @@ describe("Commons sharing review", () => {
       </RegistryContext>,
     );
     expect(onReady).not.toHaveBeenCalled();
-    await fixture.set(null);
+    await act(() =>
+      fixture.registry.set(state.approval!, AsyncResult.waiting(AsyncResult.success(null))),
+    );
     expect(onReady).toHaveBeenCalledTimes(1);
     await userEvent.click(page.getByRole("button", { name: "Cancel sharing" }));
     expect(onUnavailable).toHaveBeenCalledTimes(1);

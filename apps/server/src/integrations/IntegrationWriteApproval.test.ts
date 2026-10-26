@@ -59,6 +59,7 @@ async function fixture(
     readonly account?: () => Promise<string>;
     readonly beforeCommit?: () => Promise<void>;
     readonly afterCommit?: () => Promise<void>;
+    readonly prepare?: () => Promise<void>;
     readonly input?: IntegrationProviderTool["input"];
   } = {},
 ) {
@@ -111,6 +112,7 @@ async function fixture(
     }),
     connect: async () => ({ kind: "connected", flowId: "synthetic", message: "Connected" }),
     disconnect: async () => {},
+    ...(options.prepare ? { prepare: options.prepare } : {}),
     invoke: async (_name, input, context) => {
       await options.beforeCommit?.();
       await context!.beginCommit!();
@@ -135,6 +137,26 @@ async function fixture(
     },
   };
 }
+
+it("refuses raw credential input before requesting authority or admitting a write", async () => {
+  await using state = await fixture({
+    input: Schema.Struct({ nested: Schema.Array(Schema.Struct({ apiKey: Schema.String })) }),
+  });
+  const reviews: IntegrationWriteReview[] = [];
+  using _presenter = installIntegrationWriteGate(owner.providerInstanceId, (review) => {
+    reviews.push(review);
+    return Effect.succeed({ approved: true as const, isCurrent: () => true });
+  });
+  await expect(
+    state.registry.invokeTool(
+      "approval.fixture.write",
+      { nested: [{ apiKey: "synthetic-only" }] },
+      state.context,
+    ),
+  ).rejects.toThrow(/credential/iu);
+  expect(reviews).toEqual([]);
+  expect(state.writes).toEqual([]);
+});
 
 it("cannot use a caller boolean or a missing presenter as write authority", async () => {
   await using state = await fixture();
@@ -392,6 +414,38 @@ effectIt.effect("refuses a review born during a credential mutation, including c
     expect(state.writes).toHaveLength(1);
   }).pipe(Effect.scoped),
 );
+
+it("captures fresh credential authority after provider preparation and before review", async () => {
+  let principal = "synthetic-account-A";
+  let refresh = false;
+  const integrationId = "approval-binding-fixture";
+  await using state = await fixture({
+    account: async () => principal,
+    prepare: async () => {
+      if (!refresh) return;
+      const settle = beginIntegrationCredentialMutation(integrationId);
+      principal = "synthetic-account-B";
+      settle();
+      refresh = false;
+    },
+  });
+  const reviews: IntegrationWriteReview[] = [];
+  using _presenter = installIntegrationWriteGate(owner.providerInstanceId, (review) => {
+    reviews.push(review);
+    return Effect.succeed({ approved: true as const, isCurrent: () => true });
+  });
+  const previousGeneration = integrationCredentialGeneration(integrationId);
+  refresh = true;
+  await state.registry.invokeTool(
+    "approval.fixture.write",
+    { destination: "synthetic", body: "fresh" },
+    state.context,
+  );
+  expect(integrationCredentialGeneration(integrationId)).toBeGreaterThan(previousGeneration);
+  expect(reviews).toHaveLength(1);
+  expect(reviews[0]!.accountLabel).toBe("synthetic-account-B");
+  expect(state.writes).toHaveLength(1);
+});
 
 it("does not combine an old account status with a newer credential revision", async () => {
   const started = Promise.withResolvers<void>();

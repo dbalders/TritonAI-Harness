@@ -18,7 +18,21 @@ const MAX_REVIEW_PAYLOAD_BYTES = 512 * 1024;
 const MAX_REVIEW_WIRE_BYTES = 1024 * 1024;
 const MAX_INPUT_DEPTH = 64;
 const MAX_INPUT_NODES = 100_000;
-const SECRET_FIELD = /secret|password|passphrase|token|api[-_]?key|credential|authorization/iu;
+const RAW_CREDENTIAL_FIELDS = new Set([
+  "secret",
+  "password",
+  "passphrase",
+  "token",
+  "apitoken",
+  "apikey",
+  "clientsecret",
+  "accesstoken",
+  "refreshtoken",
+  "sessiontoken",
+  "authorization",
+  "privatekey",
+  "signingkey",
+]);
 
 /** Reject unsupported values rather than silently approving JSON's lossy conversion. */
 export function snapshotIntegrationInput(input: unknown) {
@@ -105,20 +119,25 @@ export function snapshotIntegrationInput(input: unknown) {
 }
 
 export function reviewIntegrationInput(input: Json): string {
-  const redact = (value: Json): Json => {
-    if (value === null || typeof value !== "object") return value;
-    if (Array.isArray(value)) return value.map(redact);
-    return Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [
-        key,
-        SECRET_FIELD.test(key) ? "[redacted credential field]" : redact(child),
-      ]),
-    );
+  // Name-based masking can hide whole files or destinations. Never approve hidden input.
+  const checkCredentials = (value: Json): void => {
+    if (value === null || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const child of value) checkCredentials(child);
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (RAW_CREDENTIAL_FIELDS.has(key.replace(/[-_\s]/gu, "").toLowerCase()))
+        throw new Error(
+          "This plugin write contains a raw credential field. Configure credentials in the connection before requesting approval.",
+        );
+      checkCredentials(child);
+    }
   };
-  const redacted = redact(input);
-  const pretty = JSON.stringify(redacted, null, 2);
+  checkCredentials(input);
+  const pretty = JSON.stringify(input, null, 2);
   if (Buffer.byteLength(JSON.stringify(pretty)) <= MAX_REVIEW_PAYLOAD_BYTES) return pretty;
-  const compact = JSON.stringify(redacted);
+  const compact = JSON.stringify(input);
   if (Buffer.byteLength(JSON.stringify(compact)) <= MAX_REVIEW_PAYLOAD_BYTES) return compact;
   throw new Error(
     "This plugin write is too large for complete review. Split it into smaller changes.",

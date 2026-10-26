@@ -51,7 +51,9 @@ are cancelled when that caller ends. A live root or sibling cannot keep a cancel
 authority alive. MCP plugin access remains read-only.
 
 The registry detaches JSON before awaiting readiness, decodes that snapshot, and presents the
-complete effective payload with recursively redacted credential fields. A `summary` is an ordinary
+complete effective payload without hiding fields based on their names. Explicit raw credential
+fields such as `apiKey`, `password` and `accessToken` are refused before review; configure those
+through the connection instead. File contents and credential references remain visible. A `summary` is an ordinary
 argument and cannot replace the remaining payload. Settings sharing uses its initiating authenticated
 connection to present each write; the initial public-sharing confirmation only starts that flow.
 Encoded JSON larger than 4 MiB, excessive nesting,

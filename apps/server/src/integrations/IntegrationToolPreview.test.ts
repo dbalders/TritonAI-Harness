@@ -6,6 +6,37 @@ import { makeLiveStreamBudget } from "../orchestration-v2/LiveStreamBudget.ts";
 import { snapshotIntegrationInput } from "./IntegrationWriteApproval.ts";
 
 describe("plugin payload review", () => {
+  it("keeps credential references, file maps and credential-like text complete", () => {
+    const input = {
+      files: {
+        "tokenizer.py": "print('first')\n# dangerous tail",
+        "token.ts": "export const value = 'complete';",
+        "credentials.json": '{"reference":"existing-connection"}',
+      },
+      credentials: { jiraApi: { id: "connection-id", name: "Reviewed account" } },
+      secretNotes: ["review this text", { authorization_notes: "also visible" }],
+      maxTokens: 200,
+    };
+    const prompt = describeToolCallForApproval("fixture.write", input);
+    expect(JSON.parse(prompt.slice(prompt.indexOf("\n") + 1))).toEqual(input);
+  });
+
+  it("refuses raw credential fields instead of approving hidden values", () => {
+    for (const key of ["apiKey", "api_token", "password", "clientSecret", "authorization"]) {
+      expect(() =>
+        describeToolCallForApproval("fixture.write", { nested: [{ [key]: "synthetic-only" }] }),
+      ).toThrow(/credential/iu);
+    }
+  });
+
+  it("does not bypass complete-review size limits with credential-like field names", () => {
+    expect(() =>
+      describeToolCallForApproval("fixture.write", {
+        files: { "token.ts": "x".repeat(600_000) },
+      }),
+    ).toThrow(/too large/iu);
+  });
+
   it("retains long code, nested files and the tail even when a summary is supplied", () => {
     const code = `${"first line\n".repeat(400)}dangerous tail`;
     const detail = describeToolCallForApproval("n8n.update", {
@@ -19,11 +50,9 @@ describe("plugin payload review", () => {
     expect(payload.field11).toBe(11);
   });
 
-  it("recursively redacts credential fields without redacting the bytes used for binding", () => {
+  it("rejects credentials before presentation without changing the bytes used for binding", () => {
     const input = { destination: "test", nested: [{ apiKey: "synthetic-one", code: "complete" }] };
-    const displayed = describeToolCallForApproval("tool", input);
-    expect(displayed).not.toContain("synthetic-one");
-    expect(displayed).toContain("complete");
+    expect(() => describeToolCallForApproval("tool", input)).toThrow(/credential/iu);
     expect(snapshotIntegrationInput(input).digest).not.toBe(
       snapshotIntegrationInput({
         ...input,

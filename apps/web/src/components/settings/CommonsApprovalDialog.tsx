@@ -40,8 +40,8 @@ export function CommonsApprovalDialog(props: {
   const notifyUnavailable = useEffectEvent((cause: Error) => props.onUnavailable?.(cause));
   useEffect(() => {
     if (approval.error) notifyUnavailable(new Error(approval.error));
-    else if (approval.isSuccess && !approval.isPending) notifyReady();
-  }, [approval.error, approval.isSuccess, approval.isPending]);
+    else if (approval.isSuccess) notifyReady();
+  }, [approval.error, approval.isSuccess]);
 
   const send = async (input: ServerRespondCommonsApprovalInput) => {
     setRespondingTo(input.action.type === "respond" ? input.action.requestId : input.submissionId);
