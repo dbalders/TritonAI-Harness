@@ -66,6 +66,14 @@ export const ProjectOverviewRestoreInput = Schema.Struct({
   stepId: Schema.optionalKey(boundedText(100)),
 });
 export type ProjectOverviewRestoreInput = typeof ProjectOverviewRestoreInput.Type;
+export const ProjectOverviewOpenInput = Schema.Struct({
+  projectId: ProjectId,
+  stepId: boundedText(100),
+  sourceDigest: boundedText(100),
+  draftThreadId: ThreadId,
+});
+export type ProjectOverviewOpenInput = typeof ProjectOverviewOpenInput.Type;
+
 export class ProjectOverviewError extends Schema.TaggedError<ProjectOverviewError>()(
   "ProjectOverviewError",
   { message: Schema.String },

@@ -8,6 +8,7 @@ import {
   type ProjectOverviewEnsureInput,
   type ProjectOverviewGetInput,
   type ProjectOverviewRestoreInput,
+  type ProjectOverviewOpenInput,
   type ProjectOverviewSnapshot,
   type ProjectOverviewSource,
   type ProjectId,
@@ -26,6 +27,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import { listEnabledIntegrations } from "../integrations/IntegrationRegistry.ts";
+import * as ExternalContent from "../integrations/ExternalContent.ts";
 import * as DailyMemory from "../memory/DailyMemory.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -102,6 +104,9 @@ export class ProjectOverview extends Context.Service<
     readonly restore: (
       input: ProjectOverviewRestoreInput,
     ) => Effect.Effect<ProjectOverviewSnapshot, ProjectOverviewError>;
+    readonly open: (
+      input: ProjectOverviewOpenInput,
+    ) => Effect.Effect<boolean, ProjectOverviewError>;
     readonly awaitIdle: (projectId: ProjectId) => Effect.Effect<void>;
   }
 >()("t3/project/ProjectOverview") {}
@@ -109,6 +114,7 @@ export class ProjectOverview extends Context.Service<
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const memory = yield* DailyMemory.DailyMemory;
+  const externalContent = yield* ExternalContent.ExternalContent;
   const settings = yield* ServerSettings.ServerSettingsService;
   const generation = yield* TextGeneration.TextGeneration;
   const config = yield* ServerConfig.ServerConfig;
@@ -322,6 +328,22 @@ export const make = Effect.gen(function* () {
           const plugins = formatPluginSource(yield* listEnabledIntegrations);
           const sources = plugins ? [...context.sources, plugins] : context.sources;
           const dismissed = yield* dismissals(input.projectId);
+          const provenanceOwner = `project-overview:${input.projectId}:${context.digest}`;
+          for (const source of context.sources) {
+            if (source.threadId !== null)
+              yield* externalContent
+                .inherit(`thread:${source.threadId}`, provenanceOwner)
+                .pipe(Effect.mapError(unavailable));
+            else
+              yield* externalContent
+                .markUnverified(provenanceOwner, {
+                  kind: "derived",
+                  artifactKind: "memory",
+                  artifactId: source.ref,
+                  contentDigest: digest(source.text),
+                })
+                .pipe(Effect.mapError(unavailable));
+          }
           const result = yield* generate({
             cwd: config.stateDir,
             count: 3,
@@ -397,9 +419,9 @@ export const make = Effect.gen(function* () {
                 });
               }
               yield* sql`
-              INSERT INTO project_overviews (project_id,workspace_root,overview_json)
-              VALUES (${input.projectId},${current.workspaceRoot},${encodeStored(overview)})
-              ON CONFLICT(project_id) DO UPDATE SET workspace_root=excluded.workspace_root,overview_json=excluded.overview_json
+              INSERT INTO project_overviews (project_id,workspace_root,overview_json,provenance_recorded)
+              VALUES (${input.projectId},${current.workspaceRoot},${encodeStored(overview)},1)
+              ON CONFLICT(project_id) DO UPDATE SET workspace_root=excluded.workspace_root,overview_json=excluded.overview_json,provenance_recorded=1
             `.pipe(Effect.mapError(unavailable));
               owner.state = "idle";
             }),
@@ -418,6 +440,50 @@ export const make = Effect.gen(function* () {
         );
         owner.fiber = yield* work.pipe(Effect.forkIn(scope));
         return yield* get(input);
+      }),
+    );
+  });
+
+  const open = Effect.fn("ProjectOverview.open")(function* (input: ProjectOverviewOpenInput) {
+    return yield* locks.withLock(
+      input.projectId,
+      Effect.gen(function* () {
+        const project = yield* projectFor(input.projectId);
+        const overview = yield* stored(input.projectId, project.workspaceRoot);
+        if (
+          overview?.sourceDigest !== input.sourceDigest ||
+          !overview.nextSteps.some((step) => step.id === input.stepId)
+        )
+          return yield* new ProjectOverviewError({
+            message: "This suggestion changed. Refresh next steps before opening it.",
+          });
+        // Reconcile every input again: a source may have narrowed since generation.
+        for (const source of overview.sources)
+          if (source.threadId !== null)
+            yield* externalContent
+              .inherit(
+                `thread:${source.threadId}`,
+                `project-overview:${input.projectId}:${overview.sourceDigest}`,
+              )
+              .pipe(Effect.mapError(unavailable));
+        const rows = yield* sql<{ recorded: number }>`SELECT provenance_recorded AS recorded
+      FROM project_overviews WHERE project_id=${input.projectId} AND workspace_root=${project.workspaceRoot}`.pipe(
+          Effect.mapError(unavailable),
+        );
+        const owner = `project-overview:${input.projectId}:${overview.sourceDigest}`;
+        if (rows[0]?.recorded !== 1)
+          yield* externalContent
+            .markUnverified(owner, {
+              kind: "derived",
+              artifactKind: "project-overview",
+              artifactId: input.projectId,
+              contentDigest: digest(overview),
+            })
+            .pipe(Effect.mapError(unavailable));
+        yield* externalContent
+          .inherit(owner, `thread:${input.draftThreadId}`)
+          .pipe(Effect.mapError(unavailable));
+        return true;
       }),
     );
   });
@@ -505,6 +571,7 @@ export const make = Effect.gen(function* () {
           );
         }),
       ),
+    open,
     awaitIdle: (projectId) =>
       Effect.suspend(() => {
         const fiber = runs.get(projectId)?.fiber;

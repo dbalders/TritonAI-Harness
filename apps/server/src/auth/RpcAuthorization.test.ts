@@ -664,12 +664,14 @@ it.effect("protects cached project overviews with filesystem permission", () =>
           | typeof WS_METHODS.projectOverviewEnsure
           | typeof WS_METHODS.projectOverviewDismiss
           | typeof WS_METHODS.projectOverviewRestore
+          | typeof WS_METHODS.projectOverviewOpen
         > =>
           tag !== WS_METHODS.projectOverviewGet &&
           tag !== WS_METHODS.projectOverviewSubscribe &&
           tag !== WS_METHODS.projectOverviewEnsure &&
           tag !== WS_METHODS.projectOverviewDismiss &&
-          tag !== WS_METHODS.projectOverviewRestore,
+          tag !== WS_METHODS.projectOverviewRestore &&
+          tag !== WS_METHODS.projectOverviewOpen,
       ),
     );
     let handled = false;
@@ -687,6 +689,7 @@ it.effect("protects cached project overviews with filesystem permission", () =>
           group.toLayerHandler(WS_METHODS.projectOverviewEnsure, denyHandler),
           group.toLayerHandler(WS_METHODS.projectOverviewDismiss, denyHandler),
           group.toLayerHandler(WS_METHODS.projectOverviewRestore, denyHandler),
+          group.toLayerHandler(WS_METHODS.projectOverviewOpen, denyHandler),
           RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
         ),
       ),
@@ -713,6 +716,14 @@ it.effect("protects cached project overviews with filesystem permission", () =>
         requiredPermission: AuthFilesystemReadScope,
       },
     );
+    expect(
+      yield* client[WS_METHODS.projectOverviewOpen]({
+        ...input,
+        stepId: "step",
+        sourceDigest: "digest",
+        draftThreadId: ThreadId.make("draft"),
+      }).pipe(Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );

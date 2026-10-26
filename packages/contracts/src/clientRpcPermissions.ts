@@ -25,6 +25,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.projectOverviewEnsure]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectOverviewDismiss]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectOverviewRestore]: AuthOrchestrationOperateScope,
+  [WS_METHODS.projectOverviewOpen]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectBriefExecute]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
@@ -82,7 +83,8 @@ export function clientRpcRequiredScopes(
     method === WS_METHODS.projectBriefExecute ||
     method === WS_METHODS.projectOverviewEnsure ||
     method === WS_METHODS.projectOverviewDismiss ||
-    method === WS_METHODS.projectOverviewRestore
+    method === WS_METHODS.projectOverviewRestore ||
+    method === WS_METHODS.projectOverviewOpen
   ) {
     return [AuthOrchestrationOperateScope, AuthFilesystemReadScope];
   }
