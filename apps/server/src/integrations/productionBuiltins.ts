@@ -21,6 +21,8 @@ import { validateIntegrationManifest } from "./manifest.ts";
 import { loadPluginSdkIntegration, PluginSdkQuarantineError } from "./pluginSdk/adapter.ts";
 import { acquireProductionRuntime, type ProductionRuntimeLease } from "./productionRuntime.ts";
 import { importPluginModule } from "./importPluginModule.ts";
+import { createMacPluginSandboxRuntime } from "./pluginSandbox/MacPluginSandboxRuntime.ts";
+import type { IsolatedPluginRuntime } from "./pluginSandbox/IsolatedPluginAdapter.ts";
 
 declare const __TRITONAI_BUILD_PLUGIN_COMPOSITION__: unknown;
 declare const __TRITONAI_BUILD_PLUGIN_CONFIGURATION__: unknown;
@@ -486,6 +488,7 @@ async function loadProductionPackage(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
   configuration: Readonly<Record<string, unknown>>,
   sdkHostNodeVersion?: string | null,
+  isolatedRuntime?: IsolatedPluginRuntime,
 ): Promise<IntegrationPackage> {
   const verifiedFiles = await verifiedPackageFiles(composedPackageRoot, plugin);
   if (hasPluginSdkArtifact(verifiedFiles)) {
@@ -495,6 +498,7 @@ async function loadProductionPackage(
       configuration,
       expected: plugin,
       ...(sdkHostNodeVersion === undefined ? {} : { hostNodeVersion: sdkHostNodeVersion }),
+      ...(isolatedRuntime ? { isolatedRuntime } : {}),
     });
   }
   const packageManifestFile = verifiedFiles.find(
@@ -568,6 +572,7 @@ export async function loadProductionPackageForTest(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
   configuration: Readonly<Record<string, unknown>>,
   sdkHostNodeVersion?: string | null,
+  isolatedRuntime?: IsolatedPluginRuntime,
 ): Promise<IntegrationPackage> {
   return loadProductionPackage(
     composedPackageRoot,
@@ -575,6 +580,7 @@ export async function loadProductionPackageForTest(
     secrets,
     configuration,
     sdkHostNodeVersion,
+    isolatedRuntime,
   );
 }
 
@@ -622,8 +628,10 @@ export async function loadProductionPackagesForTest(
 
 export async function loadProductionIntegrations(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
+  options: { readonly isolatedRuntime?: Parameters<typeof createMacPluginSandboxRuntime>[0] } = {},
 ): Promise<ReadonlyArray<IntegrationPackage>> {
   if (!buildComposition) return [];
+  let ownedRuntime: Awaited<ReturnType<typeof createMacPluginSandboxRuntime>> | null = null;
   try {
     if (
       buildComposition.version !== 1 ||
@@ -633,6 +641,10 @@ export async function loadProductionIntegrations(
       throw new Error("Built-in plugin composition has an unsupported contract or provenance.");
     }
     const configuration = validateBuildConfiguration(buildComposition, buildConfiguration);
+    ownedRuntime = options.isolatedRuntime
+      ? await createMacPluginSandboxRuntime(options.isolatedRuntime)
+      : null;
+    const runtime = ownedRuntime;
     const packages = await loadProductionPackages(
       buildComposition.packages.map((plugin) => {
         const composedPackageRoot = NodePath.join(
@@ -642,10 +654,46 @@ export async function loadProductionIntegrations(
           plugin.id,
         );
         return () =>
-          loadProductionPackage(composedPackageRoot, plugin, secrets, configuration[plugin.id]!);
+          loadProductionPackage(
+            composedPackageRoot,
+            plugin,
+            secrets,
+            configuration[plugin.id]!,
+            undefined,
+            runtime ?? undefined,
+          );
       }),
       process.env.TRITONAI_PLUGIN_BOOT_REPORT_PATH,
     );
+    if (runtime) {
+      let remaining = packages.filter(({ provider }) => provider).length;
+      if (remaining === 0) await runtime[Symbol.asyncDispose]();
+      const retained = packages.map((pkg) => {
+        if (!pkg.provider) return pkg;
+        const provider = pkg.provider;
+        let close: Promise<void> | undefined;
+        return {
+          ...pkg,
+          provider: new Proxy(provider, {
+            get(target, property) {
+              if (property === "close")
+                return () =>
+                  (close ??= (async () => {
+                    try {
+                      await target.close?.();
+                    } finally {
+                      if (--remaining === 0) await runtime[Symbol.asyncDispose]();
+                    }
+                  })());
+              const value = Reflect.get(target, property, target) as unknown;
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          }),
+        };
+      });
+      ownedRuntime = null;
+      return retained;
+    }
     return packages;
   } catch {
     // Build-time validation should make this unreachable. If signed resources are corrupted or a
@@ -655,6 +703,8 @@ export async function loadProductionIntegrations(
       "Managed plugin composition verification failed; integrations are disabled.\n",
     );
     return [];
+  } finally {
+    await ownedRuntime?.[Symbol.asyncDispose]();
   }
 }
 

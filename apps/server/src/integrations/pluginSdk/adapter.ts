@@ -5,7 +5,6 @@ import {
 } from "@t3tools/contracts";
 import {
   type JsonObject,
-  type JsonSchema as PluginJsonSchema,
   type JsonValue,
   validateJsonValue,
 } from "@t3tools/shared/pluginSdkContract";
@@ -14,12 +13,9 @@ import {
   type VerifiedPluginSdkArtifact,
   verifyPluginSdkArtifact,
 } from "@t3tools/shared/pluginSdkArtifact";
-import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import * as Effect from "effect/Effect";
-import type * as JsonSchema from "effect/JsonSchema";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type * as SchemaIssue from "effect/SchemaIssue";
 
 import type * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import {
@@ -32,10 +28,12 @@ import {
 } from "../IntegrationRegistry.ts";
 import { scopeIntegrationSecretStore } from "../IntegrationSecretStore.ts";
 import { importPluginModule as importDiskPluginModule } from "../importPluginModule.ts";
+import type { IntegrationProviderTool } from "../IntegrationTool.ts";
+import { compilePluginJsonSchema } from "./schema.ts";
 import {
-  type IntegrationProviderTool,
-  vettedIntegrationToolInputIssue,
-} from "../IntegrationTool.ts";
+  loadIsolatedPluginIntegration,
+  type IsolatedPluginRuntime,
+} from "../pluginSandbox/IsolatedPluginAdapter.ts";
 
 interface PluginSdkOperationContext {
   readonly signal: AbortSignal;
@@ -100,79 +98,6 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
     Boolean(value) &&
     (typeof value === "object" || typeof value === "function") &&
     typeof (value as { readonly then?: unknown }).then === "function"
-  );
-}
-
-// Agents see these issues verbatim, so they must never carry submitted values. Ajv messages and
-// the params read below come from the schema; instance paths and `additionalProperties` params
-// may name submitted property keys, which the formatter caps. That holds only for the Ajv
-// configuration in compileJsonSchema: discriminator and `$data` stay disabled, no custom keywords
-// or formats are added, and strict mode rejects unknown formats at compile time. Other params,
-// such as `propertyNames`' submitted `propertyName`, are never read.
-function pluginSchemaIssue(error: ErrorObject): SchemaIssue.Issue {
-  const path = error.instancePath
-    .split("/")
-    .slice(1)
-    .map((token) => {
-      const key = token.replaceAll("~1", "/").replaceAll("~0", "~");
-      return /^(?:0|[1-9]\d*)$/u.test(key) ? Number(key) : key;
-    });
-  const params = error.params as Record<string, unknown>;
-  switch (error.keyword) {
-    case "additionalProperties":
-      return vettedIntegrationToolInputIssue(
-        [...path, String(params.additionalProperty)],
-        "unexpected property",
-      );
-    case "unevaluatedProperties":
-      return vettedIntegrationToolInputIssue(
-        [...path, String(params.unevaluatedProperty)],
-        "unexpected property",
-      );
-    case "required":
-      return vettedIntegrationToolInputIssue(
-        [...path, String(params.missingProperty)],
-        "missing required property",
-      );
-    case "enum":
-      return vettedIntegrationToolInputIssue(
-        path,
-        `Expected ${(params.allowedValues as ReadonlyArray<unknown>).map((value) => JSON.stringify(value)).join(" | ")}`,
-      );
-    case "const":
-      return vettedIntegrationToolInputIssue(
-        path,
-        `Expected ${JSON.stringify(params.allowedValue)}`,
-      );
-    default:
-      return vettedIntegrationToolInputIssue(path, error.message ?? "invalid value");
-  }
-}
-
-function compileJsonSchema(schema: PluginJsonSchema): Schema.Decoder<unknown> {
-  // Plugin contracts are draft-2020-12 JSON Schema. Validate that exact document:
-  // Effect's best-effort importer cannot represent all patternProperties scopes.
-  const validator = new Ajv2020({
-    allErrors: true,
-    strict: true,
-    strictTypes: false,
-    strictTuples: false,
-    strictRequired: false,
-    allowMatchingProperties: true,
-  });
-  const validate = validator.compile(schema);
-  if ("$async" in validate && validate.$async) {
-    throw new Error("Plugin schemas must validate synchronously.");
-  }
-  // Any keeps this JSON-native check on the encoded side of Effect's codec;
-  // Unknown would derive a separate JSON codec and drop the advertised check.
-  return Schema.Any.check(
-    Schema.makeFilter<unknown>(
-      (input) =>
-        validate(input) ||
-        (validate.errors?.length ? validate.errors.map(pluginSchemaIssue) : "Invalid input."),
-      { toJsonSchema: () => schema as JsonSchema.JsonSchema },
-    ),
   );
 }
 
@@ -443,6 +368,7 @@ export async function loadPluginSdkIntegration(input: {
   readonly expected: { readonly id: string; readonly version: string };
   readonly hostNodeVersion?: string | null;
   readonly admissionTimeoutMs?: number;
+  readonly isolatedRuntime?: IsolatedPluginRuntime;
 }): Promise<IntegrationPackage> {
   const admissionTimeoutMs = input.admissionTimeoutMs ?? DEFAULT_ADMISSION_TIMEOUT_MS;
   if (!Number.isSafeInteger(admissionTimeoutMs) || admissionTimeoutMs <= 0) {
@@ -450,6 +376,17 @@ export async function loadPluginSdkIntegration(input: {
   }
   let created: unknown = undefined;
   try {
+    const descriptor = input.files.find((file) => file.path === "artifact.json");
+    if (
+      descriptor &&
+      descriptor.contents.byteLength <= 256 * 1024 &&
+      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(descriptor.contents)).format ===
+        "tritonai.plugin-artifact/v2"
+    ) {
+      if (!input.isolatedRuntime)
+        throw new Error("This host has no admitted isolated plugin runtime.");
+      return await loadIsolatedPluginIntegration({ ...input, runtime: input.isolatedRuntime });
+    }
     const artifact = verifyPluginSdkArtifact(
       input.files,
       input.hostNodeVersion === undefined ? {} : { hostNodeVersion: input.hostNodeVersion },
@@ -461,7 +398,7 @@ export async function loadPluginSdkIntegration(input: {
       throw new Error("Plugin SDK artifact identity does not match its composition.");
     }
 
-    const configurationSchema = compileJsonSchema(artifact.sdkManifest.configurationSchema);
+    const configurationSchema = compilePluginJsonSchema(artifact.sdkManifest.configurationSchema);
     const configuration = await Schema.decodeUnknownPromise(configurationSchema)(
       input.configuration,
       { errors: "all", onExcessProperty: "error" },
@@ -472,7 +409,7 @@ export async function loadPluginSdkIntegration(input: {
     const tools = artifact.sdkManifest.tools.map((tool): IntegrationProviderTool => ({
       name: tool.name,
       description: tool.description,
-      input: compileJsonSchema(tool.inputSchema),
+      input: compilePluginJsonSchema(tool.inputSchema),
       readOnly: tool.effect === "read",
       destructive: tool.destructive,
       idempotent: tool.idempotent,

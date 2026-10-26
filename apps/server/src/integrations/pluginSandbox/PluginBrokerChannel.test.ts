@@ -3,7 +3,13 @@ import type { JsonObject } from "@t3tools/shared/pluginSdkContract";
 import { PluginBrokerChannel, type PluginBrokerBinding } from "./PluginBrokerChannel.ts";
 import { PLUGIN_BROKER_PROTOCOL } from "./PluginBrokerProtocol.ts";
 
-function fixture(effect: "read" | "write" = "write") {
+function fixture(
+  effect: "read" | "write" = "write",
+  hooks: Pick<
+    ConstructorParameters<typeof PluginBrokerChannel>[0],
+    "prepare" | "projectCommittedResult"
+  > = {},
+) {
   const binding: PluginBrokerBinding = {
     pluginId: "synthetic-api-key",
     connectionId: "owned-connection",
@@ -28,6 +34,7 @@ function fixture(effect: "read" | "write" = "write") {
     transport: Promise.resolve(),
   };
   const channel = new PluginBrokerChannel({
+    ...hooks,
     binding,
     reviewedPolicySha256: binding.policySha256,
     operations: [
@@ -218,4 +225,54 @@ it("does not release a worker result after cancellation without a committed host
   f.controller.abort();
   await expect(f.channel.completeInvocation({ success: true })).rejects.toThrow();
   expect(f.requests).toEqual([]);
+});
+
+it("finishes host preconditions before commit admission and fences cancellation during them", async () => {
+  const entered = Promise.withResolvers<void>();
+  const prepared = Promise.withResolvers<void>();
+  const f = fixture("write", {
+    prepare: async () => {
+      entered.resolve();
+      await prepared.promise;
+    },
+  });
+  f.begin();
+  const operation = f.channel.operation(f.request());
+  await entered.promise;
+  expect(f.state.admitted).toBe(0);
+  expect(f.requests).toEqual([]);
+  f.controller.abort();
+  prepared.resolve();
+  await expect(operation).rejects.toThrow();
+  expect(f.state.admitted).toBe(0);
+  expect(f.requests).toEqual([]);
+});
+
+it("does not admit a write when its host precondition fails", async () => {
+  const f = fixture("write", {
+    prepare: async () => {
+      throw new Error("Version changed");
+    },
+  });
+  f.begin();
+  await expect(f.channel.operation(f.request())).rejects.toThrow("Version changed");
+  expect(f.state.admitted).toBe(0);
+  expect(f.requests).toEqual([]);
+});
+
+it("uses the host's public mutation receipt after normal completion and worker loss", async () => {
+  for (const lost of [false, true]) {
+    const f = fixture("write", {
+      projectCommittedResult: ({ parameters, result }) => ({
+        target: parameters.destination!,
+        receipt: result,
+      }),
+    });
+    f.begin();
+    await f.channel.operation(f.request());
+    if (lost) f.channel.revoke();
+    const expected = { target: "owned-record", receipt: { changed: true } };
+    if (lost) await expect(f.channel.committedResult()).resolves.toEqual({ value: expected });
+    else await expect(f.channel.completeInvocation({ forged: true })).resolves.toEqual(expected);
+  }
 });

@@ -45,11 +45,19 @@ type ExecuteOperation = (input: {
   readonly signal: AbortSignal;
 }) => Promise<JsonValue>;
 
+type ProjectCommittedResult = (input: {
+  readonly operation: ReviewedPluginBrokerOperation;
+  readonly parameters: JsonObject;
+  readonly result: JsonValue;
+}) => JsonValue;
+
 export class PluginBrokerChannel {
   readonly #binding: PluginBrokerBinding;
   readonly #operations: ReadonlyMap<string, ReviewedPluginBrokerOperation>;
   readonly #isCurrent: (binding: PluginBrokerBinding) => boolean;
   readonly #execute: ExecuteOperation;
+  readonly #prepare: ((input: Parameters<ExecuteOperation>[0]) => Promise<void>) | undefined;
+  readonly #projectCommittedResult: ProjectCommittedResult;
   readonly #terminate: () => void;
   readonly #shutdown = new AbortController();
   #nextRequestId = 1;
@@ -61,6 +69,8 @@ export class PluginBrokerChannel {
     readonly operations: ReadonlyArray<ReviewedPluginBrokerOperation>;
     readonly isCurrent: (binding: PluginBrokerBinding) => boolean;
     readonly execute: ExecuteOperation;
+    readonly prepare?: (input: Parameters<ExecuteOperation>[0]) => Promise<void>;
+    readonly projectCommittedResult?: ProjectCommittedResult;
     readonly terminate: () => void;
   }) {
     if (
@@ -76,6 +86,8 @@ export class PluginBrokerChannel {
     );
     this.#isCurrent = input.isCurrent;
     this.#execute = input.execute;
+    this.#prepare = input.prepare;
+    this.#projectCommittedResult = input.projectCommittedResult ?? (({ result }) => result);
     this.#terminate = input.terminate;
   }
 
@@ -135,6 +147,16 @@ export class PluginBrokerChannel {
 
   async #run(invocation: Invocation, operation: ReviewedPluginBrokerOperation): Promise<JsonValue> {
     let signal = invocation.context.signal;
+    if (this.#prepare) {
+      await this.#prepare({
+        binding: this.#binding,
+        operation,
+        parameters: invocation.input,
+        signal: AbortSignal.any([signal, this.#shutdown.signal]),
+      });
+      this.#assertCurrent();
+      signal.throwIfAborted();
+    }
     if (operation.effect === "write") {
       if (!invocation.context.beginCommit) throw new Error("Plugin broker write was not admitted.");
       signal = await invocation.context.beginCommit();
@@ -168,7 +190,7 @@ export class PluginBrokerChannel {
         throw new Error("Plugin worker did not execute its admitted operation.");
       }
       const hostResult = await invocation.pending;
-      if (invocation.committed) return hostResult;
+      if (invocation.committed) return this.#committedValue(invocation, hostResult);
       this.#assertCurrent();
       if (!invocation.committed) invocation.context.signal.throwIfAborted();
       const result = validateJsonValue(workerResult, "Plugin worker result");
@@ -184,7 +206,7 @@ export class PluginBrokerChannel {
     if (!invocation?.committed || !invocation.pending) return null;
     try {
       // Worker termination cannot replace an admitted host operation's actual settlement.
-      return { value: await invocation.pending };
+      return { value: this.#committedValue(invocation, await invocation.pending) };
     } finally {
       this.#invocation = null;
     }
@@ -194,6 +216,17 @@ export class PluginBrokerChannel {
     if (this.#shutdown.signal.aborted) return;
     this.#shutdown.abort(new Error("Plugin broker authority was revoked."));
     this.#terminate();
+  }
+
+  #committedValue(invocation: Invocation, result: JsonValue): JsonValue {
+    const operation = this.#operations.get(`${invocation.toolName}.v1`);
+    if (!operation) throw new Error("Committed plugin operation is unavailable.");
+    const projected = validateJsonValue(
+      this.#projectCommittedResult({ operation, parameters: invocation.input, result }),
+      "Plugin broker committed result",
+    );
+    encodePluginBrokerFrame(projected);
+    return projected;
   }
 
   #assertCurrent(): void {
