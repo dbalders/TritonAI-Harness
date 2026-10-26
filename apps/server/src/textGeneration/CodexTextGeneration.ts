@@ -440,34 +440,37 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             ),
         );
 
-        const version = (yield* commandOutput(["--version"])).trim().replace(/^codex-cli\s+/, "");
-        if (!CODEX_HELP_VERSIONS.has(version)) return yield* fail();
-        const help = yield* commandOutput(["exec", "--help"]);
-        if (
-          !["--ignore-user-config", "--ignore-rules", "--strict-config", "--output-schema"].every(
-            (flag) => help.includes(flag),
+        let featureArgs: ReadonlyArray<string> = [];
+        if (!serverConfig.integrationCodexRuntime) {
+          const version = (yield* commandOutput(["--version"])).trim().replace(/^codex-cli\s+/, "");
+          if (!CODEX_HELP_VERSIONS.has(version)) return yield* fail();
+          const help = yield* commandOutput(["exec", "--help"]);
+          if (
+            !["--ignore-user-config", "--ignore-rules", "--strict-config", "--output-schema"].every(
+              (flag) => help.includes(flag),
+            )
           )
-        )
-          return yield* fail();
-        const features = yield* commandOutput(["features", "list"]);
-        const featureNames = features
-          .trim()
-          .split(/\r?\n/)
-          .map((line) => {
-            const match = /^([a-z][a-z0-9_.]*)\s+(.+?)\s+(?:true|false)\s*$/.exec(line);
-            return match && match[2] !== "removed" ? match[1] : undefined;
-          })
-          .filter((name): name is string => name !== undefined);
-        if (
-          !["shell_tool", "view_image", "skip_host_skill_discovery", "plugins", "apps"].every(
-            (name) => featureNames.includes(name),
+            return yield* fail();
+          const features = yield* commandOutput(["features", "list"]);
+          const featureNames = features
+            .trim()
+            .split(/\r?\n/)
+            .map((line) => {
+              const match = /^([a-z][a-z0-9_.]*)\s+(.+?)\s+(?:true|false)\s*$/.exec(line);
+              return match && match[2] !== "removed" ? match[1] : undefined;
+            })
+            .filter((name): name is string => name !== undefined);
+          if (
+            !["shell_tool", "view_image", "skip_host_skill_discovery", "plugins", "apps"].every(
+              (name) => featureNames.includes(name),
+            )
           )
-        )
-          return yield* fail();
-        const featureArgs = featureNames.flatMap((name) => [
-          "--config",
-          `features.${name}=${name === "skip_host_skill_discovery" ? "true" : "false"}`,
-        ]);
+            return yield* fail();
+          featureArgs = featureNames.flatMap((name) => [
+            "--config",
+            `features.${name}=${name === "skip_host_skill_discovery" ? "true" : "false"}`,
+          ]);
+        }
         const defaultGateway =
           selectedProvider === undefined && effectiveEnvironment[TRITONAI_API_KEY_ENV]?.trim();
         const sourceHome =
@@ -545,6 +548,38 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         const serviceTier = resolved
           ? undefined
           : getCodexServiceTierOptionValue(request.modelSelection);
+        if (serverConfig.integrationCodexRuntime) {
+          if (Option.isNone(content)) return yield* fail();
+          return yield* NativePrompt.run({
+            operation: request.operation,
+            prompt: request.prompt,
+            outputSchema: request.outputSchema,
+            modelSelection: { ...request.modelSelection, model },
+            environment: env,
+            configArgs: [
+              ...providerArgs,
+              "-c",
+              'cli_auth_credentials_store="file"',
+              "-c",
+              `model_providers.${selectedProvider ?? "ucsd"}.supports_websockets=false`,
+              "-c",
+              "features.enable_request_compression=false",
+              "-c",
+              `model_reasoning_effort=${encodeCodexConfigString(getModelSelectionStringOptionValue(request.modelSelection, "reasoningEffort") ?? DEFAULT_TEXT_GENERATION_REASONING_EFFORT)}`,
+              ...(serviceTier
+                ? ["-c", `service_tier=${encodeCodexConfigString(serviceTier)}`]
+                : []),
+            ],
+            timeoutMs: CODEX_TIMEOUT_MS,
+          }).pipe(
+            Effect.provideService(ExternalContent.ExternalContent, content.value),
+            Effect.provideService(ServerConfig.ServerConfig, serverConfig),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, commandSpawner),
+          );
+        }
         const catalogJson = options?.modelCatalogPath
           ? yield* readBoundedFile(options.modelCatalogPath, 16 * 1024 * 1024)
           : yield* commandOutput(["debug", "models", "--bundled"]);
@@ -1045,9 +1080,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     ...TextGenerationOperations.fromRunner(
       "CodexTextGeneration",
       (request) =>
-        request.operation === "generateHelp" && !serverConfig.integrationCodexRuntime
-          ? runCodexHelpJson(request)
-          : runCodexJson(request),
+        request.operation === "generateHelp" ? runCodexHelpJson(request) : runCodexJson(request),
       { help: { promptOnly: true } },
     ),
     generateDailyMemory,

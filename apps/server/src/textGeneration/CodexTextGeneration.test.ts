@@ -11,6 +11,7 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import { fromRunner } from "@t3tools/provider-core/server/textGenerationOperations";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -317,6 +318,7 @@ function withFakeCodexEnv<A, E, R>(
     managedRuntime?: boolean;
     nativeAuth?: boolean;
     nativePin?: ServerConfig.ServerConfig["Service"]["integrationCodexRuntime"];
+    nativeLaunches?: Array<ReadonlyArray<string>>;
   },
   effectFn: (
     textGeneration: TextGeneration.TextGeneration["Service"],
@@ -354,6 +356,18 @@ function withFakeCodexEnv<A, E, R>(
         input.launchArgs ?? (input.managedRuntime ? '-c model_provider="test"' : undefined),
     });
     const serverConfig = yield* ServerConfig.ServerConfig;
+    const baseSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const spawner = ChildProcessSpawner.make((command) => {
+      if (
+        input.nativeLaunches &&
+        ChildProcess.isStandardCommand(command) &&
+        command.command.endsWith("/codex-app-server")
+      ) {
+        input.nativeLaunches.push(command.args);
+        return Effect.die("Synthetic interceptor: no native process execution");
+      }
+      return baseSpawner.spawn(command);
+    });
     const textGeneration = yield* makeCodexTextGeneration(
       config,
       input.environment === undefined ? undefined : { ...process.env, ...input.environment },
@@ -373,6 +387,7 @@ function withFakeCodexEnv<A, E, R>(
           })
         : undefined,
     ).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(ServerConfig.ServerConfig, {
         ...serverConfig,
         ...(input.nativePin ? { integrationCodexRuntime: input.nativePin } : {}),
@@ -383,6 +398,63 @@ function withFakeCodexEnv<A, E, R>(
 }
 
 it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
+  it.effect.each(["native", "custom", "managed"] as const)(
+    "native-pin Help preserves selected %s transport over ambient gateway credentials",
+    (route) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const binaryPath = (yield* Path.Path).join(root, "inert-native-runtime");
+        yield* fs.writeFileString(binaryPath, "x");
+        const provider =
+          route === "native"
+            ? "openai"
+            : route === "custom"
+              ? "selected_route"
+              : "openai_token_sharing";
+        const key = route === "custom" ? "SELECTED_API_KEY" : "ACCESS_TOKEN";
+        const endpoint =
+          route === "custom" ? "https://selected.example.invalid/v1" : "https://api.openai.com/v1";
+        const launches: Array<ReadonlyArray<string>> = [];
+        yield* withFakeCodexEnv(
+          {
+            output: "{}",
+            nativeAuth: route === "native",
+            managedRuntime: route === "managed",
+            launchArgs:
+              route === "native"
+                ? "-c model_provider=openai"
+                : `-c model_provider=${provider} -c 'model_providers.${provider}.base_url="${endpoint}"' -c 'model_providers.${provider}.env_key="${key}"' -c 'model_providers.${provider}.requires_openai_auth=false'`,
+            environment: {
+              TRITONAI_API_KEY: "synthetic-ambient-gateway-key",
+              SELECTED_API_KEY: "synthetic-selected-key",
+              ACCESS_TOKEN: "synthetic-managed-token",
+            },
+            nativePin: {
+              binaryPath,
+              sha256: "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+              contractSha256: "9ae8f9674efde0d08394d1f35150b76ac2b97bd04fc8ddcc035b9106a36c9d8c",
+            },
+            nativeLaunches: launches,
+          },
+          (generation) =>
+            Effect.gen(function* () {
+              expect(Exit.isFailure(yield* Effect.exit(generation.generateHelp!(HELP_INPUT)))).toBe(
+                true,
+              );
+              expect(launches).toHaveLength(1);
+              const args = launches[0]!;
+              expect(args).toContain(`model_provider="${provider}"`);
+              expect(args).not.toContain('model_provider="ucsd"');
+              if (route !== "native") {
+                expect(args).toContain(`model_providers.${provider}.base_url="${endpoint}"`);
+                expect(args).toContain(`model_providers.${provider}.env_key="${key}"`);
+              }
+            }),
+        );
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("a missing pinned prompt runtime cannot fall back to the configured coding CLI", () =>
     withFakeCodexEnv(
       {
