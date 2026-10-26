@@ -2,11 +2,11 @@ export const QUICKJS_EXECUTION_PROFILE = "tritonai.quickjs-wasm/v1";
 export const QUICKJS_RUNTIME_FILES = {
   bootstrap: {
     name: "worker.cjs",
-    sha256: "9ae556114c7bbe36daa139ad2b1b38a0dce9942097b69bf4330b8d2e3dacce4d",
+    sha256: "dee502688566b76fd5ae082d6de004330bb9da2f1ca6710627329d87ce235bd9",
   },
   engine: {
     name: "engine.wasm",
-    sha256: "e2b41ab68c2b06bc8635ffc63c4777de3db04fd956a7faee14823f99082aa9ef",
+    sha256: "382dc56e633017da3f8b76d61efc3ec0d5673cffd6fd2ce06789cef6e37b5fb2",
   },
   bridge: {
     name: "guest-bridge.js",

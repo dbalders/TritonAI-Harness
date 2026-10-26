@@ -67,6 +67,8 @@ try {
       "-sALLOW_TABLE_GROWTH=0",
       "-sMALLOC=emmalloc",
       "-sASSERTIONS=0",
+      `-sSTACK_OVERFLOW_CHECK=${metadata.limits.stackOverflowCheck}`,
+      "-Wl,--stack-first",
       "-sERROR_ON_UNDEFINED_SYMBOLS=1",
       `-sEXPORTED_FUNCTIONS=${JSON.stringify(exports)}`,
       "-o",

@@ -7,7 +7,7 @@ const createEngine = function createEngine() {
   if (
     bytes.length > 1000000 ||
     crypto.createHash("sha256").update(bytes).digest("hex") !==
-      "e2b41ab68c2b06bc8635ffc63c4777de3db04fd956a7faee14823f99082aa9ef"
+      "382dc56e633017da3f8b76d61efc3ec0d5673cffd6fd2ce06789cef6e37b5fb2"
   )
     throw Error("Module pin refused");
   const module = new WebAssembly.Module(bytes);
@@ -85,6 +85,11 @@ const createEngine = function createEngine() {
     tableGrowthDenied = true;
   }
   if (!memoryGrowthDenied || !tableGrowthDenied) throw Error("Growth accepted");
+  engine.emscripten_stack_init();
+  const stackBase = engine.emscripten_stack_get_base();
+  const stackEnd = engine.emscripten_stack_get_end();
+  if (stackBase - stackEnd !== 262144 || stackEnd !== 0) throw Error("Stack bounds mismatch");
+  engine.__set_stack_limits(stackBase, stackEnd);
   engine._initialize();
   if (engine.harness_initialize() !== 0) throw Error("Engine initialization failed");
   return { engine, memory, memoryGrowthDenied, tableGrowthDenied };

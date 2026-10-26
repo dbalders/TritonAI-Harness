@@ -34,7 +34,8 @@ int harness_initialize(void) {
   runtime = JS_NewRuntime();
   if (!runtime) return -2;
   JS_SetMemoryLimit(runtime, 48 * 1024 * 1024);
-  JS_SetMaxStackSize(runtime, 128 * 1024);
+  /* QuickJS disables its stack check under Emscripten. The build checks every
+     Wasm stack-pointer assignment against the reserved C stack instead. */
   JS_SetInterruptHandler(runtime, interrupted, NULL);
   JS_SetModuleLoaderFunc(runtime, NULL, deny_module, NULL);
   context = JS_NewContext(runtime);
