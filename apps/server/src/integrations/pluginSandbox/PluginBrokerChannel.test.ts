@@ -202,6 +202,16 @@ it("does not let a worker's forged success erase the actual host transport failu
   expect(f.requests).toHaveLength(1);
 });
 
+it("rejects a worker's success when it never requested the admitted host operation", async () => {
+  const f = fixture();
+  f.begin();
+  await expect(f.channel.completeInvocation({ success: true })).rejects.toThrow(
+    "did not execute its admitted operation",
+  );
+  expect(f.state.admitted).toBe(0);
+  expect(f.requests).toEqual([]);
+});
+
 it("does not release a worker result after cancellation without a committed host operation", async () => {
   const f = fixture("read");
   f.begin();

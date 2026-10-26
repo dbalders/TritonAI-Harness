@@ -160,7 +160,10 @@ export class PluginBrokerChannel {
     const invocation = this.#invocation;
     if (!invocation) throw new Error("No plugin broker invocation is active.");
     try {
-      if (invocation.pending) await invocation.pending;
+      if (!invocation.used || !invocation.pending) {
+        throw new Error("Plugin worker did not execute its admitted operation.");
+      }
+      await invocation.pending;
       this.#assertCurrent();
       if (!invocation.committed) invocation.context.signal.throwIfAborted();
       const result = validateJsonValue(workerResult, "Plugin worker result");
