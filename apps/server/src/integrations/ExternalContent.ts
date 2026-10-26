@@ -118,6 +118,12 @@ interface InvocationState {
 export class ExternalContent extends Context.Service<
   ExternalContent,
   {
+    readonly assertUnexposed: (
+      ownerId: string,
+    ) => Effect.Effect<void, ExternalContentDenied | ExternalContentPersistenceError>;
+    readonly assertInference: (
+      caller: ExternalContentCaller,
+    ) => Effect.Effect<void, ExternalContentDenied | ExternalContentPersistenceError>;
     readonly establish: (
       runtime: ExternalContentRuntimeBoundary,
     ) => Effect.Effect<void, ExternalContentDenied | ExternalContentPersistenceError>;
@@ -190,6 +196,30 @@ const make = Effect.gen(function* () {
   };
 
   return ExternalContent.of({
+    assertUnexposed: Effect.fn("ExternalContent.assertUnexposed")(function* (ownerId) {
+      const row = yield* persistence(readRow(ownerId));
+      if (row && row.exposure_version > 0)
+        return yield* new ExternalContentDenied({ reason: "runtime_unverified" });
+    }),
+    assertInference: Effect.fn("ExternalContent.assertInference")(function* (caller) {
+      const row = yield* persistence(readRow(caller.ownerId));
+      const boundary = active.get(caller.ownerId);
+      if (!boundary && (!row || row.exposure_version === 0)) return;
+      if (!boundary) return yield* new ExternalContentDenied({ reason: "runtime_unverified" });
+      yield* Effect.try({
+        try: () => assertBoundary(boundary, caller),
+        catch: () => new ExternalContentDenied({ reason: "scope_changed" }),
+      });
+      if (
+        !row ||
+        row.scope_id !== boundary.runtime.scopeId ||
+        row.scope_version !== boundary.scopeVersion ||
+        row.provider_session_id !== caller.providerSessionId ||
+        row.provider_instance_id !== caller.providerInstanceId ||
+        row.boundary_digest !== boundary.runtime.boundaryDigest
+      )
+        return yield* new ExternalContentDenied({ reason: "scope_changed" });
+    }),
     establish: Effect.fn("ExternalContent.establish")(function* (input) {
       const caller = Object.freeze({ ...input.caller });
       const tools = [...new Set(input.allowedTools)].sort();

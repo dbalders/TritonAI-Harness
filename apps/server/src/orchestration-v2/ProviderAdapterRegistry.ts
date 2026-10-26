@@ -13,6 +13,8 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import * as ExternalContent from "../integrations/ExternalContent.ts";
+import * as ExternalContentProvider from "./ExternalContentProvider.ts";
 import {
   ProviderAdapterDriverCreateError,
   type AnyProviderAdapterDriver,
@@ -68,68 +70,74 @@ export class ProviderAdapterRegistryV2 extends Context.Service<
 export const layerFromProviderInstanceRegistry: Layer.Layer<
   ProviderAdapterRegistryV2,
   never,
-  ProviderInstanceRegistry.ProviderInstanceRegistry
+  ProviderInstanceRegistry.ProviderInstanceRegistry | ExternalContent.ExternalContent
 > = Layer.effect(
   ProviderAdapterRegistryV2,
   Effect.gen(function* () {
     const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+    const content = yield* ExternalContent.ExternalContent;
     return ProviderAdapterRegistryV2.of({
       get: (instanceId) =>
         instances.getInstance(instanceId).pipe(
-          Effect.flatMap((instance) => {
-            if (instance === undefined)
-              return new ProviderAdapterRegistryLookupError({ instanceId });
-            const adapter = instance.orchestrationAdapter;
-            const auth = instance.auth;
-            if (!auth) return Effect.succeed(adapter);
-            return Effect.succeed({
-              ...adapter,
-              openSession: (input) => {
-                const open = Effect.gen(function* () {
-                  const binding = auth.credentialBinding;
-                  const related = binding
-                    ? (yield* instances.listInstances).filter(
-                        (instance) =>
-                          instance.auth?.credentialBinding?.key === binding.key &&
-                          instance.auth.credentialBinding.owner === binding.owner,
+          Effect.flatMap(
+            Effect.fn("ProviderAdapterRegistry.guardInstance")(function* (instance) {
+              if (instance === undefined)
+                return yield* new ProviderAdapterRegistryLookupError({ instanceId });
+              const adapter = yield* ExternalContentProvider.protectAdapter(
+                instance.orchestrationAdapter,
+              ).pipe(Effect.provideService(ExternalContent.ExternalContent, content));
+              const auth = instance.auth;
+              if (!auth) return adapter;
+              return {
+                ...adapter,
+                openSession: (input) => {
+                  const open = Effect.gen(function* () {
+                    const binding = auth.credentialBinding;
+                    const related = binding
+                      ? (yield* instances.listInstances).filter(
+                          (instance) =>
+                            instance.auth?.credentialBinding?.key === binding.key &&
+                            instance.auth.credentialBinding.owner === binding.owner,
+                        )
+                      : [instance];
+                    for (const instance of related) {
+                      if (
+                        instance.auth?.isChangingCredentials &&
+                        (yield* instance.auth.isChangingCredentials)
                       )
-                    : [instance];
-                  for (const instance of related) {
-                    if (
-                      instance.auth?.isChangingCredentials &&
-                      (yield* instance.auth.isChangingCredentials)
-                    )
-                      return yield* new ProviderSetupError({
-                        instanceId,
-                        operation: "session",
-                        detail: "This provider's sign-in is changing. Try again after it finishes.",
-                      });
-                  }
-                  let admitted: Effect.Effect<
-                    ProviderAdapter.ProviderAdapterV2SessionRuntime,
-                    ProviderAdapter.ProviderAdapterV2Error | ProviderSetupError,
-                    Scope.Scope
-                  > = adapter.openSession(input);
-                  // Shared credential changes must interrupt a peer's startup too.
-                  for (const peer of related) {
-                    if (peer.auth?.withAccess) admitted = peer.auth.withAccess(admitted);
-                  }
-                  return yield* admitted;
-                });
-                return open.pipe(
-                  Effect.mapError((cause) =>
-                    isProviderSetupError(cause)
-                      ? new ProviderAdapter.ProviderAdapterOpenSessionError({
-                          driver: adapter.driver,
-                          providerSessionId: input.providerSessionId,
-                          cause,
-                        })
-                      : cause,
-                  ),
-                );
-              },
-            } satisfies ProviderAdapter.ProviderAdapterV2["Service"]);
-          }),
+                        return yield* new ProviderSetupError({
+                          instanceId,
+                          operation: "session",
+                          detail:
+                            "This provider's sign-in is changing. Try again after it finishes.",
+                        });
+                    }
+                    let admitted: Effect.Effect<
+                      ProviderAdapter.ProviderAdapterV2SessionRuntime,
+                      ProviderAdapter.ProviderAdapterV2Error | ProviderSetupError,
+                      Scope.Scope
+                    > = adapter.openSession(input);
+                    // Shared credential changes must interrupt a peer's startup too.
+                    for (const peer of related) {
+                      if (peer.auth?.withAccess) admitted = peer.auth.withAccess(admitted);
+                    }
+                    return yield* admitted;
+                  });
+                  return open.pipe(
+                    Effect.mapError((cause) =>
+                      isProviderSetupError(cause)
+                        ? new ProviderAdapter.ProviderAdapterOpenSessionError({
+                            driver: adapter.driver,
+                            providerSessionId: input.providerSessionId,
+                            cause,
+                          })
+                        : cause,
+                    ),
+                  );
+                },
+              } satisfies ProviderAdapter.ProviderAdapterV2["Service"];
+            }),
+          ),
         ),
       list: () =>
         instances.listInstances.pipe(

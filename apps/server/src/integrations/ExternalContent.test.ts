@@ -60,6 +60,54 @@ it.effect("refuses external content when no runtime boundary has actually been i
   ),
 );
 
+it.effect("permits ordinary coding before exposure, then requires the exact live runtime", () =>
+  test(
+    Effect.gen(function* () {
+      const service = yield* ExternalContent.ExternalContent;
+      yield* service.assertUnexposed(caller.ownerId);
+      yield* service.assertInference(caller);
+      yield* service.establish(runtime());
+      yield* service.assertInference(caller);
+      expect(
+        yield* Effect.flip(service.assertInference({ ...caller, providerSessionId: "other" })),
+      ).toMatchObject({ reason: "scope_changed" });
+      const invocation = yield* service.admit(caller, "fixture.read");
+      yield* service.record(invocation, source, { isError: false, data: { body: "untrusted" } });
+      expect(yield* Effect.flip(service.assertUnexposed(caller.ownerId))).toMatchObject({
+        reason: "runtime_unverified",
+      });
+      yield* service.assertInference(caller);
+      yield* service.revoke(caller.ownerId);
+      expect(yield* Effect.flip(service.assertInference(caller))).toMatchObject({
+        reason: "runtime_unverified",
+      });
+      const restarted = yield* freshService;
+      expect(yield* Effect.flip(restarted.assertInference(caller))).toMatchObject({
+        reason: "runtime_unverified",
+      });
+      yield* restarted.establish(runtime({ scopeId: "verified-replacement" }));
+      yield* restarted.assertInference(caller);
+    }),
+  ),
+);
+
+it.effect("withholds inference when persisted exposure cannot be read", () =>
+  test(
+    Effect.gen(function* () {
+      const service = yield* ExternalContent.ExternalContent;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DROP TABLE external_content_exposures`;
+      yield* sql`DROP TABLE external_content_scopes`;
+      expect((yield* Effect.flip(service.assertInference(caller)))._tag).toBe(
+        "ExternalContentPersistenceError",
+      );
+      expect((yield* Effect.flip(service.assertUnexposed(caller.ownerId)))._tag).toBe(
+        "ExternalContentPersistenceError",
+      );
+    }),
+  ),
+);
+
 it.effect("keeps malicious control fields inside data and saves exposure before delivery", () =>
   test(
     Effect.gen(function* () {
