@@ -6,6 +6,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
+// regression: 3445a3b6fd fix(contracts): preserve Unicode monograms across runtimes
 it("rejects more than two visible letters separated by joiners without Intl.Segmenter", async () => {
   vi.stubGlobal("Intl", Object.create(Intl, { Segmenter: { value: undefined } }));
   vi.resetModules();
@@ -17,6 +18,7 @@ it("rejects more than two visible letters separated by joiners without Intl.Segm
   }
 });
 
+// regression: 3445a3b6fd fix(contracts): preserve Unicode monograms across runtimes
 it("decodes persisted international monograms without Intl.Segmenter", async () => {
   vi.stubGlobal("Intl", Object.create(Intl, { Segmenter: { value: undefined } }));
   vi.resetModules();

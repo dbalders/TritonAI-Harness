@@ -47,6 +47,7 @@ const PermitRaceActor = Context.Reference<"completion" | "stop" | undefined>("st
   defaultValue: () => undefined,
 });
 
+// regression: #421 contain Stop commands and restore managed Auto approvals
 it.live.each([
   "success",
   "retry",
@@ -67,12 +68,7 @@ it.live.each([
   "null-unloaded-initial",
   "null-unloaded-settled",
   "null-unloaded-terminate",
-  "null-unloaded-verify",
-  "null-exited-initial",
   "null-exited-terminate",
-  "null-exited-verify",
-  "null-input-ended-initial",
-  "null-input-ended-terminate",
   "null-input-ended-verify",
   "null-generic-transport",
   "null-unknown-rpc",

@@ -373,7 +373,7 @@ export const validateTritonAiApiKey = Effect.fn("desktop.tritonAiApiKey.validate
   return access;
 });
 
-export function assignValidatedCredentials(
+function assignValidatedCredentials(
   results: ReadonlyArray<ValidatedCredential>,
 ): TritonAiCredentialBundle | null {
   const onPremOnly = results.find((result) => result.access.onPrem && !result.access.frontier);

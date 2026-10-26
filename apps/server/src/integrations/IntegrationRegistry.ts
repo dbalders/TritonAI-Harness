@@ -241,7 +241,7 @@ export interface IntegrationProviderFault {
  * Records a provider fault in the server trace. Server logs reach the trace file only as events on
  * an active span, and a fault is reported from outside any span, so the warning gets its own.
  */
-export const logProviderFault = (fault: IntegrationProviderFault) =>
+const logProviderFault = (fault: IntegrationProviderFault) =>
   Effect.logWarning("integrations.provider.faulted", fault).pipe(
     Effect.withSpan("integrations.provider.faulted", {
       attributes: {
@@ -684,7 +684,7 @@ function capabilityNames(manifest: IntegrationManifest, ids: ReadonlyArray<strin
  * The refusal, if any, that the persisted install state alone imposes on a tool: not installed,
  * a version that does not match the catalog, disabled, or none of its capabilities selected.
  */
-export function persistedToolUnavailability(
+function persistedToolUnavailability(
   manifest: IntegrationManifest,
   tool: IntegrationManifest["tools"][number],
   installed: InstalledIntegrationState | undefined,

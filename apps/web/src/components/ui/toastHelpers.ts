@@ -1,5 +1,3 @@
-"use client";
-
 import type { ToastManagerAddOptions } from "@base-ui/react/toast";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import type { ThreadToastData } from "./toast";
@@ -14,14 +12,6 @@ export type StackedThreadToastOptions = {
   actionVariant?: ThreadToastData["actionVariant"];
   data?: Omit<ThreadToastData, "actionLayout">;
 };
-
-/**
- * Defined `actionProps` that hide a previous toast CTA on `toastManager.update`.
- * Passing `actionProps: undefined` is a no-op because updates omit undefined keys.
- */
-export const hiddenToastActionProps = {
-  children: null,
-} as const satisfies Pick<ComponentPropsWithoutRef<"button">, "children">;
 
 export function stackedThreadToast(
   options: StackedThreadToastOptions,

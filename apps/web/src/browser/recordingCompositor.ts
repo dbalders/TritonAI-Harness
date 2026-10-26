@@ -72,7 +72,7 @@ export async function createRecordingCompositor(
   }
 }
 
-export class RecordingDecorations {
+class RecordingDecorations {
   private ring: {
     x: number;
     y: number;

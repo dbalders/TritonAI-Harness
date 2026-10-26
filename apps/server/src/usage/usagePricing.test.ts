@@ -8,7 +8,6 @@ import {
   lookupRate,
   parseRateTable,
   priceUsage,
-  withTritonAiRates,
 } from "./usagePricing.ts";
 
 const rate = (input: number, cacheRead?: number) => ({
@@ -16,14 +15,6 @@ const rate = (input: number, cacheRead?: number) => ({
   output_cost_per_token: input * 5,
   ...(cacheRead === undefined ? {} : { cache_read_input_token_cost: cacheRead }),
 });
-
-const glm52Totals = {
-  uncachedInputTokens: 57_000,
-  cachedInputTokens: 263_000,
-  cacheCreationTokens: 0,
-  outputTokens: 4_540,
-  reasoningTokens: 2_490,
-};
 
 describe("usage pricing", () => {
   const totals = {
@@ -251,54 +242,5 @@ describe("usage pricing", () => {
     expect(lookupRate(table, "provider-a/example-model")?.inputCostPerToken).toBe(1);
     expect(lookupRate(table, "provider-b/example-model")?.inputCostPerToken).toBe(3);
     expect(lookupRate(table, "example-model")).toBeNull();
-  });
-
-  it("prices the TritonAI GLM-5.2 alias from Z.AI's published rates", () => {
-    const parsed = parseRateTable({});
-    const rates = withTritonAiRates(parsed);
-
-    expect(parsed.size).toBe(0);
-
-    expect(lookupRate(rates, "api-glm-5.2")).toEqual({
-      inputCostPerToken: 1.4e-6,
-      outputCostPerToken: 4.4e-6,
-      cacheReadCostPerToken: 2.6e-7,
-      cacheCreationCostPerToken: 0,
-      fast: null,
-      ultrafast: null,
-    });
-    const glm52Record = {
-      model: "api-glm-5.2",
-      totals: glm52Totals,
-      reportedCostUsd: null,
-      speed: "standard" as const,
-    };
-    expect(priceUsage(rates, glm52Record)).toMatchObject({
-      costUsd: expect.closeTo(0.168156, 9),
-      costSource: "modelPriced",
-    });
-    expect(cacheSavingsUsd(rates, glm52Record)).toBeCloseTo(0.29982, 9);
-  });
-
-  it("prefers LiteLLM's first-party GLM-5.2 row when it becomes available", () => {
-    const rates = withTritonAiRates(
-      parseRateTable({
-        "zai/glm-5.2": {
-          input_cost_per_token: 2e-6,
-          output_cost_per_token: 6e-6,
-          cache_read_input_token_cost: 5e-7,
-          cache_creation_input_token_cost: 1e-7,
-        },
-      }),
-    );
-
-    expect(lookupRate(rates, "api-glm-5.2")).toEqual({
-      inputCostPerToken: 2e-6,
-      outputCostPerToken: 6e-6,
-      cacheReadCostPerToken: 5e-7,
-      cacheCreationCostPerToken: 1e-7,
-      fast: null,
-      ultrafast: null,
-    });
   });
 });

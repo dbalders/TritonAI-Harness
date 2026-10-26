@@ -44,7 +44,7 @@ const sameTitle = (left: string, right: string) =>
   left.trim().toLowerCase() === right.trim().toLowerCase();
 
 /** What TritonAI can already do here, so suggestions do not ask to build or ship it again. */
-export const formatPluginSource = (
+const formatPluginSource = (
   integrations: ReadonlyArray<IntegrationSummary>,
 ): ProjectOverviewSource | null => {
   if (!integrations.length) return null;

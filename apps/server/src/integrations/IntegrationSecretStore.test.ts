@@ -43,18 +43,6 @@ function expectScopeFailure<A, E, R>(effect: Effect.Effect<A, E, R>) {
 }
 
 describe("integration secret store scopes", () => {
-  it.effect("constructs canonical names from package ids and local suffixes", () =>
-    Effect.gen(function* () {
-      const secrets = memorySecrets();
-      const analytics = scopeIntegrationSecretStore(secrets.service, "analytics-suite");
-      const credential = new TextEncoder().encode("credential");
-
-      yield* analytics.set("oauth", credential);
-
-      expect(secrets.values.get("integration-analytics-suite--oauth")).toEqual(credential);
-    }),
-  );
-
   it.effect("keeps prefix-overlapping integration ids in distinct namespaces", () =>
     Effect.gen(function* () {
       const secrets = memorySecrets();

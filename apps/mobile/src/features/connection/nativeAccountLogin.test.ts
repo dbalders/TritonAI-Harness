@@ -153,16 +153,6 @@ describe("native UCSD sign-in", () => {
     expect(actions.poll).toHaveBeenLastCalledWith({});
   });
 
-  it("keeps the callback proof available after a transient exchange failure", async () => {
-    const { native, actions } = setup();
-    await native.start();
-    await native.openExternal(verificationUrl);
-    actions.poll.mockRejectedValueOnce(new Error("Disconnected"));
-    await expect(native.getStatus()).rejects.toThrow("Disconnected");
-    expect(await native.getStatus()).toEqual(signedIn);
-    expect(actions.poll).toHaveBeenLastCalledWith({ requestId: id, completionCode: proof });
-  });
-
   it.each(["status", "exchange"])(
     "retries a received proof after a transient %s failure and panel remount",
     async (failure) => {

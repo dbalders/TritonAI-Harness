@@ -72,7 +72,7 @@ export class ElectronProtocol extends Context.Service<
   }
 >()("@t3tools/desktop/electron/ElectronProtocol") {}
 
-export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrationInput): string {
+function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrationInput): string {
   const clerkOrigin = input.clerkFrontendApiHostname
     ? `https://${input.clerkFrontendApiHostname}`
     : undefined;
@@ -119,7 +119,7 @@ function withContentSecurityPolicy(response: Response, policy: string): Response
 /**
  * Must run synchronously during process bootstrap, before Electron emits `ready`.
  */
-export function registerDesktopSchemePrivilegesSync(): void {
+function registerDesktopSchemePrivilegesSync(): void {
   Electron.protocol.registerSchemesAsPrivileged([
     {
       scheme: DESKTOP_PRODUCTION_SCHEME,

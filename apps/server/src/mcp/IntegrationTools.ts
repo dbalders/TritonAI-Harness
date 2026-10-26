@@ -31,7 +31,7 @@ export class IntegrationToolRegistrationError extends Schema.TaggedError<Integra
 
 const INTEGRATION_INVOCATION_CAPABILITY = "integrations.invoke" as const;
 
-export function integrationToolInvocationContext(
+function integrationToolInvocationContext(
   definition: IntegrationProviderTool,
   signal: AbortSignal,
   owner?: McpInvocationContext.McpThreadCaller,
