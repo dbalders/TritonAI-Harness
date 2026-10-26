@@ -168,4 +168,4 @@ it("keeps a real browser offline while details and inputs still work", async (ct
       new Promise<void>((resolve) => udp.close(resolve)),
     ]);
   }
-}, 30_000);
+});
