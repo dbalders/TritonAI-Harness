@@ -22,7 +22,20 @@ describe("plugin payload review", () => {
   });
 
   it("refuses raw credential fields instead of approving hidden values", () => {
-    for (const key of ["apiKey", "api_token", "password", "clientSecret", "authorization"]) {
+    for (const key of [
+      "apiKey",
+      "api_token",
+      "password",
+      "clientSecret",
+      "authorization",
+      "githubToken",
+      "personalAccessToken",
+      "botToken",
+      "webhookSecret",
+      "dbPassword",
+      "oauth_token",
+      "x-api-key",
+    ]) {
       expect(() =>
         describeToolCallForApproval("fixture.write", { nested: [{ [key]: "synthetic-only" }] }),
       ).toThrow(/credential/iu);

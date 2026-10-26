@@ -165,7 +165,14 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
                     {props.approval.detail}
                   </Text>
                 </ScrollView>
-                <View className="border-t border-border bg-card-alt p-4">{actions}</View>
+                <View className="border-t border-border bg-card-alt p-4">
+                  {warning ? (
+                    <Text className="mb-2 font-sans text-xs leading-normal text-warning-foreground">
+                      {warning}
+                    </Text>
+                  ) : null}
+                  {actions}
+                </View>
               </SafeAreaView>
             </View>
           </SafeAreaProvider>

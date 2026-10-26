@@ -5,6 +5,7 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { retainIntegrationWriteCredentials } from "./IntegrationWriteApproval.ts";
 import {
   IntegrationSecretScopeError,
   scopeIntegrationSecretStore,
@@ -43,6 +44,23 @@ function expectScopeFailure<A, E, R>(effect: Effect.Effect<A, E, R>) {
 }
 
 describe("integration secret store scopes", () => {
+  it.effect("returns a typed store error when credentials are held by an admitted write", () =>
+    Effect.gen(function* () {
+      const secrets = memorySecrets();
+      const scoped = scopeIntegrationSecretStore(secrets.service, "refresh-fixture");
+      const release = retainIntegrationWriteCredentials("refresh-fixture");
+      try {
+        const error = yield* Effect.flip(scoped.set("oauth", new Uint8Array([1])));
+        expect(error._tag).toBe("SecretStorePersistError");
+        expect(secrets.values.size).toBe(0);
+      } finally {
+        release();
+      }
+      yield* scoped.set("oauth", new Uint8Array([2]));
+      expect(secrets.values.get("integration-refresh-fixture--oauth")).toEqual(new Uint8Array([2]));
+    }),
+  );
+
   it.effect("keeps prefix-overlapping integration ids in distinct namespaces", () =>
     Effect.gen(function* () {
       const secrets = memorySecrets();

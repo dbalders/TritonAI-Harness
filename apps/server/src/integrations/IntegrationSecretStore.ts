@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { isIntegrationId } from "./manifest.ts";
 import { beginIntegrationCredentialMutation } from "./IntegrationWriteApproval.ts";
 
@@ -67,7 +67,14 @@ export function scopeIntegrationSecretStore(
   const mutate = Effect.fn("IntegrationSecretStore.mutate")(
     <A, E, R>(operation: () => Effect.Effect<A, E, R>) =>
       Effect.acquireUseRelease(
-        Effect.sync(() => beginIntegrationCredentialMutation(integrationId)),
+        Effect.try({
+          try: () => beginIntegrationCredentialMutation(integrationId),
+          catch: (cause) =>
+            new ServerSecretStore.SecretStorePersistError({
+              resource: `${integrationId} credentials`,
+              cause,
+            }),
+        }),
         () => Effect.suspend(operation).pipe(Effect.uninterruptible),
         (settle) => Effect.sync(settle),
       ),

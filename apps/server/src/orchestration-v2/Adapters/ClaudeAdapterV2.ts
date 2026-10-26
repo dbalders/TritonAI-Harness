@@ -121,7 +121,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as Integrations from "../../integrations/IntegrationRegistry.ts";
-import { describeToolCallForApproval } from "../../integrations/IntegrationToolPreview.ts";
+import { TRITONAI_COMMONS_SUBMIT_TOOL_NAME } from "../../mcp/TritonAiCommonsTool.ts";
 import {
   BROWSER_NAVIGATION_GRANT,
   browserNavigationRequest,
@@ -9057,6 +9057,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           const integrationTool = claudeIntegrationTool(toolName);
+          if (
+            integrationTool?.readOnly === false ||
+            toolName === claudeT3McpToolName(TRITONAI_COMMONS_SUBMIT_TOOL_NAME)
+          ) {
+            return {
+              behavior: "deny",
+              message:
+                "This provider has no host approval presenter for plugin writes or Commons sharing. Use a managed Codex thread or share from Settings.",
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          }
           if (!requiresClaudeApproval(context) || integrationTool?.readOnly === true) {
             return {
               behavior: "allow",
@@ -9084,24 +9095,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           const requestKind = providerRequestKindFromClaudeTool(toolName);
-          const prompt = integrationTool
-            ? yield* Effect.try(() =>
-                describeToolCallForApproval(integrationTool.name, toolInput),
-              ).pipe(Effect.catch(() => Effect.succeed(null)))
-            : browserApproval?.requiresApproval === true
+          const prompt =
+            browserApproval?.requiresApproval === true
               ? browserApproval.prompt
               : (callbackOptions.title ??
                 callbackOptions.description ??
                 callbackOptions.decisionReason ??
                 summarizeClaudeToolRequest(toolName, nativeToolInput));
-          if (prompt === null) {
-            return {
-              behavior: "deny",
-              message:
-                "This plugin request cannot be reviewed completely. Configure credentials through the connection or split the request into smaller changes.",
-              toolUseID: callbackOptions.toolUseID,
-            } satisfies PermissionResult;
-          }
           const artifacts = yield* buildApprovalRequestArtifacts({
             context,
             nativeItemId: nativeRequestId,
