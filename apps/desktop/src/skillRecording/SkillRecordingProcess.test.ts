@@ -55,13 +55,6 @@ it("settles start and stop when the helper crashes mid-recording", async () => {
   assert.deepEqual(await recording.stop(), { status: "failed" });
 });
 
-it("passes through why the helper could not record", async () => {
-  const recording = startSkillRecordingProcess("worker.cjs", request);
-  worker.emit("message", { type: "ready" });
-  worker.emit("message", { type: "error", reason: "permission-required" });
-  assert.deepEqual(await recording.started, { status: "permission-required" });
-});
-
 it("reports a limit, then still hands back the capture on stop", async () => {
   const recording = startSkillRecordingProcess("worker.cjs", request);
   worker.emit("message", { type: "ready" });

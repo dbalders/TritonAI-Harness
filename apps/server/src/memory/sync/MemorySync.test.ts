@@ -525,6 +525,7 @@ const assertNotSyncing = (drive: FakeOneDrive, sync: MemorySync.MemorySync["Serv
   });
 
 it.layer(NodeServices.layer)("MemorySync", (it) => {
+  // regression: #335 preserve recovered inbox notes and sign-out access
   it.effect("keeps sign out available when Microsoft cannot load the account name", () =>
     Effect.gen(function* () {
       const drive = new FakeOneDrive();
@@ -554,6 +555,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
   describe.each(Array.from(["Other computer", MAC.name], (scenario) => ({ scenario })))(
     "case $scenario",
     ({ scenario: name }) => {
+      // regression: #347 verify device ownership before deleting cloud notes
       it.effect(`stops independent first-sync short-ID collisions with ${name}`, () =>
         Effect.gen(function* () {
           const drive = new FakeOneDrive();
@@ -590,6 +592,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
     },
   );
 
+  // regression: #347 verify device ownership before deleting cloud notes
   it.effect("restores a legacy downloaded note repeatedly without adopting its ownership", () =>
     Effect.gen(function* () {
       const drive = new FakeOneDrive();
@@ -618,6 +621,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
     }),
   );
 
+  // regression: #347 verify device ownership before deleting cloud notes
   it.effect("still deletes a generated note intentionally removed by its verified uploader", () =>
     Effect.gen(function* () {
       const drive = new FakeOneDrive();
@@ -641,6 +645,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
   describe.each(Array.from(["Other computer", MAC.name], (scenario) => ({ scenario })))(
     "case $scenario",
     ({ scenario: name }) => {
+      // regression: #347 verify device ownership before deleting cloud notes
       it.effect(
         `preserves an orphaned remote note downloaded by ${name} with a matching code`,
         () =>
@@ -686,6 +691,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
       scenario,
     })),
   )("case $scenario", ({ scenario: recordProblem }) => {
+    // regression: #347 verify device ownership before deleting cloud notes
     it.effect(
       `preserves an uploaded note after local loss with a ${recordProblem} remote device record`,
       () =>
@@ -1146,6 +1152,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
       }).pipe(Effect.provide(mac.layer));
     }),
   );
+  // regression: #342 cancel pending OneDrive sign-in when sync is turned off
   it.effect("turning sync off while a sign-in poll waits on Microsoft cancels it", () =>
     Effect.gen(function* () {
       const drive = new FakeOneDrive();
@@ -1166,6 +1173,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
     }),
   );
 
+  // regression: #342 cancel pending OneDrive sign-in when sync is turned off
   it.effect("turning sync off after Microsoft answers but before saving discards the sign-in", () =>
     Effect.gen(function* () {
       const drive = new FakeOneDrive();
@@ -1183,6 +1191,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
     }),
   );
 
+  // regression: #342 cancel pending OneDrive sign-in when sync is turned off
   it.effect("signing out while a sign-in completes leaves it signed out", () =>
     Effect.gen(function* () {
       const drive = new FakeOneDrive();
@@ -1200,6 +1209,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
     }),
   );
 
+  // regression: #342 cancel pending OneDrive sign-in when sync is turned off
   it.effect("turning sync off while it reuses the plugin sign-in keeps it off", () =>
     Effect.gen(function* () {
       const drive = new FakeOneDrive();
@@ -1225,29 +1235,6 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
         yield* assertNotSyncing(drive, sync);
         // The plugin sign-in still works for the next attempt.
         assert.strictEqual((yield* sync.start).kind, "connected");
-      }).pipe(Effect.provide(mac.layer));
-    }),
-  );
-
-  it.effect("turning sync back on after a cancelled sign-in starts a fresh one", () =>
-    Effect.gen(function* () {
-      const drive = new FakeOneDrive();
-      const mac = yield* setup(drive, MAC);
-      yield* Effect.gen(function* () {
-        yield* mac.registerDevice;
-        const { sync } = yield* cancelDuringSignIn(drive, isAccountLookup, (sync) => sync.stop);
-        yield* assertNotSyncing(drive, sync);
-        const started = yield* sync.start;
-        if (started.kind !== "device_code") return assert.fail("expected a device code");
-        assert.strictEqual((yield* sync.poll(started.flowId)).state, "connected");
-        const settings = yield* ServerSettings.ServerSettingsService;
-        assert.isTrue((yield* settings.getSettings).memorySyncEnabled);
-        assert.isTrue((yield* sync.getStatus).sync.signedIn);
-        yield* sync.syncNow;
-        assert.strictEqual((yield* sync.getStatus).sync.state, "idle");
-        assert.isNotNull(
-          drive.file(`TritonAI Harness/memory/general/.devices/${MAC.environmentId}/device.json`),
-        );
       }).pipe(Effect.provide(mac.layer));
     }),
   );

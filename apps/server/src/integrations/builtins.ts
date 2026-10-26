@@ -33,13 +33,6 @@ async function loadBuiltinIntegrationPackages(
   }
 }
 
-export function loadBuiltinIntegrationPackagesForTest(
-  loadFixtures: IntegrationPackageLoader | null,
-  loadProduction: IntegrationPackageLoader,
-): Promise<ReadonlyArray<IntegrationPackage>> {
-  return loadBuiltinIntegrationPackages(loadFixtures, loadProduction);
-}
-
 export async function loadBuiltinIntegrations(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
   options: { readonly includeFixtures?: boolean } = {},

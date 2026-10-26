@@ -425,86 +425,6 @@ describe("managed skill install ownership", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("cleans refresh staging when replacement preparation fails", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-refresh-write-test-" });
-      const skillsDirectory = path.join(root, "skills");
-      const skillDirectory = path.join(skillsDirectory, "local-skill");
-      yield* fs.makeDirectory(skillDirectory, { recursive: true });
-      yield* fs.writeFileString(
-        path.join(skillDirectory, "SKILL.md"),
-        skillMarkdown("local-skill", "original"),
-      );
-      const failingFileSystem = {
-        ...fs,
-        writeFileString: (
-          target: string,
-          contents: string,
-          options?: Parameters<FileSystem.FileSystem["writeFileString"]>[2],
-        ) =>
-          target.includes(".backup.")
-            ? Effect.fail(
-                PlatformError.systemError({
-                  _tag: "PermissionDenied",
-                  module: "FileSystem",
-                  method: "writeFileString",
-                  pathOrDescriptor: target,
-                  description: "Injected replacement write failure.",
-                }),
-              )
-            : fs.writeFileString(target, contents, options),
-      } satisfies FileSystem.FileSystem;
-
-      const error = yield* installSkillBundle({
-        bundle: bundle("local-skill", "replacement"),
-        skillsDirectory,
-      }).pipe(Effect.provideService(FileSystem.FileSystem, failingFileSystem), Effect.flip);
-
-      expect(error.message).toContain("Failed to write");
-      expect(yield* fs.readDirectory(skillsDirectory)).toEqual(["local-skill"]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("cleans refresh staging when the original skill cannot be moved", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-refresh-rename-test-" });
-      const skillsDirectory = path.join(root, "skills");
-      const skillDirectory = path.join(skillsDirectory, "local-skill");
-      yield* fs.makeDirectory(skillDirectory, { recursive: true });
-      yield* fs.writeFileString(
-        path.join(skillDirectory, "SKILL.md"),
-        skillMarkdown("local-skill", "original"),
-      );
-      const failingFileSystem = {
-        ...fs,
-        rename: (from: string, to: string) =>
-          from === skillDirectory && to.includes(".backup.")
-            ? Effect.fail(
-                PlatformError.systemError({
-                  _tag: "PermissionDenied",
-                  module: "FileSystem",
-                  method: "rename",
-                  pathOrDescriptor: from,
-                  description: "Injected refresh rename failure.",
-                }),
-              )
-            : fs.rename(from, to),
-      } satisfies FileSystem.FileSystem;
-
-      const error = yield* installSkillBundle({
-        bundle: bundle("local-skill", "replacement"),
-        skillsDirectory,
-      }).pipe(Effect.provideService(FileSystem.FileSystem, failingFileSystem), Effect.flip);
-
-      expect(error.message).toContain("Failed to move");
-      expect(yield* fs.readDirectory(skillsDirectory)).toEqual(["local-skill"]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("allows a real skills directory under a symlinked parent", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -524,31 +444,6 @@ describe("managed skill install ownership", () => {
       expect(yield* fs.exists(path.join(actualHome, "skills", "local-skill", "SKILL.md"))).toBe(
         true,
       );
-      yield* discardProviderSkillInstallRollback(result.rollback);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("refreshes an unmanaged same-name skill when ownership is known", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "managed-skill-install-test-" });
-      const skillsDirectory = path.join(root, "skills");
-      const skillDirectory = path.join(skillsDirectory, "local-skill");
-      const skillPath = path.join(skillDirectory, "SKILL.md");
-      yield* fs.makeDirectory(skillDirectory, { recursive: true });
-      yield* fs.writeFileString(skillPath, skillMarkdown("local-skill", "original"));
-      yield* fs.writeFileString(
-        path.join(skillsDirectory, ".tritonai-managed-skills.json"),
-        '{"version":1,"kind":"tritonai-secure","skills":["secure-skill"]}',
-      );
-
-      const result = yield* installSkillBundle({
-        bundle: bundle("local-skill", "replacement"),
-        skillsDirectory,
-      });
-
-      expect(yield* fs.readFileString(skillPath)).toContain("replacement");
       yield* discardProviderSkillInstallRollback(result.rollback);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

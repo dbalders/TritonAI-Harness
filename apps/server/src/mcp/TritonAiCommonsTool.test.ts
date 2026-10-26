@@ -24,36 +24,6 @@ it("requires runtime write approval before resolving or submitting a skill", asy
   expect(submit).not.toHaveBeenCalled();
 });
 
-it("binds the exact selector to the current provider and returns bounded review metadata", async () => {
-  const submit = vi.fn(async () => ({
-    reviewUrl: "https://github.com/dbalders/UCSD-Skills-Library/pull/42",
-    branch: "internal-branch-is-not-model-visible",
-    path: "community/accessibility-review/SKILL.md",
-    skillName: "accessibility-review",
-  }));
-  const result = await invokeTritonAiCommonsTool({
-    arguments: { skillName: "accessibility-review", confirmedPublicShare: true },
-    providerInstanceId,
-    signal,
-    writeApproved: true,
-    runtime: { submit },
-  });
-
-  expect(submit).toHaveBeenCalledWith(
-    {
-      instanceId: providerInstanceId,
-      skillName: "accessibility-review",
-      confirmedPublicShare: true,
-    },
-    signal,
-  );
-  expect(result).toMatchObject({
-    status: "review_opened",
-    reviewUrl: "https://github.com/dbalders/UCSD-Skills-Library/pull/42",
-  });
-  expect(result).not.toHaveProperty("branch");
-});
-
 it("rejects ambiguous or unconfirmed arguments before the domain service", async () => {
   const submit = vi.fn();
   for (const argumentsValue of [

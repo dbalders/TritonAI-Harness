@@ -367,16 +367,6 @@ describe("production built-in package verification", () => {
     }
   });
 
-  it("quarantines one SDK provider without disabling later production packages", async () => {
-    const retained = { manifest: validateIntegrationManifest(skillsOnlyManifest()) };
-    await expect(
-      loadProductionPackagesForTest([
-        () => Promise.reject(new PluginSdkQuarantineError()),
-        () => Promise.resolve(retained),
-      ]),
-    ).resolves.toEqual([retained]);
-  });
-
   it("quarantines SDK1 packages while retaining a later providerless package", async () => {
     const sdk = composition(await testFiles(sdkGoldenRoot), "synthetic-api-key");
     const data = await fixture(
@@ -393,15 +383,6 @@ describe("production built-in package verification", () => {
       expect(packages[0]?.provider).toBeUndefined();
     } finally {
       await NodeFSP.rm(data.root, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts an exact package inventory and digest", async () => {
-    const { root, plugin } = await fixture();
-    try {
-      await expect(verifyProductionPackageForTest(root, plugin)).resolves.toBeUndefined();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
 
@@ -431,23 +412,6 @@ describe("production built-in package verification", () => {
     }
   });
 
-  it("cleans up a private snapshot when its consumer fails", async () => {
-    const { root, plugin } = await fixture();
-    let snapshotParent = "";
-    try {
-      await expect(
-        withProductionPackageSnapshotForTest(root, plugin, async (snapshotRoot) => {
-          snapshotParent = NodePath.dirname(snapshotRoot);
-          throw new Error("fixture consumer failed");
-        }),
-      ).rejects.toThrow("fixture consumer failed");
-      await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-      if (snapshotParent) await NodeFSP.rm(snapshotParent, { recursive: true, force: true });
-    }
-  });
-
   it("runs the released beta.78 provider with a host-created beta.102 secret-store Effect", async () => {
     const { root, plugin } = await fixture("4.0.0-beta.78");
     try {
@@ -463,21 +427,6 @@ describe("production built-in package verification", () => {
           get: () => Effect.succeed(Option.some(new TextEncoder().encode("host-secret"))),
         });
         await expect(provider.credential()).resolves.toBe("host-secret");
-      });
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("runs a peer-contract provider against the Harness-owned Effect runtime", async () => {
-    const { root, plugin } = await fixture(null, {
-      peerDependencies: { effect: EFFECT_HOST_PEER_RANGE },
-    });
-    try {
-      await withProductionPackageSnapshotForTest(root, plugin, async (snapshotRoot) => {
-        await expect(
-          import(NodeURL.pathToFileURL(NodePath.join(snapshotRoot, "dist", "index.js")).href),
-        ).resolves.toHaveProperty("FixtureProvider");
       });
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });

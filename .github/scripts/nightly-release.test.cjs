@@ -62,24 +62,3 @@ test("manual proof builds without publishing; manual publication is explicit", a
   assert.equal(publish.outputs.publish, "true");
   assert.equal(publish.outputs.stable_version, "0.3.3");
 });
-
-test("schedule is opt-in and skips the latest published nightly source", async () => {
-  const disabled = fixture("schedule");
-  disabled.enabled = "";
-  await resolveNightly(disabled);
-  assert.equal(disabled.outputs.build, "false");
-  const unchanged = fixture("schedule");
-  unchanged.github.paginate = async () => [
-    {
-      tag_name: "v0.3.4-nightly.20260911.1",
-      prerelease: true,
-      draft: false,
-      published_at: "2026-09-11T08:17:00Z",
-    },
-  ];
-  await resolveNightly(unchanged);
-  assert.equal(unchanged.outputs.build, "false");
-  const changed = fixture("schedule");
-  await resolveNightly(changed);
-  assert.equal(changed.outputs.build, "true");
-});

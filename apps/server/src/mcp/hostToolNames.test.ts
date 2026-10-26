@@ -15,6 +15,7 @@ import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
 import { TRITONAI_COMMONS_SUBMIT_TOOL_NAME } from "./TritonAiCommonsTool.ts";
 
 // Keep in step with the toolkits McpHttpServer.makeLayer registers and reserves.
+// regression: #400 fix(integrations): restore plugin access, failure detail, and approvals after orchestration-v2
 it("lists exactly the tools the Harness MCP server registers itself", () => {
   const registered = [
     ...[

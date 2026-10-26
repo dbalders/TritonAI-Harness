@@ -135,6 +135,7 @@ layer("managed provider instance references", (it) => {
 });
 
 layer("startup preserves historical model selections", (it) => {
+  // regression: #323 remove history scans and bound startup recovery
   it.effect("does not rewrite chats or events when the managed catalog changes", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

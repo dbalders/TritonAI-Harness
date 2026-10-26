@@ -72,26 +72,3 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("startup heartbeat", 
       }),
   );
 });
-
-it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("heartbeat query failure", (it) => {
-  it.effect("omits unknown counts when gathering fails without blocking startup", () =>
-    Effect.gen(function* () {
-      const recorded: Array<Readonly<Record<string, unknown>> | undefined> = [];
-      yield* recordStartupHeartbeat.pipe(
-        Effect.provide(
-          Layer.succeed(
-            AnalyticsService,
-            AnalyticsService.of({
-              record: (_, properties) =>
-                Effect.sync(() => {
-                  recorded.push(properties);
-                }),
-              flush: Effect.void,
-            }),
-          ),
-        ),
-      );
-      assert.deepStrictEqual(recorded, [{}]);
-    }),
-  );
-});

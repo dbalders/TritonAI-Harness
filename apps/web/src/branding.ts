@@ -1,4 +1,8 @@
-import { TRITONAI_APP_BASE_NAME, type DesktopAppBranding } from "@t3tools/contracts";
+import {
+  TRITONAI_APP_BASE_NAME,
+  isTritonAiNightlyVersion,
+  type DesktopAppBranding,
+} from "@t3tools/contracts";
 import { formatAppDisplayName } from "./branding.logic";
 
 function readInjectedDesktopAppBranding(): DesktopAppBranding | null {
@@ -27,4 +31,8 @@ export const APP_DISPLAY_NAME =
   injectedDesktopAppBranding?.displayName ??
   formatAppDisplayName({ baseName: APP_BASE_NAME, stageLabel: APP_STAGE_LABEL });
 export const APP_VERSION = import.meta.env.APP_VERSION || "0.0.0";
+export const GUIDED_TOUR_AVAILABLE =
+  APP_STAGE_LABEL === "Dev" ||
+  APP_STAGE_LABEL === "Nightly" ||
+  isTritonAiNightlyVersion(APP_VERSION);
 export const DESKTOP_DOWNLOAD_URL = "https://t3.codes/download";

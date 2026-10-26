@@ -15,8 +15,8 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-export const APP_DISPLAY_NAME = "TritonAI Harness";
-export const APP_BUNDLE_ID = isDevelopment
+const APP_DISPLAY_NAME = "TritonAI Harness";
+const APP_BUNDLE_ID = isDevelopment
   ? `edu.ucsd.tritonai.harness.dev.${devBundleIdSuffix || "local"}`
   : "edu.ucsd.tritonai.harness";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
@@ -103,7 +103,7 @@ function runChecked(command, args) {
   throw new Error(`Failed to run ${command} ${args.join(" ")}: ${details}`.trim());
 }
 
-export function resolveMacCodeSignArguments(appBundlePath) {
+function resolveMacCodeSignArguments(appBundlePath) {
   return ["--force", "--deep", "--sign", "-", "--timestamp=none", appBundlePath];
 }
 
@@ -224,7 +224,7 @@ function registerMacLauncherBundle(appBundlePath) {
 }
 
 // Bundle-internal paths are macOS paths whatever host builds them.
-export function resolveMacLauncherIconPaths(runtimeDir, development = isDevelopment) {
+function resolveMacLauncherIconPaths(runtimeDir, development = isDevelopment) {
   return {
     sourceIconPath: development ? developmentMacIconPngPath : productionMacIconPngPath,
     generatedIconPath: NodePath.posix.join(
@@ -283,7 +283,7 @@ function ensureMacIconIcns(runtimeDir) {
   }
 }
 
-export function resolveMacBundleInfoPlistStrings(executableName) {
+function resolveMacBundleInfoPlistStrings(executableName) {
   return {
     CFBundleDisplayName: APP_DISPLAY_NAME,
     CFBundleName: APP_DISPLAY_NAME,

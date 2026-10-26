@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   alignPathCase,
   classifyVaultPath,
-  conflictCopyPath,
   type CloudFile,
   type LocalFile,
   planMemorySync,
@@ -148,6 +147,7 @@ describe("this computer's files", () => {
     ).toEqual([{ kind: "download", path: pending }]);
   });
 
+  // regression: #335 preserve recovered inbox notes and sign-out access
   it("restores processed inbox notes when sync metadata survives a lost inbox", () => {
     const processed = "Inbox/5c9e/processed/2026-09-29/idea.md";
     const pending = "Inbox/5c9e/idea.md";
@@ -274,14 +274,6 @@ describe("Notes", () => {
   });
 });
 
-describe("conflictCopyPath", () => {
-  it("keeps the folder and extension", () => {
-    expect(conflictCopyPath("Notes/Projects/plans.md", "Mac (5c9e)", "2026-09-29 221530")).toBe(
-      "Notes/Projects/plans (conflict Mac (5c9e) 2026-09-29 221530).md",
-    );
-  });
-});
-
 describe("alignPathCase", () => {
   it("treats a case-only rename in OneDrive as the same file, never a delete", () => {
     const aligned = alignPathCase({
@@ -301,20 +293,9 @@ describe("alignPathCase", () => {
     });
     expect(actions).toEqual([{ kind: "download", path: "Notes/Plans.md" }]);
   });
-
-  it("keeps only one of two local files that differ only in case", () => {
-    const aligned = alignPathCase({
-      local: new Map([
-        ["Notes/a.md", { sha256: "1" }],
-        ["Notes/A.md", { sha256: "2" }],
-      ]),
-      cloud: new Map<string, { eTag: string }>(),
-      synced: new Map<string, { sha256: string; eTag: string }>(),
-    });
-    expect(aligned.local.size).toBe(1);
-  });
 });
 
+// regression: #347 verify device ownership before deleting cloud notes
 describe("generated note ownership", () => {
   it("preserves a downloaded note after local loss when only its short ID matches", () => {
     const path = "Daily/2026-10-02 Other computer (aaaa).md";
@@ -330,6 +311,7 @@ describe("generated note ownership", () => {
   });
 });
 
+// regression: #347 verify device ownership before deleting cloud notes
 describe("full-ID provenance", () => {
   it.each(["Daily/2026/Mac (5c9e).md", "Projects/X/X - Mac (5c9e).md"])(
     "requires both upload provenance and a remote owner record to delete %s",

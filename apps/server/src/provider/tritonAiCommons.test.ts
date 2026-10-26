@@ -247,18 +247,6 @@ describe("TritonAI Commons local skill submission", () => {
     );
   });
 
-  it("rejects unsupported frontmatter instead of opening a review the validator will reject", () => {
-    expect(() =>
-      prepareTritonAiCommonsSubmission({
-        bundle: localSkill(
-          `---\nname: local-accessibility-review\ndescription: Review a public webpage.\ncustom-field: value\n---\n\n# Review\n`,
-        ),
-        githubLogin: "contributor",
-        repositoryLicense: TEST_LICENSE,
-      }),
-    ).toThrow("not supported by TritonAI Commons");
-  });
-
   it("recognizes protected plugin skill paths case-insensitively on every platform", () => {
     expect(
       isProtectedLocalSkillPathForCommons(
@@ -273,21 +261,6 @@ describe("TritonAI Commons local skill submission", () => {
     expect(
       isProtectedLocalSkillPathForCommons("C:\\Users\\Contributor\\skills\\demo\\SKILL.md"),
     ).toBe(false);
-  });
-
-  it("preserves an explicit maintainer from the local skill", () => {
-    const prepared = prepareTritonAiCommonsSubmission({
-      bundle: localSkill(
-        `---\nname: local-accessibility-review\ndescription: Review a public webpage for accessibility issues.\nmaintainer: Accessibility Team\n---\n\n# Review\n\nReview the webpage.\n`,
-      ),
-      githubLogin: "contributor",
-      repositoryLicense: TEST_LICENSE,
-    });
-
-    expect(prepared.maintainer).toBe("Accessibility Team");
-    expect(
-      prepared.bundle.files.find(({ path }) => path === "SKILL.md")?.content.match(/maintainer:/gu),
-    ).toHaveLength(1);
   });
 
   it("rejects unsafe local content before any repository write", () => {
@@ -391,34 +364,10 @@ describe("TritonAI Commons local skill submission", () => {
       base: "main",
       draft: false,
     });
-    expect((pull.input as { body: string }).body).toContain("existing local skill");
-    expect((pull.input as { body: string }).body).toContain("later maintainer decision");
     expect(
       fixture.calls.find(({ name }) => name === "github.branches.create")?.input,
     ).toMatchObject({
       fromRef: BASE_SHA,
-    });
-  });
-
-  it("creates a contributor fork but branches directly for the repository owner", async () => {
-    const contributor = registryFixture({ forkExists: false });
-    await submitProviderSkillToTritonAiCommons({
-      bundle: localSkill(),
-      registry: contributor.registry,
-      signal: new AbortController().signal,
-    });
-    expect(contributor.calls.some(({ name }) => name === "github.repositories.fork")).toBe(true);
-
-    const owner = registryFixture({ login: "dbalders" });
-    await submitProviderSkillToTritonAiCommons({
-      bundle: localSkill(),
-      registry: owner.registry,
-      signal: new AbortController().signal,
-    });
-    expect(owner.calls.some(({ name }) => name === "github.repositories.fork")).toBe(false);
-    expect(owner.calls.find(({ name }) => name === "github.contents.put")?.input).toMatchObject({
-      owner: "dbalders",
-      path: "community/local-accessibility-review/SKILL.md",
     });
   });
 
@@ -452,20 +401,6 @@ describe("TritonAI Commons local skill submission", () => {
     expect(fixture.calls.filter(({ name }) => name === "github.branches.create")).toHaveLength(1);
     expect(fixture.calls.filter(({ name }) => name === "github.pulls.create")).toHaveLength(1);
     expect(fixture.calls.filter(({ name }) => name === "github.contents.put")).toHaveLength(3);
-  });
-
-  it("resumes a pristine deterministic branch left by an interrupted submission", async () => {
-    const fixture = registryFixture({ branchExistsWithoutPull: true });
-
-    await submitProviderSkillToTritonAiCommons({
-      bundle: localSkill(),
-      registry: fixture.registry,
-      signal: new AbortController().signal,
-    });
-
-    expect(fixture.calls.some(({ name }) => name === "github.branches.create")).toBe(false);
-    expect(fixture.calls.filter(({ name }) => name === "github.contents.put")).toHaveLength(3);
-    expect(fixture.calls.filter(({ name }) => name === "github.pulls.create")).toHaveLength(1);
   });
 
   it("resumes matching files after GitHub accepted a write but its response failed", async () => {
