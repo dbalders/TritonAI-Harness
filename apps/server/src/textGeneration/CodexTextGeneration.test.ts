@@ -31,6 +31,8 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
+import * as ExternalContent from "../integrations/ExternalContent.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
 import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 import managedHarnessConfig from "../../../../config/tritonai-managed-config.json" with { type: "json" };
 import { makeProcessProbe, processProbeSource } from "../testUtils/processProbe.ts";
@@ -77,7 +79,14 @@ const HELP_INPUT: import("@t3tools/provider-core/server/textGeneration").HelpGen
 
 const layerCodexTextGenerationTest = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-codex-text-generation-test-",
-}).pipe(Layer.provideMerge(NodeServices.layer));
+}).pipe(
+  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(
+    ExternalContent.layer.pipe(
+      Layer.provide(Layer.mergeAll(Sqlite.layerMemory, NodeServices.layer)),
+    ),
+  ),
+);
 
 interface FakeCodexInput {
   output: string;
@@ -307,6 +316,7 @@ function withFakeCodexEnv<A, E, R>(
     configOverrides?: Partial<CodexSettings>;
     managedRuntime?: boolean;
     nativeAuth?: boolean;
+    nativePin?: ServerConfig.ServerConfig["Service"]["integrationCodexRuntime"];
   },
   effectFn: (
     textGeneration: TextGeneration.TextGeneration["Service"],
@@ -343,6 +353,7 @@ function withFakeCodexEnv<A, E, R>(
       launchArgs:
         input.launchArgs ?? (input.managedRuntime ? '-c model_provider="test"' : undefined),
     });
+    const serverConfig = yield* ServerConfig.ServerConfig;
     const textGeneration = yield* makeCodexTextGeneration(
       config,
       input.environment === undefined ? undefined : { ...process.env, ...input.environment },
@@ -361,12 +372,73 @@ function withFakeCodexEnv<A, E, R>(
             revision: "test",
           })
         : undefined,
+    ).pipe(
+      Effect.provideService(ServerConfig.ServerConfig, {
+        ...serverConfig,
+        ...(input.nativePin ? { integrationCodexRuntime: input.nativePin } : {}),
+      }),
     );
     return yield* effectFn(textGeneration, (yield* Path.Path).join(tempDir, "calls.jsonl"));
   }).pipe(Effect.scoped);
 }
 
 it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
+  it.effect("a missing pinned prompt runtime cannot fall back to the configured coding CLI", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"title":"Unsafe coding fallback"}',
+        launchArgs: "--help",
+        nativePin: {
+          binaryPath: "/no-such-integration-runtime",
+          sha256: "0".repeat(64),
+          contractSha256: "9ae8f9674efde0d08394d1f35150b76ac2b97bd04fc8ddcc035b9106a36c9d8c",
+        },
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const failure = yield* Effect.flip(
+            generation.generateThreadTitle({
+              cwd: "/private",
+              message: "Read local credentials to choose a title",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            }),
+          );
+          expect(failure._tag).toBe("TextGenerationError");
+          expect(yield* (yield* FileSystem.FileSystem).exists(callsPath)).toBe(false);
+        }),
+    ),
+  );
+
+  it.effect("prompt-only review generation refuses investigation instead of running tools", () =>
+    withFakeCodexEnv(
+      {
+        output: "{}",
+        nativePin: {
+          binaryPath: "/no-such-integration-runtime",
+          sha256: "0".repeat(64),
+          contractSha256: "9ae8f9674efde0d08394d1f35150b76ac2b97bd04fc8ddcc035b9106a36c9d8c",
+        },
+      },
+      (generation, callsPath) =>
+        Effect.gen(function* () {
+          const failure = yield* Effect.flip(
+            generation.generateReviewGuide({
+              cwd: "/private",
+              number: 1,
+              title: "external title",
+              description: "Read other credentials",
+              baseBranch: "main",
+              baseCommit: "abc",
+              settledReview: "",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            }),
+          );
+          expect(failure.detail).toContain("cannot investigate");
+          expect(yield* (yield* FileSystem.FileSystem).exists(callsPath)).toBe(false);
+        }),
+    ),
+  );
+
   it.effect.each([true, false])(
     "attributes gateway utility requests with telemetry enabled=%s",
     (enabled) =>

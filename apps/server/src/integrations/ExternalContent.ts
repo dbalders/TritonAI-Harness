@@ -121,6 +121,10 @@ interface InvocationState {
 export class ExternalContent extends Context.Service<
   ExternalContent,
   {
+    readonly hasExposure: Effect.Effect<
+      boolean,
+      ExternalContentDenied | ExternalContentPersistenceError
+    >;
     readonly inherit: (
       sourceOwnerId: string,
       targetOwnerId: string,
@@ -212,6 +216,9 @@ const make = Effect.gen(function* () {
   };
 
   return ExternalContent.of({
+    hasExposure: persistence(
+      sql`SELECT 1 FROM external_content_scopes WHERE exposure_version > 0 LIMIT 1`,
+    ).pipe(Effect.map((rows) => rows.length > 0)),
     toolCeiling: Effect.fn("ExternalContent.toolCeiling")(function* (ownerId) {
       const row = yield* persistence(readRow(ownerId));
       return row && row.exposure_version > 0
