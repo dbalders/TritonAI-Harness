@@ -8965,16 +8965,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           const requestKind = providerRequestKindFromClaudeTool(toolName);
-          // A plugin write shows the change it will make, with secret-looking arguments hidden.
-          // Opening a website shows the complete destination.
           const prompt = integrationTool
-            ? describeToolCallForApproval(integrationTool.name, toolInput)
+            ? yield* Effect.try(() =>
+                describeToolCallForApproval(integrationTool.name, toolInput),
+              ).pipe(Effect.catch(() => Effect.succeed(null)))
             : browserApproval?.requiresApproval === true
               ? browserApproval.prompt
               : (callbackOptions.title ??
                 callbackOptions.description ??
                 callbackOptions.decisionReason ??
                 summarizeClaudeToolRequest(toolName, nativeToolInput));
+          if (prompt === null) {
+            return {
+              behavior: "deny",
+              message:
+                "This plugin request cannot be reviewed completely. Configure credentials through the connection or split the request into smaller changes.",
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          }
           const artifacts = yield* buildApprovalRequestArtifacts({
             context,
             nativeItemId: nativeRequestId,

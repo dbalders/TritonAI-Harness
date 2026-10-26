@@ -1373,6 +1373,25 @@ describe("ClaudeAdapterV2 plugin tool approvals", () => {
         const canUseTool = openedOptions?.canUseTool;
         assert.isFunction(canUseTool);
 
+        let nested: Record<string, unknown> = { content: "synthetic" };
+        for (let depth = 0; depth < 65; depth++) nested = { nested };
+        for (const [index, input] of [
+          { token: "synthetic-only" },
+          { content: "x".repeat(600_000) },
+          nested,
+        ].entries()) {
+          const refused = yield* Effect.promise(() =>
+            canUseTool!("mcp__t3-code__fixture_records_write", input, {
+              signal: new AbortController().signal,
+              toolUseID: `tool-unreviewable-${index}`,
+              requestId: `request-unreviewable-${index}`,
+            }),
+          );
+          if (refused === null || refused.behavior !== "deny")
+            return assert.fail("Unreviewable plugin request was not refused.");
+          assert.include(refused.message, "cannot be reviewed completely");
+        }
+
         const read = yield* Effect.promise(() =>
           canUseTool!(
             "mcp__t3-code__fixture_records_list",
