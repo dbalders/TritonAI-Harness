@@ -123,6 +123,50 @@ it.effect("a provider startup declaration cannot substitute for an actual host r
   }).pipe(Effect.provide(layer), Effect.scoped),
 );
 
+it.effect("keeps the host credential identity distinct from the orchestration session", () =>
+  Effect.gen(function* () {
+    const { adapter, calls } = fixture();
+    const content = yield* ExternalContent.ExternalContent;
+    const externalContentSessionId = "separate-host-credential";
+    const boundCaller = { ...caller, providerSessionId: externalContentSessionId };
+    yield* content.establish({
+      channel,
+      caller: boundCaller,
+      scopeId: "credential-bound-native-scope",
+      boundaryDigest: "d".repeat(64),
+      allowedTools: ["fixture.read"],
+      expiresAt: 10_000,
+      isCurrent: () => true,
+    });
+    const nativeOpen = () =>
+      adapter
+        .openSession(openInput)
+        .pipe(Effect.map((runtime) => ({ ...runtime, externalContentSessionId })));
+    const protectedAdapter = yield* ExternalContentProvider.protectAdapter({
+      ...adapter,
+      openExternalContentSession: nativeOpen,
+    });
+    const runtime = yield* protectedAdapter.openSession(openInput);
+    const invocation = yield* content.admit(boundCaller, "fixture.read", channel);
+    yield* content.record(
+      invocation,
+      {
+        integrationId: "fixture",
+        integrationVersion: "1",
+        toolName: "fixture.read",
+        connectionGeneration: "generation-1",
+      },
+      { isError: false, data: { body: "Untrusted integration data" } },
+    );
+    yield* runtime.startTurn(turn);
+    expect(runtime.providerSessionId).toBe(providerSessionId);
+    expect(calls).toEqual(["open", "start"]);
+    yield* content.revoke(boundCaller.ownerId);
+    expect((yield* Effect.flip(runtime.startTurn(turn)))._tag).toBe("ProviderAdapterProtocolError");
+    expect(calls).toEqual(["open", "start"]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
 it.effect("a coding replacement cannot borrow a previous process's unused integration lease", () =>
   Effect.gen(function* () {
     const content = yield* ExternalContent.ExternalContent;

@@ -550,6 +550,8 @@ export type ProviderAdapterV2SubagentOutcome = {
 export interface ProviderAdapterV2SessionRuntime {
   /** Private host IPC identity. Never serialize it into provider or client metadata. */
   readonly externalContentChannel?: object;
+  /** Host tool credential identity; orchestration session IDs have a separate lifecycle. */
+  readonly externalContentSessionId?: string;
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
   readonly providerSessionId: ProviderSessionId;

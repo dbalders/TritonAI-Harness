@@ -2311,9 +2311,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ),
             Effect.flatMap((context) =>
               Effect.service(CodexClient.CodexAppServerClient).pipe(
-                Effect.map((client) =>
-                  withCodexReplayChildMetadata(client, transcript, readChildMetadata),
-                ),
+                Effect.map((client) => {
+                  if (overrides.settings?.sessionPurpose === "integrations")
+                    assert.equal(
+                      openInput.integrationBoundary?.providerSessionId,
+                      `mcp-credential-${transcript.scenario}`,
+                    );
+                  return withCodexReplayChildMetadata(client, transcript, readChildMetadata);
+                }),
                 Effect.map((client) =>
                   Object.assign(replayHooks.runtimeChannel ?? {}, {
                     ...client,
@@ -2591,7 +2596,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const credential = {
           environmentId: EnvironmentId.make("fixture-environment"),
           threadId,
-          providerSessionId: `provider-session-${name}`,
+          providerSessionId: `mcp-credential-${name}`,
           providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
           endpoint: "http://127.0.0.1:1234/mcp",
           authorizationHeader: "Bearer synthetic-fixture-token",

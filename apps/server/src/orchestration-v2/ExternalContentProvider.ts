@@ -32,7 +32,8 @@ export const protectAdapter = Effect.fn("ExternalContentProvider.protectAdapter"
                 .assertInference(
                   {
                     ownerId: `thread:${input.threadId}`,
-                    providerSessionId: runtime.providerSessionId,
+                    providerSessionId:
+                      runtime.externalContentSessionId ?? runtime.providerSessionId,
                     providerInstanceId: runtime.instanceId,
                   },
                   true,
@@ -54,7 +55,7 @@ export const protectAdapter = Effect.fn("ExternalContentProvider.protectAdapter"
           const owners = new Set([`thread:${input.threadId}`]);
           const caller = (ownerId: string) => ({
             ownerId,
-            providerSessionId: runtime.providerSessionId,
+            providerSessionId: runtime.externalContentSessionId ?? runtime.providerSessionId,
             providerInstanceId: runtime.instanceId,
           });
           const guard = (threadId: string | null | undefined) => {

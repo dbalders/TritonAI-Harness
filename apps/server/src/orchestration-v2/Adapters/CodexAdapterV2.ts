@@ -1374,6 +1374,7 @@ export interface CodexAppServerClientFactoryShape {
     readonly environment: NodeJS.ProcessEnv;
     readonly appServerArgs?: ReadonlyArray<string>;
     readonly integrationBoundary?: {
+      readonly providerSessionId: string;
       readonly nativeTools: ReadonlyArray<string>;
       readonly allowedTools: ReadonlyArray<string>;
       readonly expiresAt: number;
@@ -1688,7 +1689,7 @@ export const layerAppServerClientFactory: Layer.Layer<
           return yield* IntegrationCodexRuntime.open({
             caller: {
               ownerId: `thread:${input.threadId}`,
-              providerSessionId: input.providerSessionId,
+              providerSessionId: input.integrationBoundary.providerSessionId,
               providerInstanceId: input.instanceId,
             },
             nativeTools: input.integrationBoundary.nativeTools,
@@ -2078,7 +2079,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           : undefined;
         if (
           integrationOnly &&
-          (!integrationSession || integrationSession.providerSessionId !== input.providerSessionId)
+          (!integrationSession ||
+            integrationSession.threadId !== input.threadId ||
+            integrationSession.providerInstanceId !== adapterOptions.instanceId)
         )
           return yield* toProtocolError(
             "The integration-only session has no active host tool binding.",
@@ -2093,6 +2096,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ...(initialCatalog && integrationSession
             ? {
                 integrationBoundary: {
+                  providerSessionId: integrationSession.providerSessionId,
                   nativeTools: initialCatalog.names,
                   allowedTools: initialCatalog.canonicalNames,
                   expiresAt:
@@ -7587,6 +7591,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           externalContentChannel: client,
+          ...(integrationSession
+            ? { externalContentSessionId: integrationSession.providerSessionId }
+            : {}),
           instanceId: adapterOptions.instanceId,
           driver: CODEX_PROVIDER,
           providerSessionId: input.providerSessionId,
