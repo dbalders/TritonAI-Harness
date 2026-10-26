@@ -136,6 +136,7 @@ function SidebarUtilityItem({
   label,
   onClick,
   tooltip = true,
+  isActive = false,
   render,
 }: {
   icon: ReactNode;
@@ -143,12 +144,14 @@ function SidebarUtilityItem({
   onClick: () => void;
   /** Off where the icon already says enough. */
   tooltip?: boolean;
+  isActive?: boolean;
   render?: ReactElement;
 }) {
   const button = (
     <SidebarMenuButton
       aria-label={label}
       data-getting-started-target={label === "Settings" ? "settings" : undefined}
+      isActive={isActive}
       onClick={onClick}
       render={render}
       size="icon"
@@ -210,6 +213,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
     void navigate({ to: "/settings" });
   };
 
+  const handleHelpClick = () => {
+    closeMobileSidebar();
+    void navigate({ to: "/help" });
+  };
+
   const handleUsageClick = () => {
     if (isMobile) {
       setOpenMobile(false);
@@ -224,18 +232,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <SidebarMenu>
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            isActive={isOnHelpPage}
-            onClick={closeMobileSidebar}
-            render={<Link to="/help" />}
-          >
-            <CircleHelpIcon />
-            <span>Help</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
-      </SidebarMenu>
       <SidebarMenu className="flex-row items-center">
         {isOnUtilityPage ? (
           <SidebarMenuItem className="min-w-0 flex-1">
@@ -266,6 +262,13 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             <SidebarIdeasItem onClick={closeMobileSidebar} />
           </>
         )}
+        {/* Outside the utility-page switch so Help stays reachable next to Back. */}
+        <SidebarUtilityItem
+          icon={<CircleHelpIcon />}
+          isActive={isOnHelpPage}
+          label="Help"
+          onClick={handleHelpClick}
+        />
         <SidebarUpdatePill />
       </SidebarMenu>
     </div>
