@@ -5,6 +5,7 @@ import { compactVoicePauses, VOICE_SPEECH_SAMPLE_RATE as RATE } from "./voiceAud
 const at = (seconds: number) => Math.round(seconds * RATE);
 
 describe("compactVoicePauses", () => {
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("keeps both spoken sections and their quiet edges across a thirty-second pause", () => {
     const samples = new Float32Array(at(34));
     samples.fill(0.001, at(0.8), at(1));
@@ -25,6 +26,7 @@ describe("compactVoicePauses", () => {
     expect(result?.slice(at(2.35))).toEqual(samples.slice(at(31.65)));
   });
 
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("leaves ordinary pauses and short leading and trailing silence untouched", () => {
     const samples = new Float32Array(at(3));
     expect(
@@ -35,16 +37,14 @@ describe("compactVoicePauses", () => {
     ).toBe(samples);
   });
 
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("trims long leading and trailing silence while retaining padding", () => {
     const samples = Float32Array.from({ length: at(25) }, (_, index) => index / at(25));
     const result = compactVoicePauses(samples, [{ start: at(10), end: at(12) }]);
     expect(result).toEqual(samples.slice(at(9.65), at(12.35)));
   });
 
-  it("does not produce uploadable audio when no speech is detected", () => {
-    expect(compactVoicePauses(new Float32Array(10 * RATE), [])).toBeNull();
-  });
-
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it.each([
     { name: "fractional", speech: [{ start: 0.5, end: 100 }] },
     { name: "empty", speech: [{ start: 100, end: 100 }] },

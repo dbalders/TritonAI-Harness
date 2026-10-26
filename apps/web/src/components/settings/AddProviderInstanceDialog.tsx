@@ -51,8 +51,6 @@ import { resolveOfficialAcpRegistryIconUrl } from "./AcpRegistryIcon";
 import { AddManagedCodexAccountDialog } from "./CodexSetupSection";
 import { ProviderEnvironmentSection } from "./ProviderInstanceCard";
 
-("use client");
-
 /**
  * Output is trimmed to 48 chars so the final composed id stays under the 64-char slug cap
  * enforced by `ProviderInstanceId` in `@t3tools/contracts`.

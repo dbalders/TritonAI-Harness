@@ -45,7 +45,7 @@ const EMPTY_SHELL_STATE: EnvironmentShellState = {
 };
 const EMPTY_SHELL_STATE_ATOM = Atom.make(EMPTY_SHELL_STATE);
 
-export function hasPriorProjectOrConversationState(input: {
+function hasPriorProjectOrConversationState(input: {
   projectCount: number;
   nonOnboardingProjectCount: number;
   threadCount: number;
@@ -80,12 +80,6 @@ export function getTritonAiFirstRunOnboardingDecision(input: {
   if (!input.primaryEnvironmentReady || !input.primaryEnvironmentBootstrapped) return "defer";
   if (input.routePathname !== "/") return "defer";
   return hasPriorProjectOrConversationState(input) ? "complete" : "run";
-}
-
-export function shouldRunTritonAiFirstRunOnboarding(
-  input: Parameters<typeof getTritonAiFirstRunOnboardingDecision>[0],
-): boolean {
-  return getTritonAiFirstRunOnboardingDecision(input) === "run";
 }
 
 function useComposerDraftStoreHydrated(): boolean {

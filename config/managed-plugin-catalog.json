@@ -50,12 +50,6 @@
       "manifestDigest": "d3356c4db8a32df557e84646a0fa26a8f5a2651637e63045e35165e239dbcb31"
     },
     {
-      "pluginId": "tableau",
-      "version": "1.1.0",
-      "digest": "8d66b498b2c5521ac8e09780b46283a8cb3a24661b73f3cbbaf59001b0cdd0fc",
-      "manifestDigest": "9447a651f9dee86010b4dae5857fb0f8ddc3388c48b2cb3f55959d6b720b59cf"
-    },
-    {
       "pluginId": "ucsd-assistant",
       "version": "0.1.0",
       "digest": "5659ab754d8c70472420c07f6be467e89ca249638e3bbaec06a3a6202dddbda9",

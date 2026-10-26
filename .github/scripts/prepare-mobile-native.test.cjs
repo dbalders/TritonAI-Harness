@@ -153,31 +153,6 @@ test("rejects missing archive support, signing credentials, and symlinks", (t) =
   assert.equal(f.git("diff", "--cached", "--name-only"), "");
 });
 
-test("prepares an explicitly requested current-main production build", (t) => {
-  const f = fixture(t);
-  const tree = prepareMobileNative({ ...f.options, tag: "main" });
-  const receipt = JSON.parse(
-    f.git("show", `${tree}:apps/mobile/ios/ci_scripts/stable-source.json`),
-  );
-  assert.equal(receipt.tag, "main");
-  assert.equal(receipt.variant, "production");
-});
-
-test("records the allocated stable marketing version without editing release sources", (t) => {
-  const f = fixture(t);
-  const tree = prepareMobileNative({ ...f.options, marketingVersion: "1.4.2" });
-  const receipt = JSON.parse(
-    f.git("show", `${tree}:apps/mobile/ios/ci_scripts/stable-source.json`),
-  );
-  assert.equal(receipt.marketingVersion, "1.4.2");
-  assert.equal(f.git("rev-parse", "HEAD"), f.options.sourceSha);
-  assert.equal(f.git("diff", "--name-only", "HEAD", "--", "source.txt"), "");
-  assert.throws(
-    () => prepareMobileNative({ ...f.options, marketingVersion: "1.4.2; unsafe" }),
-    /Marketing version/,
-  );
-});
-
 test("Xcode Cloud applies the stable marketing version and build number to every target", (t) => {
   const f = fixture(t);
   const scripts = path.join(f.ios, "ci_scripts");

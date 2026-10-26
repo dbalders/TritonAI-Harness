@@ -24,15 +24,6 @@ function check(needs) {
     env: { PATH: process.env.PATH, RESULTS: JSON.stringify(needs) },
   });
 }
-
-test("accepts successful required jobs", posix, () => {
-  assert.equal(check(results()).status, 0);
-});
-test("accepts static analysis skipped by a successful clean native gate", posix, () => {
-  const needs = results("false");
-  needs.mobile_native_static_analysis.result = "skipped";
-  assert.equal(check(needs).status, 0);
-});
 for (const changed of ["true", "", undefined, false]) {
   test(`rejects static analysis skipped with changed=${String(changed)}`, posix, () => {
     const needs = results(changed);

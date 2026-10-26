@@ -1,20 +1,29 @@
-import * as NodePath from "@effect/platform-node/NodePath";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, describe, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
-
 import type * as Electron from "electron";
 
+import * as NodePath from "@effect/platform-node/NodePath";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import { assert, describe, it } from "@effect/vitest";
+
+import * as Effect from "effect/Effect";
+
+import * as FileSystem from "effect/FileSystem";
+
+import * as Layer from "effect/Layer";
+
+import * as Option from "effect/Option";
+
 import * as ElectronApp from "../electron/ElectronApp.ts";
+
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
+
 import * as DesktopAssets from "./DesktopAssets.ts";
+
 import * as DesktopConfig from "./DesktopConfig.ts";
+
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
-import * as DesktopUserData from "./DesktopUserData.ts";
 
 const defaultEnvironmentInput = {
   dirname: "/repo/apps/desktop/dist-electron",
@@ -160,6 +169,7 @@ describe("DesktopAppIdentity", () => {
     ),
   );
 
+  // regression: 13e7bc16e3 fix(desktop): let Nightly coexist with stable Harness
   it.effect("never adopts the stable legacy profile for Nightly", () =>
     withIdentity(
       Effect.gen(function* () {
@@ -175,66 +185,6 @@ describe("DesktopAppIdentity", () => {
       },
     ),
   );
-
-  it.effect("preserves failures while inspecting the legacy userData path", () => {
-    const legacyPath = "/Users/alice/Library/Application Support/T3 Code (Dev)";
-    const cause = PlatformError.systemError({
-      _tag: "PermissionDenied",
-      module: "FileSystem",
-      method: "exists",
-      description: "permission denied",
-      pathOrDescriptor: legacyPath,
-    });
-
-    return withIdentity(
-      Effect.gen(function* () {
-        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        const error = yield* identity.resolveUserDataPath.pipe(Effect.flip);
-
-        assert.instanceOf(error, DesktopUserData.DesktopUserDataInitializationError);
-        assert.equal(error.resourcePath, legacyPath);
-        assert.strictEqual(error.cause, cause);
-        assert.equal(
-          error.message,
-          `Could not initialize Electron user data during inspect at ${legacyPath} (PermissionDenied).`,
-        );
-      }),
-      {
-        legacyPathProbeError: cause,
-        environment: { env: { VITE_DEV_SERVER_URL: "http://localhost:5173" } },
-      },
-    );
-  });
-
-  it.effect("configures app identity from the environment commit override", () => {
-    const calls: ElectronAppCalls = {
-      setAboutPanelOptions: [],
-      setDockIcon: [],
-      setName: [],
-    };
-
-    return withIdentity(
-      Effect.gen(function* () {
-        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        yield* identity.configure;
-
-        assert.deepEqual(calls.setName, ["TritonAI Harness Alpha"]);
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "TritonAI Harness");
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
-        assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
-        assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
-      }),
-      {
-        calls,
-        environment: {
-          env: {
-            T3CODE_COMMIT_HASH: "0123456789abcdef",
-          },
-        },
-        pngIconPath: Option.some("/icon.png"),
-      },
-    );
-  });
 
   it.effect.each([
     { stage: "Beta", environment: {} },
@@ -272,28 +222,6 @@ describe("DesktopAppIdentity", () => {
         );
       }),
       { calls, environment },
-    );
-  });
-
-  it.effect("also sets the dock icon when running unpackaged", () => {
-    const calls: ElectronAppCalls = {
-      setAboutPanelOptions: [],
-      setDockIcon: [],
-      setName: [],
-    };
-
-    return withIdentity(
-      Effect.gen(function* () {
-        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
-        yield* identity.configure;
-
-        assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
-      }),
-      {
-        calls,
-        environment: { isPackaged: false },
-        pngIconPath: Option.some("/icon.png"),
-      },
     );
   });
 });

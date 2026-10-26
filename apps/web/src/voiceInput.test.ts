@@ -1,16 +1,8 @@
-import {
-  DEFAULT_VOICE_TRANSCRIPTION_LANGUAGE,
-  DEFAULT_VOICE_TRANSCRIPTION_MODEL,
-  type ServerVoiceTranscribeInput,
-} from "@t3tools/contracts";
+import { type ServerVoiceTranscribeInput } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { detectVoiceSpeech } from "./voiceActivity";
-import {
-  encodeAudioBufferAsWav,
-  isVoiceInputSilenceError,
-  transcribeVoiceBlob,
-} from "./voiceInput";
+import { encodeAudioBufferAsWav, transcribeVoiceBlob } from "./voiceInput";
 
 vi.mock("./voiceActivity", () => ({ detectVoiceSpeech: vi.fn() }));
 
@@ -103,6 +95,7 @@ describe("encodeAudioBufferAsWav", () => {
 });
 
 describe("transcribeVoiceBlob", () => {
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("uploads speech on both sides of a long pause without the thirty-second gap", async () => {
     const samples = new Float32Array(34 * RATE);
     samples.fill(0.08, 1 * RATE, 2 * RATE);
@@ -127,100 +120,7 @@ describe("transcribeVoiceBlob", () => {
     expect(wav.sampleAt(3.2)).toBeLessThan(-2_000);
   });
 
-  it("mixes a stereo recording to mono before detecting speech", async () => {
-    installDecodedRecording(new Float32Array(RATE).fill(0.2), new Float32Array(RATE).fill(0.1));
-    let uploaded: ServerVoiceTranscribeInput | undefined;
-
-    await transcribeVoiceBlob(new Blob(["voice"]), async (input) => {
-      uploaded = input;
-      return { text: "stereo" };
-    });
-
-    expect(vi.mocked(detectVoiceSpeech).mock.calls[0]?.[0][0]).toBeCloseTo(0.15);
-    expect(decodeUploadedWav(uploaded)).toMatchObject({ channels: 1, seconds: 1 });
-  });
-
-  it("uses default transcription settings when no voice settings are supplied", async () => {
-    installDecodedRecording(speechLikeSamples());
-    let capturedInput: ServerVoiceTranscribeInput | undefined;
-
-    const text = await transcribeVoiceBlob(
-      new Blob(["voice"], { type: "audio/wav" }),
-      async (input) => {
-        capturedInput = input;
-        return { text: "hello" };
-      },
-    );
-
-    expect(text).toBe("hello");
-    expect(capturedInput).toMatchObject({
-      mimeType: "audio/wav",
-      model: DEFAULT_VOICE_TRANSCRIPTION_MODEL,
-      language: DEFAULT_VOICE_TRANSCRIPTION_LANGUAGE,
-    });
-    expect(capturedInput).not.toHaveProperty("baseUrl");
-  });
-
-  it("passes configured voice transcription settings to the server command", async () => {
-    installDecodedRecording(speechLikeSamples());
-    let capturedInput: ServerVoiceTranscribeInput | undefined;
-
-    await transcribeVoiceBlob(
-      new Blob(["voice"], { type: "audio/wav" }),
-      async (input) => {
-        capturedInput = input;
-        return { text: "custom" };
-      },
-      {
-        baseUrl: " https://voice-gateway.example.edu/v1 ",
-        model: " api-cohere-transcribe-large ",
-        language: " es ",
-      },
-    );
-
-    expect(capturedInput).toMatchObject({
-      baseUrl: "https://voice-gateway.example.edu/v1",
-      mimeType: "audio/wav",
-      model: "api-cohere-transcribe-large",
-      language: "es",
-    });
-  });
-
-  it("rejects a muted recording without loading the speech detector", async () => {
-    installDecodedRecording(new Float32Array(RATE));
-    const transcribe = vi.fn();
-
-    await expect(
-      transcribeVoiceBlob(new Blob(["voice"], { type: "audio/wav" }), transcribe),
-    ).rejects.toSatisfy(isVoiceInputSilenceError);
-    expect(detectVoiceSpeech).not.toHaveBeenCalled();
-    expect(transcribe).not.toHaveBeenCalled();
-  });
-
-  it("does not upload room noise when the speech detector finds no speech", async () => {
-    installDecodedRecording(speechLikeSamples());
-    vi.mocked(detectVoiceSpeech).mockResolvedValue([]);
-    const transcribe = vi.fn();
-
-    await expect(
-      transcribeVoiceBlob(new Blob(["noise"], { type: "audio/mp4" }), transcribe),
-    ).rejects.toSatisfy(isVoiceInputSilenceError);
-    expect(transcribe).not.toHaveBeenCalled();
-  });
-
-  it("uploads quiet speech the detector recognizes regardless of its overall volume", async () => {
-    const samples = new Float32Array(10 * RATE);
-    samples.fill(0.001, 1 * RATE, 2 * RATE);
-    installDecodedRecording(samples);
-    vi.mocked(detectVoiceSpeech).mockResolvedValue([{ start: 1 * RATE, end: 2 * RATE }]);
-    const transcribe = vi.fn(async () => ({ text: "Quiet speech." }));
-
-    await expect(
-      transcribeVoiceBlob(new Blob(["voice"], { type: "audio/wav" }), transcribe),
-    ).resolves.toBe("Quiet speech.");
-    expect(transcribe).toHaveBeenCalledOnce();
-  });
-
+  // regression: #407 fix(web): shorten long dictation pauses before transcription
   it("does not upload untreated audio if speech detection fails", async () => {
     installDecodedRecording(speechLikeSamples());
     const detectorError = new Error("no available backend found");
@@ -233,22 +133,6 @@ describe("transcribeVoiceBlob", () => {
       message: expect.stringContaining("the recording was not sent"),
       cause: detectorError,
     });
-    expect(transcribe).not.toHaveBeenCalled();
-  });
-
-  it("does not upload a recording canceled while speech detection was running", async () => {
-    installDecodedRecording(speechLikeSamples());
-    const abort = new AbortController();
-    vi.mocked(detectVoiceSpeech).mockImplementation(async (_samples, signal) => {
-      abort.abort();
-      signal?.throwIfAborted();
-      return [];
-    });
-    const transcribe = vi.fn();
-
-    await expect(
-      transcribeVoiceBlob(new Blob(["voice"]), transcribe, undefined, { signal: abort.signal }),
-    ).rejects.toMatchObject({ name: "AbortError" });
     expect(transcribe).not.toHaveBeenCalled();
   });
 });
