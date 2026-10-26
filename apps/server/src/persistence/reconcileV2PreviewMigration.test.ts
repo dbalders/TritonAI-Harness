@@ -54,6 +54,10 @@ describe("V2 preview upgrade", () => {
         [75, "CodexUsageNativeTurnIndex"],
         [76, "RepairClientSettlementTimestamps"],
         [77, "WebhookDedupe"],
+        [78, "ExternalContent"],
+        [79, "ExternalContentInheritance"],
+        [80, "IdeaProvenance"],
+        [81, "ProjectOverviewProvenance"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -151,6 +155,10 @@ describe("V2 preview upgrade", () => {
         [75, "CodexUsageNativeTurnIndex"],
         [76, "RepairClientSettlementTimestamps"],
         [77, "WebhookDedupe"],
+        [78, "ExternalContent"],
+        [79, "ExternalContentInheritance"],
+        [80, "IdeaProvenance"],
+        [81, "ProjectOverviewProvenance"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
