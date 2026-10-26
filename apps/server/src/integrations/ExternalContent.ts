@@ -250,20 +250,10 @@ const make = Effect.gen(function* () {
             const tools = yield* encodeTools(
               sourceTools.filter((tool) => !priorTools || priorTools.has(tool)),
             );
-            const sources = yield* sql<{ source_json: string; origin_invocation_id: string }>`
-          SELECT source_json, origin_invocation_id FROM external_content_exposures WHERE owner_id = ${sourceOwnerId}
-          ORDER BY exposure_version DESC LIMIT 8
-        `;
-            if (sources.length === 0)
+            const sourceReceipt = yield* sql`SELECT 1 FROM external_content_exposures
+              WHERE owner_id = ${sourceOwnerId} LIMIT 1`;
+            if (sourceReceipt.length === 0)
               return yield* new ExternalContentDenied({ reason: "invalid_boundary" });
-            const incoming = [];
-            for (const entry of sources) {
-              if (!identity(entry.origin_invocation_id))
-                return yield* new ExternalContentDenied({ reason: "invalid_boundary" });
-              const known = yield* sql`SELECT 1 FROM external_content_exposures
-                WHERE owner_id = ${targetOwnerId} AND origin_invocation_id = ${entry.origin_invocation_id}`;
-              if (known.length === 0) incoming.push(entry);
-            }
             const live = active.get(targetOwnerId);
             retained =
               live &&
@@ -293,13 +283,31 @@ const make = Effect.gen(function* () {
             scope_version = excluded.scope_version, provider_session_id = excluded.provider_session_id,
             provider_instance_id = excluded.provider_instance_id, boundary_digest = excluded.boundary_digest,
             allowed_tools_json = excluded.allowed_tools_json`;
-            for (const entry of incoming.toReversed()) {
-              const encoded = yield* encodeSource(yield* decodeSource(entry.source_json));
-              const id = yield* crypto.randomUUIDv4();
-              version++;
-              yield* sql`INSERT INTO external_content_exposures
-            (invocation_id, owner_id, scope_id, exposure_version, source_json, received_at, origin_invocation_id)
-            VALUES (${id}, ${targetOwnerId}, ${scopeId}, ${version}, ${encoded}, ${clock.currentTimeMillisUnsafe()}, ${entry.origin_invocation_id})`;
+            // Preserve every origin. Only approval presentation is limited to eight sources.
+            let cursor = 0;
+            while (true) {
+              const incoming = yield* sql<{
+                source_json: string;
+                origin_invocation_id: string;
+                exposure_version: number;
+              }>`SELECT s.source_json, s.origin_invocation_id, s.exposure_version
+                FROM external_content_exposures s
+                WHERE s.owner_id = ${sourceOwnerId} AND s.exposure_version > ${cursor}
+                  AND NOT EXISTS (SELECT 1 FROM external_content_exposures t
+                    WHERE t.owner_id = ${targetOwnerId} AND t.origin_invocation_id = s.origin_invocation_id)
+                ORDER BY s.exposure_version LIMIT 128`;
+              if (incoming.length === 0) break;
+              for (const entry of incoming) {
+                if (!identity(entry.origin_invocation_id))
+                  return yield* new ExternalContentDenied({ reason: "invalid_boundary" });
+                const encoded = yield* encodeSource(yield* decodeSource(entry.source_json));
+                const id = yield* crypto.randomUUIDv4();
+                version++;
+                yield* sql`INSERT INTO external_content_exposures
+                  (invocation_id, owner_id, scope_id, exposure_version, source_json, received_at, origin_invocation_id)
+                  VALUES (${id}, ${targetOwnerId}, ${scopeId}, ${version}, ${encoded}, ${clock.currentTimeMillisUnsafe()}, ${entry.origin_invocation_id})`;
+                cursor = entry.exposure_version;
+              }
             }
             yield* sql`UPDATE external_content_scopes SET exposure_version = ${version} WHERE owner_id = ${targetOwnerId}`;
             inheritedVersion = version;

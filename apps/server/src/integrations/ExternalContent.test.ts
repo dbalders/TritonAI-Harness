@@ -341,6 +341,47 @@ it.effect("keeps malicious control fields inside data and saves exposure before 
   ),
 );
 
+it.effect.each([8, 129])(
+  "preserves older origins behind %i newer receipts and revokes pending consent",
+  (count) =>
+    test(
+      Effect.gen(function* () {
+        const service = yield* ExternalContent.ExternalContent;
+        const sql = yield* SqlClient.SqlClient;
+        const other = {
+          ...caller,
+          ownerId: "thread:receipt-window",
+          providerSessionId: "receipt-window",
+        };
+        yield* service.establish(runtime());
+        yield* service.establish(runtime({ caller: other, scopeId: "receipt-window" }));
+        const original = yield* service.admit(caller, "fixture.read", channel);
+        yield* service.record(original, source, {
+          isError: false,
+          data: { body: "older external result" },
+        });
+        for (let index = 0; index < count; index++) {
+          yield* service.record(yield* service.admit(other, "fixture.read", channel), source, {
+            isError: false,
+            data: {},
+          });
+        }
+        const pending = yield* service.admit(other, "fixture.write", channel);
+        yield* service.inherit(other.ownerId, caller.ownerId);
+        yield* service.inherit(caller.ownerId, other.ownerId);
+        yield* service.assertInference(other, true, channel);
+        expect(() => pending.assertCurrent(true)).toThrowError();
+        const current = yield* service.admit(other, "fixture.write", channel);
+        expect(current.review.scope.exposureVersion).toBe(count + 1);
+        expect(current.review.sources).toHaveLength(8);
+        const originalCopies = yield* sql`SELECT owner_id FROM external_content_exposures
+      WHERE origin_invocation_id = ${original.invocationId}`;
+        expect(originalCopies).toHaveLength(2);
+        expect(yield* sql`SELECT * FROM external_content_exposures`).toHaveLength(2 * (count + 1));
+      }),
+    ),
+);
+
 it.effect("does not accept a different native session, owner, provider or undisclosed tool", () =>
   test(
     Effect.gen(function* () {
