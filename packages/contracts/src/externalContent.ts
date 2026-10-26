@@ -3,6 +3,10 @@ import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchema
 
 const Identity = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
 
+export const EXTERNAL_CONTENT_CLEAN_THREAD_CODE = "external_content_requires_clean_thread";
+export const EXTERNAL_CONTENT_CLEAN_THREAD_MESSAGE =
+  "This conversation contains external or older content that cannot safely enter the coding runtime. Start a clean thread and enter your next request there. This history stays readable and is not copied into the new thread.";
+
 export const ExternalContentScope = Schema.Struct({
   id: Identity,
   version: PositiveInt,

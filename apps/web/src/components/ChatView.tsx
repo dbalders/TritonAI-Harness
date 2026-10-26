@@ -3351,6 +3351,7 @@ export default function ChatView(props: ChatViewProps) {
               onOpenProviderSetup={openProviderSetupStable}
               threadId={activeThread.id}
               threadError={timelineThreadError}
+              onStartCleanThread={handleNewThreadInActiveProjectStable}
               threadErrorClass={
                 threadErrorIsServerRuntimeError ? (serverRuntime?.lastErrorClass ?? null) : null
               }

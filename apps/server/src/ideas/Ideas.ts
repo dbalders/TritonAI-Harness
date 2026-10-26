@@ -57,7 +57,7 @@ import { findMemoryDevice, generalVaultPaths } from "../memory/memoryVault.ts";
 import * as PublicSkillRepository from "../provider/publicSkillRepository.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
-import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { ExternalInputOwner, TextGeneration } from "../textGeneration/TextGeneration.ts";
 import {
   type CandidateIdea,
   type ContextFile,
@@ -1030,6 +1030,7 @@ export const make = Effect.gen(function* () {
         context: formatIdeasContext(context),
         modelSelection: settings.textGenerationModelSelection,
       }).pipe(
+        Effect.provideService(ExternalInputOwner, { ownerId: owner }),
         // Its own scope for Codex's temporary files: a run started by Suggest more outlives the
         // request whose scope it would otherwise inherit.
         Effect.scoped,

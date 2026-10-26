@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type { ProviderInstanceId } from "@t3tools/contracts";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import { TextGenerationError } from "@t3tools/contracts";
@@ -34,6 +35,11 @@ export class TextGeneration extends Context.Service<TextGeneration, ProviderText
   "t3/textGeneration/TextGeneration",
 ) {}
 
+export class ExternalInputOwner extends Context.Service<
+  ExternalInputOwner,
+  { readonly ownerId: string }
+>()("t3/textGeneration/TextGeneration/ExternalInputOwner") {}
+
 type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
@@ -59,23 +65,26 @@ const resolveInstance = (
             operation,
             detail: `No provider instance registered for id '${instanceId}'.`,
           });
-        const exposed = yield* content.hasExposure.pipe(
-          Effect.mapError(
-            (cause) =>
-              new TextGenerationError({
-                operation,
-                detail: "External-content history could not be checked. Generation was withheld.",
-                cause,
-              }),
-          ),
-        );
-        // Helper inputs also include copied and summarized history without a single owning thread.
-        // An environment-wide marker prevents those paths from silently restoring a coding CLI.
+        const source = yield* Effect.serviceOption(ExternalInputOwner);
+        const exposed = Option.isSome(source)
+          ? yield* content.toolCeiling(source.value.ownerId).pipe(
+              Effect.map((tools) => tools !== undefined),
+              Effect.mapError(
+                (cause) =>
+                  new TextGenerationError({
+                    operation,
+                    detail:
+                      "External-content history could not be checked. Generation was withheld.",
+                    cause,
+                  }),
+              ),
+            )
+          : false;
         if (exposed && (instance.driverKind !== "codex" || !promptOnlyRuntimeAvailable))
           return yield* new TextGenerationError({
             operation,
             detail:
-              "This environment contains integration content. Text generation requires a Codex model with the verified prompt-only runtime.",
+              "These generation inputs contain external content and require a Codex model with the verified prompt-only runtime.",
           });
         return instance.textGeneration;
       }),

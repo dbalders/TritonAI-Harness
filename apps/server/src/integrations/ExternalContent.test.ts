@@ -70,6 +70,8 @@ it.effect("keeps unverified derived content data-only through restart and inheri
       expect(yield* Effect.flip(restarted.assertUnexposed(caller.ownerId))).toMatchObject({
         reason: "runtime_unverified",
       });
+      yield* restarted.assertUnexposed("thread:fresh-user-request");
+      expect(yield* restarted.toolCeiling("thread:fresh-user-request")).toBeUndefined();
       const sql = yield* SqlClient.SqlClient;
       const rows = yield* sql<{
         source_json: string;

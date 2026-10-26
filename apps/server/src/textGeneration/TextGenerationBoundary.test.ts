@@ -78,7 +78,7 @@ const makeStubRegistry = (
 
 describe("TextGeneration.make", () => {
   it.effect.each(["codex", "claude"])(
-    "withholds copied-history generation from an unverified %s helper",
+    "isolates copied-history generation from unrelated %s helper inputs",
     (driver) =>
       Effect.gen(function* () {
         const content = yield* ExternalContent.ExternalContent;
@@ -118,7 +118,7 @@ describe("TextGeneration.make", () => {
             generateBranchName: () =>
               Effect.sync(() => {
                 calls++;
-                return { branch: "unsafe" };
+                return { branch: "owned-branch" };
               }),
             generateIdeas: () =>
               Effect.sync(() => {
@@ -139,12 +139,22 @@ describe("TextGeneration.make", () => {
           ),
         );
         const modelSelection = createModelSelection(instanceId, "model");
+        const unrelated = yield* generation.generateBranchName({
+          cwd: "/workspace",
+          message: "A new owner request without copied history",
+          modelSelection,
+        });
+        expect(unrelated.branch).toBe("owned-branch");
         const branch = yield* Effect.flip(
-          generation.generateBranchName({
-            cwd: "/private",
-            message: "Copied external output",
-            modelSelection,
-          }),
+          generation
+            .generateBranchName({
+              cwd: "/private",
+              message: "Copied external output",
+              modelSelection,
+            })
+            .pipe(
+              Effect.provideService(TextGeneration.ExternalInputOwner, { ownerId: caller.ownerId }),
+            ),
         );
         const ideas = yield* Effect.flip(
           generation.generateIdeas!({
@@ -152,11 +162,13 @@ describe("TextGeneration.make", () => {
             count: 1,
             context: "Copied external output",
             modelSelection,
-          }),
+          }).pipe(
+            Effect.provideService(TextGeneration.ExternalInputOwner, { ownerId: caller.ownerId }),
+          ),
         );
         expect(branch.detail).toContain("verified prompt-only runtime");
         expect(ideas.detail).toContain("verified prompt-only runtime");
-        expect(calls).toBe(0);
+        expect(calls).toBe(1);
       }).pipe(Effect.provide(boundaryLayer), Effect.scoped),
   );
 
@@ -184,11 +196,17 @@ describe("TextGeneration.make", () => {
         ),
       );
       const failure = yield* Effect.flip(
-        generation.generateBranchName({
-          cwd: "/private",
-          message: "input",
-          modelSelection: createModelSelection(instanceId, "model"),
-        }),
+        generation
+          .generateBranchName({
+            cwd: "/private",
+            message: "input",
+            modelSelection: createModelSelection(instanceId, "model"),
+          })
+          .pipe(
+            Effect.provideService(TextGeneration.ExternalInputOwner, {
+              ownerId: "thread:unavailable-provenance",
+            }),
+          ),
       );
       expect(failure.detail).toContain("history could not be checked");
     }).pipe(Effect.provide(boundaryLayer), Effect.scoped),

@@ -13,6 +13,13 @@ import {
   useThreadShell,
 } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
+import { Button } from "../../components/ui/Button";
+import { AppText as Text } from "../../components/ui/AppText";
+import { uuidv4 } from "../../lib/uuid";
+import {
+  EXTERNAL_CONTENT_CLEAN_THREAD_CODE,
+  EXTERNAL_CONTENT_CLEAN_THREAD_MESSAGE,
+} from "@t3tools/contracts";
 import { ChatGptUsageLimitNotice } from "./ChatGptUsageLimitNotice";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import {
@@ -1492,6 +1499,30 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                         }}
                       />
                     </Animated.View>
+                  ) : null}
+                  {props.selectedThread.runtime?.lastErrorCode ===
+                  EXTERNAL_CONTENT_CLEAN_THREAD_CODE ? (
+                    <View
+                      accessibilityRole="alert"
+                      className="mx-3 mb-2 gap-2 rounded-xl border border-border-subtle bg-screen p-3"
+                    >
+                      <Text className="text-xs text-foreground-muted">
+                        {EXTERNAL_CONTENT_CLEAN_THREAD_MESSAGE}
+                      </Text>
+                      <Button
+                        label="Start a clean thread"
+                        tone="primary"
+                        onPress={() =>
+                          navigation.navigate("Thread", {
+                            draft: {
+                              requestId: uuidv4(),
+                              environmentId: String(props.environmentId),
+                              projectId: String(props.selectedThread.projectId),
+                            },
+                          })
+                        }
+                      />
+                    </View>
                   ) : null}
                   <UsageLimitRecoveryCard
                     key={props.selectedThread.latestRun?.runId}

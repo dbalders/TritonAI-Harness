@@ -41,7 +41,7 @@ import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { ExternalInputOwner, TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { addLocalDays, localDayAt, localDayRange, pendingMemoryDays } from "./memoryDays.ts";
 import {
   appendProjectRecentLine,
@@ -633,7 +633,7 @@ export const make = Effect.gen(function* () {
       activity: formatMemoryActivity(threads, projectNoteNames),
       inboxNotes: [...processedNotes, ...includedInboxNotes].map(formatInboxNote).join("\n\n"),
       modelSelection: settings.textGenerationModelSelection,
-    });
+    }).pipe(Effect.provideService(ExternalInputOwner, { ownerId: owner }));
 
     const sessionPaths = yield* provide(
       findSessionFiles(

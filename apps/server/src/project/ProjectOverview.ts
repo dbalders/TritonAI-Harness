@@ -359,6 +359,7 @@ export const make = Effect.gen(function* () {
             project: { id: input.projectId, title: context.project.title },
             modelSelection: context.modelSelection,
           }).pipe(
+            Effect.provideService(TextGeneration.ExternalInputOwner, { ownerId: provenanceOwner }),
             Effect.scoped,
             Effect.tapError((error) =>
               Effect.logWarning("Project next steps generation failed", {
