@@ -258,7 +258,6 @@ export function AttachmentFilePreview(props: {
         onRetry={async () => {
           const renewed = await refresh();
           if (renewed === null) throw new Error("The video is unavailable.");
-          setRemoteUrl(renewed);
         }}
       />
     </div>

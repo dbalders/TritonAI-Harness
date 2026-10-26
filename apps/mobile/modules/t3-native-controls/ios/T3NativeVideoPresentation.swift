@@ -9,6 +9,7 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
   private let requestRefresh: (() -> Void)?
   private var refreshTimeout: DispatchWorkItem?
   private var refreshAttempts = 0
+  private var latestURL: URL?
   private var failedPosition: CMTime?
   private struct PlaybackSnapshot {
     let position: CMTime
@@ -94,16 +95,29 @@ final class T3NativeVideoPresentation: NSObject, AVPlayerViewControllerDelegate,
 
   private func handleFailure(_ error: Error) {
     playbackError = error
-    guard let requestRefresh, refreshAttempts < 1 else { dismiss(); return }
-    refreshAttempts += 1
+    guard let requestRefresh else { dismiss(); return }
     failedPosition = controller.player?.currentTime()
+    refreshTimeout?.cancel()
     let timeout = DispatchWorkItem { [weak self] in self?.dismiss() }
     refreshTimeout = timeout
     DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: timeout)
+    if let latestURL,
+      (controller.player?.currentItem?.asset as? AVURLAsset)?.url != latestURL {
+      replaceFailedURL(latestURL)
+      return
+    }
+    guard refreshAttempts < 1 else { dismiss(); return }
+    refreshAttempts += 1
     requestRefresh()
   }
 
   func replaceURL(_ url: URL) {
+    latestURL = url
+    guard playbackError != nil else { return }
+    replaceFailedURL(url)
+  }
+
+  private func replaceFailedURL(_ url: URL) {
     guard !finished, let player = controller.player,
       (player.currentItem?.asset as? AVURLAsset)?.url != url else { return }
     if pendingPlayback == nil {

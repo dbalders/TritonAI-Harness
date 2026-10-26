@@ -17,6 +17,31 @@ const seekFinished = (video: HTMLVideoElement) =>
         video.addEventListener("seeked", () => resolve(), { once: true }),
       );
 
+it("keeps buffered playback running when a newer signed URL arrives", async () => {
+  const bytes = Uint8Array.from(atob(renewalVideoBase64), (value) => value.charCodeAt(0));
+  const urls = [0, 1].map(() => URL.createObjectURL(new Blob([bytes], { type: "video/webm" })));
+  using _urls = { [Symbol.dispose]: () => urls.forEach((url) => URL.revokeObjectURL(url)) };
+  const player = (src: string) => <MediaVideoPlayer src={src} label="Buffered clip" />;
+  await using screen = await render(player(urls[0]!));
+  const video = screen.container.querySelector("video")!;
+  await metadataReady(video);
+  await screen.getByLabelText("Buffered clip").click();
+  await video.play();
+  let emptied = 0;
+  const emptiedListener = () => emptied++;
+  video.addEventListener("emptied", emptiedListener);
+  using _listener = {
+    [Symbol.dispose]: () => video.removeEventListener("emptied", emptiedListener),
+  };
+  await screen.rerender(player(urls[1]!));
+  await new Promise<void>((resolve) =>
+    video.addEventListener("timeupdate", () => resolve(), { once: true }),
+  );
+  expect(emptied).toBe(0);
+  expect(video.src).toBe(urls[0]);
+  expect(video.paused).toBe(false);
+});
+
 it("keeps a paused playhead across renewals before the first play", async () => {
   const bytes = Uint8Array.from(atob(renewalVideoBase64), (value) => value.charCodeAt(0));
   const urls = [0, 1, 2].map(() => URL.createObjectURL(new Blob([bytes], { type: "video/webm" })));
@@ -35,6 +60,7 @@ it("keeps a paused playhead across renewals before the first play", async () => 
       video.addEventListener("loadedmetadata", () => resolve(), { once: true }),
     );
     await screen.rerender(player(url));
+    video.dispatchEvent(new Event("error"));
     await metadata;
     await seekFinished(video);
     expect(video.src).toBe(url);
@@ -61,6 +87,7 @@ it("keeps paused position and playing position when the signed source renews", a
     video.addEventListener("loadedmetadata", () => resolve(), { once: true }),
   );
   await screen.rerender(player(urls[1]!));
+  video.dispatchEvent(new Event("error"));
   await pausedMetadata;
   await seekFinished(video);
   expect(video.currentTime).toBeCloseTo(7, 0);
@@ -73,6 +100,7 @@ it("keeps paused position and playing position when the signed source renews", a
     video.addEventListener("loadedmetadata", () => resolve(), { once: true }),
   );
   await screen.rerender(player(urls[2]!));
+  video.dispatchEvent(new Event("error"));
   await playingMetadata;
   await seekFinished(video);
   if (video.paused)
@@ -147,6 +175,7 @@ it("stays paused when the page becomes hidden while a renewed source loads", asy
     { once: true },
   );
   await screen.rerender(<MediaVideoPlayer src={urls[1]!} label="Hidden renewal clip" />);
+  video.dispatchEvent(new Event("error"));
   await metadata;
   await seekFinished(video);
   expect(document.hidden).toBe(true);
@@ -176,6 +205,7 @@ it("retains the original playhead while a second renewal replaces a loading sour
     waiting.addEventListener("sourceopen", () => resolve(), { once: true }),
   );
   await screen.rerender(player(urls[1]!));
+  video.dispatchEvent(new Event("error"));
   await sourceOpened;
   expect(video.readyState).toBe(0);
   expect(video.currentTime).toBe(0);
@@ -184,6 +214,7 @@ it("retains the original playhead while a second renewal replaces a loading sour
     video.addEventListener("loadedmetadata", () => resolve(), { once: true }),
   );
   await screen.rerender(player(urls[2]!));
+  video.dispatchEvent(new Event("error"));
   await metadata;
   await seekFinished(video);
   if (video.paused)
@@ -227,6 +258,7 @@ it("keeps the pending playhead when a renewed source fails before loading", asyn
   await initial.play();
   const position = initial.currentTime;
   await screen.rerender(<Player broken />);
+  initial.dispatchEvent(new Event("error"));
   await vi.waitFor(() => {
     const recovered = screen.container.querySelector("video");
     expect(recovered?.src).toBe(urls[2]);
@@ -274,6 +306,7 @@ it("keeps a recovered paused playhead on the next periodic renewal", async () =>
   await seekFinished(initial);
   initial.playbackRate = 1.25;
   await screen.rerender(<Player broken />);
+  initial.dispatchEvent(new Event("error"));
   await vi.waitFor(() => {
     const recovered = screen.container.querySelector("video");
     expect(recovered?.src).toBe(urls[2]);
@@ -287,6 +320,8 @@ it("keeps a recovered paused playhead on the next periodic renewal", async () =>
     recovered.addEventListener("loadedmetadata", () => resolve(), { once: true }),
   );
   await screen.rerender(<Player broken renewed />);
+  expect(recovered.src).toBe(urls[2]);
+  recovered.dispatchEvent(new Event("error"));
   await metadata;
   await seekFinished(recovered);
   expect(recovered.src).toBe(urls[3]);

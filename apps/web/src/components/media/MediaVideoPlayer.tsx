@@ -79,27 +79,18 @@ export function MediaVideoPlayer({
   const failed = failedResourceKey === sourceResourceKey || (src === null && sourceFailed);
   const preloaded = preloadedSrc === src || typeof IntersectionObserver === "undefined";
 
-  // Re-signing must not reset the playhead. Changed files refresh once playback pauses.
+  if (playbackSource === null && latestSrc !== null) {
+    setPlaybackSource({ src: latestSrc, revision, resourceKey });
+  }
+
+  // A renewed capability is held for recovery; replacing a buffered source would reload it.
+  // Changed files refresh once playback pauses.
   if (
     playbackSource !== null &&
     playbackSource.revision !== revision &&
     (video === null || playingVideo !== video)
   ) {
     setPlaybackSource(null);
-  }
-
-  if (
-    video &&
-    latestSrc &&
-    playbackSource !== null &&
-    playbackSource.revision === revision &&
-    playbackSource.src !== latestSrc
-  ) {
-    setResume(
-      (current) =>
-        current ?? { time: video.currentTime, playing: !video.paused, rate: video.playbackRate },
-    );
-    setPlaybackSource({ src: latestSrc, revision, resourceKey });
   }
 
   useEffect(() => {
@@ -240,12 +231,6 @@ export function MediaVideoPlayer({
             if (automaticRecovery.current.resourceKey !== sourceResourceKey) {
               automaticRecovery.current = { resourceKey: sourceResourceKey, used: false };
             }
-            if (automaticRecovery.current.used) {
-              setPlayingVideo(null);
-              setFailedResourceKey(sourceResourceKey);
-              return;
-            }
-            automaticRecovery.current.used = true;
             if (latestSrc !== null && src !== latestSrc) {
               if (video)
                 setResume(
@@ -258,7 +243,8 @@ export function MediaVideoPlayer({
                 );
               setPlaybackSource(null);
               setPlayingVideo(null);
-            } else if (src !== null && onRetry) {
+            } else if (!automaticRecovery.current.used && src !== null && onRetry) {
+              automaticRecovery.current.used = true;
               void retry();
             } else {
               setPlayingVideo(null);

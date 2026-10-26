@@ -15,6 +15,7 @@ import { makeVideoSourceRenewal, mayResumeVideoPlayback } from "../lib/videoSour
 
 function LoadedMediaVideo(props: {
   readonly uri: string;
+  readonly latestUri: string | null;
   readonly resolvePlaybackUri?: () => Promise<string | null>;
   readonly playRequested: boolean;
   readonly paused: boolean;
@@ -27,6 +28,7 @@ function LoadedMediaVideo(props: {
   const [attempt, setAttempt] = useState(0);
   const previousAttempt = useRef(-1);
   const recoveryUsed = useRef(false);
+  const loadedUri = useRef<string | null>(null);
   const terminalFailure = useRef(false);
   const renewal = useRef<ReturnType<typeof makeVideoSourceRenewal> | null>(null);
   // Expo's Android player also reports completed playback as idle.
@@ -50,9 +52,13 @@ function LoadedMediaVideo(props: {
   const loadSource = useEffectEvent(
     async (source: string, playInitially: boolean, signal: AbortSignal, refresh: boolean) => {
       const loader = renewal.current;
-      const uri = refresh && props.resolvePlaybackUri ? await props.resolvePlaybackUri() : source;
+      const cached = props.latestUri !== loadedUri.current ? props.latestUri : null;
+      const uri = refresh
+        ? (cached ?? (props.resolvePlaybackUri ? await props.resolvePlaybackUri() : source))
+        : source;
       if (signal.aborted || loader === null) return false;
       if (uri === null) throw new Error("Video unavailable");
+      loadedUri.current = uri;
       return loader.replace(uri, {
         signal,
         playInitially,
@@ -69,8 +75,9 @@ function LoadedMediaVideo(props: {
   );
   const recover = useEffectEvent(() => {
     if (terminalFailure.current) return;
-    if (!recoveryUsed.current && props.resolvePlaybackUri) {
-      recoveryUsed.current = true;
+    const hasNewCapability = props.latestUri !== null && props.latestUri !== loadedUri.current;
+    if (hasNewCapability || (!recoveryUsed.current && props.resolvePlaybackUri)) {
+      if (!hasNewCapability) recoveryUsed.current = true;
       setLoadState("pending");
       setAttempt((value) => value + 1);
     } else {
@@ -190,7 +197,8 @@ function MediaVideoPlayerContent(props: MediaVideoPlayerProps) {
     >
       {playbackUri ? (
         <LoadedMediaVideo
-          uri={props.uri ?? playbackUri}
+          uri={playbackUri}
+          latestUri={props.uri}
           resolvePlaybackUri={props.resolvePlaybackUri}
           playRequested={!props.expanded || props.autoPlay === true}
           paused={(props.paused ?? false) || mediaActions.sharing}

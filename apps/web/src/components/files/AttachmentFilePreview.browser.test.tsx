@@ -155,7 +155,7 @@ describe("attachment HTML preview recovery", () => {
   });
 });
 
-it("renews an open attachment video for each mounted asset query update", async () => {
+it("holds an attachment video source until an expired request needs a newer capability", async () => {
   state.refresh.mockReset();
   const bytes = Uint8Array.from(atob(renewalVideoBase64), (value) => value.charCodeAt(0));
   const urls = [0, 1, 2].map(() => URL.createObjectURL(new Blob([bytes], { type: "video/webm" })));
@@ -197,6 +197,8 @@ it("renews an open attachment video for each mounted asset query update", async 
     await act(() =>
       registry.set(state.assetUrl!, { _tag: "Success", url, expiresAt: Date.now() + 120_000 }),
     );
+    expect(video.src).not.toBe(url);
+    video.dispatchEvent(new Event("error"));
     await metadata;
     if (video.seeking)
       await new Promise<void>((resolve) =>
