@@ -266,6 +266,7 @@ it("builds the server from the frozen managed plugin snapshot and validated conf
   const environment = createDesktopSourceBuildEnvironment(
     {
       TRITONAI_PLUGIN_COMPOSITION_SOURCE: "/moving/source",
+      TRITONAI_PLUGIN_SANDBOX_SOURCE: "/moving/runtime",
       TRITONAI_PLUGIN_CONFIGURATION_JSON: '{"stale":true}',
       AZURE_CLIENT_SECRET: "must-not-reach-the-source-build",
       ELECTRON_RUN_AS_NODE: "1",
@@ -275,11 +276,16 @@ it("builds the server from the frozen managed plugin snapshot and validated conf
     },
     {
       sourceRoot: "/frozen/plugin-composition-input",
+      sandboxSourceRoot: "/frozen/plugin-sandbox-input/production-integrations/runtime",
       serializedConfiguration: '{"microsoft-365":{"clientId":"public-client"}}',
     },
   );
 
   assert.equal(environment.TRITONAI_PLUGIN_COMPOSITION_SOURCE, "/frozen/plugin-composition-input");
+  assert.equal(
+    environment.TRITONAI_PLUGIN_SANDBOX_SOURCE,
+    "/frozen/plugin-sandbox-input/production-integrations/runtime",
+  );
   assert.equal(
     environment.TRITONAI_PLUGIN_CONFIGURATION_JSON,
     '{"microsoft-365":{"clientId":"public-client"}}',
@@ -296,6 +302,7 @@ it("removes ambient managed plugin inputs from builds without a frozen compositi
   const environment = createDesktopSourceBuildEnvironment(
     {
       TRITONAI_PLUGIN_COMPOSITION_SOURCE: "/ambient/source",
+      TRITONAI_PLUGIN_SANDBOX_SOURCE: "/ambient/runtime",
       TRITONAI_PLUGIN_CONFIGURATION_JSON: '{"ambient":true}',
       KEEP_ME: "yes",
     },
@@ -303,6 +310,7 @@ it("removes ambient managed plugin inputs from builds without a frozen compositi
   );
 
   assert.notProperty(environment, "TRITONAI_PLUGIN_COMPOSITION_SOURCE");
+  assert.notProperty(environment, "TRITONAI_PLUGIN_SANDBOX_SOURCE");
   assert.notProperty(environment, "TRITONAI_PLUGIN_CONFIGURATION_JSON");
   assert.equal(environment.KEEP_ME, "yes");
 });

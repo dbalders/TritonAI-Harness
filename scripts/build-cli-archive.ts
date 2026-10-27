@@ -488,9 +488,6 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   const managedConfig = path.join(serverDir, "dist/tritonai-managed-config.json");
   yield* requireInput(managedConfig, "Rebuild the Harness server with its managed policy.");
   yield* fs.copyFile(managedConfig, path.join(contentDir, "tritonai-managed-config.json"));
-  const pluginLoader = path.join(serverDir, "dist/plugin-module-loader.cjs");
-  yield* requireInput(pluginLoader, "Rebuild the Harness server with its SEA plugin loader.");
-  yield* fs.copyFile(pluginLoader, path.join(contentDir, "plugin-module-loader.cjs"));
   const pluginResources = path.join(serverDir, "dist/production-integrations");
   if (yield* fs.exists(pluginResources)) {
     yield* fs.copy(pluginResources, path.join(contentDir, "production-integrations"));

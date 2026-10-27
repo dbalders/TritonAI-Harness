@@ -15,6 +15,10 @@ import {
 } from "../../../scripts/lib/managed-plugin-composition.ts";
 import { loadManagedHarnessConfigForBuild } from "../../../scripts/lib/managed-harness-config.ts";
 import { loadRepoEnv } from "../../../scripts/lib/public-config.ts";
+import {
+  loadPluginSandboxBundleForBuild,
+  snapshotPluginSandboxBundle,
+} from "../../../scripts/lib/plugin-sandbox-bundle.ts";
 import { findEsmImportsOfExternalPackages } from "../../../scripts/lib/cli-executable-imports.ts";
 import rootPackageJson from "../../../package.json" with { type: "json" };
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -77,10 +81,6 @@ const emitManagedBuildResources = Effect.fn("emitManagedBuildResources")(functio
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(path.join(serverDir, "dist"), { recursive: true });
-  yield* fs.writeFileString(
-    path.join(serverDir, "dist/plugin-module-loader.cjs"),
-    "exports.importPluginModule = (specifier) => import(specifier);\n",
-  );
   const managedConfig = loadManagedHarnessConfigForBuild(repoRoot);
   yield* fs.writeFileString(
     path.join(serverDir, "dist/tritonai-managed-config.json"),
@@ -98,6 +98,12 @@ const emitManagedBuildResources = Effect.fn("emitManagedBuildResources")(functio
       pluginSource.root,
       path.join(serverDir, "dist/production-integrations"),
     );
+    const sandbox = loadPluginSandboxBundleForBuild(repoRoot, loadRepoEnv());
+    if (sandbox)
+      snapshotPluginSandboxBundle(
+        sandbox,
+        path.join(serverDir, "dist/production-integrations/runtime"),
+      );
     yield* Effect.log("[cli] Bundled managed plugin composition into dist");
   }
 });

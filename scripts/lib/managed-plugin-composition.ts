@@ -5,7 +5,12 @@ import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 import { validateIntegrationManifest } from "@t3tools/contracts";
 import { resolvePluginHostRuntimeDependencies } from "@t3tools/shared/pluginHostRuntime";
-import { hasPluginSdkArtifact, verifyPluginSdkArtifact } from "@t3tools/shared/pluginSdkArtifact";
+import {
+  hasPluginSdkArtifact,
+  verifyPluginSdkArtifact,
+  verifyIsolatedPluginSdkArtifact,
+} from "@t3tools/shared/pluginSdkArtifact";
+import { QUICKJS_LAUNCHER_NODE_VERSION } from "@t3tools/shared/pluginSandboxProfile";
 import effectPackageJson from "effect/package.json" with { type: "json" };
 
 export const MANAGED_PLUGIN_COMPOSITION_KIND = "tritonai-harness-plugin-composition";
@@ -298,7 +303,17 @@ function validatePackage(
     contents: NodeFS.readFileSync(NodePath.join(packageRoot, file.path)),
   }));
   if (hasPluginSdkArtifact(artifactFiles)) {
-    const artifact = verifyPluginSdkArtifact(artifactFiles, { hostNodeVersion: null });
+    const descriptor = JSON.parse(
+      artifactFiles.find(({ path }) => path === "artifact.json")!.contents.toString("utf8"),
+    ) as unknown;
+    assertRecord(descriptor, `Managed plugin ${id} SDK descriptor`);
+    // Composition checks the artifact ABI; execution still requires a separately verified worker.
+    const artifact =
+      descriptor.format === "tritonai.plugin-artifact/v3"
+        ? verifyIsolatedPluginSdkArtifact(artifactFiles, {
+            workerNodeVersion: QUICKJS_LAUNCHER_NODE_VERSION,
+          })
+        : verifyPluginSdkArtifact(artifactFiles, { hostNodeVersion: null });
     if (artifact.sdkManifest.id !== id || artifact.sdkManifest.version !== version) {
       throw new Error(`Managed plugin ${id} SDK artifact does not match its composition proof.`);
     }

@@ -58,6 +58,11 @@ import {
   type ManagedPluginComposition,
 } from "./lib/managed-plugin-composition.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
+import {
+  loadPluginSandboxBundleForBuild,
+  snapshotPluginSandboxBundle,
+  PLUGIN_SANDBOX_SOURCE_ENV,
+} from "./lib/plugin-sandbox-bundle.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import { prepareWindowsCuaDriver } from "./lib/windows-cua-driver.ts";
@@ -424,6 +429,7 @@ type ManagedPluginConfigurationLoader = (
   packageRoot: string,
   plugin: ManagedPluginComposition["packages"][number],
   configuration: Readonly<Record<string, unknown>>,
+  isolatedRuntime?: unknown,
 ) => Promise<ManagedPluginConfigurationValidationResult>;
 
 type ManagedPluginPackageRootResolver = (
@@ -447,6 +453,7 @@ const loadManagedPluginForConfigurationValidation: ManagedPluginConfigurationLoa
   packageRoot,
   plugin,
   configuration,
+  isolatedRuntime,
 ) => {
   // Keep the build script inside its TypeScript project while still exercising the exact
   // server-owned production factory. A static cross-project import makes `vp run typecheck`
@@ -459,6 +466,8 @@ const loadManagedPluginForConfigurationValidation: ManagedPluginConfigurationLoa
     plugin,
     pluginConfigurationValidationSecretStore,
     configuration,
+    undefined,
+    isolatedRuntime,
   );
 };
 
@@ -467,6 +476,8 @@ type ManagedPluginConfigurationLoaderWithSecrets = (
   plugin: ManagedPluginComposition["packages"][number],
   secrets: typeof pluginConfigurationValidationSecretStore,
   configuration: Readonly<Record<string, unknown>>,
+  sdkHostNodeVersion?: string | null,
+  isolatedRuntime?: unknown,
 ) => Promise<ManagedPluginConfigurationValidationResult>;
 
 export async function validateManagedPluginBuildConfiguration(
@@ -474,12 +485,18 @@ export async function validateManagedPluginBuildConfiguration(
   configuration: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
   packageRootForPlugin: ManagedPluginPackageRootResolver,
   loadPackage: ManagedPluginConfigurationLoader = loadManagedPluginForConfigurationValidation,
+  isolatedRuntime?: unknown,
 ): Promise<void> {
   const loaded: Array<ManagedPluginConfigurationValidationResult> = [];
   try {
     for (const plugin of composition.packages) {
       loaded.push(
-        await loadPackage(packageRootForPlugin(plugin), plugin, configuration[plugin.id]!),
+        await loadPackage(
+          packageRootForPlugin(plugin),
+          plugin,
+          configuration[plugin.id]!,
+          isolatedRuntime,
+        ),
       );
     }
   } finally {
@@ -1383,6 +1400,7 @@ export function createDesktopSourceBuildEnvironment(
   managedPluginInput: {
     readonly sourceRoot: string;
     readonly serializedConfiguration: string;
+    readonly sandboxSourceRoot?: string;
   } | null,
 ): NodeJS.ProcessEnv {
   const buildEnvironment: NodeJS.ProcessEnv = { ...baseEnv };
@@ -1395,6 +1413,9 @@ export function createDesktopSourceBuildEnvironment(
     delete buildEnvironment[PRODUCTION_PLUGIN_SOURCE_ENV];
     delete buildEnvironment[PRODUCTION_PLUGIN_CONFIGURATION_ENV];
   }
+  delete buildEnvironment[PLUGIN_SANDBOX_SOURCE_ENV];
+  if (managedPluginInput?.sandboxSourceRoot)
+    buildEnvironment[PLUGIN_SANDBOX_SOURCE_ENV] = managedPluginInput.sandboxSourceRoot;
   for (const key of Object.keys(buildEnvironment)) {
     if (key.startsWith("AZURE_")) delete buildEnvironment[key];
   }
@@ -4981,17 +5002,63 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
           new ManagedPluginCompositionBuildError({ failure: "invalid-composition", cause }),
       })
     : null;
+  const sandboxSnapshotDirectory = path.join(stageRoot, "plugin-sandbox-input");
+  const pluginSandbox = pluginBuildInput
+    ? yield* Effect.try({
+        try: () => {
+          const source = loadPluginSandboxBundleForBuild(repoRoot, repoEnv);
+          if (!source) return null;
+          const root = path.join(sandboxSnapshotDirectory, "production-integrations/runtime");
+          snapshotPluginSandboxBundle(source, root);
+          return { ...source, root };
+        },
+        catch: (cause) =>
+          new ManagedPluginCompositionBuildError({ failure: "invalid-composition", cause }),
+      })
+    : null;
   if (pluginBuildInput && !options.pluginConfigurationPrevalidated) {
-    yield* Effect.tryPromise({
-      try: () =>
-        validateManagedPluginBuildConfiguration(
-          pluginBuildInput.composition,
-          pluginBuildInput.configuration,
-          (plugin) => path.join(pluginSnapshotRoot, "packages", plugin.id),
-        ),
-      catch: (cause) =>
-        new ManagedPluginCompositionBuildError({ failure: "invalid-configuration", cause }),
-    });
+    yield* Effect.acquireUseRelease(
+      Effect.tryPromise({
+        try: async () => {
+          if (!pluginSandbox) return null;
+          const moduleUrl = new URL(
+            "../apps/server/src/integrations/pluginSandbox/BundledPluginSandbox.ts",
+            import.meta.url,
+          ).href;
+          const sandboxModule = (await import(moduleUrl)) as {
+            readonly createBundledPluginSandbox: (
+              directory: string,
+              host: { readonly platform: NodeJS.Platform; readonly arch: NodeJS.Architecture },
+              manifest: unknown,
+            ) => Promise<AsyncDisposable | null>;
+          };
+          return sandboxModule.createBundledPluginSandbox(
+            sandboxSnapshotDirectory,
+            { platform: hostPlatform, arch: hostArch },
+            pluginSandbox.manifest,
+          );
+        },
+        catch: (cause) =>
+          new ManagedPluginCompositionBuildError({ failure: "invalid-configuration", cause }),
+      }),
+      (runtime) =>
+        Effect.tryPromise({
+          try: () =>
+            validateManagedPluginBuildConfiguration(
+              pluginBuildInput.composition,
+              pluginBuildInput.configuration,
+              (plugin) => path.join(pluginSnapshotRoot, "packages", plugin.id),
+              loadManagedPluginForConfigurationValidation,
+              runtime ?? undefined,
+            ),
+          catch: (cause) =>
+            new ManagedPluginCompositionBuildError({ failure: "invalid-configuration", cause }),
+        }),
+      (runtime) =>
+        Effect.promise(async () => {
+          await runtime?.[Symbol.asyncDispose]();
+        }),
+    );
   } else if (pluginBuildInput) {
     const receiptPath = options.pluginValidationReceipt?.trim();
     const serializedConfiguration = repoEnv[PRODUCTION_PLUGIN_CONFIGURATION_ENV]?.trim() ?? "";
@@ -5030,6 +5097,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         ? {
             sourceRoot: pluginSnapshotRoot,
             serializedConfiguration: repoEnv[PRODUCTION_PLUGIN_CONFIGURATION_ENV]?.trim() ?? "",
+            ...(pluginSandbox ? { sandboxSourceRoot: pluginSandbox.root } : {}),
           }
         : null,
     );
@@ -5131,6 +5199,16 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         path.join(productionPackagesRoot, plugin.id),
       );
     }
+    if (pluginSandbox)
+      yield* Effect.try({
+        try: () =>
+          snapshotPluginSandboxBundle(
+            pluginSandbox,
+            path.join(productionIntegrationsRoot, "runtime"),
+          ),
+        catch: (cause) =>
+          new ManagedPluginCompositionBuildError({ failure: "invalid-composition", cause }),
+      });
   }
 
   // The Windows build now separates its server runtime into server.asar, so keep its

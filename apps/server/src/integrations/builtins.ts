@@ -3,6 +3,7 @@ import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 
 import type { IntegrationPackage } from "./IntegrationRegistry.ts";
 import { loadProductionIntegrations } from "./productionBuiltins.ts";
+import type { PluginSandboxHost } from "./pluginSandbox/BundledPluginSandbox.ts";
 
 declare const __TRITONAI_BUILD_SUPPORTS_INTEGRATION_FIXTURES__: boolean | undefined;
 
@@ -35,7 +36,7 @@ async function loadBuiltinIntegrationPackages(
 
 export async function loadBuiltinIntegrations(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
-  options: { readonly includeFixtures?: boolean } = {},
+  options: { readonly includeFixtures?: boolean; readonly host?: PluginSandboxHost } = {},
 ): Promise<ReadonlyArray<IntegrationPackage>> {
   const loadFixtures = options.includeFixtures
     ? async () => {
@@ -46,5 +47,7 @@ export async function loadBuiltinIntegrations(
         return makeFixtureIntegrations(secrets);
       }
     : null;
-  return loadBuiltinIntegrationPackages(loadFixtures, () => loadProductionIntegrations(secrets));
+  return loadBuiltinIntegrationPackages(loadFixtures, () =>
+    loadProductionIntegrations(secrets, options.host ? { host: options.host } : {}),
+  );
 }

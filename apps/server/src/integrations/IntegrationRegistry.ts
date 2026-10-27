@@ -12,6 +12,7 @@ import {
   type IntegrationsListResult,
 } from "@t3tools/contracts";
 import { compareSemverVersions } from "@t3tools/shared/semver";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -3908,8 +3909,10 @@ export const startupLayer = Layer.effectDiscard(
       resolveIntegrationCodexHomes(config.baseDir, settings),
     );
     const runFork = Effect.runForkWith(yield* Effect.context<never>());
+    const host = { platform: yield* HostProcess.Platform, arch: yield* HostProcess.Architecture };
     const builtinIntegrations = yield* Effect.promise(() =>
       loadBuiltinIntegrations(secrets, {
+        host,
         includeFixtures: process.env.TRITONAI_ENABLE_INTEGRATION_FIXTURES === "1",
       }),
     );
