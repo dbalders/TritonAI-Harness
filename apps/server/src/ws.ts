@@ -1547,6 +1547,7 @@ const wsRpcSecondHalfTags = [
   WS_METHODS.ideasMarkViewed,
   WS_METHODS.ideasSuggestMore,
   WS_METHODS.ideasFeedback,
+  WS_METHODS.gettingStartedRecord,
   WS_METHODS.serverListProviderSkillCatalog,
   WS_METHODS.serverInstallProviderSkill,
   WS_METHODS.serverRemoveProviderSkill,
@@ -3655,6 +3656,11 @@ export const layerWsRpc = (
         [WS_METHODS.ideasMarkViewed]: (_input) => ideas.markViewed,
         [WS_METHODS.ideasSuggestMore]: (_input) => ideas.suggestMore,
         [WS_METHODS.ideasFeedback]: (input) => ideas.feedback(input),
+        [WS_METHODS.gettingStartedRecord]: ({ event, chapter }) =>
+          analytics.record(`onboarding.${event}`, {
+            ...originProps,
+            ...(chapter === undefined ? {} : { chapter }),
+          }),
         [WS_METHODS.serverListProviderSkillCatalog]: (input) =>
           CodexManagement.listProviderSkillCatalog(input),
         [WS_METHODS.serverInstallProviderSkill]: (input) =>
@@ -3976,6 +3982,7 @@ export const layerWsRpc = (
           [WS_METHODS.ideasMarkViewed]: handlers[WS_METHODS.ideasMarkViewed],
           [WS_METHODS.ideasSuggestMore]: handlers[WS_METHODS.ideasSuggestMore],
           [WS_METHODS.ideasFeedback]: handlers[WS_METHODS.ideasFeedback],
+          [WS_METHODS.gettingStartedRecord]: handlers[WS_METHODS.gettingStartedRecord],
           [WS_METHODS.serverListProviderSkillCatalog]:
             handlers[WS_METHODS.serverListProviderSkillCatalog],
           [WS_METHODS.serverInstallProviderSkill]: handlers[WS_METHODS.serverInstallProviderSkill],

@@ -2620,6 +2620,9 @@ export default function ChatView(props: ChatViewProps) {
           },
         })
       : null;
+  const timelineSkills = activeProviderStatus
+    ? resolveProviderSkillsForCwd(activeProviderStatus, gitCwd)
+    : EMPTY_PROVIDER_SKILLS;
   const gettingStartedBannerItem = useGettingStartedChatGuide({
     environmentId,
     threadId: activeThread?.id ?? null,
@@ -2635,6 +2638,14 @@ export default function ChatView(props: ChatViewProps) {
     hasPendingApproval: pendingApprovals.length > 0,
     hasPendingQuestion: pendingUserInputs.length > 0,
     timelineEntries,
+    answeredRunIds: new Set(
+      serverVisibleTurnItems.flatMap(({ item }) =>
+        item.type === "assistant_message" && item.runId !== null && !item.streaming
+          ? [item.runId]
+          : [],
+      ),
+    ),
+    skills: timelineSkills,
   });
   const composerBannerItems = (() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
@@ -2730,9 +2741,6 @@ export default function ChatView(props: ChatViewProps) {
     isDesktop: isElectron,
   });
   const getShortcutContextStable = useStableCallback(getShortcutContext);
-  const timelineSkills = activeProviderStatus
-    ? resolveProviderSkillsForCwd(activeProviderStatus, gitCwd)
-    : EMPTY_PROVIDER_SKILLS;
   const threadFindControlsRef = useRef<ThreadFindControls | null>(null);
   const [isThreadFindActive, setIsThreadFindActive] = useState(false);
   const openThreadFind = () => threadFindControlsRef.current?.open();
