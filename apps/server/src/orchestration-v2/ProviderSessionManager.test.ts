@@ -2245,6 +2245,53 @@ it.effect("ProviderSessionManagerV2 terminal detach revokes the thread's MCP cre
   }),
 );
 
+it.effect("ProviderSessionManagerV2 resumes a long-idle thread with a working MCP token", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const registry = yield* McpSessionRegistry.McpSessionRegistry;
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-idle-resume");
+      const providerSessionId = idAllocator.derive.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const runtime = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const providerThread = makeProviderThread({ idAllocator, threadId, providerSessionId, now });
+      yield* runtime.resumeThread({ providerThread, threadId, modelSelection, runtimePolicy });
+      const token = (yield* mcpSessions.read(threadId))!.authorizationHeader.replace(
+        /^Bearer\s+/,
+        "",
+      );
+
+      // The shared provider process outlives the credential's liveness window
+      // while this thread sits unloaded, then the thread is resumed.
+      yield* TestClock.adjust("25 hours");
+      yield* runtime.resumeThread({
+        providerThread,
+        threadId,
+        modelSelection: { ...modelSelection, model: "gpt-5.4-mini" },
+        runtimePolicy,
+      });
+
+      assert.isDefined(yield* registry.resolve(token));
+    });
+
+    yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 2 * 86_400_000 })));
+  }),
+);
+
 const openSessionWithBackgroundCommand = (fixtureName: string) =>
   Effect.gen(function* () {
     const eventSink = yield* EventSink.EventSinkV2;
