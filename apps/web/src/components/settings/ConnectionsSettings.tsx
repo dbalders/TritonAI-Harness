@@ -1075,7 +1075,6 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
               ) : null
             }
           >
-            <LocalEnvironmentSetting />
             {canManageLocalBackend ? (
               <SettingsRow
                 title="Version"
@@ -1472,7 +1471,6 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
             title="No environment selected"
             description="Connect an environment to view its settings and access."
           />
-          <LocalEnvironmentSetting />
           {canReadRelay || canManageRelay ? (
             <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
           ) : null}
@@ -1485,7 +1483,11 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
 
   return (
     <SettingsPageContainer>
-      {primarySettings}
+      {desktopBridge?.setLocalEnvironmentEnabled ? (
+        <SettingsSection id="this-app" title="This app">
+          <LocalEnvironmentSetting />
+        </SettingsSection>
+      ) : null}
       <UcsdAccountSettings environmentId={primaryEnvironmentId} />
       <SettingsSection
         {...searchableSetting("remote-environments")}

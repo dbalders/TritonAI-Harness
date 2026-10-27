@@ -499,7 +499,7 @@ describe("large text preview recovery", () => {
       await using screen = await render(preview("first"));
       await vi.waitFor(() => expect(workers).toHaveLength(1));
       await vi.waitFor(() => expect(screen.container.textContent).toContain("original"));
-      await vi.waitFor(() => expect(screen.container.textContent).toContain("1,000 lines"));
+      await expect.element(screen.getByText("1,000 lines", { exact: false })).toBeVisible();
       const viewport = screen.container.querySelector<HTMLElement>('[tabindex="0"]')!;
       await act(() =>
         viewport.dispatchEvent(
