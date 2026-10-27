@@ -490,7 +490,6 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
         version: 1 as const,
         kind: "media-file-exact" as const,
         filePath: canonicalFile,
-        ...(input.download ? { download: true } : {}),
         ...opened.identity,
         expiresAt: input.expiresAt,
       },

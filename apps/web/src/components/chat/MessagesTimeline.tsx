@@ -748,11 +748,10 @@ const ConversationTimeline = memo(function ConversationTimeline({
     viewport: timelineViewportElement,
     onManualNavigation: navigateTimeline,
   });
-  const [loadedListIdentity, setLoadedListIdentity] = useState<string | null>(null);
-  const findListReady = loadedListIdentity === listIdentityKey;
+  const [findListReady, setFindListReady] = useState(false);
   const handleListLoad = () => {
     onCitationListLoad();
-    setLoadedListIdentity(listIdentityKey);
+    setFindListReady(true);
   };
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
   // Every full-screen viewer reports false when it unmounts, so a row that leaves the list
@@ -1303,10 +1302,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
                 fullscreenAppRowId !== null ||
                 disclosureToggleSettling
                   ? false
-                  : isWorking &&
-                      !prefersReducedMotion &&
-                      settlingListIdentity === null &&
-                      findListReady
+                  : isWorking && !prefersReducedMotion && settlingListIdentity === null
                     ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
                     : TIMELINE_MAINTAIN_SCROLL_AT_END
               }

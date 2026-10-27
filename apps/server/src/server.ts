@@ -803,7 +803,6 @@ const makeRoutesLayerFor = (
       ServerHttp.layerAssetRoute,
       ServerHttp.layerAttachmentUploadRoute,
       GuestHttp.layer,
-      GuestHttp.layer,
       DeviceHubProxy.layer,
       ServerBrowserStream.routeLayer,
       ServerHttp.layerStaticAndDevRoute,

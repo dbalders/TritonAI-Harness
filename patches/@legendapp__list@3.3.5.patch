@@ -1619,7 +1619,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..d7cbe1cb43449cc29822b2646deabbdd
      }
    }
 diff --git a/react.js b/react.js
-index 914d2dafaafa001c9ab6791a0a0581659295e333..8c320b0dfb3ea60ef145274b37b1297b7dee26dc 100644
+index 914d2dafaafa001c9ab6791a0a0581659295e333..574faf647bbed760888eefec1a56ecf943cefd5c 100644
 --- a/react.js
 +++ b/react.js
 @@ -1908,6 +1908,10 @@ function updateScroll(ctx, newScroll, forceUpdate, options) {
@@ -1633,6 +1633,15 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..8c320b0dfb3ea60ef145274b37b1297b
    const allowedEdge = isUserScrollEvent ? beginReachedEdgeUserScroll(ctx, newScroll - prevScroll) : void 0;
    const didResolvePendingNativeMVCPAdjust = resolvePendingNativeMVCPAdjust(ctx, newScroll);
    const scrollLength = state.scrollLength;
+@@ -2869,7 +2873,7 @@ function abortBootstrapInitialScroll(ctx) {
+     clearBootstrapInitialScrollSession(state);
+     dispatchInitialScroll(ctx, {
+       forceScroll: true,
+-      resolvedOffset: bootstrapInitialScroll.scroll,
++      resolvedOffset: resolveInitialScrollOffset(ctx, initialScroll),
+       target: initialScroll,
+       waitForCompletionFrame: Platform.OS === "web"
+     });
 @@ -3257,6 +3261,7 @@ function syncMountedContainer(ctx, containerIndex, itemIndex, options) {
    const itemKey = (_a3 = state.idCache[itemIndex]) != null ? _a3 : getId(state, itemIndex);
    const updateLayout = (_b = options == null ? void 0 : options.updateLayout) != null ? _b : true;
@@ -1903,7 +1912,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..8c320b0dfb3ea60ef145274b37b1297b
              scrollBy();
              if (resetPaddingRafRef.current !== void 0) {
 diff --git a/react.mjs b/react.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..252a9d5b23e271c089d30c357a78dff754f1c899 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..e6f47227f496b3a12aef7c318f8a1eb996f9f001 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -1887,6 +1887,10 @@ function updateScroll(ctx, newScroll, forceUpdate, options) {
@@ -1917,6 +1926,15 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..252a9d5b23e271c089d30c357a78dff7
    const allowedEdge = isUserScrollEvent ? beginReachedEdgeUserScroll(ctx, newScroll - prevScroll) : void 0;
    const didResolvePendingNativeMVCPAdjust = resolvePendingNativeMVCPAdjust(ctx, newScroll);
    const scrollLength = state.scrollLength;
+@@ -2848,7 +2852,7 @@ function abortBootstrapInitialScroll(ctx) {
+     clearBootstrapInitialScrollSession(state);
+     dispatchInitialScroll(ctx, {
+       forceScroll: true,
+-      resolvedOffset: bootstrapInitialScroll.scroll,
++      resolvedOffset: resolveInitialScrollOffset(ctx, initialScroll),
+       target: initialScroll,
+       waitForCompletionFrame: Platform.OS === "web"
+     });
 @@ -3236,6 +3240,7 @@ function syncMountedContainer(ctx, containerIndex, itemIndex, options) {
    const itemKey = (_a3 = state.idCache[itemIndex]) != null ? _a3 : getId(state, itemIndex);
    const updateLayout = (_b = options == null ? void 0 : options.updateLayout) != null ? _b : true;

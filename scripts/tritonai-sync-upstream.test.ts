@@ -428,3 +428,78 @@ it("retains release conflicts before installation or PR publication", () => {
     NodeFS.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+it("retains an existing candidate's conflicting main refresh before validation", () => {
+  const fixture = createFixture();
+  let retained: string | undefined;
+  try {
+    prepareReleaseFixture(fixture);
+    const path = NodePath.join(fixture.repo, "refresh-conflict");
+    NodeFS.writeFileSync(path, "base\n");
+    git(fixture.repo, "add", "refresh-conflict");
+    git(fixture.repo, "commit", "-m", "shared behavior");
+    git(fixture.repo, "push", "origin", "main");
+    const initial = runReleaseSync(fixture);
+    assert.equal(initial.status, 0, initial.stderr);
+    const branch = NodeChildProcess.execFileSync("git", ["branch", "--list", "sync/release-*"], {
+      cwd: fixture.repo,
+      encoding: "utf8",
+    }).trim();
+    git(fixture.repo, "switch", branch);
+    NodeFS.writeFileSync(path, "candidate fix\n");
+    git(fixture.repo, "commit", "-am", "candidate behavior fix");
+    git(fixture.repo, "switch", "main");
+    NodeFS.writeFileSync(path, "new main behavior\n");
+    git(fixture.repo, "commit", "-am", "conflicting main behavior");
+    git(fixture.repo, "push", "origin", "main");
+    const result = runReleaseSync(fixture, ["--create-pr"]);
+    retained = /Kept sync worktree at (.+)/u.exec(result.stderr)?.[1];
+    assert.equal(result.status, 2, result.stderr);
+    const report = JSON.parse(result.stdout.slice(result.stdout.indexOf("{\n")));
+    assert.equal(report.mergeStatus, "conflicted");
+    assert.equal(report.checkStatus, "not-run");
+    assert.ok(retained && NodeFS.existsSync(retained));
+    assert.match(
+      NodeChildProcess.execFileSync("git", ["diff", "--name-only", "--diff-filter=U"], {
+        cwd: retained,
+        encoding: "utf8",
+      }),
+      /refresh-conflict/u,
+    );
+    assert.equal(
+      NodeChildProcess.execFileSync("git", ["show", `${branch}:refresh-conflict`], {
+        cwd: fixture.repo,
+        encoding: "utf8",
+      }),
+      "candidate fix\n",
+    );
+    assert.equal(
+      NodeFS.readFileSync(NodePath.join(fixture.trace, "order"), "utf8"),
+      "install\nchecks\n",
+    );
+    assert.ok(!githubCalls(fixture).some((args) => args[0] === "pr" && args[1] === "create"));
+  } finally {
+    if (retained) {
+      git(fixture.repo, "worktree", "remove", "--force", retained);
+      NodeFS.rmSync(NodePath.dirname(retained), { recursive: true, force: true });
+    }
+    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+it("keeps skipped release checks marked as needing review", () => {
+  const fixture = createFixture();
+  try {
+    prepareReleaseFixture(fixture);
+    const result = runReleaseSync(fixture, ["--skip-checks"]);
+    assert.equal(result.status, 2, result.stderr);
+    const report = JSON.parse(result.stdout.slice(result.stdout.indexOf("{\n")));
+    assert.equal(report.status, "needs-human-review");
+    assert.equal(report.installStatus, "skipped");
+    assert.equal(report.checkStatus, "skipped");
+    assert.include(report.labels, "needs review");
+    assert.ok(!NodeFS.existsSync(NodePath.join(fixture.trace, "install.json")));
+  } finally {
+    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

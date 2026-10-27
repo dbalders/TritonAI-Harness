@@ -868,8 +868,8 @@ describe("orchestration v2 legacy v1 cutover", () => {
               const legacyThreadCount = yield* sql<{ readonly count: number }>`
               SELECT COUNT(*) AS count FROM projection_threads
             `;
-              const recordedMigration41 = yield* sql<{ readonly name: string }>`
-              SELECT name FROM effect_sql_migrations WHERE migration_id = 41
+              const recordedMigration42 = yield* sql<{ readonly name: string }>`
+              SELECT name FROM effect_sql_migrations WHERE migration_id = 42
             `;
               const authSessionColumns = yield* sql<{ readonly name: string }>`
               PRAGMA table_info(auth_sessions)
@@ -880,7 +880,7 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 legacyMessageCount: legacyMessageCount[0]?.count ?? 0,
                 legacyThreadCount: legacyThreadCount[0]?.count ?? 0,
                 longProjection: continuedAgain,
-                migration41Name: recordedMigration41[0]?.name ?? null,
+                migration42Name: recordedMigration42[0]?.name ?? null,
                 authSessionColumnNames: authSessionColumns.map((column) => column.name),
               };
             }).pipe(
@@ -905,7 +905,7 @@ describe("orchestration v2 legacy v1 cutover", () => {
           assert.deepStrictEqual(divergenceLog?.annotations.divergent, [
             "42:ThreadSummaryTimeline (this build: AuthSessionClientConnection)",
           ]);
-          assert.equal(firstBoot.migration41Name, "ThreadSummaryTimeline");
+          assert.equal(firstBoot.migration42Name, "ThreadSummaryTimeline");
 
           assert.notInclude(firstBoot.authSessionColumnNames, "client_surface");
           assert.notInclude(firstBoot.authSessionColumnNames, "client_app_version");

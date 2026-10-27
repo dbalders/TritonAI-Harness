@@ -198,9 +198,10 @@ function createWorktree({ branch, downstreamRef, worktree, cwd }) {
   if (existing.status === 0) {
     // Reuse the preserved candidate; Git refuses a branch owned by another worktree.
     run("git", ["worktree", "add", worktree, branch], { cwd });
-    run("git", ["merge", "--no-edit", downstreamRef], { cwd: worktree });
+    return mergeRelease({ releaseSha: downstreamRef, worktree });
   } else {
     run("git", ["worktree", "add", "-b", branch, worktree, downstreamRef], { cwd });
+    return "clean";
   }
 }
 
@@ -363,12 +364,11 @@ function main() {
   };
 
   try {
-    createWorktree({ branch, downstreamRef, worktree, cwd: repoRoot });
-
-    report.mergeStatus = mergeRelease({ releaseSha, worktree });
+    report.mergeStatus = createWorktree({ branch, downstreamRef, worktree, cwd: repoRoot });
+    if (report.mergeStatus === "clean") report.mergeStatus = mergeRelease({ releaseSha, worktree });
     if (report.mergeStatus === "conflicted") {
       report.summary =
-        "Parent release merge has conflicts. Reconcile both parents in the retained worktree before checks or publication.";
+        "Sync merge has conflicts. Reconcile both parents in the retained worktree before checks or publication.";
       console.log(JSON.stringify(report, null, 2));
       return 2;
     }
@@ -385,15 +385,10 @@ function main() {
       }
     }
 
-    const checksOk =
-      (report.installStatus === "passed" || report.installStatus === "skipped") &&
-      (report.checkStatus === "passed" || report.checkStatus === "skipped");
+    const checksOk = report.installStatus === "passed" && report.checkStatus === "passed";
     report.status =
       report.mergeStatus === "clean" && checksOk ? "review-ready" : "needs-human-review";
-    report.summary =
-      report.mergeStatus === "clean"
-        ? "Parent release merged cleanly into TritonAI Harness."
-        : "Parent release was merged with downstream-preferred conflict resolutions.";
+    report.summary = "Parent release merged cleanly into TritonAI Harness.";
 
     const labels = labelsFor(report);
     if (args.push) {
