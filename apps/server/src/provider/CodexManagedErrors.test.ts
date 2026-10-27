@@ -62,3 +62,16 @@ it("preserves credentials for the current subscriber and permission error codes"
     assert.isFalse(classifyCodexManagedError({ error: { code } })!.revoke);
   }
 });
+
+it("explains context overflow and what to do instead of showing gateway JSON", () => {
+  for (const native of [
+    { message: "x", codexErrorInfo: "contextWindowExceeded" },
+    "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
+    'unexpected status 400 Bad Request: {"error":{"message":"litellm.ContextWindowExceededError: litellm.BadRequestError: ContextWindowExceededError: Hosted_vllmException - This model\'s maximum context length is 524288 tokens."}}',
+  ]) {
+    const failure = classifyCodexManagedError(native);
+    assert.equal(failure?.code, "context_window_exceeded");
+    assert.include(failure!.message, "start a new thread");
+    assert.notInclude(failure!.message, "litellm");
+  }
+});

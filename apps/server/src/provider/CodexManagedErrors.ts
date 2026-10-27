@@ -60,6 +60,18 @@ const failures = {
     revoke: false,
   },
 };
+// Codex's own wording, its error code, and the gateway's raw LiteLLM/vLLM overflow text.
+const CONTEXT_OVERFLOW_PATTERN =
+  /contextWindowExceeded|ran out of room in the model's context window|ContextWindowExceededError|maximum context length is \d+ tokens/;
+// Harness's gateway proxy first leaves out older history, so this remains only when the latest
+// message and recent work alone are too long.
+const contextOverflowFailure = {
+  message:
+    "Your latest message and the recent work in this thread are too long for the model to read at once. Send a shorter message, or start a new thread.",
+  revoke: false,
+  code: "context_window_exceeded",
+} as const;
+
 export function classifyCodexManagedError(value: unknown) {
   let text: string;
   try {
@@ -68,6 +80,7 @@ export function classifyCodexManagedError(value: unknown) {
     return undefined;
   }
   if (typeof text !== "string") return undefined;
+  if (CONTEXT_OVERFLOW_PATTERN.test(text)) return contextOverflowFailure;
   for (const [code, failure] of Object.entries(failures)) {
     if (!text.includes(code)) continue;
     if (code === "subscription_sharing_unsupported_capability") {
