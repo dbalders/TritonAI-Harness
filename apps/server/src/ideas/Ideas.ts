@@ -197,7 +197,10 @@ function isSection(value: string): value is IdeaSection {
   return IDEA_SECTIONS.some((section) => section === value);
 }
 
-const STARTER_KEYS = new Set(STARTER_IDEAS.map((starter) => `starter:${starter.id}`));
+const STARTER_TITLES = new Map<string, string>(
+  STARTER_IDEAS.map((starter) => [`starter:${starter.id}`, starter.title] as const),
+);
+const STARTER_KEYS = new Set(STARTER_TITLES.keys());
 /** Raise when the starter library is replaced, so pages that showed the old one are topped up once. */
 const STARTER_LIBRARY_VERSION = "2";
 
@@ -238,7 +241,8 @@ function toIdea(row: IdeaRow): Idea | null {
     id: row.ideaId,
     section: row.section,
     icon: content.value.icon,
-    title: content.value.title,
+    // A saved starter card shows the library's current wording.
+    title: STARTER_TITLES.get(row.ideaKey) ?? content.value.title,
     body: content.value.body,
     sources: content.value.sources,
     action: content.value.action,
