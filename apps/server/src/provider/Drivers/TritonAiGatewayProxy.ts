@@ -297,13 +297,22 @@ export function contextOverflowEventStream(): string {
   return `data: ${JSON.stringify(event)}\n\n`;
 }
 
+function isActionableItem(item: unknown): boolean {
+  return (
+    Predicate.isObject(item) &&
+    (item.type === "function_call" || item.type === "custom_tool_call" || item.type === "message")
+  );
+}
+
 /**
  * Codex retries an incomplete reply as a stream failure, so a reply that hit the output limit
- * would be generated again up to the retry limit. When it produced a tool call or message, accept
- * it instead: Codex reports a cut-off tool call to the model, which can then change approach.
- * A reply with only reasoning stays incomplete and keeps Codex's retry.
+ * would be generated again up to the retry limit. When the stream already delivered a tool call or
+ * message (Codex acts only on `response.output_item.done`), accept the reply instead: Codex reports
+ * a cut-off tool call to the model, which can then change approach. Any other incomplete reply,
+ * such as one with only reasoning, stays incomplete and keeps Codex's retry.
  */
-export function acceptOutputLimitedEvent(data: string): string {
+export function acceptOutputLimitedEvent(data: string, deliveredActionableItem: boolean): string {
+  if (!deliveredActionableItem) return data;
   if (!data.includes('"response.incomplete"') || !data.includes("max_output_tokens")) return data;
   let event: unknown;
   try {
@@ -316,16 +325,6 @@ export function acceptOutputLimitedEvent(data: string): string {
   if (!Predicate.isObject(response)) return data;
   const details = response.incomplete_details;
   if (!Predicate.isObject(details) || details.reason !== "max_output_tokens") return data;
-  const actionable =
-    Array.isArray(response.output) &&
-    response.output.some(
-      (item) =>
-        Predicate.isObject(item) &&
-        (item.type === "function_call" ||
-          item.type === "custom_tool_call" ||
-          item.type === "message"),
-    );
-  if (!actionable) return data;
   return JSON.stringify({
     ...event,
     type: "response.completed",
@@ -333,13 +332,32 @@ export function acceptOutputLimitedEvent(data: string): string {
   });
 }
 
-function rewriteSseEvent(event: string): string {
+/** Rewrites one response stream's events, remembering which output items Codex received. */
+export function makeResponseEventRewriter(): (data: string) => string {
+  let deliveredActionableItem = false;
+  return (data) => {
+    if (!deliveredActionableItem && data.includes('"response.output_item.done"')) {
+      try {
+        const event: unknown = JSON.parse(data);
+        if (
+          Predicate.isObject(event) &&
+          event.type === "response.output_item.done" &&
+          isActionableItem(event.item)
+        )
+          deliveredActionableItem = true;
+      } catch {
+        // Not an event Codex can parse either; pass it through unchanged.
+      }
+    }
+    return acceptOutputLimitedEvent(data, deliveredActionableItem);
+  };
+}
+
+function rewriteSseEvent(event: string, rewrite: (data: string) => string): string {
   return event
     .split("\n")
     .map((line) =>
-      line.startsWith("data:")
-        ? `data: ${acceptOutputLimitedEvent(line.slice(5).trimStart())}`
-        : line,
+      line.startsWith("data:") ? `data: ${rewrite(line.slice(5).trimStart())}` : line,
     )
     .join("\n");
 }
@@ -347,6 +365,7 @@ function rewriteSseEvent(event: string): string {
 /** Rewrites complete server-sent events while preserving streaming order and partial chunks. */
 export function rewriteResponseEvents<E, R>(
   stream: Stream.Stream<Uint8Array, E, R>,
+  rewrite: (data: string) => string = makeResponseEventRewriter(),
 ): Stream.Stream<Uint8Array, E, R> {
   return stream.pipe(
     Stream.decodeText,
@@ -360,10 +379,10 @@ export function rewriteResponseEvents<E, R>(
         const events = complete.split("\n\n").slice(0, -1);
         return [
           text.slice(boundary + 2),
-          [events.map((event) => `${rewriteSseEvent(event)}\n\n`).join("")],
+          [events.map((event) => `${rewriteSseEvent(event, rewrite)}\n\n`).join("")],
         ] as const;
       },
-      { onHalt: (pending) => (pending.length > 0 ? [rewriteSseEvent(pending)] : []) },
+      { onHalt: (pending) => (pending.length > 0 ? [rewriteSseEvent(pending, rewrite)] : []) },
     ),
     Stream.encodeText,
   );

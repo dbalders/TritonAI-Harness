@@ -8,6 +8,7 @@ import { it } from "@effect/vitest";
 import { describe, expect } from "vite-plus/test";
 import {
   acceptOutputLimitedEvent,
+  makeResponseEventRewriter,
   boundTritonAiReplayedModelOutput,
   capTritonAiOutputTokens,
   limitTritonAiRequestImages,
@@ -380,15 +381,15 @@ describe("TritonAI context window guard", () => {
     expect(frontier).toEqual({});
   });
 
-  it("accepts an output-limited reply only when it produced a tool call or message", () => {
-    const accepted = JSON.parse(
-      acceptOutputLimitedEvent(JSON.stringify(outputLimited([{ type: "reasoning" }, cutOffCall]))),
-    );
+  it("accepts an output-limited reply only after Codex received a tool call or message", () => {
+    const limited = JSON.stringify(outputLimited([{ type: "reasoning" }, cutOffCall]));
+    const accepted = JSON.parse(acceptOutputLimitedEvent(limited, true));
     expect(accepted.type).toBe("response.completed");
     expect(accepted.response.status).toBe("completed");
     expect(accepted.response.output[1]).toEqual(cutOffCall);
+    // A call present only in the final snapshot never reached Codex, so keep its retry.
+    expect(acceptOutputLimitedEvent(limited, false)).toBe(limited);
     for (const unchanged of [
-      JSON.stringify(outputLimited([{ type: "reasoning" }])),
       JSON.stringify({
         ...outputLimited([cutOffCall]),
         response: {
@@ -399,12 +400,27 @@ describe("TritonAI context window guard", () => {
       JSON.stringify({ type: "response.completed", response: { output: [] } }),
       "[DONE]",
     ])
-      expect(acceptOutputLimitedEvent(unchanged)).toBe(unchanged);
+      expect(acceptOutputLimitedEvent(unchanged, true)).toBe(unchanged);
+  });
+
+  it("tracks delivered items per stream", () => {
+    const limited = JSON.stringify(outputLimited([{ type: "reasoning" }, cutOffCall]));
+    const reasoningOnly = makeResponseEventRewriter();
+    reasoningOnly(
+      JSON.stringify({ type: "response.output_item.done", item: { type: "reasoning" } }),
+    );
+    expect(reasoningOnly(limited)).toBe(limited);
+    const withCall = makeResponseEventRewriter();
+    withCall(JSON.stringify({ type: "response.output_item.done", item: cutOffCall }));
+    expect(JSON.parse(withCall(limited)).type).toBe("response.completed");
+    // A fresh stream starts without delivered items.
+    expect(makeResponseEventRewriter()(limited)).toBe(limited);
   });
 
   it.effect("rewrites events split across chunks without changing other bytes", () =>
     Effect.gen(function* () {
-      const original = `event: response.created\ndata: {"type":"response.created"}\n\n${sse(
+      const done = sse({ type: "response.output_item.done", item: cutOffCall });
+      const original = `event: response.created\ndata: {"type":"response.created"}\n\n${done}${sse(
         outputLimited([cutOffCall]),
       )}data: [DONE]\n\n`;
       const encoder = new TextEncoder();
@@ -412,7 +428,8 @@ describe("TritonAI context window guard", () => {
         original.slice(0, 7),
         original.slice(7, 61),
         original.slice(61, 200),
-        original.slice(200),
+        original.slice(200, 420),
+        original.slice(420),
       ];
       const text = yield* rewriteResponseEvents(
         Stream.fromIterable(chunks.map((chunk) => encoder.encode(chunk))),
@@ -420,7 +437,9 @@ describe("TritonAI context window guard", () => {
       expect(text).toBe(
         original.replace(
           sse(outputLimited([cutOffCall])),
-          sse(JSON.parse(acceptOutputLimitedEvent(JSON.stringify(outputLimited([cutOffCall]))))),
+          sse(
+            JSON.parse(acceptOutputLimitedEvent(JSON.stringify(outputLimited([cutOffCall])), true)),
+          ),
         ),
       );
       const plain = "data: one\n\ndata: [DONE]\n\n";
@@ -472,8 +491,10 @@ describe("TritonAI context window guard", () => {
 
   it.effect("caps hosted-model output and accepts an output-limited tool call end to end", () =>
     Effect.gen(function* () {
+      // The gateway's order for a cut-off tool call (observed 2026-10-27).
       const events = [
         sse({ type: "response.created" }),
+        sse({ type: "response.output_item.done", item: cutOffCall }),
         sse(outputLimited([cutOffCall])),
         "data: [DONE]\n\n",
       ];
