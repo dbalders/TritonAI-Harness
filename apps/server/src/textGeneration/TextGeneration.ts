@@ -8,8 +8,6 @@ import { TextGenerationError } from "@t3tools/contracts";
 
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
-import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
-import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
 import * as ExternalContent from "../integrations/ExternalContent.ts";
 import * as ServerConfig from "../config.ts";
 
@@ -56,7 +54,6 @@ const resolveInstance = (
   promptOnlyRuntimeAvailable: boolean,
   operation: TextGenerationOp,
   instanceId: ProviderInstanceId,
-  externalInputs = false,
 ): Effect.Effect<ProviderInstance["textGeneration"], TextGenerationError> =>
   registry.getInstance(instanceId).pipe(
     Effect.flatMap(
@@ -81,10 +78,7 @@ const resolveInstance = (
               ),
             )
           : false;
-        if (
-          (exposed || externalInputs) &&
-          (instance.driverKind !== "codex" || !promptOnlyRuntimeAvailable)
-        )
+        if (exposed && (instance.driverKind !== "codex" || !promptOnlyRuntimeAvailable))
           return yield* new TextGenerationError({
             operation,
             detail:
@@ -98,7 +92,6 @@ const resolveInstance = (
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
-  const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const content = yield* ExternalContent.ExternalContent;
   const config = yield* ServerConfig.ServerConfig;
   return TextGeneration.of({
@@ -154,25 +147,20 @@ export const make = Effect.gen(function* () {
         input.modelSelection.instanceId,
       ).pipe(Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input))),
     generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function* (input) {
-      const linkedContext =
-        input.linkedContext ??
-        (config.integrationCodexRuntime
-          ? yield* ThreadTitleLinks.resolveThreadTitleLinks(input).pipe(
-              Effect.provideService(
-                SourceControlProviderRegistry.SourceControlProviderRegistry,
-                sourceControl,
-              ),
-            )
-          : undefined);
-      const textGeneration = yield* resolveInstance(
+      // Titles become later prompt inputs without carrying separate link provenance.
+      if (input.linkedContext !== undefined)
+        return yield* new TextGenerationError({
+          operation: "generateThreadTitle",
+          detail: "External link context cannot be used to generate thread titles.",
+        });
+      const generation = yield* resolveInstance(
         registry,
         content,
         Boolean(config.integrationCodexRuntime),
         "generateThreadTitle",
         input.modelSelection.instanceId,
-        linkedContext !== undefined,
       );
-      return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
+      return yield* generation.generateThreadTitle(input);
     }),
     generateDailyMemory: (input) =>
       resolveInstance(
