@@ -113,6 +113,11 @@ export const traceMaxFilesConfig = Config.Int("T3CODE_TRACE_MAX_FILES").pipe(
 );
 
 const EnvServerConfig = Config.all({
+  integrationCodexBinary: optionalStringConfig("TRITONAI_INTEGRATION_CODEX_BINARY"),
+  integrationCodexSha256: optionalStringConfig("TRITONAI_INTEGRATION_CODEX_SHA256"),
+  integrationCodexContractSha256: optionalStringConfig(
+    "TRITONAI_INTEGRATION_CODEX_CONTRACT_SHA256",
+  ),
   logLevel: Config.LogLevel("T3CODE_LOG_LEVEL").pipe(Config.withDefault("Info")),
   traceMinLevel: Config.LogLevel("T3CODE_TRACE_MIN_LEVEL").pipe(Config.withDefault("Info")),
   traceTimingEnabled: Config.Boolean("T3CODE_TRACE_TIMING_ENABLED").pipe(Config.withDefault(true)),
@@ -563,6 +568,30 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   const desktopBrowserControlFd = bootstrap?.desktopBrowserControlFd;
   const resourceMonitorPath = bootstrap?.resourceMonitorPath;
   const computerUseMcp = bootstrap?.computerUseMcp;
+  const runtimePins = [
+    env.integrationCodexBinary,
+    env.integrationCodexSha256,
+    env.integrationCodexContractSha256,
+  ];
+  if (
+    runtimePins.some((pin) => pin !== undefined) &&
+    (!env.integrationCodexBinary ||
+      !path.isAbsolute(env.integrationCodexBinary) ||
+      !/^[a-f0-9]{64}$/u.test(env.integrationCodexSha256 ?? "") ||
+      !/^[a-f0-9]{64}$/u.test(env.integrationCodexContractSha256 ?? ""))
+  )
+    return yield* new CliError.UserError({
+      cause:
+        "Integration runtime composition requires an absolute binary path and both SHA-256 pins in the server startup environment.",
+    });
+  const integrationCodexRuntime =
+    env.integrationCodexBinary && env.integrationCodexSha256 && env.integrationCodexContractSha256
+      ? {
+          binaryPath: env.integrationCodexBinary,
+          sha256: env.integrationCodexSha256,
+          contractSha256: env.integrationCodexContractSha256,
+        }
+      : undefined;
   const autoBootstrapProjectFromCwd = Option.getOrElse(
     resolveOptionPrecedence(
       Option.fromUndefinedOr(options?.forceAutoBootstrapProjectFromCwd),
@@ -678,6 +707,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     resourceMonitorPath,
     computerUseMcp,
     computerUseState: bootstrap?.computerUseState,
+    ...(integrationCodexRuntime ? { integrationCodexRuntime } : {}),
     autoBootstrapProjectFromCwd,
     logWebSocketEvents,
     tailscaleServeEnabled,

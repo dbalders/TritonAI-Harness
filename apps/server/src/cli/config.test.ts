@@ -771,6 +771,38 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     tailscaleServePort: Option.none<number>(),
   });
 
+  it.effect("takes integration runtime pins only from a complete host startup composition", () =>
+    Effect.gen(function* () {
+      const root = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+        prefix: "integration-runtime-config-",
+      });
+      const binaryPath = (yield* Path.Path).join(root, "codex-app-server");
+      const complete = {
+        TRITONAI_INTEGRATION_CODEX_BINARY: binaryPath,
+        TRITONAI_INTEGRATION_CODEX_SHA256: "a".repeat(64),
+        TRITONAI_INTEGRATION_CODEX_CONTRACT_SHA256: "b".repeat(64),
+      };
+      const resolve = (env: Record<string, string>) =>
+        resolveServerConfig(minimalWebFlags(root), Option.none()).pipe(
+          Effect.provide(
+            Layer.mergeAll(NetService.layer, ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+          ),
+        );
+      expect((yield* resolve({})).integrationCodexRuntime).toBeUndefined();
+      expect((yield* resolve(complete)).integrationCodexRuntime).toEqual({
+        binaryPath,
+        sha256: "a".repeat(64),
+        contractSha256: "b".repeat(64),
+      });
+      for (const env of [
+        { TRITONAI_INTEGRATION_CODEX_BINARY: binaryPath },
+        { ...complete, TRITONAI_INTEGRATION_CODEX_BINARY: "relative-codex" },
+        { ...complete, TRITONAI_INTEGRATION_CODEX_SHA256: "not-a-digest" },
+      ])
+        expect((yield* Effect.flip(resolve(env)))._tag).toBe("UserError");
+    }),
+  );
+
   it.effect(
     "resolves each signal's endpoint through T3CODE_OTLP_*_URL, an OTEL endpoint, the bootstrap envelope, and persisted Settings, in that order",
     () =>

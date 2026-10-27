@@ -11,6 +11,7 @@ import {
 } from "../integrations/IntegrationToolFailure.ts";
 import { describeToolCallForApproval } from "../integrations/IntegrationToolPreview.ts";
 import type { IntegrationWriteInvocation } from "../integrations/IntegrationWriteApproval.ts";
+import { ExternalToolResultError } from "../integrations/ExternalContent.ts";
 import {
   BROWSER_NAVIGATION_GRANT,
   browserNavigationRequest,
@@ -271,6 +272,8 @@ function serializeDynamicToolResult(value: unknown): string | undefined {
 
 /** Tell the agent why a dynamic tool call failed without disclosing unsafe error details. */
 function dynamicToolFailureResponse(error: unknown): EffectCodexSchema.DynamicToolCallResponse {
+  if (error instanceof ExternalToolResultError)
+    return dynamicToolResponse(false, JSON.stringify(error.result));
   return dynamicToolResponse(false, describeIntegrationToolFailure(error).text);
 }
 

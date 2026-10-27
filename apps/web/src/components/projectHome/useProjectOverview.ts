@@ -9,6 +9,7 @@ import type {
   ProjectNextStep,
   ProjectNextStepFeedbackKind,
   ProjectOverviewSnapshot,
+  ThreadId,
 } from "@t3tools/contracts";
 import { useEffect, useRef, useState } from "react";
 import { useEnvironmentQuery } from "../../state/query";
@@ -42,6 +43,7 @@ export function useProjectOverview({
   const allowed = useAtomValue(
     serverEnvironment.ensureProjectOverview.permissionAtom(environmentId),
   );
+  const canOpen = useAtomValue(serverEnvironment.openProjectNextStep.permissionAtom(environmentId));
   const query = useEnvironmentQuery(
     connected && supported
       ? serverEnvironment.projectOverview({ environmentId, input: { projectId } })
@@ -59,6 +61,10 @@ export function useProjectOverview({
     label: "Dismiss project next step",
     reportFailure: false,
   });
+  const sendOpen = useAtomCommand(serverEnvironment.openProjectNextStep, {
+    label: "Open project next step",
+    reportFailure: false,
+  });
   const sendRestore = useAtomCommand(serverEnvironment.restoreProjectNextSteps, {
     label: "Restore project next steps",
     reportFailure: false,
@@ -68,6 +74,14 @@ export function useProjectOverview({
     setLastQueryData(query.data);
     if (query.data) setSaved(query.data);
   }
+  const open = async (step: ProjectNextStep, sourceDigest: string, draftThreadId: ThreadId) => {
+    const result = await sendOpen({
+      environmentId,
+      input: { projectId, stepId: step.id, sourceDigest, draftThreadId },
+    });
+    if (result._tag !== "Success" || !result.value)
+      throw new Error("Couldn't open this suggestion safely. Refresh next steps and try again.");
+  };
   const restore = async (stepId?: string) => {
     const result = await sendRestore({
       environmentId,
@@ -125,8 +139,10 @@ export function useProjectOverview({
     busy: checking || snapshot?.generation.state === "generating",
     error: requestError ?? query.error ?? snapshot?.generation.message ?? null,
     canRefresh: connected && supported && allowed,
+    canOpen: connected && supported && canOpen,
     canGiveFeedback: connected && supported && allowed && feedbackSupported,
     refresh,
+    open,
     dismiss,
     restore,
   };

@@ -82,6 +82,18 @@ it("preserves actionable handoff errors wrapped by turn startup", () => {
   );
 });
 
+it("offers a clean continuation for history that cannot enter the coding runtime", () => {
+  const failure = makeProviderFailure({
+    cause: Cause.fail({
+      _tag: "ProviderAdapterOpenSessionError",
+      cause: { _tag: "ExternalContentDenied", reason: "runtime_unverified" },
+    }),
+  });
+  assert.equal(failure.code, "external_content_requires_clean_thread");
+  assert.include(failure.message, "Start a clean thread");
+  assert.notInclude(failure.message, "sign in");
+});
+
 it("keeps unrecognized reasons and provider text out of category messages", () => {
   for (const cause of [
     "Private launch command",

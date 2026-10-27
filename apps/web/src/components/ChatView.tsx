@@ -1,6 +1,9 @@
 import { Button } from "./ui/button";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
-import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
+import {
+  EXTERNAL_CONTENT_CLEAN_THREAD_CODE,
+  PRIMARY_LOCAL_ENVIRONMENT_ID,
+} from "@t3tools/contracts";
 import { useGettingStartedChatGuide } from "./onboarding/GettingStartedChatGuide";
 import { takePendingRecordedSkillPrompt, usePendingRecordedSkillPrompt } from "./RecordSkill";
 import { composerTargetKey } from "../composerDraftStore";
@@ -762,8 +765,12 @@ export default function ChatView(props: ChatViewProps) {
     serverProjection === null ? null : deriveLatestThreadRun(serverProjection);
   const serverActivityRun =
     serverProjection === null ? null : deriveThreadActivityRun(serverProjection);
-  const serverRuntime =
+  const structureRuntime =
     serverProjection === null ? null : deriveThreadStructureRuntime(serverProjection);
+  const serverRuntime =
+    serverThread?.runtime?.lastErrorCode === EXTERNAL_CONTENT_CLEAN_THREAD_CODE
+      ? serverThread.runtime
+      : structureRuntime;
   const runlessWorkStartedAt =
     serverProjection === null ? null : deriveRunlessWorkStartedAt(serverProjection);
   const providerSubagentStatus =
@@ -1073,6 +1080,9 @@ export default function ChatView(props: ChatViewProps) {
     startNewThreadForProject(activeProjectRef, handleNewThread);
   };
   const handleNewThreadInActiveProjectStable = useStableCallback(handleNewThreadInActiveProject);
+  const handleStartCleanThread = useStableCallback(() => {
+    if (activeProjectRef) void handleNewThread(activeProjectRef, { forceNew: true });
+  });
   const projectGroupingSettings = selectProjectGroupingSettings(settings);
   const activeDraftLogicalProjectKey =
     !isServerThread && activeProject
@@ -3351,6 +3361,7 @@ export default function ChatView(props: ChatViewProps) {
               onOpenProviderSetup={openProviderSetupStable}
               threadId={activeThread.id}
               threadError={timelineThreadError}
+              onStartCleanThread={handleStartCleanThread}
               threadErrorClass={
                 threadErrorIsServerRuntimeError ? (serverRuntime?.lastErrorClass ?? null) : null
               }

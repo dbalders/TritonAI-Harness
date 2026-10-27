@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Crypto from "effect/Crypto";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -15,8 +16,8 @@ import {
   type ServerProviderModel,
   TextGenerationError,
 } from "@t3tools/contracts";
+import { parseCodexTransportArgs } from "../provider/CodexTransportArgs.ts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
-import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -36,6 +37,8 @@ import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as TextGeneration from "./TextGeneration.ts";
+import * as ExternalContent from "../integrations/ExternalContent.ts";
+import * as NativePrompt from "./NativePromptGeneration.ts";
 import { isolatedCodexHelpAuth } from "./CodexHelpAuth.ts";
 import { withCodexHelpAuthOwner } from "./CodexHelpAuthOwner.ts";
 import { readCodexHelpTransport } from "./CodexHelpTransport.ts";
@@ -103,6 +106,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
   const serverConfig = yield* Effect.service(ServerConfig.ServerConfig);
   const requestAnalytics = yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics;
   const resolvedEnvironment = environment ?? process.env;
+  const content = yield* Effect.serviceOption(ExternalContent.ExternalContent);
+  const crypto = yield* Crypto.Crypto;
 
   const readStreamAsString = <E>(
     operation: string,
@@ -259,9 +264,15 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     Effect.orElseSucceed((): ReadonlyArray<string> => []),
   );
 
-  // Help gets a separate launch path: never reuse arbitrary CLI overrides or a
-  // user's Codex home. In particular, a read-only sandbox alone is insufficient.
-  const runCodexHelpJson: TextGenerationOperations.Runner = (request) =>
+  // Isolated helpers retain only the selected transport, without ambient tools or instructions.
+  const runIsolatedCodexJson = <S extends Schema.Top>(
+    request: Omit<TextGenerationOperations.Request<S>, "operation"> & {
+      readonly operation:
+        | TextGenerationOperations.Operation
+        | "generateDailyMemory"
+        | "generateIdeas";
+    },
+  ): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.scoped(
       Effect.gen(function* () {
         const operation = request.operation;
@@ -296,84 +307,16 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         // Retain only the trusted runtime's provider transport settings. Other
         // launch overrides could add instructions, hooks, tools, or extra roots.
         const providerArgs: string[] = [];
-        // undefined means absent; null means a selector we cannot safely interpret.
-        let selectedProvider: string | null | undefined;
-        // An unrelated transport must not change native authentication or be queried here.
-        const providerTransports = new Map<string, string[]>();
-        {
-          const launchArgs = resolved
-            ? effectiveConfig.launchArgs
-            : resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment);
-          // These switches change the configuration source or endpoint. Dropping
-          // them could turn an unsupported route into an implicit native request.
-          if (
-            tokenizeCliArgs(launchArgs ?? "").some(
-              (arg) =>
-                ["--profile", "-p", "--oss", "--local-provider", "--remote", "--cd", "-C"].some(
-                  (flag) => arg === flag || arg.startsWith(flag + "="),
-                ) || /^-(?:p|C).+/.test(arg),
-            )
-          )
-            return yield* fail();
-          const args = codexExecLaunchArgs(launchArgs);
-          for (let index = 0; index < args.length; index++) {
-            const arg = args[index];
-            const value =
-              arg === "--config" || arg === "-c"
-                ? args[++index]
-                : arg?.startsWith("--config=")
-                  ? arg.slice("--config=".length)
-                  : arg?.startsWith("-c=")
-                    ? arg.slice("-c=".length)
-                    : undefined;
-            if (value === undefined) continue;
-            const separator = value.indexOf("=");
-            if (separator < 0) return yield* fail();
-            const key = value.slice(0, separator).trim();
-            const configValue = value.slice(separator + 1).trim();
-            if (/^(?:profile|profiles|oss_provider|codex_home)(?:\.|$)/.test(key))
-              return yield* fail();
-            if (key === "model_provider") {
-              // Codex parses TOML, falling back to a raw string after shell
-              // tokenization. Admit only unambiguous provider IDs in either
-              // form; escaped/structured selectors fail closed. Later overrides win.
-              const selector =
-                /^(?:"([A-Za-z0-9_-]+)"|'([A-Za-z0-9_-]+)'|([A-Za-z_][A-Za-z0-9_-]*))$/.exec(
-                  configValue,
-                );
-              selectedProvider =
-                selector && !(selector[3] && /^(?:true|false|inf|nan)$/.test(selector[3]))
-                  ? (selector[1] ?? selector[2] ?? selector[3] ?? null)
-                  : null;
-              continue;
-            }
-            // A dotted override replaces a scalar selector with a table. A
-            // later root assignment can replace it again, so validate only last.
-            if (key.startsWith("model_provider.")) {
-              selectedProvider = null;
-              continue;
-            }
-            // Do not silently drop alternate endpoint settings and then reuse
-            // native credentials. They are outside Help's transport allowlist.
-            if (/^(?:openai_base_url|chatgpt_base_url)(?:\.|$)/.test(key)) return yield* fail();
-            const isProviderTransport =
-              key === "model_providers" || key.startsWith("model_providers.");
-            const transport =
-              /^model_providers\.([A-Za-z0-9_-]+)\.(?:name|base_url|env_key|wire_api|requires_openai_auth|supports_websockets|model_catalog_url)$/.exec(
-                key,
-              );
-            if (isProviderTransport && !transport) return yield* fail();
-            if (transport) {
-              const provider = transport[1]!;
-              const overrides = providerTransports.get(provider) ?? [];
-              overrides.push("--config", `${key}=${configValue}`);
-              providerTransports.set(provider, overrides);
-            }
-          }
-        }
-
-        if (selectedProvider === null) return yield* fail();
-        if (selectedProvider === undefined && providerTransports.size > 0) return yield* fail();
+        const { selectedProvider: initialProvider, providerTransports } = yield* Effect.try({
+          try: () =>
+            parseCodexTransportArgs(
+              resolved
+                ? effectiveConfig.launchArgs
+                : resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment),
+            ),
+          catch: () => fail(),
+        });
+        let selectedProvider = initialProvider;
         if (
           selectedProvider === "openai" &&
           !providerTransports.has(selectedProvider) &&
@@ -434,34 +377,37 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             ),
         );
 
-        const version = (yield* commandOutput(["--version"])).trim().replace(/^codex-cli\s+/, "");
-        if (!CODEX_HELP_VERSIONS.has(version)) return yield* fail();
-        const help = yield* commandOutput(["exec", "--help"]);
-        if (
-          !["--ignore-user-config", "--ignore-rules", "--strict-config", "--output-schema"].every(
-            (flag) => help.includes(flag),
+        let featureArgs: ReadonlyArray<string> = [];
+        if (!serverConfig.integrationCodexRuntime) {
+          const version = (yield* commandOutput(["--version"])).trim().replace(/^codex-cli\s+/, "");
+          if (!CODEX_HELP_VERSIONS.has(version)) return yield* fail();
+          const help = yield* commandOutput(["exec", "--help"]);
+          if (
+            !["--ignore-user-config", "--ignore-rules", "--strict-config", "--output-schema"].every(
+              (flag) => help.includes(flag),
+            )
           )
-        )
-          return yield* fail();
-        const features = yield* commandOutput(["features", "list"]);
-        const featureNames = features
-          .trim()
-          .split(/\r?\n/)
-          .map((line) => {
-            const match = /^([a-z][a-z0-9_.]*)\s+(.+?)\s+(?:true|false)\s*$/.exec(line);
-            return match && match[2] !== "removed" ? match[1] : undefined;
-          })
-          .filter((name): name is string => name !== undefined);
-        if (
-          !["shell_tool", "view_image", "skip_host_skill_discovery", "plugins", "apps"].every(
-            (name) => featureNames.includes(name),
+            return yield* fail();
+          const features = yield* commandOutput(["features", "list"]);
+          const featureNames = features
+            .trim()
+            .split(/\r?\n/)
+            .map((line) => {
+              const match = /^([a-z][a-z0-9_.]*)\s+(.+?)\s+(?:true|false)\s*$/.exec(line);
+              return match && match[2] !== "removed" ? match[1] : undefined;
+            })
+            .filter((name): name is string => name !== undefined);
+          if (
+            !["shell_tool", "view_image", "skip_host_skill_discovery", "plugins", "apps"].every(
+              (name) => featureNames.includes(name),
+            )
           )
-        )
-          return yield* fail();
-        const featureArgs = featureNames.flatMap((name) => [
-          "--config",
-          `features.${name}=${name === "skip_host_skill_discovery" ? "true" : "false"}`,
-        ]);
+            return yield* fail();
+          featureArgs = featureNames.flatMap((name) => [
+            "--config",
+            `features.${name}=${name === "skip_host_skill_discovery" ? "true" : "false"}`,
+          ]);
+        }
         const defaultGateway =
           selectedProvider === undefined && effectiveEnvironment[TRITONAI_API_KEY_ENV]?.trim();
         const sourceHome =
@@ -470,7 +416,18 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             : undefined;
         if (defaultGateway) {
           providerArgs.push(
-            ...makeTritonAiCodexConfigArgs(effectiveEnvironment, requestAnalytics.headers("help")),
+            ...makeTritonAiCodexConfigArgs(
+              effectiveEnvironment,
+              requestAnalytics.headers(
+                operation === "generateIdeas"
+                  ? "ideas"
+                  : operation === "generateDailyMemory"
+                    ? "memory"
+                    : operation === "generateHelp"
+                      ? "help"
+                      : "generation",
+              ),
+            ),
           );
         } else {
           if (sourceHome) {
@@ -539,6 +496,47 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         const serviceTier = resolved
           ? undefined
           : getCodexServiceTierOptionValue(request.modelSelection);
+        if (serverConfig.integrationCodexRuntime) {
+          if (Option.isNone(content)) return yield* fail();
+          return yield* NativePrompt.run({
+            operation: request.operation,
+            prompt: request.prompt,
+            outputSchema: request.outputSchema,
+            modelSelection: { ...request.modelSelection, model },
+            environment: env,
+            imagePaths: yield* materializeImageAttachments(
+              request.attachments,
+              request.modelSelection,
+            ),
+            configArgs: [
+              ...providerArgs,
+              "-c",
+              'cli_auth_credentials_store="file"',
+              "-c",
+              `model_providers.${selectedProvider ?? "ucsd"}.supports_websockets=false`,
+              "-c",
+              "features.enable_request_compression=false",
+              "-c",
+              `model_reasoning_effort=${encodeCodexConfigString(getModelSelectionStringOptionValue(request.modelSelection, "reasoningEffort") ?? DEFAULT_TEXT_GENERATION_REASONING_EFFORT)}`,
+              ...(serviceTier
+                ? ["-c", `service_tier=${encodeCodexConfigString(serviceTier)}`]
+                : []),
+            ],
+            timeoutMs:
+              operation === "generateDailyMemory"
+                ? DAILY_MEMORY_TIMEOUT_MS
+                : operation === "generateIdeas"
+                  ? IDEAS_TIMEOUT_MS
+                  : CODEX_TIMEOUT_MS,
+          }).pipe(
+            Effect.provideService(ExternalContent.ExternalContent, content.value),
+            Effect.provideService(ServerConfig.ServerConfig, serverConfig),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, commandSpawner),
+          );
+        }
         const catalogJson = options?.modelCatalogPath
           ? yield* readBoundedFile(options.modelCatalogPath, 16 * 1024 * 1024)
           : yield* commandOutput(["debug", "models", "--bundled"]);
@@ -683,6 +681,21 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateDailyMemory"
       | "generateIdeas";
   }): Effect.fn.Return<S["Type"], TextGenerationError, S["DecodingServices"]> {
+    if (serverConfig.integrationCodexRuntime && investigate)
+      return yield* new TextGenerationError({
+        operation,
+        detail:
+          "The prompt-only runtime cannot investigate a checkout. Supply the review context explicitly.",
+      });
+    if (serverConfig.integrationCodexRuntime)
+      return yield* runIsolatedCodexJson({
+        operation,
+        cwd,
+        prompt,
+        outputSchema: outputSchemaJson,
+        modelSelection,
+        attachments,
+      });
     const imagePaths = yield* materializeImageAttachments(attachments, modelSelection);
     const schemaJson = yield* encodeJsonForOperation(
       operation,
@@ -947,7 +960,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     ...TextGenerationOperations.fromRunner(
       "CodexTextGeneration",
       (request) =>
-        request.operation === "generateHelp" ? runCodexHelpJson(request) : runCodexJson(request),
+        request.operation === "generateHelp"
+          ? runIsolatedCodexJson(request)
+          : runCodexJson(request),
       { help: { promptOnly: true } },
     ),
     generateDailyMemory,

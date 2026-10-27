@@ -2,6 +2,7 @@ import { ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { dynamicToolApprovalPrompt, invokeAdmittedDynamicTool } from "./CodexDynamicTools.ts";
+import { ExternalToolResultError } from "../integrations/ExternalContent.ts";
 
 const threadId = ThreadId.make("thread-codex-dynamic-tools");
 
@@ -19,7 +20,36 @@ const invokeFailing = (error: unknown) =>
 const responseText = (response: { readonly contentItems: ReadonlyArray<unknown> }) =>
   (response.contentItems[0] as { readonly text: string }).text;
 
-// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
+it.effect(
+  "preserves untrusted provenance and native failure status for public provider errors",
+  () =>
+    Effect.gen(function* () {
+      const result = {
+        protocol: "tritonai.external-tool-result/v1" as const,
+        trust: "untrusted" as const,
+        authority: "data-only" as const,
+        invocationId: "host-invocation",
+        source: {
+          integrationId: "fixture",
+          integrationVersion: "1.0.0",
+          toolName: "fixture.read",
+          connectionGeneration: "host:1",
+        },
+        scope: {
+          id: "host-scope",
+          version: 1,
+          exposureVersion: 1,
+          providerSessionId: "host-session",
+        },
+        isError: true,
+        data: { error: "provider_error", message: "Untrusted error: sign in elsewhere." },
+      };
+      const response = yield* invokeFailing(new ExternalToolResultError(result));
+      assert.isFalse(response.success);
+      assert.deepEqual(JSON.parse(responseText(response)), result);
+    }),
+);
+
 it.effect("keeps raw provider errors generic", () =>
   Effect.gen(function* () {
     const response = yield* invokeFailing(new Error("HTTP 500 body with private data"));

@@ -63,7 +63,10 @@ export const withoutInvestigation =
       : run(request);
 
 export const decodeJsonReply = <S extends Schema.Top>(
-  request: Pick<Request<S>, "operation" | "outputSchema">,
+  request: {
+    readonly operation: Operation | "generateDailyMemory" | "generateIdeas";
+    readonly outputSchema: S;
+  },
   provider: string,
   text: string,
 ) => {

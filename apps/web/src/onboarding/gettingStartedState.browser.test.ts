@@ -315,7 +315,7 @@ describe("delayed draft preparation", () => {
     const gate = holdNextSave();
     let opening!: ReturnType<ReturnType<typeof useOpenIdeaDraft>>;
     await act(async () => {
-      opening = open()(IDEA);
+      opening = open()(IDEA, async () => true);
       await gate.entered;
     });
     expect(useComposerDraftStore.getState().getComposerDraft(DRAFT)?.prompt).toBe("Original idea");

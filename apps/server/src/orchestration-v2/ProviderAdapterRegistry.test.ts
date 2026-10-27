@@ -28,6 +28,12 @@ import {
 } from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ExternalContent from "../integrations/ExternalContent.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
+
+const layerContent = ExternalContent.layer.pipe(
+  Layer.provide(Layer.mergeAll(Sqlite.layerMemory, NodeServices.layer)),
+);
 
 const driver = ProviderDriverKind.make("codex");
 const personalId = ProviderInstanceId.make("codex_personal");
@@ -77,14 +83,15 @@ const layerInstanceRegistry = Layer.succeed(ProviderInstanceRegistry.ProviderIns
 });
 const layerTest = ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
   Layer.provide(layerInstanceRegistry),
+  Layer.provide(layerContent),
 );
 
 it.effect("routes two configured instances of the same driver independently", () =>
   Effect.gen(function* () {
     const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistryV2;
 
-    assert.strictEqual(yield* registry.get(personalId), personalAdapter);
-    assert.strictEqual(yield* registry.get(workId), workAdapter);
+    assert.strictEqual((yield* registry.get(personalId)).instanceId, personalId);
+    assert.strictEqual((yield* registry.get(workId)).instanceId, workId);
     assert.deepEqual(yield* registry.list(), [personalId, workId]);
   }).pipe(Effect.provide(layerTest)),
 );
@@ -221,7 +228,7 @@ it.effect(
         .pipe(Effect.flip);
       assert.instanceOf(error, ProviderAdapter.ProviderAdapterOpenSessionError);
       assert.instanceOf(error.cause, ProviderSetupError);
-    }),
+    }).pipe(Effect.provide(layerContent)),
 );
 
 it.effect("interrupts admitted session startup when a shared peer signs out", () =>
@@ -285,5 +292,5 @@ it.effect("interrupts admitted session startup when a shared peer signs out", ()
     yield* auth.logout(Effect.void);
     yield* Deferred.await(stopped);
     assert.isTrue(Exit.isFailure(yield* Fiber.await(startup)));
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(layerContent, NodeServices.layer))),
 );

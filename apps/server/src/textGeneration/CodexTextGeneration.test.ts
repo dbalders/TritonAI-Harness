@@ -1,5 +1,8 @@
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import { fromRunner } from "@t3tools/provider-core/server/textGenerationOperations";
 import { EnvironmentId } from "@t3tools/contracts";
@@ -9,6 +12,11 @@ import { TRITONAI_CODEX_MODEL_PROVIDER_ID } from "@t3tools/contracts";
 import * as TritonAiRequestAnalytics from "../telemetry/TritonAiRequestAnalytics.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as TextGeneration from "./TextGeneration.ts";
+import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
+import * as ExternalContent from "../integrations/ExternalContent.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 import managedHarnessConfig from "../../../../config/tritonai-managed-config.json" with { type: "json" };
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
@@ -28,10 +36,6 @@ import * as Layer from "effect/Layer";
 
 import * as Path from "effect/Path";
 
-import * as Schema from "effect/Schema";
-
-import * as Scope from "effect/Scope";
-
 import { createModelSelection } from "@t3tools/shared/model";
 
 import { expect } from "vite-plus/test";
@@ -41,12 +45,6 @@ import { CodexSettings, ProviderInstanceId } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
 
 import { makeProcessProbe, processProbeSource } from "../testUtils/processProbe.ts";
-
-import * as TextGeneration from "./TextGeneration.ts";
-
-import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
-
-import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
@@ -92,7 +90,14 @@ const HELP_INPUT: import("@t3tools/provider-core/server/textGeneration").HelpGen
 
 const layerCodexTextGenerationTest = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-codex-text-generation-test-",
-}).pipe(Layer.provideMerge(NodeServices.layer));
+}).pipe(
+  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(
+    ExternalContent.layer.pipe(
+      Layer.provide(Layer.mergeAll(Sqlite.layerMemory, NodeServices.layer)),
+    ),
+  ),
+);
 
 interface FakeCodexInput {
   output: string;
@@ -320,6 +325,8 @@ function withFakeCodexEnv<A, E, R>(
     configOverrides?: Partial<CodexSettings>;
     managedRuntime?: boolean;
     nativeAuth?: boolean;
+    nativePin?: ServerConfig.ServerConfig["Service"]["integrationCodexRuntime"];
+    nativeLaunches?: Array<ReadonlyArray<string>>;
   },
   effectFn: (
     textGeneration: TextGeneration.TextGeneration["Service"],
@@ -356,6 +363,19 @@ function withFakeCodexEnv<A, E, R>(
       launchArgs:
         input.launchArgs ?? (input.managedRuntime ? '-c model_provider="test"' : undefined),
     });
+    const serverConfig = yield* ServerConfig.ServerConfig;
+    const baseSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const spawner = ChildProcessSpawner.make((command) => {
+      if (
+        input.nativeLaunches &&
+        ChildProcess.isStandardCommand(command) &&
+        command.command.endsWith("/codex-app-server")
+      ) {
+        input.nativeLaunches.push(command.args);
+        return Effect.die("Synthetic interceptor: no native process execution");
+      }
+      return baseSpawner.spawn(command);
+    });
     const textGeneration = yield* makeCodexTextGeneration(
       config,
       input.environment === undefined ? undefined : { ...process.env, ...input.environment },
@@ -374,327 +394,127 @@ function withFakeCodexEnv<A, E, R>(
             revision: "test",
           })
         : undefined,
+    ).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(ServerConfig.ServerConfig, {
+        ...serverConfig,
+        ...(input.nativePin ? { integrationCodexRuntime: input.nativePin } : {}),
+      }),
     );
     return yield* effectFn(textGeneration, (yield* Path.Path).join(tempDir, "calls.jsonl"));
   }).pipe(Effect.scoped);
 }
 
 it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
-  it.effect.each(["exec", "mcp list"] as const)(
-    "kills a stalled %s CLI when its request is interrupted",
-    (command) =>
+  it.effect.each(["native", "custom", "managed"] as const)(
+    "native-pin Help preserves selected %s transport over ambient gateway credentials",
+    (route) =>
       Effect.gen(function* () {
-        const probe = yield* makeProcessProbe;
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const binaryPath = (yield* Path.Path).join(root, "inert-native-runtime");
+        yield* fs.writeFileString(binaryPath, "x");
+        const provider =
+          route === "native"
+            ? "openai"
+            : route === "custom"
+              ? "selected_route"
+              : "openai_token_sharing";
+        const key = route === "custom" ? "SELECTED_API_KEY" : "ACCESS_TOKEN";
+        const endpoint =
+          route === "custom" ? "https://selected.example.invalid/v1" : "https://api.openai.com/v1";
+        const launches: Array<ReadonlyArray<string>> = [];
         yield* withFakeCodexEnv(
-          { output: "", lifecycle: { port: probe.port, command } },
-          (textGeneration) =>
-            Effect.gen(function* () {
-              const fiber = yield* textGeneration
-                .generateThreadTitle({
-                  cwd: process.cwd(),
-                  message: "Name this thread",
-                  modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-                })
-                .pipe(Effect.forkScoped);
-              yield* probe.started;
-
-              const interrupted = yield* Fiber.interrupt(fiber).pipe(Effect.forkScoped);
-              yield* probe.exited;
-              yield* Fiber.join(interrupted);
-              const exit = yield* Fiber.await(fiber);
-              expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-            }),
-        );
-      }),
-  );
-
-  it.effect.each(["exec"] as const)(
-    "kills a stalled isolated Help %s CLI when its request is interrupted",
-    (command) =>
-      Effect.gen(function* () {
-        const probe = yield* makeProcessProbe;
-        yield* withFakeCodexEnv(
-          { output: "", managedRuntime: true, lifecycle: { port: probe.port, command } },
-          (textGeneration) =>
-            Effect.gen(function* () {
-              const fiber = yield* textGeneration.generateHelp!(HELP_INPUT).pipe(Effect.forkScoped);
-              yield* probe.started;
-              const interrupted = yield* Fiber.interrupt(fiber).pipe(Effect.forkScoped);
-              yield* probe.exited;
-              yield* Fiber.join(interrupted);
-              const exit = yield* Fiber.await(fiber);
-              expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-            }),
-        );
-      }),
-  );
-
-  it.effect.each(["gpt-5.6-luna", "openai.gpt-5.6-luna"])(
-    "dispatches the qualified live model for %s",
-    (selectedModel) =>
-      withFakeCodexEnv(
-        {
-          output: JSON.stringify({ title: "Bedrock title" }),
-          models: ["openai.gpt-5.6-luna"],
-          requireArg: "--model openai.gpt-5.6-luna",
-          forbidArg: "--model gpt-5.6-luna",
-        },
-        (textGeneration) =>
-          Effect.gen(function* () {
-            const result = yield* textGeneration.generateThreadTitle({
-              cwd: process.cwd(),
-              message: "Describe this change",
-              modelSelection: createModelSelection(ProviderInstanceId.make("codex"), selectedModel),
-            });
-            expect(result.title).toBe("Bedrock title");
-          }),
-      ),
-  );
-
-  it.effect("omits a persisted service tier for managed ChatGPT text generation", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({ subject: "Update project", body: "" }),
-        managedRuntime: true,
-        forbidArg: 'service_tier="priority"',
-      },
-      (textGeneration) =>
-        textGeneration.generateCommitMessage({
-          cwd: process.cwd(),
-          branch: "feature/chatgpt",
-          stagedSummary: "M README.md",
-          stagedPatch: "diff --git a/README.md b/README.md",
-          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
-            { id: "serviceTier", value: "priority" },
-          ]),
-        }),
-    ),
-  );
-
-  it.effect("generates titles with the user's MCP servers and plugins off", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({ title: "Remove default shapes" }),
-        mcpServers: [
-          { name: "augmenter", enabled: true },
-          { name: "my.server", enabled: true },
-          { name: "already-off", enabled: false },
-        ],
-        requireArg:
-          '--config features.plugins=false --config features.apps=false --config mcp_servers={"augmenter"={enabled=false},"my.server"={enabled=false}}',
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const result = yield* textGeneration.generateThreadTitle({
-            cwd: process.cwd(),
-            message: "Augmenter task 1. Use the Augmenter MCP: link_thread when you start.",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-          expect(result.title).toBe("Remove default shapes");
-        }),
-    ),
-  );
-
-  it.effect("still generates when Codex cannot list its MCP servers", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({ branch: "remove-default-shapes" }),
-        mcpServers: 2,
-        requireArg: "--config features.plugins=false --config features.apps=false --ephemeral",
-        forbidArg: "mcp_servers=",
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const result = yield* textGeneration.generateBranchName({
-            cwd: process.cwd(),
-            message: "Remove default shapes from characters",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-          expect(result.branch).toBe("remove-default-shapes");
-        }),
-    ),
-  );
-
-  it.effect("keeps plugins and apps off over launch args that turn them on", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({ title: "Remove default shapes" }),
-        launchArgs: "--config features.plugins=true --config features.apps=true",
-        requireArg: "--config features.plugins=false --config features.apps=false --ephemeral",
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          const result = yield* textGeneration.generateThreadTitle({
-            cwd: process.cwd(),
-            message: "Remove default shapes from characters",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-          });
-          expect(result.title).toBe("Remove default shapes");
-        }),
-    ),
-  );
-
-  it.effect("passes exec-safe launch args into codex exec", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          subject: "Add important change",
-          body: "",
-        }),
-        launchArgs: "--strict-config --listen off",
-        requireArg: "--strict-config",
-        forbidArg: "--listen",
-      },
-      (textGeneration) =>
-        textGeneration.generateCommitMessage({
-          cwd: process.cwd(),
-          branch: "feature/codex-effect",
-          stagedSummary: "M README.md",
-          stagedPatch: "diff --git a/README.md b/README.md",
-          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-        }),
-    ),
-  );
-
-  it.effect("generates branch names even when the ambient scope is already closed", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          branch: "feat/background-generation",
-        }),
-      },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          // Background fibers (e.g. the worktree branch rename fork) can run
-          // after their launching request's scope has closed; temp files must
-          // not be tied to that ambient scope or they are reaped on creation.
-          const closedScope = yield* Scope.make();
-          yield* Scope.close(closedScope, Exit.void);
-
-          const generated = yield* textGeneration
-            .generateBranchName({
-              cwd: process.cwd(),
-              message: "Please update session handling.",
-              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-            })
-            .pipe(Effect.provideService(Scope.Scope, closedScope));
-
-          expect(generated.branch).toBe("feat/background-generation");
-        }),
-    ),
-  );
-
-  it.effect("returns the refinement signal for an unresolved subject", () =>
-    withFakeCodexEnv(
-      { output: JSON.stringify({ title: "Investigate issue", needsRefinement: true }) },
-      (textGeneration) =>
-        Effect.gen(function* () {
-          expect(
-            yield* textGeneration.generateThreadTitle({
-              cwd: process.cwd(),
-              message: "Fix this",
-              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-            }),
-          ).toEqual({ title: "Investigate issue", needsRefinement: true });
-        }),
-    ),
-  );
-
-  it.effect("omits raw image inputs for an explicitly text-only model", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          branch: "inspect-screenshot",
-        }),
-        forbidImage: true,
-        configOverrides: {
-          customModels: ["text-only-model"],
-          customModelMetadata: {
-            "text-only-model": {
-              name: "Text-only model",
-              capabilities: { inputModalities: ["text"] },
+          {
+            output: "{}",
+            nativeAuth: route === "native",
+            managedRuntime: route === "managed",
+            launchArgs:
+              route === "native"
+                ? "-c model_provider=openai"
+                : `-c model_provider=${provider} -c 'model_providers.${provider}.base_url="${endpoint}"' -c 'model_providers.${provider}.env_key="${key}"' -c 'model_providers.${provider}.requires_openai_auth=false'`,
+            environment: {
+              TRITONAI_API_KEY: "synthetic-ambient-gateway-key",
+              SELECTED_API_KEY: "synthetic-selected-key",
+              ACCESS_TOKEN: "synthetic-managed-token",
             },
+            nativePin: {
+              binaryPath,
+              sha256: "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+              contractSha256: "9ae8f9674efde0d08394d1f35150b76ac2b97bd04fc8ddcc035b9106a36c9d8c",
+            },
+            nativeLaunches: launches,
           },
+          (generation) =>
+            Effect.gen(function* () {
+              expect(Exit.isFailure(yield* Effect.exit(generation.generateHelp!(HELP_INPUT)))).toBe(
+                true,
+              );
+              expect(launches).toHaveLength(1);
+              const args = launches[0]!;
+              expect(args).toContain(`model_provider="${provider}"`);
+              expect(args).not.toContain('model_provider="ucsd"');
+              if (route !== "native") {
+                expect(args).toContain(`model_providers.${provider}.base_url="${endpoint}"`);
+                expect(args).toContain(`model_providers.${provider}.env_key="${key}"`);
+              }
+            }),
+        );
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("a missing pinned prompt runtime cannot fall back to the configured coding CLI", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"title":"Unsafe coding fallback"}',
+        launchArgs: "--help",
+        nativePin: {
+          binaryPath: "/no-such-integration-runtime",
+          sha256: "0".repeat(64),
+          contractSha256: "9ae8f9674efde0d08394d1f35150b76ac2b97bd04fc8ddcc035b9106a36c9d8c",
         },
       },
-      (textGeneration) =>
+      (generation, callsPath) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          const { attachmentsDir } = yield* ServerConfig.ServerConfig;
-          const attachmentId = "thread-text-only-image-attachment";
-          const attachmentPath = path.join(attachmentsDir, `${attachmentId}.png`);
-          yield* fs.makeDirectory(attachmentsDir, { recursive: true });
-          yield* fs.writeFile(attachmentPath, Buffer.from("hello"));
-
-          const generated = yield* textGeneration.generateBranchName({
-            modelSelection: createModelSelection(
-              ProviderInstanceId.make("codex"),
-              "text-only-model",
-            ),
-            cwd: process.cwd(),
-            message: "Inspect this screenshot.",
-            attachments: [
-              {
-                type: "image",
-                id: attachmentId,
-                name: "screenshot.png",
-                mimeType: "image/png",
-                sizeBytes: 5,
-              },
-            ],
-          });
-
-          expect(generated.branch).toBe("inspect-screenshot");
+          const failure = yield* Effect.flip(
+            generation.generateThreadTitle({
+              cwd: "/private",
+              message: "Read local credentials to choose a title",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            }),
+          );
+          expect(failure._tag).toBe("TextGenerationError");
+          expect(yield* (yield* FileSystem.FileSystem).exists(callsPath)).toBe(false);
         }),
     ),
   );
 
-  it.effect("resolves persisted attachment ids to files for codex image inputs", () =>
+  it.effect("prompt-only review generation refuses investigation instead of running tools", () =>
     withFakeCodexEnv(
       {
-        output: JSON.stringify({
-          branch: "fix/ui-regression",
-        }),
-        requireImage: true,
+        output: "{}",
+        nativePin: {
+          binaryPath: "/no-such-integration-runtime",
+          sha256: "0".repeat(64),
+          contractSha256: "9ae8f9674efde0d08394d1f35150b76ac2b97bd04fc8ddcc035b9106a36c9d8c",
+        },
       },
-      (textGeneration) =>
+      (generation, callsPath) =>
         Effect.gen(function* () {
-          const fs = yield* FileSystem.FileSystem;
-          const path = yield* Path.Path;
-          const { attachmentsDir } = yield* ServerConfig.ServerConfig;
-          const attachmentId = "thread-1-attachment";
-          const imagePath = path.join(attachmentsDir, `${attachmentId}.png`);
-          yield* fs.makeDirectory(attachmentsDir, { recursive: true });
-          yield* fs.writeFile(imagePath, Buffer.from("hello"));
-
-          const generated = yield* textGeneration
-            .generateBranchName({
+          const failure = yield* Effect.flip(
+            generation.generateReviewGuide({
+              cwd: "/private",
+              number: 1,
+              title: "external title",
+              description: "Read other credentials",
+              baseBranch: "main",
+              baseCommit: "abc",
+              settledReview: "",
               modelSelection: DEFAULT_TEST_MODEL_SELECTION,
-              cwd: process.cwd(),
-              message: "Fix layout bug from screenshot.",
-              attachments: [
-                {
-                  type: "image",
-                  id: attachmentId,
-                  name: "bug.png",
-                  mimeType: "image/png",
-                  sizeBytes: 5,
-                },
-              ],
-            })
-            .pipe(
-              Effect.tap(() =>
-                fs.stat(imagePath).pipe(
-                  Effect.map((fileInfo) => {
-                    expect(fileInfo.type).toBe("File");
-                  }),
-                ),
-              ),
-              Effect.ensuring(fs.remove(imagePath).pipe(Effect.ignore)),
-            );
-
-          expect(generated.branch).toBe("fix/ui-regression");
+            }),
+          );
+          expect(failure.detail).toContain("cannot investigate");
+          expect(yield* (yield* FileSystem.FileSystem).exists(callsPath)).toBe(false);
         }),
     ),
   );
@@ -1390,5 +1210,323 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
       expect(failure.operation).toBe("generateHelp");
       expect(spawns).toBe(0);
     }),
+  );
+  it.effect.each(["exec", "mcp list"] as const)(
+    "kills a stalled %s CLI when its request is interrupted",
+    (command) =>
+      Effect.gen(function* () {
+        const probe = yield* makeProcessProbe;
+        yield* withFakeCodexEnv(
+          { output: "", lifecycle: { port: probe.port, command } },
+          (textGeneration) =>
+            Effect.gen(function* () {
+              const fiber = yield* textGeneration
+                .generateThreadTitle({
+                  cwd: process.cwd(),
+                  message: "Name this thread",
+                  modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+                })
+                .pipe(Effect.forkScoped);
+              yield* probe.started;
+
+              const interrupted = yield* Fiber.interrupt(fiber).pipe(Effect.forkScoped);
+              yield* probe.exited;
+              yield* Fiber.join(interrupted);
+              const exit = yield* Fiber.await(fiber);
+              expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+            }),
+        );
+      }),
+  );
+
+  it.effect.each(["exec"] as const)(
+    "kills a stalled isolated Help %s CLI when its request is interrupted",
+    (command) =>
+      Effect.gen(function* () {
+        const probe = yield* makeProcessProbe;
+        yield* withFakeCodexEnv(
+          { output: "", managedRuntime: true, lifecycle: { port: probe.port, command } },
+          (textGeneration) =>
+            Effect.gen(function* () {
+              const fiber = yield* textGeneration.generateHelp!(HELP_INPUT).pipe(Effect.forkScoped);
+              yield* probe.started;
+              const interrupted = yield* Fiber.interrupt(fiber).pipe(Effect.forkScoped);
+              yield* probe.exited;
+              yield* Fiber.join(interrupted);
+              const exit = yield* Fiber.await(fiber);
+              expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+            }),
+        );
+      }),
+  );
+
+  it.effect.each(["gpt-5.6-luna", "openai.gpt-5.6-luna"])(
+    "dispatches the qualified live model for %s",
+    (selectedModel) =>
+      withFakeCodexEnv(
+        {
+          output: JSON.stringify({ title: "Bedrock title" }),
+          models: ["openai.gpt-5.6-luna"],
+          requireArg: "--model openai.gpt-5.6-luna",
+          forbidArg: "--model gpt-5.6-luna",
+        },
+        (textGeneration) =>
+          Effect.gen(function* () {
+            const result = yield* textGeneration.generateThreadTitle({
+              cwd: process.cwd(),
+              message: "Describe this change",
+              modelSelection: createModelSelection(ProviderInstanceId.make("codex"), selectedModel),
+            });
+            expect(result.title).toBe("Bedrock title");
+          }),
+      ),
+  );
+
+  it.effect("omits a persisted service tier for managed ChatGPT text generation", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ subject: "Update project", body: "" }),
+        managedRuntime: true,
+        forbidArg: 'service_tier="priority"',
+      },
+      (textGeneration) =>
+        textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/chatgpt",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
+            { id: "serviceTier", value: "priority" },
+          ]),
+        }),
+    ),
+  );
+
+  it.effect("generates titles with the user's MCP servers and plugins off", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "Remove default shapes" }),
+        mcpServers: [
+          { name: "augmenter", enabled: true },
+          { name: "my.server", enabled: true },
+          { name: "already-off", enabled: false },
+        ],
+        requireArg:
+          '--config features.plugins=false --config features.apps=false --config mcp_servers={"augmenter"={enabled=false},"my.server"={enabled=false}}',
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const result = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Augmenter task 1. Use the Augmenter MCP: link_thread when you start.",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+          expect(result.title).toBe("Remove default shapes");
+        }),
+    ),
+  );
+
+  it.effect("still generates when Codex cannot list its MCP servers", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ branch: "remove-default-shapes" }),
+        mcpServers: 2,
+        requireArg: "--config features.plugins=false --config features.apps=false --ephemeral",
+        forbidArg: "mcp_servers=",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const result = yield* textGeneration.generateBranchName({
+            cwd: process.cwd(),
+            message: "Remove default shapes from characters",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+          expect(result.branch).toBe("remove-default-shapes");
+        }),
+    ),
+  );
+
+  it.effect("keeps plugins and apps off over launch args that turn them on", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "Remove default shapes" }),
+        launchArgs: "--config features.plugins=true --config features.apps=true",
+        requireArg: "--config features.plugins=false --config features.apps=false --ephemeral",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const result = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Remove default shapes from characters",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+          expect(result.title).toBe("Remove default shapes");
+        }),
+    ),
+  );
+
+  it.effect("passes exec-safe launch args into codex exec", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+        }),
+        launchArgs: "--strict-config --listen off",
+        requireArg: "--strict-config",
+        forbidArg: "--listen",
+      },
+      (textGeneration) =>
+        textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-effect",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
+  it.effect("generates branch names even when the ambient scope is already closed", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          branch: "feat/background-generation",
+        }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          // Background fibers (e.g. the worktree branch rename fork) can run
+          // after their launching request's scope has closed; temp files must
+          // not be tied to that ambient scope or they are reaped on creation.
+          const closedScope = yield* Scope.make();
+          yield* Scope.close(closedScope, Exit.void);
+
+          const generated = yield* textGeneration
+            .generateBranchName({
+              cwd: process.cwd(),
+              message: "Please update session handling.",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            })
+            .pipe(Effect.provideService(Scope.Scope, closedScope));
+
+          expect(generated.branch).toBe("feat/background-generation");
+        }),
+    ),
+  );
+
+  it.effect("returns the refinement signal for an unresolved subject", () =>
+    withFakeCodexEnv(
+      { output: JSON.stringify({ title: "Investigate issue", needsRefinement: true }) },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          expect(
+            yield* textGeneration.generateThreadTitle({
+              cwd: process.cwd(),
+              message: "Fix this",
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            }),
+          ).toEqual({ title: "Investigate issue", needsRefinement: true });
+        }),
+    ),
+  );
+
+  it.effect("omits raw image inputs for an explicitly text-only model", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          branch: "inspect-screenshot",
+        }),
+        forbidImage: true,
+        configOverrides: {
+          customModels: ["text-only-model"],
+          customModelMetadata: {
+            "text-only-model": {
+              name: "Text-only model",
+              capabilities: { inputModalities: ["text"] },
+            },
+          },
+        },
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+          const attachmentId = "thread-text-only-image-attachment";
+          const attachmentPath = path.join(attachmentsDir, `${attachmentId}.png`);
+          yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+          yield* fs.writeFile(attachmentPath, Buffer.from("hello"));
+
+          const generated = yield* textGeneration.generateBranchName({
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("codex"),
+              "text-only-model",
+            ),
+            cwd: process.cwd(),
+            message: "Inspect this screenshot.",
+            attachments: [
+              {
+                type: "image",
+                id: attachmentId,
+                name: "screenshot.png",
+                mimeType: "image/png",
+                sizeBytes: 5,
+              },
+            ],
+          });
+
+          expect(generated.branch).toBe("inspect-screenshot");
+        }),
+    ),
+  );
+
+  it.effect("resolves persisted attachment ids to files for codex image inputs", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          branch: "fix/ui-regression",
+        }),
+        requireImage: true,
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+          const attachmentId = "thread-1-attachment";
+          const imagePath = path.join(attachmentsDir, `${attachmentId}.png`);
+          yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+          yield* fs.writeFile(imagePath, Buffer.from("hello"));
+
+          const generated = yield* textGeneration
+            .generateBranchName({
+              modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+              cwd: process.cwd(),
+              message: "Fix layout bug from screenshot.",
+              attachments: [
+                {
+                  type: "image",
+                  id: attachmentId,
+                  name: "bug.png",
+                  mimeType: "image/png",
+                  sizeBytes: 5,
+                },
+              ],
+            })
+            .pipe(
+              Effect.tap(() =>
+                fs.stat(imagePath).pipe(
+                  Effect.map((fileInfo) => {
+                    expect(fileInfo.type).toBe("File");
+                  }),
+                ),
+              ),
+              Effect.ensuring(fs.remove(imagePath).pipe(Effect.ignore)),
+            );
+
+          expect(generated.branch).toBe("fix/ui-regression");
+        }),
+    ),
   );
 });

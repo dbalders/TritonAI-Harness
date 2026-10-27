@@ -6,7 +6,8 @@ import {
   ThreadId,
   type ProjectOverview,
 } from "@t3tools/contracts";
-import { projectNextStepDraft } from "./projectNextStepDraft";
+import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
+import { openProjectNextStepDraft, projectNextStepDraft } from "./projectNextStepDraft";
 import { mergeIdeaPrompt } from "../ideas/ideaDraft";
 
 describe("project next-step draft", () => {
@@ -64,5 +65,64 @@ describe("project next-step draft", () => {
     const merged = mergeIdeaPrompt("Keep my existing request.", prompt);
     expect(merged).toContain("Keep my existing request.");
     expect(mergeIdeaPrompt(merged, prompt)).toBe(merged);
+  });
+  it("keeps generated text unsendable until the actual destination thread is admitted", async () => {
+    useComposerDraftStore.setState({ draftsByThreadKey: {}, draftThreadsByThreadKey: {} });
+    const draftId = DraftId.make("different-draft-id");
+    const threadId = ThreadId.make("actual-thread-id");
+    const overview: ProjectOverview = {
+      description: "Synthetic next step",
+      sourceDigest: "digest",
+      generatedAt: IsoDateTime.make("2026-10-17T12:00:00.000Z"),
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "fixture" },
+      sources: [],
+      nextSteps: [
+        {
+          id: "step",
+          title: "GENERATED TITLE",
+          reason: "Fixture",
+          prompt: "Generated details",
+          sources: ["source"],
+        },
+      ],
+    };
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(draftId, "User text");
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const admission = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const request = {
+      environmentId: EnvironmentId.make("fixture"),
+      overview,
+      step: overview.nextSteps[0]!,
+      open: async () => ({ draftId, threadId }),
+      admit: async (destination: ThreadId) => {
+        expect(destination).toBe(threadId);
+        entered();
+        await pending;
+        throw new Error("Host admission failed");
+      },
+    };
+    const opening = openProjectNextStepDraft(request);
+    const rejected = expect(opening).rejects.toThrow("Host admission failed");
+    await admission;
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe("User text");
+    release();
+    await rejected;
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe("User text");
+    await openProjectNextStepDraft({
+      ...request,
+      admit: async (destination) => {
+        expect(destination).toBe(threadId);
+      },
+    });
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe(
+      "User text\n\nGENERATED TITLE",
+    );
   });
 });

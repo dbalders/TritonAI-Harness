@@ -84,6 +84,8 @@ export function useNewThreadHandler() {
       /** Seeds only a newly created draft; reused drafts keep their existing composer content. */
       newDraftPrompt?: string;
       replace?: boolean;
+      /** Empty drafts can retain inherited provenance; recovery needs a new owner. */
+      forceNew?: boolean;
       /** Cancels an app-owned draft request while project defaults are loading. */
       isCurrent?: () => boolean;
     },
@@ -204,6 +206,7 @@ export function useNewThreadHandler() {
       markPromotedDraftThreadByRef(storedDraftThreadRef);
     }
     const emptyStoredDraftThread =
+      !options?.forceNew &&
       reusableStoredDraftThread &&
       !composerDraftHasUserContent(getComposerDraft(reusableStoredDraftThread.draftId))
         ? reusableStoredDraftThread
@@ -326,6 +329,7 @@ export function useNewThreadHandler() {
     }
 
     if (
+      !options?.forceNew &&
       latestActiveDraftThread &&
       currentRouteTarget?.kind === "draft" &&
       latestActiveDraftThread.logicalProjectKey === logicalProjectKey &&

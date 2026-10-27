@@ -33,10 +33,8 @@ import {
   projectThreadStatus,
 } from "./projectHomeView";
 
-import { useComposerDraftStore } from "../../composerDraftStore";
-import { mergeIdeaPrompt } from "../ideas/ideaDraft";
 import { ProjectDescription, ProjectNextSteps } from "./ProjectNextSteps";
-import { projectNextStepDraft } from "./projectNextStepDraft";
+import { openProjectNextStepDraft } from "./projectNextStepDraft";
 import { useProjectOverview } from "./useProjectOverview";
 
 const UPDATES_SHOWN = 6;
@@ -357,17 +355,16 @@ function ProjectOverview({
   });
   const openNextStep = (step: ProjectNextStep) => {
     const saved = overview.snapshot?.overview;
-    if (!saved || !connected) return;
-    const { prompt, threadContexts } = projectNextStepDraft(project.environmentId, saved, step);
-    void openPage(step.id, async () => {
-      const opened = await newThread(refs[0]!, { newDraftPrompt: prompt });
-      if (!opened) throw new Error("This project could not open a draft. Please try again.");
-      const store = useComposerDraftStore.getState();
-      const existing = store.getComposerDraft(opened.draftId)?.prompt ?? "";
-      const merged = mergeIdeaPrompt(existing, prompt);
-      if (merged !== existing) store.setPrompt(opened.draftId, merged);
-      store.addThreadContexts(opened.draftId, threadContexts, { insertAtCaret: false });
-    });
+    if (!saved || !overview.canOpen) return;
+    void openPage(step.id, () =>
+      openProjectNextStepDraft({
+        environmentId: project.environmentId,
+        overview: saved,
+        step,
+        open: () => newThread(refs[0]!),
+        admit: (threadId) => overview.open(step, saved.sourceDigest, threadId),
+      }),
+    );
   };
   const completionKey = view.recent
     .map((thread) => `${thread.id}:${thread.latestRun?.completedAt ?? ""}`)

@@ -1,4 +1,5 @@
 import type { OrchestrationV2ProviderFailureClass } from "@t3tools/contracts";
+import { EXTERNAL_CONTENT_CLEAN_THREAD_CODE } from "@t3tools/contracts";
 import {
   CHATGPT_USAGE_LIMIT_CODE,
   CHATGPT_WORKSPACE_ADMIN_REQUEST,
@@ -74,15 +75,18 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   onDismiss,
   errorClass,
   errorCode,
+  onStartCleanThread,
 }: {
   error: string | null;
   errorClass?: OrchestrationV2ProviderFailureClass | null;
   errorCode?: string | null;
   onDismiss?: () => void;
+  onStartCleanThread?: () => void;
 }) {
   if (!error) return null;
   const workspaceLimit = errorCode === CHATGPT_WORKSPACE_USAGE_LIMIT_CODE;
   const chatGptLimit = workspaceLimit || errorCode === CHATGPT_USAGE_LIMIT_CODE;
+  const cleanThreadRequired = errorCode === EXTERNAL_CONTENT_CLEAN_THREAD_CODE;
   const variant = errorClass === "usage_limit" || chatGptLimit ? "warning" : "error";
   return (
     <div className="pointer-events-auto mx-auto w-fit max-w-[min(48rem,calc(100%-2rem))] pt-3">
@@ -106,8 +110,13 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
             <ExpandableText text={error} collapsedText={getThreadErrorBannerMessage(error)} />
           )}
         </AlertDescription>
-        {(chatGptLimit || onDismiss) && (
+        {(chatGptLimit || onDismiss || (cleanThreadRequired && onStartCleanThread)) && (
           <AlertAction>
+            {cleanThreadRequired && onStartCleanThread ? (
+              <Button variant="default" size="sm" onClick={onStartCleanThread}>
+                Start a clean thread
+              </Button>
+            ) : null}
             {workspaceLimit ? (
               <Button variant="default" size="sm" onClick={copyAdminRequest}>
                 Copy request for admin

@@ -548,6 +548,10 @@ export type ProviderAdapterV2SubagentOutcome = {
 };
 
 export interface ProviderAdapterV2SessionRuntime {
+  /** Private host IPC identity. Never serialize it into provider or client metadata. */
+  readonly externalContentChannel?: object;
+  /** Host tool credential identity; orchestration session IDs have a separate lifecycle. */
+  readonly externalContentSessionId?: string;
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
   readonly providerSessionId: ProviderSessionId;
@@ -656,6 +660,10 @@ export class ProviderAdapterV2 extends Context.Service<
       input: ProviderSelectionTransitionInput,
     ) => Effect.Effect<ProviderSelectionTransitionPlan, ProviderAdapterV2Error>;
     readonly openSession: (
+      input: ProviderAdapterV2OpenSessionInput,
+    ) => Effect.Effect<ProviderAdapterV2SessionRuntime, ProviderAdapterV2Error, Scope.Scope>;
+    /** Host-only startup path. It must install an enforced boundary before restoring any history. */
+    readonly openExternalContentSession?: (
       input: ProviderAdapterV2OpenSessionInput,
     ) => Effect.Effect<ProviderAdapterV2SessionRuntime, ProviderAdapterV2Error, Scope.Scope>;
   }

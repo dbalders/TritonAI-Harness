@@ -10,6 +10,10 @@ import type {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
+import {
+  EXTERNAL_CONTENT_CLEAN_THREAD_CODE,
+  EXTERNAL_CONTENT_CLEAN_THREAD_MESSAGE,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Cause from "effect/Cause";
 
@@ -65,6 +69,7 @@ const PROVIDER_FAILURE_REASONS: Record<ProviderAdapterFailureReason, string> = {
 function curatedCauseMessages(cause: unknown): {
   readonly known: string | undefined;
   readonly category: string | undefined;
+  readonly code?: string;
 } {
   const seen = new Set<unknown>();
   let category: (typeof PROVIDER_FAILURE_CATEGORIES)[string];
@@ -85,6 +90,15 @@ function curatedCauseMessages(cause: unknown): {
       if (typeof cause !== "object") break;
       const tag = (cause as Record<string, unknown>)._tag;
       switch (tag) {
+        case "ExternalContentDenied":
+          if ((cause as Record<string, unknown>).reason === "runtime_unverified") {
+            return {
+              known: EXTERNAL_CONTENT_CLEAN_THREAD_MESSAGE,
+              category: categoryMessage(),
+              code: EXTERNAL_CONTENT_CLEAN_THREAD_CODE,
+            };
+          }
+          break;
         case "ContextHandoffBudgetError":
           return { known: new ContextHandoffBudgetError().message, category: categoryMessage() };
         case "AcpModelSelectionError":
@@ -212,7 +226,7 @@ export function makeProviderFailure(input: {
   const rawMessage =
     input.message ?? curated.known ?? curated.category ?? DEFAULT_PROVIDER_FAILURE_MESSAGE;
   const message = boundedText(rawMessage, MAX_PROVIDER_FAILURE_MESSAGE_LENGTH);
-  const rawCode = input.code ?? stringField(input.cause, "code") ?? null;
+  const rawCode = curated.code ?? input.code ?? stringField(input.cause, "code") ?? null;
   const code =
     rawCode === null ? null : boundedText(rawCode, MAX_PROVIDER_FAILURE_CODE_LENGTH) || null;
 

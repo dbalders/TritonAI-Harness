@@ -92,6 +92,7 @@ export const makeCommonsApproval = Effect.fn("CommonsApproval.make")(function* (
         submittedDigest: review.submittedDigest,
         effectiveDigest: review.effectiveDigest,
         payload: review.payload,
+        ...(review.externalContent ? { externalContent: review.externalContent } : {}),
         expiresAt,
       },
     });

@@ -1,6 +1,7 @@
 import { expect, it, vi } from "@effect/vitest";
 import {
   EnvironmentId,
+  type ExternalToolResult,
   IntegrationOperationError,
   ProviderInstanceId,
   ThreadId,
@@ -22,6 +23,23 @@ import * as McpToolAccess from "./McpToolAccess.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { liveThreadShell, liveThreadsLayer } from "./McpToolAccess.testkit.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+
+const hostResult = (data: Record<string, unknown>): ExternalToolResult => ({
+  protocol: "tritonai.external-tool-result/v1",
+  trust: "untrusted",
+  authority: "data-only",
+  invocationId: "invocation-1",
+  source: {
+    integrationId: "fixture",
+    integrationVersion: "1.0.0",
+    toolName: "fixture.read",
+    connectionGeneration: "host:1:1",
+  },
+  scope: { id: "scope-1", version: 1, exposureVersion: 1, providerSessionId: "session-1" },
+  isError: false,
+  data,
+});
+const hostResultText = (data: Record<string, unknown>) => JSON.stringify(hostResult(data));
 
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
@@ -129,6 +147,44 @@ it.effect("awaits the canonical registry catalog before the MCP layer becomes av
   ),
 );
 
+it.effect(
+  "production MCP hides plugins even from a valid thread bearer without native channel attestation",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const authorized = invocation(new Set(["integrations.invoke"]));
+        const enabled = Context.getUnsafe(server.tools[0]!.annotations, McpSchema.EnabledWhen);
+        expect(
+          yield* Effect.sync(() => enabled({} as never)).pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
+          ),
+        ).toBe(false);
+        const failure = yield* server
+          .callTool({ name: fixtureTool.name, arguments: {} })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
+            Effect.provideService(McpSchema.McpServerClient, client),
+            Effect.flip,
+          );
+        expect(failure).toBeInstanceOf(McpSchema.InvalidParams);
+      }).pipe(
+        Effect.provide(
+          registrationLayer(new Set(), async () => registryWith([fixtureTool])).pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                McpServer.McpServer.layer,
+                Layer.succeed(ThreadManagementService.ThreadManagementService, {
+                  getThreadShell: () => Effect.succeed(null),
+                } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+);
+
 it.effect("registers write-capable tools with conservative MCP annotations", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -205,11 +261,11 @@ it.effect("rejects reserved built-in names before built-in registration complete
 // regression: fc95a4c143 fix(server): bound model-facing integration results
 it.effect("preserves bounded results and reports omitted results as completed MCP calls", () => {
   const invokeTool = vi
-    .fn<Integrations.RegistryRuntime["invokeTool"]>()
-    .mockResolvedValueOnce({ records: [{ id: "record-1" }] })
-    .mockResolvedValueOnce(Integrations.INTEGRATION_TOOL_RESULT_OMITTED);
+    .fn<Integrations.RegistryRuntime["invokeToolForAgent"]>()
+    .mockResolvedValueOnce(hostResult({ records: [{ id: "record-1" }] }))
+    .mockResolvedValueOnce(hostResult(Integrations.INTEGRATION_TOOL_RESULT_OMITTED));
   const registrySpy = vi.spyOn(Integrations, "getIntegrationRegistry").mockReturnValue({
-    invokeTool,
+    invokeToolForAgent: invokeTool,
   } as unknown as Integrations.RegistryRuntime);
   const authorized = invocation(new Set(["integrations.invoke"]));
 
@@ -223,8 +279,10 @@ it.effect("preserves bounded results and reports omitted results as completed MC
           Effect.provideService(McpSchema.McpServerClient, client),
         );
       expect(bounded.isError).toBe(false);
-      expect(bounded.structuredContent).toEqual({ records: [{ id: "record-1" }] });
-      expect(bounded.content).toEqual([{ type: "text", text: '{"records":[{"id":"record-1"}]}' }]);
+      expect(bounded.structuredContent).toEqual(hostResult({ records: [{ id: "record-1" }] }));
+      expect(bounded.content).toEqual([
+        { type: "text", text: hostResultText({ records: [{ id: "record-1" }] }) },
+      ]);
 
       const omitted = yield* server
         .callTool({ name: "fixture.read", arguments: {} })
@@ -233,11 +291,13 @@ it.effect("preserves bounded results and reports omitted results as completed MC
           Effect.provideService(McpSchema.McpServerClient, client),
         );
       expect(omitted.isError).toBe(false);
-      expect(omitted.structuredContent).toEqual(Integrations.INTEGRATION_TOOL_RESULT_OMITTED);
+      expect(omitted.structuredContent).toEqual(
+        hostResult(Integrations.INTEGRATION_TOOL_RESULT_OMITTED),
+      );
       expect(omitted.content).toEqual([
         {
           type: "text",
-          text: '{"resultOmitted":true,"reason":"integration_tool_result_omitted","message":"Integration tool completed, but its result was omitted."}',
+          text: hostResultText(Integrations.INTEGRATION_TOOL_RESULT_OMITTED),
         },
       ]);
       expect(invokeTool).toHaveBeenCalledTimes(2);
@@ -248,7 +308,7 @@ it.effect("preserves bounded results and reports omitted results as completed MC
 // regression: #304 fix(server): show agents why integration tool calls fail
 it.effect("tells MCP agents why a call failed only through safe errors", () => {
   const invokeTool = vi
-    .fn<Integrations.RegistryRuntime["invokeTool"]>()
+    .fn<Integrations.RegistryRuntime["invokeToolForAgent"]>()
     .mockRejectedValueOnce(
       new IntegrationOperationError({
         code: "invalid_input",
@@ -261,7 +321,7 @@ it.effect("tells MCP agents why a call failed only through safe errors", () => {
     )
     .mockRejectedValueOnce(new Error("401 from https://n8n.invalid?token=SECRET_TOKEN"));
   const registrySpy = vi.spyOn(Integrations, "getIntegrationRegistry").mockReturnValue({
-    invokeTool,
+    invokeToolForAgent: invokeTool,
   } as unknown as Integrations.RegistryRuntime);
   const authorized = invocation(new Set(["integrations.invoke"]));
 
@@ -378,11 +438,11 @@ it.effect.each([
   "full-access",
 ] as const)("denies an outside plugin write without a host presenter: %s", (access) => {
   const invokeTool = vi
-    .fn<Integrations.RegistryRuntime["invokeTool"]>()
-    .mockResolvedValue({ ok: true });
+    .fn<Integrations.RegistryRuntime["invokeToolForAgent"]>()
+    .mockResolvedValue(hostResult({ ok: true }));
   const registrySpy = vi
     .spyOn(Integrations, "getIntegrationRegistry")
-    .mockReturnValue({ invokeTool } as unknown as Integrations.RegistryRuntime);
+    .mockReturnValue({ invokeToolForAgent: invokeTool } as unknown as Integrations.RegistryRuntime);
   const scope: McpInvocationContext.McpInvocationScope = {
     ...invocation(new Set(["integrations.invoke"])),
     thread: undefined,
@@ -414,11 +474,11 @@ it.effect.each([true, false])(
   "permits a plugin write only while the provider owns a live run: %s",
   (active) => {
     const invokeTool = vi
-      .fn<Integrations.RegistryRuntime["invokeTool"]>()
-      .mockResolvedValue({ ok: true });
-    const registrySpy = vi
-      .spyOn(Integrations, "getIntegrationRegistry")
-      .mockReturnValue({ invokeTool } as unknown as Integrations.RegistryRuntime);
+      .fn<Integrations.RegistryRuntime["invokeToolForAgent"]>()
+      .mockResolvedValue(hostResult({ ok: true }));
+    const registrySpy = vi.spyOn(Integrations, "getIntegrationRegistry").mockReturnValue({
+      invokeToolForAgent: invokeTool,
+    } as unknown as Integrations.RegistryRuntime);
     const scope = invocation(new Set(["integrations.invoke"]));
     const threads = Layer.mock(ThreadManagementService.ThreadManagementService)({
       getThreadShell: (threadId) =>
@@ -438,6 +498,10 @@ it.effect.each([true, false])(
           expect(invokeTool).toHaveBeenCalledWith(
             writeFixtureTool.name,
             {},
+            expect.objectContaining({
+              ownerId: `thread:${scope.thread!.threadId}`,
+              providerSessionId: scope.thread!.providerSessionId,
+            }),
             expect.objectContaining({ approvalOwner: scope.thread }),
           );
         else {

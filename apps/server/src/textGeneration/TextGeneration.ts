@@ -1,14 +1,15 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type { ProviderInstanceId } from "@t3tools/contracts";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import { TextGenerationError } from "@t3tools/contracts";
 
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
-import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
-import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
+import * as ExternalContent from "../integrations/ExternalContent.ts";
+import * as ServerConfig from "../config.ts";
 
 export type {
   DailyMemoryGenerationInput,
@@ -32,6 +33,11 @@ export class TextGeneration extends Context.Service<TextGeneration, ProviderText
   "t3/textGeneration/TextGeneration",
 ) {}
 
+export class ExternalInputOwner extends Context.Service<
+  ExternalInputOwner,
+  { readonly ownerId: string }
+>()("t3/textGeneration/TextGeneration/ExternalInputOwner") {}
+
 type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
@@ -44,29 +50,59 @@ type TextGenerationOp =
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
+  content: ExternalContent.ExternalContent["Service"],
+  promptOnlyRuntimeAvailable: boolean,
   operation: TextGenerationOp,
   instanceId: ProviderInstanceId,
 ): Effect.Effect<ProviderInstance["textGeneration"], TextGenerationError> =>
   registry.getInstance(instanceId).pipe(
-    Effect.flatMap((instance) =>
-      instance
-        ? Effect.succeed(instance.textGeneration)
-        : Effect.fail(
-            new TextGenerationError({
-              operation,
-              detail: `No provider instance registered for id '${instanceId}'.`,
-            }),
-          ),
+    Effect.flatMap(
+      Effect.fn("TextGeneration.selectRuntime")(function* (instance) {
+        if (!instance)
+          return yield* new TextGenerationError({
+            operation,
+            detail: `No provider instance registered for id '${instanceId}'.`,
+          });
+        const source = yield* Effect.serviceOption(ExternalInputOwner);
+        const exposed = Option.isSome(source)
+          ? yield* content.toolCeiling(source.value.ownerId).pipe(
+              Effect.map((tools) => tools !== undefined),
+              Effect.mapError(
+                (cause) =>
+                  new TextGenerationError({
+                    operation,
+                    detail:
+                      "External-content history could not be checked. Generation was withheld.",
+                    cause,
+                  }),
+              ),
+            )
+          : false;
+        if (exposed && (instance.driverKind !== "codex" || !promptOnlyRuntimeAvailable))
+          return yield* new TextGenerationError({
+            operation,
+            detail:
+              "These generation inputs contain external content and require a Codex model with the verified prompt-only runtime.",
+          });
+        return instance.textGeneration;
+      }),
     ),
   );
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
-  const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  const content = yield* ExternalContent.ExternalContent;
+  const config = yield* ServerConfig.ServerConfig;
   return TextGeneration.of({
     generateHelp: (input) =>
-      resolveInstance(registry, "generateHelp", input.modelSelection.instanceId).pipe(
+      resolveInstance(
+        registry,
+        content,
+        Boolean(config.integrationCodexRuntime),
+        "generateHelp",
+        input.modelSelection.instanceId,
+      ).pipe(
         Effect.flatMap((textGeneration) =>
           textGeneration.generateHelp
             ? textGeneration.generateHelp(input)
@@ -79,39 +115,61 @@ export const make = Effect.gen(function* () {
         ),
       ),
     generateCommitMessage: (input) =>
-      resolveInstance(registry, "generateCommitMessage", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)),
-      ),
+      resolveInstance(
+        registry,
+        content,
+        Boolean(config.integrationCodexRuntime),
+        "generateCommitMessage",
+        input.modelSelection.instanceId,
+      ).pipe(Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input))),
     generatePrContent: (input) =>
-      resolveInstance(registry, "generatePrContent", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) => textGeneration.generatePrContent(input)),
-      ),
+      resolveInstance(
+        registry,
+        content,
+        Boolean(config.integrationCodexRuntime),
+        "generatePrContent",
+        input.modelSelection.instanceId,
+      ).pipe(Effect.flatMap((textGeneration) => textGeneration.generatePrContent(input))),
     generateBranchName: (input) =>
-      resolveInstance(registry, "generateBranchName", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
-      ),
+      resolveInstance(
+        registry,
+        content,
+        Boolean(config.integrationCodexRuntime),
+        "generateBranchName",
+        input.modelSelection.instanceId,
+      ).pipe(Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input))),
     generateReviewGuide: (input) =>
-      resolveInstance(registry, "generateReviewGuide", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input)),
-      ),
-    generateThreadTitle: (input) =>
-      resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) =>
-          Effect.gen(function* () {
-            const linkedContext =
-              input.linkedContext ??
-              (yield* ThreadTitleLinks.resolveThreadTitleLinks(input).pipe(
-                Effect.provideService(
-                  SourceControlProviderRegistry.SourceControlProviderRegistry,
-                  sourceControl,
-                ),
-              ));
-            return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
-          }),
-        ),
-      ),
+      resolveInstance(
+        registry,
+        content,
+        Boolean(config.integrationCodexRuntime),
+        "generateReviewGuide",
+        input.modelSelection.instanceId,
+      ).pipe(Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input))),
+    generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function* (input) {
+      // Titles become later prompt inputs without carrying separate link provenance.
+      if (input.linkedContext !== undefined)
+        return yield* new TextGenerationError({
+          operation: "generateThreadTitle",
+          detail: "External link context cannot be used to generate thread titles.",
+        });
+      const generation = yield* resolveInstance(
+        registry,
+        content,
+        Boolean(config.integrationCodexRuntime),
+        "generateThreadTitle",
+        input.modelSelection.instanceId,
+      );
+      return yield* generation.generateThreadTitle(input);
+    }),
     generateDailyMemory: (input) =>
-      resolveInstance(registry, "generateDailyMemory", input.modelSelection.instanceId).pipe(
+      resolveInstance(
+        registry,
+        content,
+        Boolean(config.integrationCodexRuntime),
+        "generateDailyMemory",
+        input.modelSelection.instanceId,
+      ).pipe(
         Effect.flatMap((textGeneration) =>
           textGeneration.generateDailyMemory
             ? textGeneration.generateDailyMemory(input)
@@ -125,7 +183,13 @@ export const make = Effect.gen(function* () {
         ),
       ),
     generateIdeas: (input) =>
-      resolveInstance(registry, "generateIdeas", input.modelSelection.instanceId).pipe(
+      resolveInstance(
+        registry,
+        content,
+        Boolean(config.integrationCodexRuntime),
+        "generateIdeas",
+        input.modelSelection.instanceId,
+      ).pipe(
         Effect.flatMap((textGeneration) =>
           textGeneration.generateIdeas
             ? textGeneration.generateIdeas(input)
@@ -141,4 +205,4 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(TextGeneration, make);
+export const layer = Layer.effect(TextGeneration, make).pipe(Layer.provide(ExternalContent.layer));

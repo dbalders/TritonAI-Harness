@@ -143,7 +143,7 @@ export function ProjectNextSteps({
                     <Button
                       variant="outline"
                       size="xs"
-                      disabled={!connected || opening !== null}
+                      disabled={!view.canOpen || opening !== null}
                       aria-busy={opening === step.id}
                       onClick={() => onOpen(step)}
                     >

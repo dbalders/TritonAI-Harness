@@ -1,7 +1,7 @@
 import { getManagedCodexSettings } from "../managedPolicy.ts";
 /**
  * DailyMemory - writes this device's daily notes into the general memory
- * vault, and keeps the Codex memory skill in step with the Memory setting.
+ * vault. Reuse through Ideas and project history retains the host's provenance boundary.
  *
  * The summarizer remembers the last day it finished. On startup, every hour,
  * and when Memory is turned on, it summarizes each finished day after that
@@ -36,11 +36,12 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as ExternalContent from "../integrations/ExternalContent.ts";
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
-import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { ExternalInputOwner, TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { addLocalDays, localDayAt, localDayRange, pendingMemoryDays } from "./memoryDays.ts";
 import {
   appendProjectRecentLine,
@@ -62,14 +63,13 @@ import {
   findMemoryDevice,
   generalVaultPaths,
   type GeneralVaultPaths,
-  installMemorySkill,
   type MemoryDevice,
   readPartialProgress,
   readSummaryProgress,
   registerMemoryDevice,
   removeGeneratedFile,
   removeMemorySkill,
-  renderMemorySkill,
+  sha256Bytes,
   writeGeneratedFile,
   writePartialProgress,
   writeSummaryProgress,
@@ -482,6 +482,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* ServerSettingsService;
   const textGeneration = yield* TextGeneration;
+  const externalContent = yield* ExternalContent.ExternalContent;
   const environment = yield* ServerEnvironment;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -490,6 +491,17 @@ export const make = Effect.gen(function* () {
   const descriptor = yield* environment.getDescriptor;
   const status = yield* Ref.make<SummarizerStatus>({ state: "idle", message: null });
   const lock = yield* Semaphore.make(1);
+  const removeAutomaticSkill = Effect.fn("DailyMemory.removeAutomaticSkill")(function* () {
+    const settings = yield* settingsService.getSettings;
+    const home = yield* resolveCodexHomeLayout(getManagedCodexSettings(settings));
+    return yield* removeMemorySkill({
+      skillsDirectory: path.join(home.sharedHomePath, "skills"),
+      vaultPath: vault.root,
+    });
+  });
+  // An ambient skill could feed synced integration text to an ordinary coding runtime.
+  // Remove the old host-generated path before any new client turn can start.
+  yield* removeAutomaticSkill();
 
   const provide = <A, E>(
     effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path | SqlClient.SqlClient>,
@@ -600,6 +612,20 @@ export const make = Effect.gen(function* () {
         detail: "Text generation does not support daily memory.",
       });
     }
+    const owner = `memory:${descriptor.environmentId}:${day}`;
+    for (const thread of threads)
+      yield* externalContent.inherit(`thread:${thread.threadId}`, owner);
+    if (processedNotes.length > 0 || includedInboxNotes.length > 0)
+      yield* externalContent.markUnverified(owner, {
+        kind: "derived",
+        artifactKind: "memory",
+        artifactId: `${descriptor.environmentId}:${day}`,
+        contentDigest: sha256Bytes(
+          new TextEncoder().encode(
+            [...processedNotes, ...includedInboxNotes].map(formatInboxNote).join("\n\n"),
+          ),
+        ),
+      });
     const summary = yield* generateDailyMemory({
       cwd: vault.root,
       day,
@@ -607,7 +633,7 @@ export const make = Effect.gen(function* () {
       activity: formatMemoryActivity(threads, projectNoteNames),
       inboxNotes: [...processedNotes, ...includedInboxNotes].map(formatInboxNote).join("\n\n"),
       modelSelection: settings.textGenerationModelSelection,
-    });
+    }).pipe(Effect.provideService(ExternalInputOwner, { ownerId: owner }));
 
     const sessionPaths = yield* provide(
       findSessionFiles(
@@ -719,10 +745,9 @@ export const make = Effect.gen(function* () {
       const codexHome = (yield* resolveCodexHomeLayout(getManagedCodexSettings(settings)).pipe(
         Effect.provideService(Path.Path, path),
       )).sharedHomePath;
-      const skillsDirectory = path.join(codexHome, "skills");
+      yield* removeAutomaticSkill();
 
       if (!settings.memoryEnabled) {
-        yield* provide(removeMemorySkill({ skillsDirectory, vaultPath: vault.root }));
         yield* Ref.set(status, { state: "idle", message: null });
         return;
       }
@@ -739,17 +764,6 @@ export const make = Effect.gen(function* () {
       );
       const ownPaths = devicePaths(path, vault, device);
       yield* provide(ensureGeneralVault(vault, device));
-      yield* provide(
-        installMemorySkill({
-          skillsDirectory,
-          vaultPath: vault.root,
-          contents: renderMemorySkill({
-            vaultPath: vault.root,
-            sessionsPath: path.join(codexHome, "sessions"),
-            device,
-          }),
-        }),
-      );
 
       const today = localDayAt(nowMs);
       const progress = yield* provide(readSummaryProgress(ownPaths));

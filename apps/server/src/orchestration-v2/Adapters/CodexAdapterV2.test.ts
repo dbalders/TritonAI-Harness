@@ -8,6 +8,9 @@ import type * as ProviderContinuationRequests from "@t3tools/provider-core/serve
 import { vi } from "vite-plus/test";
 import * as Clock from "effect/Clock";
 import * as IntegrationRegistry from "../../integrations/IntegrationRegistry.ts";
+import * as ExternalContent from "../../integrations/ExternalContent.ts";
+import { makeExternalContentRegistry } from "../../integrations/externalContentRegistryAdapter.ts";
+import * as Sqlite from "../../persistence/Sqlite.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 
@@ -1159,6 +1162,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       >;
       readonly afterNotification?: (method: string, payload: unknown) => Effect.Effect<void>;
       readonly interceptRawRequests?: boolean;
+      readonly runtimeChannel?: object;
     } = {},
   ) =>
     Effect.gen(function* () {
@@ -1182,43 +1186,47 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             ),
             Effect.flatMap((context) =>
               Effect.service(CodexClient.CodexAppServerClient).pipe(
+                Effect.map((client) => {
+                  if (overrides.settings?.sessionPurpose === "integrations")
+                    assert.equal(
+                      openInput.integrationBoundary?.providerSessionId,
+                      `mcp-credential-${transcript.scenario}`,
+                    );
+                  return withCodexReplayChildMetadata(client, transcript, readChildMetadata);
+                }),
                 Effect.map((client) =>
-                  withCodexReplayChildMetadata(client, transcript, readChildMetadata),
-                ),
-                Effect.map(
-                  (client) =>
-                    ({
-                      ...client,
-                      raw: replayHooks.interceptRawRequests
-                        ? {
-                            ...client.raw,
-                            request: (method, params) =>
-                              onRequest(method, params).pipe(
-                                Effect.andThen(client.raw.request(method, params)),
-                              ),
-                          }
-                        : client.raw,
-                      handleServerNotification: (method, handler) =>
-                        client.handleServerNotification(method, (payload) =>
-                          handler(payload).pipe(
-                            Effect.andThen(
-                              () => replayHooks.afterNotification?.(method, payload) ?? Effect.void,
+                  Object.assign(replayHooks.runtimeChannel ?? {}, {
+                    ...client,
+                    raw: replayHooks.interceptRawRequests
+                      ? {
+                          ...client.raw,
+                          request: (method, params) =>
+                            onRequest(method, params).pipe(
+                              Effect.andThen(client.raw.request(method, params)),
                             ),
+                        }
+                      : client.raw,
+                    handleServerNotification: (method, handler) =>
+                      client.handleServerNotification(method, (payload) =>
+                        handler(payload).pipe(
+                          Effect.andThen(
+                            () => replayHooks.afterNotification?.(method, payload) ?? Effect.void,
                           ),
                         ),
-                      handleServerRequest: (method, handler) =>
-                        client.handleServerRequest(method, (payload) =>
-                          handler(payload).pipe(
-                            Effect.tap((result) =>
-                              method === "item/tool/call" ? onToolResponse(result) : Effect.void,
-                            ),
+                      ),
+                    handleServerRequest: (method, handler) =>
+                      client.handleServerRequest(method, (payload) =>
+                        handler(payload).pipe(
+                          Effect.tap((result) =>
+                            method === "item/tool/call" ? onToolResponse(result) : Effect.void,
                           ),
                         ),
-                      request: (method, params) =>
-                        onRequest(method, params).pipe(
-                          Effect.andThen(client.request(method, params)),
-                        ),
-                    }) satisfies CodexClient.CodexAppServerClient["Service"],
+                      ),
+                    request: (method, params) =>
+                      onRequest(method, params).pipe(
+                        Effect.andThen(client.request(method, params)),
+                      ),
+                  } satisfies CodexClient.CodexAppServerClient["Service"]),
                 ),
                 Effect.provide(context),
               ),
@@ -1395,46 +1403,53 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           pluginJournalGate.entered = journalEntered.resolve;
           pluginJournalGate.wait = releaseJournal.promise;
         }
+        const externalContent = yield* makeExternalContentRegistry();
         let invocations = 0;
         const registry = yield* Effect.acquireRelease(
           Effect.sync(
             () =>
-              new IntegrationRegistry.RegistryRuntime(root, [
-                {
-                  manifest,
-                  bundledFiles: { ".tritonai-plugin/plugin.json": JSON.stringify(manifest) },
-                  provider: {
-                    id: "v2-dispatch-fixture",
-                    tools: [
-                      {
-                        name: toolName,
-                        description: "Write fixture.",
-                        input: EmptyIntegrationToolInput,
-                        readOnly: false,
-                        openWorld: false,
+              new IntegrationRegistry.RegistryRuntime(
+                root,
+                [
+                  {
+                    manifest,
+                    bundledFiles: { ".tritonai-plugin/plugin.json": JSON.stringify(manifest) },
+                    provider: {
+                      id: "v2-dispatch-fixture",
+                      tools: [
+                        {
+                          name: toolName,
+                          description: "Write fixture.",
+                          input: EmptyIntegrationToolInput,
+                          readOnly: false,
+                          openWorld: false,
+                        },
+                      ],
+                      status: async () => ({
+                        state: "connected",
+                        accountLabel: "Fixture",
+                        grantedCapabilities: ["records.write"],
+                        message: null,
+                      }),
+                      connect: async () => ({
+                        kind: "connected",
+                        flowId: "fixture",
+                        message: "Connected.",
+                      }),
+                      disconnect: async () => undefined,
+                      invoke: async (_name, _args, context) => {
+                        assert.isTrue(context?.writeApproved);
+                        await context?.beginCommit?.();
+                        invocations++;
+                        return { changed: true };
                       },
-                    ],
-                    status: async () => ({
-                      state: "connected",
-                      accountLabel: "Fixture",
-                      grantedCapabilities: ["records.write"],
-                      message: null,
-                    }),
-                    connect: async () => ({
-                      kind: "connected",
-                      flowId: "fixture",
-                      message: "Connected.",
-                    }),
-                    disconnect: async () => undefined,
-                    invoke: async (_name, _args, context) => {
-                      assert.isTrue(context?.writeApproved);
-                      await context?.beginCommit?.();
-                      invocations++;
-                      return { changed: true };
                     },
                   },
-                },
-              ]),
+                ],
+                undefined,
+                undefined,
+                { externalContent },
+              ),
           ),
           (value) => Effect.promise(() => value.close()),
         );
@@ -1459,7 +1474,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         const credential = {
           environmentId: EnvironmentId.make("fixture-environment"),
           threadId,
-          providerSessionId: `provider-session-${name}`,
+          providerSessionId: `mcp-credential-${name}`,
           providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
           endpoint: "http://127.0.0.1:1234/mcp",
           authorizationHeader: "Bearer synthetic-fixture-token",
@@ -1469,6 +1484,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
         };
         yield* sessions.set(credential);
+        const runtimeChannel = {};
+        // Protocol replay only: the separate native launcher canary proves actual enforcement.
+        yield* (yield* ExternalContent.ExternalContent).establish({
+          channel: runtimeChannel,
+          caller: {
+            ownerId: `thread:${threadId}`,
+            providerSessionId: credential.providerSessionId,
+            providerInstanceId: credential.providerInstanceId,
+          },
+          scopeId: `replay-${name}`,
+          boundaryDigest: "e".repeat(64),
+          allowedTools: [toolName],
+          expiresAt: credential.expiresAt,
+          isCurrent: () => true,
+        });
         const preamble = codexReplayPreamble({
           nativeThreadId,
           nativeTurnId,
@@ -1482,24 +1512,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 id: 2,
                 method: "thread/start",
                 params: {
+                  cwd: "/workspace",
+                  model: "gpt-5.4",
                   config: CodexAdapterV2.CODEX_THREAD_CONFIG,
-                  dynamicTools: [
-                    tritonAiCommonsDynamicToolDefinition,
-                    ...(scenario === "undisclosed"
-                      ? []
-                      : [
+                  ...(scenario === "undisclosed"
+                    ? {}
+                    : {
+                        dynamicTools: [
                           {
                             name: dynamicName,
                             description:
                               "Write fixture. Integration plugin tool: fixture.records.write.",
                             inputSchema: { type: "object", additionalProperties: false },
                           },
-                        ]),
-                  ].map(({ name, description, inputSchema }) => ({
-                    name,
-                    description,
-                    inputSchema,
-                  })),
+                        ],
+                      }),
                 },
               },
             };
@@ -1797,7 +1824,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                         Object.assign(expected.frame, { params });
                     }),
           undefined,
-          {},
+          { settings: { ...DEFAULT_CODEX_SETTINGS, sessionPurpose: "integrations" } },
           (result) =>
             Effect.sync(() => {
               toolResult = result;
@@ -1808,6 +1835,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 Object.assign(response.frame, { result });
             }).pipe(Effect.andThen(Deferred.succeed(toolDone, undefined))),
           {
+            runtimeChannel,
             interceptRawRequests: stopping,
             beforeEmitInbound: (entry) =>
               entry.label === "fixture-result-consumed"
@@ -1971,7 +1999,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }),
     ).pipe(
       Effect.provide(
-        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          ExternalContent.layer.pipe(
+            Layer.provide(Layer.mergeAll(Sqlite.layerMemory, NodeServices.layer)),
+          ),
+        ),
       ),
     ),
   );

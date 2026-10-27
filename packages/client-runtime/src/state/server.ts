@@ -1152,6 +1152,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:project-overview:dismiss",
       tag: WS_METHODS.projectOverviewDismiss,
     }),
+    openProjectNextStep: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:project-overview:open",
+      tag: WS_METHODS.projectOverviewOpen,
+    }),
     restoreProjectNextSteps: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:project-overview:restore",
       tag: WS_METHODS.projectOverviewRestore,

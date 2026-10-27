@@ -28,8 +28,9 @@ import {
   type DailyMemoryGenerationResult,
   TextGeneration,
 } from "../textGeneration/TextGeneration.ts";
+import * as ExternalContent from "../integrations/ExternalContent.ts";
 import * as DailyMemory from "./DailyMemory.ts";
-import { memorySkillName } from "./memoryVault.ts";
+import { installMemorySkill, memorySkillName, renderMemorySkill } from "./memoryVault.ts";
 
 const localIso = (day: number, hour: number) => new Date(2026, 8, day, hour).toISOString();
 const NOW = new Date(2026, 8, 29, 9).getTime();
@@ -150,13 +151,72 @@ const makeHarness = (options: {
           Effect.sync(() => calls.push(input.day)).pipe(Effect.andThen(generate(input))),
       }),
     ).pipe(
-      Layer.provideMerge(SqlitePersistenceMemory),
+      Layer.provideMerge(ExternalContent.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory))),
       Layer.provideMerge(ServerConfig.layerTest(baseDir, baseDir)),
     );
     return { baseDir, codexHome, calls, layer, fs, path };
   });
 
 it.layer(NodeServices.layer)("DailyMemory", (it) => {
+  it.effect("fences unknown inbox notes before Memory inference", () =>
+    Effect.gen(function* () {
+      let exposed = false;
+      let content: ExternalContent.ExternalContent["Service"];
+      const { baseDir, calls, layer, fs, path } = yield* makeHarness({
+        memoryEnabled: true,
+        generate: (input) =>
+          Effect.gen(function* () {
+            exposed = yield* content.hasExposure.pipe(Effect.orDie);
+            return summaryFor(input);
+          }),
+      });
+      const inbox = path.join(baseDir, "memory/general/Inbox/3f2a");
+      yield* fs.makeDirectory(inbox, { recursive: true });
+      const file = path.join(inbox, "2026-09-28-1200-external.md");
+      yield* fs.writeFileString(file, "Synthetic unverified imported note");
+      yield* fs.utimes(file, NOON_28, NOON_28);
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        content = yield* ExternalContent.ExternalContent;
+        const memory = yield* DailyMemory.make;
+        yield* memory.runCatchUp;
+        assert.isTrue(exposed);
+        assert.deepEqual(calls, ["2026-09-28"]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("removes only its generated ambient memory skill before startup completes", () =>
+    Effect.gen(function* () {
+      const { baseDir, codexHome, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
+      yield* Effect.gen(function* () {
+        const vaultPath = path.join(baseDir, "memory", "general");
+        const skillsDirectory = path.join(codexHome, "skills");
+        const device = { id: DEVICE_ID, shortId: "3f2a", name: "Test Mac", label: DEVICE };
+        yield* installMemorySkill({
+          skillsDirectory,
+          vaultPath,
+          contents: renderMemorySkill({
+            vaultPath,
+            sessionsPath: path.join(codexHome, "sessions"),
+            device,
+          }),
+        });
+        const userFile = path.join(skillsDirectory, "user-owned", "SKILL.md");
+        yield* fs.makeDirectory(path.dirname(userFile), { recursive: true });
+        yield* fs.writeFileString(userFile, "User's own skill");
+        assert.isTrue(
+          yield* fs.exists(path.join(skillsDirectory, memorySkillName(vaultPath), "SKILL.md")),
+        );
+        yield* DailyMemory.make;
+        assert.isFalse(
+          yield* fs.exists(path.join(skillsDirectory, memorySkillName(vaultPath), "SKILL.md")),
+        );
+        assert.equal(yield* fs.readFileString(userFile), "User's own skill");
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   it.effect(
     "serves captured project memory and bounded original updates, without crossing workspaces",
     () =>
@@ -343,7 +403,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
               yield* fs.readFileString(path.join(vault, ".devices", DEVICE_ID, "device.json")),
               '"name": "Test Mac"',
             );
-            assert.isTrue(
+            assert.isFalse(
               yield* fs.exists(path.join(codexHome, "skills", memorySkillName(vault), "SKILL.md")),
             );
 
@@ -415,11 +475,9 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         assert.include(project, `- [[2026-09-26 ${DEVICE}]]: Progress 2026-09-26\n`);
         assert.include(project, `- [[2026-09-28 ${DEVICE}]]: Progress 2026-09-28\n`);
 
-        const skill = yield* fs.readFileString(
-          path.join(codexHome, "skills", memorySkillName(vault), "SKILL.md"),
+        assert.isFalse(
+          yield* fs.exists(path.join(codexHome, "skills", memorySkillName(vault), "SKILL.md")),
         );
-        assert.include(skill, vault);
-        assert.include(skill, "Inbox/3f2a/YYYY-MM-DD-HHMM-short-topic.md");
 
         const status = yield* memory.getStatus;
         assert.strictEqual(status.state, "idle");
@@ -734,43 +792,45 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
-  it.effect("writes nothing while off and removes its skill when turned off", () =>
-    Effect.gen(function* () {
-      const { baseDir, codexHome, calls, layer, fs, path } = yield* makeHarness({
-        memoryEnabled: true,
-      });
-      yield* TestClock.setTime(NOW);
-      const skillFile = path.join(
-        codexHome,
-        "skills",
-        memorySkillName(path.join(baseDir, "memory", "general")),
-        "SKILL.md",
-      );
+  it.effect(
+    "keeps summaries without installing ambient read skills and writes nothing while off",
+    () =>
+      Effect.gen(function* () {
+        const { baseDir, codexHome, calls, layer, fs, path } = yield* makeHarness({
+          memoryEnabled: true,
+        });
+        yield* TestClock.setTime(NOW);
+        const skillFile = path.join(
+          codexHome,
+          "skills",
+          memorySkillName(path.join(baseDir, "memory", "general")),
+          "SKILL.md",
+        );
 
-      yield* Effect.gen(function* () {
-        const memory = yield* DailyMemory.make;
-        yield* memory.runCatchUp;
-        assert.isTrue(yield* fs.exists(skillFile));
+        yield* Effect.gen(function* () {
+          const memory = yield* DailyMemory.make;
+          yield* memory.runCatchUp;
+          assert.isFalse(yield* fs.exists(skillFile));
 
-        const settings = yield* ServerSettings.ServerSettingsService;
-        yield* settings.updateSettings({ memoryEnabled: false });
-        yield* memory.runCatchUp;
-        assert.isFalse(yield* fs.exists(skillFile));
-        const status = yield* memory.getStatus;
-        assert.strictEqual(status.state, "disabled");
-        assert.isFalse(status.enabled);
-      }).pipe(Effect.provide(layer));
+          const settings = yield* ServerSettings.ServerSettingsService;
+          yield* settings.updateSettings({ memoryEnabled: false });
+          yield* memory.runCatchUp;
+          assert.isFalse(yield* fs.exists(skillFile));
+          const status = yield* memory.getStatus;
+          assert.strictEqual(status.state, "disabled");
+          assert.isFalse(status.enabled);
+        }).pipe(Effect.provide(layer));
 
-      const off = yield* makeHarness({ memoryEnabled: false });
-      yield* Effect.gen(function* () {
-        yield* seed;
-        const memory = yield* DailyMemory.make;
-        yield* memory.runCatchUp;
-      }).pipe(Effect.provide(off.layer));
-      assert.isFalse(yield* fs.exists(path.join(off.baseDir, "memory")));
-      assert.deepStrictEqual(off.calls, []);
-      assert.deepStrictEqual(calls, []);
-      assert.isTrue(yield* fs.exists(baseDir));
-    }),
+        const off = yield* makeHarness({ memoryEnabled: false });
+        yield* Effect.gen(function* () {
+          yield* seed;
+          const memory = yield* DailyMemory.make;
+          yield* memory.runCatchUp;
+        }).pipe(Effect.provide(off.layer));
+        assert.isFalse(yield* fs.exists(path.join(off.baseDir, "memory")));
+        assert.deepStrictEqual(off.calls, []);
+        assert.deepStrictEqual(calls, []);
+        assert.isTrue(yield* fs.exists(baseDir));
+      }),
   );
 });

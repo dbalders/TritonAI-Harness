@@ -22,7 +22,10 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
   const { scratchEnvironmentId, openScratchProject } = useScratchProject();
   const projects = useProjects();
 
-  return async (idea: Idea): Promise<{ readonly draftThreadId: ThreadId | null } | null> => {
+  return async (
+    idea: Idea,
+    beforePrompt: (draftThreadId: ThreadId | null) => Promise<boolean>,
+  ): Promise<{ readonly draftThreadId: ThreadId | null } | null> => {
     if (environmentId === null) return null;
     const { action } = idea;
     const store = useComposerDraftStore.getState();
@@ -40,6 +43,7 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
     };
 
     if (action.kind === "resume-thread") {
+      if (!(await beforePrompt(null))) return null;
       const threadRef = scopeThreadRef(environmentId, action.threadId);
       const existing = store.getComposerDraft(threadRef)?.prompt ?? "";
       store.setPrompt(threadRef, mergeIdeaPrompt(existing, action.prompt));
@@ -62,6 +66,7 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
     );
     if (reopened) {
       const [draftKey, session] = reopened;
+      if (!(await beforePrompt(session.threadId))) return null;
       trackIdea(session.threadId);
       await navigate({ to: "/draft/$draftId", params: { draftId: DraftId.make(draftKey) } });
       return { draftThreadId: session.threadId };
@@ -82,8 +87,11 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
     projectRef = projectRef ?? (fallback ? scopeProjectRef(environmentId, fallback.id) : null);
     if (projectRef === null) return null;
 
-    const opened = await handleNewThread(projectRef, { newDraftPrompt: action.prompt });
+    const opened = await handleNewThread(projectRef);
     if (!opened) return null;
+    // An empty draft may open while this is pending; generated text becomes sendable only
+    // after the host has persisted its provenance on the destination thread.
+    if (!(await beforePrompt(opened.threadId))) return null;
     // A reused draft keeps its own text, so the idea is added after it.
     const existing =
       useComposerDraftStore.getState().getComposerDraft(opened.draftId)?.prompt ?? "";
