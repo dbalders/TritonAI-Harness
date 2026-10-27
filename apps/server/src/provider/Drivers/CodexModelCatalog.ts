@@ -48,6 +48,7 @@ function managedModelFromTemplate(input: {
   readonly name: string;
   readonly inputModalities: ReadonlyArray<"text" | "image">;
   readonly priority: number;
+  readonly searchTool: boolean;
 }): JsonObject {
   return {
     ...input.template,
@@ -80,9 +81,11 @@ function managedModelFromTemplate(input: {
     effective_context_window_percent: 95,
     experimental_supported_tools: [],
     input_modalities: [...input.inputModalities],
-    // TritonAI's Responses gateway accepts ordinary function tools but does not
-    // preserve Codex's proprietary namespace / tool_search call shapes.
-    supports_search_tool: false,
+    // On the managed gateway these are campus-hosted models. The gateway drops Codex's
+    // client-side tool_search, so Harness's gateway proxy translates it into an ordinary
+    // function (TritonAiGatewayProxy). Search lets Codex defer plugin tools instead of sending
+    // every schema on each request. Elsewhere nothing translates it.
+    supports_search_tool: input.searchTool,
     use_responses_lite: false,
     auto_review_model_override: null,
     tool_mode: null,
@@ -155,6 +158,7 @@ export function buildTritonAiCodexModelCatalog(
         name: metadata.name,
         inputModalities,
         priority,
+        searchTool: options.managedGateway,
       }),
     );
     priority += 1;

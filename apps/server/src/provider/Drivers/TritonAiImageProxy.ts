@@ -6,6 +6,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { EnvHttpProxyAgent } from "@effect/platform-node/Undici";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import * as Stream from "effect/Stream";
 import {
   Headers,
   HttpBody,
@@ -41,10 +42,200 @@ export function limitTritonAiRequestImages(body: unknown): void {
   }
 }
 
+const TOOL_SEARCH = "tool_search";
+
+function loadedToolNames(tools: unknown): string[] {
+  if (!Array.isArray(tools)) return [];
+  return tools.flatMap((tool) => {
+    if (!Predicate.isObject(tool)) return [];
+    if (tool.type === "namespace" && Array.isArray(tool.tools))
+      return tool.tools.flatMap((inner) =>
+        Predicate.isObject(inner) && typeof inner.name === "string" ? [inner.name] : [],
+      );
+    return typeof tool.name === "string" ? [tool.name] : [];
+  });
+}
+
+function withoutDeferLoading(tool: unknown): unknown {
+  if (!Predicate.isObject(tool)) return tool;
+  const { defer_loading: _deferLoading, ...rest } = tool;
+  return rest.type === "namespace" && Array.isArray(rest.tools)
+    ? { ...rest, tools: rest.tools.map(withoutDeferLoading) }
+    : rest;
+}
+
+/** Adds tools found by an earlier search, merging into a namespace already in the request. */
+function addLoadedTools(requestTools: unknown[], loaded: unknown): void {
+  if (!Array.isArray(loaded)) return;
+  for (const tool of loaded.map(withoutDeferLoading)) {
+    if (!Predicate.isObject(tool)) continue;
+    if (tool.type === "namespace" && Array.isArray(tool.tools)) {
+      const existing = requestTools.find(
+        (entry): entry is Record<string, unknown> & { tools: unknown[] } =>
+          Predicate.isObject(entry) &&
+          entry.type === "namespace" &&
+          entry.name === tool.name &&
+          Array.isArray(entry.tools),
+      );
+      if (existing === undefined) {
+        requestTools.push(tool);
+        continue;
+      }
+      const present = new Set(loadedToolNames(existing.tools));
+      for (const inner of tool.tools)
+        if (Predicate.isObject(inner) && !present.has(String(inner.name)))
+          existing.tools.push(inner);
+    } else if (!loadedToolNames(requestTools).includes(String(tool.name))) {
+      requestTools.push(tool);
+    }
+  }
+}
+
+/**
+ * Campus-hosted models behind the gateway drop Codex's client-side `tool_search` tool and reject
+ * its call and output items. Send search as an ordinary function, replay earlier searches as
+ * function calls, and make the tools they found callable. Namespaced tools pass through as is.
+ * Returns true when the request used tool search, so the reply needs the reverse translation.
+ */
+export function translateToolSearchForGateway(body: unknown): boolean {
+  if (!Predicate.isObject(body)) return false;
+  let used = false;
+  const tools = Array.isArray(body.tools) ? (body.tools as unknown[]) : [];
+  body.tools = tools.map((tool) => {
+    if (!Predicate.isObject(tool) || tool.type !== TOOL_SEARCH) return tool;
+    used = true;
+    return {
+      type: "function",
+      name: TOOL_SEARCH,
+      description: tool.description,
+      strict: false,
+      parameters: tool.parameters,
+    };
+  });
+  if (!Array.isArray(body.input)) return used;
+  body.input = body.input.map((item) => {
+    if (!Predicate.isObject(item)) return item;
+    if (item.type === "tool_search_call") {
+      used = true;
+      return {
+        type: "function_call",
+        call_id: item.call_id,
+        name: TOOL_SEARCH,
+        arguments: JSON.stringify(item.arguments ?? {}),
+      };
+    }
+    if (item.type === "tool_search_output") {
+      used = true;
+      addLoadedTools(body.tools as unknown[], item.tools);
+      const names = loadedToolNames(item.tools);
+      return {
+        type: "function_call_output",
+        call_id: item.call_id,
+        output:
+          names.length === 0
+            ? "No matching tools were found."
+            : `These tools are now available to call: ${names.join(", ")}.`,
+      };
+    }
+    return item;
+  });
+  return used;
+}
+
+function toToolSearchCall(item: unknown): unknown {
+  if (
+    !Predicate.isObject(item) ||
+    item.type !== "function_call" ||
+    item.name !== TOOL_SEARCH ||
+    item.namespace != null
+  )
+    return item;
+  let parsed: unknown = {};
+  if (typeof item.arguments === "string" && item.arguments.trim().length > 0) {
+    try {
+      parsed = JSON.parse(item.arguments);
+    } catch {
+      parsed = { query: item.arguments };
+    }
+  }
+  return {
+    type: "tool_search_call",
+    ...(item.id === undefined ? {} : { id: item.id }),
+    call_id: item.call_id ?? null,
+    status: item.status ?? "completed",
+    execution: "client",
+    arguments: Predicate.isObject(parsed) ? parsed : {},
+  };
+}
+
+/** Returns a gateway `tool_search` function call to Codex as its client-side search call. */
+export function toCodexToolSearchEvent(data: string): string {
+  if (!data.includes(`"${TOOL_SEARCH}"`)) return data;
+  let event: unknown;
+  try {
+    event = JSON.parse(data);
+  } catch {
+    return data;
+  }
+  if (!Predicate.isObject(event)) return data;
+  if ("item" in event) return JSON.stringify({ ...event, item: toToolSearchCall(event.item) });
+  const response = event.response;
+  if (Predicate.isObject(response) && Array.isArray(response.output))
+    return JSON.stringify({
+      ...event,
+      response: { ...response, output: response.output.map(toToolSearchCall) },
+    });
+  return data;
+}
+
+function rewriteSseEvent(event: string, rewrite: (data: string) => string): string {
+  return event
+    .split("\n")
+    .map((line) =>
+      line.startsWith("data:") ? `data: ${rewrite(line.slice(5).trimStart())}` : line,
+    )
+    .join("\n");
+}
+
+/** Rewrites complete server-sent events while preserving streaming order and partial chunks. */
+function rewriteResponseEvents<E, R>(
+  stream: Stream.Stream<Uint8Array, E, R>,
+  rewrite: (data: string) => string,
+): Stream.Stream<Uint8Array, E, R> {
+  return stream.pipe(
+    Stream.decodeText,
+    Stream.mapAccum(
+      () => "",
+      (pending: string, chunk: string) => {
+        const text = (pending + chunk).replace(/\r\n/g, "\n");
+        const boundary = text.lastIndexOf("\n\n");
+        if (boundary < 0) return [text, []] as const;
+        const complete = text.slice(0, boundary + 2);
+        const events = complete.split("\n\n").slice(0, -1);
+        return [
+          text.slice(boundary + 2),
+          [events.map((event) => `${rewriteSseEvent(event, rewrite)}\n\n`).join("")],
+        ] as const;
+      },
+      { onHalt: (pending) => (pending.length > 0 ? [rewriteSseEvent(pending, rewrite)] : []) },
+    ),
+    Stream.encodeText,
+  );
+}
+
+// Rewritten bodies get new framing from the local server.
+const HOP_BY_HOP_HEADERS = ["connection", "content-length", "transfer-encoding", "set-cookie"];
+
+export interface TritonAiImageProxyOptions {
+  /** Whether a requested model needs Codex tool search translated into an ordinary function. */
+  readonly translateToolSearch?: (model: string) => boolean;
+}
+
 /** A scoped request filter; Effect owns sockets, streaming, cancellation, and cleanup. */
 export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(function* (
   upstreamBaseUrl: string,
   environment: NodeJS.ProcessEnv,
+  options: TritonAiImageProxyOptions = {},
 ) {
   const upstream = yield* Effect.try(() => new URL(upstreamBaseUrl));
   const allProxy = environment.all_proxy || environment.ALL_PROXY;
@@ -79,12 +270,20 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
       target.pathname = upstream.pathname.replace(/\/$/, "") + suffix;
       for (const [key, value] of local.searchParams) target.searchParams.set(key, value);
       let body: HttpBody.HttpBody = HttpBody.stream(request.stream);
+      let searchTranslated = false;
       if (
         request.method === "POST" &&
         (suffix === "/responses" || suffix === "/responses/compact")
       ) {
         const input = yield* request.json;
         limitTritonAiRequestImages(input);
+        if (
+          Predicate.isObject(input) &&
+          input.stream === true &&
+          typeof input.model === "string" &&
+          options.translateToolSearch?.(input.model) === true
+        )
+          searchTranslated = translateToolSearchForGateway(input);
         body = HttpBody.jsonUnsafe(input);
       }
       const headers = Headers.removeMany(request.headers, [
@@ -93,8 +292,17 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
         "content-length",
         "transfer-encoding",
       ]);
-      return HttpServerResponse.fromClientResponse(
-        yield* client.execute(HttpClientRequest.make(request.method)(target, { headers, body })),
+      const response = yield* client.execute(
+        HttpClientRequest.make(request.method)(target, { headers, body }),
+      );
+      if (!searchTranslated || response.status !== 200)
+        return HttpServerResponse.fromClientResponse(response);
+      return HttpServerResponse.stream(
+        rewriteResponseEvents(response.stream, toCodexToolSearchEvent),
+        {
+          status: response.status,
+          headers: Headers.removeMany(response.headers, HOP_BY_HOP_HEADERS),
+        },
       );
     }).pipe(
       Effect.catchTags({

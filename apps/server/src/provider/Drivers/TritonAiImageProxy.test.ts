@@ -6,7 +6,13 @@ import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import { it } from "@effect/vitest";
 import { describe, expect } from "vite-plus/test";
-import { limitTritonAiRequestImages, makeTritonAiImageProxy } from "./TritonAiImageProxy.ts";
+import {
+  limitTritonAiRequestImages,
+  makeTritonAiImageProxy,
+  toCodexToolSearchEvent,
+  translateToolSearchForGateway,
+  type TritonAiImageProxyOptions,
+} from "./TritonAiImageProxy.ts";
 
 const image = (id: number) => ({
   type: "input_image",
@@ -29,9 +35,13 @@ const post = (url: string, body: unknown = screenshotHistory) =>
     }),
   );
 
-const startProxy = Effect.fn(function* (url: string, env: NodeJS.ProcessEnv = {}) {
+const startProxy = Effect.fn(function* (
+  url: string,
+  env: NodeJS.ProcessEnv = {},
+  options: TritonAiImageProxyOptions = {},
+) {
   const scope = yield* Scope.fork(yield* Effect.scope, "sequential");
-  const baseUrl = yield* makeTritonAiImageProxy(url, env).pipe(
+  const baseUrl = yield* makeTritonAiImageProxy(url, env, options).pipe(
     Effect.provideService(Scope.Scope, scope),
   );
   return { baseUrl, close: Scope.close(scope, Exit.void) };
@@ -226,6 +236,240 @@ describe("TritonAI image request budget", () => {
       expect(response.status).toBe(200);
       yield* Effect.promise(() => response.text());
       expect(f.received[0]?.url).toBe("/v1/responses?tenant=campus&api-version=request&trace=test");
+    }).pipe(Effect.scoped),
+  );
+});
+
+const message = (role: string, text: string) => ({
+  type: "message",
+  role,
+  content: [{ type: role === "assistant" ? "output_text" : "input_text", text }],
+});
+const sse = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`;
+
+// A gateway that answers every request with the same server-sent events.
+const scriptedGateway = Effect.fn(function* (
+  events: ReadonlyArray<string>,
+  options: TritonAiImageProxyOptions,
+) {
+  const received: any[] = [];
+  const server = NodeHttp.createServer(async (req, res) => {
+    const parts: Buffer[] = [];
+    for await (const chunk of req) parts.push(Buffer.from(chunk));
+    received.push(JSON.parse(Buffer.concat(parts).toString()));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    for (const event of events) res.write(event);
+    res.end();
+  });
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(
+      () =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          server.closeAllConnections();
+        }),
+    ),
+  );
+  yield* Effect.promise(
+    () => new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve)),
+  );
+  const address = server.address();
+  if (!address || typeof address === "string") return yield* Effect.die("Missing test address");
+  return { received, ...(yield* startProxy(`http://127.0.0.1:${address.port}/v1`, {}, options)) };
+});
+
+// Codex 0.161's client-side tool search, as sent for hosted models with deferred plugin tools.
+const toolSearchTool = {
+  type: "tool_search",
+  execution: "client",
+  description: "# Tool discovery",
+  parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+};
+const mailSearch = {
+  type: "function",
+  name: "microsoft365_mail_search",
+  description: "Search Outlook mail.",
+  strict: false,
+  defer_loading: true,
+  parameters: { type: "object", properties: { query: { type: "string" } } },
+};
+const { defer_loading: _deferLoading, ...mailSearchWithoutDeferral } = mailSearch;
+const searchedThread = () => ({
+  model: "api-glm-5.3-flash",
+  stream: true,
+  tools: [
+    { type: "function", name: "exec_command", parameters: {} },
+    toolSearchTool,
+    { type: "namespace", name: "microsoft365", tools: [{ type: "function", name: "existing" }] },
+  ],
+  input: [
+    message("user", "Find my invoice email."),
+    {
+      type: "tool_search_call",
+      call_id: "call_search",
+      status: "completed",
+      execution: "client",
+      arguments: { query: "outlook mail", limit: 8 },
+    },
+    {
+      type: "tool_search_output",
+      call_id: "call_search",
+      status: "completed",
+      execution: "client",
+      tools: [{ type: "namespace", name: "microsoft365", description: "", tools: [mailSearch] }],
+    },
+    {
+      type: "function_call",
+      call_id: "call_mail",
+      namespace: "microsoft365",
+      name: "microsoft365_mail_search",
+      arguments: '{"query":"invoice"}',
+    },
+    { type: "function_call_output", call_id: "call_mail", output: "[]" },
+  ],
+});
+
+describe("TritonAI tool search translation", () => {
+  it("sends search as an ordinary function and makes found tools callable", () => {
+    const body = searchedThread();
+    expect(translateToolSearchForGateway(body)).toBe(true);
+    expect(body.tools).toEqual([
+      { type: "function", name: "exec_command", parameters: {} },
+      {
+        type: "function",
+        name: "tool_search",
+        description: "# Tool discovery",
+        strict: false,
+        parameters: toolSearchTool.parameters,
+      },
+      {
+        type: "namespace",
+        name: "microsoft365",
+        tools: [{ type: "function", name: "existing" }, mailSearchWithoutDeferral],
+      },
+    ]);
+    expect(body.input.slice(1, 3)).toEqual([
+      {
+        type: "function_call",
+        call_id: "call_search",
+        name: "tool_search",
+        arguments: '{"query":"outlook mail","limit":8}',
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_search",
+        output: "These tools are now available to call: microsoft365_mail_search.",
+      },
+    ]);
+    // Namespaced calls already work through the gateway and stay as Codex sent them.
+    expect(body.input.slice(3)).toEqual(searchedThread().input.slice(3));
+    // Translating again is harmless and does not duplicate found tools.
+    expect(translateToolSearchForGateway(body)).toBe(false);
+    expect(JSON.stringify(body.tools).match(/microsoft365_mail_search/g)).toHaveLength(1);
+  });
+
+  it("reports an empty search and leaves requests without search unchanged", () => {
+    const empty = {
+      tools: [toolSearchTool],
+      input: [
+        {
+          type: "tool_search_output",
+          call_id: "c",
+          status: "completed",
+          execution: "client",
+          tools: [],
+        },
+      ],
+    };
+    expect(translateToolSearchForGateway(empty)).toBe(true);
+    expect(empty.input[0]).toEqual({
+      type: "function_call_output",
+      call_id: "c",
+      output: "No matching tools were found.",
+    });
+    const plain = { tools: [{ type: "function", name: "x" }], input: [message("user", "hi")] };
+    const before = structuredClone(plain);
+    expect(translateToolSearchForGateway(plain)).toBe(false);
+    expect(plain).toEqual(before);
+  });
+
+  it("returns the gateway's search call to Codex as its client-side search", () => {
+    const call = {
+      type: "function_call",
+      id: "fc_1",
+      call_id: "call_1",
+      status: "completed",
+      name: "tool_search",
+      arguments: '{"query":"outlook mail","limit":3}',
+    };
+    const expected = {
+      type: "tool_search_call",
+      id: "fc_1",
+      call_id: "call_1",
+      status: "completed",
+      execution: "client",
+      arguments: { query: "outlook mail", limit: 3 },
+    };
+    const done = JSON.parse(
+      toCodexToolSearchEvent(JSON.stringify({ type: "response.output_item.done", item: call })),
+    );
+    expect(done).toEqual({ type: "response.output_item.done", item: expected });
+    const added = JSON.parse(
+      toCodexToolSearchEvent(
+        JSON.stringify({
+          type: "response.output_item.added",
+          item: { ...call, status: "in_progress", arguments: "" },
+        }),
+      ),
+    );
+    expect(added.item).toMatchObject({ type: "tool_search_call", arguments: {} });
+    const completed = JSON.parse(
+      toCodexToolSearchEvent(
+        JSON.stringify({ type: "response.completed", response: { output: [call] } }),
+      ),
+    );
+    expect(completed.response.output).toEqual([expected]);
+    // Ordinary and namespaced calls are untouched.
+    for (const unchanged of [
+      JSON.stringify({
+        type: "response.output_item.done",
+        item: { ...call, name: "exec_command" },
+      }),
+      JSON.stringify({ type: "response.output_item.done", item: { ...call, namespace: "x" } }),
+      "[DONE]",
+    ])
+      expect(toCodexToolSearchEvent(unchanged)).toBe(unchanged);
+  });
+
+  it.effect("translates search both ways only for models that need it", () =>
+    Effect.gen(function* () {
+      const searchCall = {
+        type: "function_call",
+        call_id: "call_1",
+        status: "completed",
+        name: "tool_search",
+        arguments: '{"query":"mail"}',
+      };
+      const events = [
+        sse({ type: "response.output_item.done", item: searchCall }),
+        sse({ type: "response.completed", response: { output: [searchCall] } }),
+      ];
+      const gateway = yield* scriptedGateway(events, {
+        translateToolSearch: (model) => model === "api-glm-5.3-flash",
+      });
+      const hosted = yield* post(`${gateway.baseUrl}/responses`, searchedThread());
+      const hostedText = yield* Effect.promise(() => hosted.text());
+      expect(hostedText).toContain('"type":"tool_search_call"');
+      expect(hostedText).not.toContain('"name":"tool_search"');
+      expect(JSON.stringify(gateway.received[0])).not.toContain("tool_search_call");
+      expect(JSON.stringify(gateway.received[0].tools)).toContain("microsoft365_mail_search");
+
+      const native = yield* post(`${gateway.baseUrl}/responses`, {
+        ...searchedThread(),
+        model: "gpt-6.1-sol",
+      });
+      expect(yield* Effect.promise(() => native.text())).toBe(events.join(""));
+      expect(gateway.received[1]).toEqual({ ...searchedThread(), model: "gpt-6.1-sol" });
     }).pipe(Effect.scoped),
   );
 });

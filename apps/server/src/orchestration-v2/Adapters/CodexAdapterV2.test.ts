@@ -311,6 +311,29 @@ describe("CodexAdapterV2 thread MCP configuration", () => {
     assert.notProperty(withoutSession.config, "mcp_servers.t3-code");
     assert.property(withoutSession.config, "mcp_servers.cua-driver");
   });
+
+  it("keeps Harness MCP tools out of tool search on the hosted route", () => {
+    const mcpSession = {
+      environmentId: EnvironmentId.make("mcp-direct-environment"),
+      threadId: ThreadId.make("mcp-direct-thread"),
+      providerSessionId: "mcp-direct-session",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer fixture-token",
+      browserToolsAvailable: true,
+    };
+    const computerUseMcp = { command: "/fixture/cua-driver", args: ["mcp"], environment: {} };
+    const hosted = CodexAdapterV2.codexThreadRuntimeParams({
+      mcpSession,
+      computerUseMcp,
+      keepMcpToolsDirect: true,
+    });
+    for (const server of ["mcp_servers.t3-code", "mcp_servers.cua-driver"])
+      assert.deepInclude(hosted.config[server] as object, { omit_tools_from: ["deferred"] });
+    const cloud = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession, computerUseMcp });
+    for (const server of ["mcp_servers.t3-code", "mcp_servers.cua-driver"])
+      assert.notProperty(cloud.config[server] as object, "omit_tools_from");
+  });
 });
 
 describe("CodexAdapterV2 process spawning", () => {

@@ -31,12 +31,36 @@ class CodexFlatToolSetupError extends Schema.TaggedError<CodexFlatToolSetupError
   { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
 ) {}
 
+// Codex reserves these tool-search namespaces; see its app-server dynamic tool validation.
+const RESERVED_NAMESPACES = new Set(["functions", "tool_search", "web", "multi_agent_v1"]);
+
+/**
+ * Groups a plugin tool under its plugin (the canonical name's first segment, such as "n8n") so
+ * Codex can defer it and find it with tool search. Tool names stay unchanged.
+ */
+export function deferredPluginTool(
+  canonicalName: string,
+  defer: boolean,
+): { readonly namespace: string; readonly deferLoading: true } | Record<string, never> {
+  if (!defer) return {};
+  const namespace = canonicalName.split(".")[0]?.replace(/[^a-zA-Z0-9_-]/gu, "_") ?? "";
+  if (
+    !/^[a-zA-Z0-9_-]{1,64}$/u.test(namespace) ||
+    RESERVED_NAMESPACES.has(namespace) ||
+    namespace.startsWith("mcp__")
+  )
+    return {};
+  return { namespace, deferLoading: true };
+}
+
 /** A native thread's disclosed catalog; each invocation still checks the live grant. */
 export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(function* (input: {
   readonly threadId: ThreadId;
   readonly instanceId: ProviderInstanceId;
   readonly disclosedToolNames?: ReadonlyArray<string>;
   readonly broker?: PreviewAutomationBroker.PreviewAutomationBroker["Service"];
+  /** Defer plugin tools behind Codex tool search; only for models that can search. */
+  readonly deferPluginTools?: boolean;
 }) {
   const sessions = yield* McpProviderSessions.McpProviderSessions;
   const session = yield* sessions.read(input.threadId);
@@ -79,6 +103,7 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
               description: `${definition.description} Integration plugin tool: ${definition.name}.`,
               inputSchema: integrationToolJsonSchema(definition),
               requiresApproval: registry.toolRequiresApprovalSync?.(definition.name) ?? false,
+              ...deferredPluginTool(definition.name, input.deferPluginTools === true),
             },
           ];
         })
