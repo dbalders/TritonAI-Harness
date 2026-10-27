@@ -94,16 +94,18 @@ function addLoadedTools(requestTools: unknown[], loaded: unknown): void {
 /**
  * Campus-hosted models behind the gateway drop Codex's client-side `tool_search` tool and reject
  * its call and output items. Send search as an ordinary function, replay earlier searches as
- * function calls, and make the tools they found callable. Namespaced tools pass through as is.
- * Returns true when the request used tool search, so the reply needs the reverse translation.
+ * function calls, and, when the request offers search, make the tools they found callable.
+ * Compaction requests carry the history but no tools, so they get no tools added. Namespaced
+ * tools pass through as is. Returns true when the request offers search, so the reply needs the
+ * reverse translation.
  */
 export function translateToolSearchForGateway(body: unknown): boolean {
   if (!Predicate.isObject(body)) return false;
-  let used = false;
+  let searchable = false;
   const tools = Array.isArray(body.tools) ? (body.tools as unknown[]) : [];
   body.tools = tools.map((tool) => {
     if (!Predicate.isObject(tool) || tool.type !== TOOL_SEARCH) return tool;
-    used = true;
+    searchable = true;
     return {
       type: "function",
       name: TOOL_SEARCH,
@@ -112,11 +114,10 @@ export function translateToolSearchForGateway(body: unknown): boolean {
       parameters: tool.parameters,
     };
   });
-  if (!Array.isArray(body.input)) return used;
+  if (!Array.isArray(body.input)) return searchable;
   body.input = body.input.map((item) => {
     if (!Predicate.isObject(item)) return item;
     if (item.type === "tool_search_call") {
-      used = true;
       return {
         type: "function_call",
         call_id: item.call_id,
@@ -125,8 +126,7 @@ export function translateToolSearchForGateway(body: unknown): boolean {
       };
     }
     if (item.type === "tool_search_output") {
-      used = true;
-      addLoadedTools(body.tools as unknown[], item.tools);
+      if (searchable) addLoadedTools(body.tools as unknown[], item.tools);
       const names = loadedToolNames(item.tools);
       return {
         type: "function_call_output",
@@ -139,7 +139,7 @@ export function translateToolSearchForGateway(body: unknown): boolean {
     }
     return item;
   });
-  return used;
+  return searchable;
 }
 
 function toToolSearchCall(item: unknown): unknown {
@@ -178,13 +178,8 @@ export function toCodexToolSearchEvent(data: string): string {
     return data;
   }
   if (!Predicate.isObject(event)) return data;
+  // Codex reads calls from the item events, not from response.completed's output.
   if ("item" in event) return JSON.stringify({ ...event, item: toToolSearchCall(event.item) });
-  const response = event.response;
-  if (Predicate.isObject(response) && Array.isArray(response.output))
-    return JSON.stringify({
-      ...event,
-      response: { ...response, output: response.output.map(toToolSearchCall) },
-    });
   return data;
 }
 
@@ -270,7 +265,7 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
       target.pathname = upstream.pathname.replace(/\/$/, "") + suffix;
       for (const [key, value] of local.searchParams) target.searchParams.set(key, value);
       let body: HttpBody.HttpBody = HttpBody.stream(request.stream);
-      let searchTranslated = false;
+      let rewriteSearchReply = false;
       if (
         request.method === "POST" &&
         (suffix === "/responses" || suffix === "/responses/compact")
@@ -279,11 +274,10 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
         limitTritonAiRequestImages(input);
         if (
           Predicate.isObject(input) &&
-          input.stream === true &&
           typeof input.model === "string" &&
           options.translateToolSearch?.(input.model) === true
         )
-          searchTranslated = translateToolSearchForGateway(input);
+          rewriteSearchReply = translateToolSearchForGateway(input) && input.stream === true;
         body = HttpBody.jsonUnsafe(input);
       }
       const headers = Headers.removeMany(request.headers, [
@@ -295,7 +289,7 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
       const response = yield* client.execute(
         HttpClientRequest.make(request.method)(target, { headers, body }),
       );
-      if (!searchTranslated || response.status !== 200)
+      if (!rewriteSearchReply || response.status !== 200)
         return HttpServerResponse.fromClientResponse(response);
       return HttpServerResponse.stream(
         rewriteResponseEvents(response.stream, toCodexToolSearchEvent),

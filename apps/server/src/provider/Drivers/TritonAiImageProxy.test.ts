@@ -387,6 +387,11 @@ describe("TritonAI tool search translation", () => {
       call_id: "c",
       output: "No matching tools were found.",
     });
+    // Compaction sends the history without tools: replay it, but add no tools for the summary.
+    const compaction = { ...searchedThread(), tools: [] };
+    expect(translateToolSearchForGateway(compaction)).toBe(false);
+    expect(compaction.tools).toEqual([]);
+    expect(JSON.stringify(compaction.input)).not.toContain("tool_search_");
     const plain = { tools: [{ type: "function", name: "x" }], input: [message("user", "hi")] };
     const before = structuredClone(plain);
     expect(translateToolSearchForGateway(plain)).toBe(false);
@@ -423,12 +428,6 @@ describe("TritonAI tool search translation", () => {
       ),
     );
     expect(added.item).toMatchObject({ type: "tool_search_call", arguments: {} });
-    const completed = JSON.parse(
-      toCodexToolSearchEvent(
-        JSON.stringify({ type: "response.completed", response: { output: [call] } }),
-      ),
-    );
-    expect(completed.response.output).toEqual([expected]);
     // Ordinary and namespaced calls are untouched.
     for (const unchanged of [
       JSON.stringify({
@@ -452,7 +451,7 @@ describe("TritonAI tool search translation", () => {
       };
       const events = [
         sse({ type: "response.output_item.done", item: searchCall }),
-        sse({ type: "response.completed", response: { output: [searchCall] } }),
+        sse({ type: "response.completed", response: { output: [] } }),
       ];
       const gateway = yield* scriptedGateway(events, {
         translateToolSearch: (model) => model === "api-glm-5.3-flash",
