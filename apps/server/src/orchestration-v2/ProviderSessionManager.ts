@@ -1746,7 +1746,14 @@ export const layerWithOptions = (
                 isProviderThreadLoaded({ providerSessionId, threadId, providerThreadKey }),
               ),
               Effect.flatMap((loaded) =>
-                loaded ? Effect.succeed(input.providerThread) : runtime.resumeThread(input),
+                loaded
+                  ? Effect.succeed(input.providerThread)
+                  : // Resume hands the provider this thread's stored MCP token,
+                    // and Codex connects with it at once and never retries.
+                    // Revive it first so an idle thread does not lose t3-code.
+                    mcpSessionRegistry
+                      .touch(threadId)
+                      .pipe(Effect.andThen(runtime.resumeThread(input))),
               ),
               Effect.tap((providerThread) =>
                 markProviderThreadLoaded({
