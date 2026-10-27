@@ -235,6 +235,18 @@ describe.each([
   });
 
   if (draft) {
+    it("allocates a fresh thread for recovery even when a stored draft is empty", async () => {
+      testState.reset(draft);
+      const pending = useNewThreadHandler()(
+        { environmentId: "environment-ssh", projectId: "project-remote" } as never,
+        { forceNew: true },
+      );
+      testState.completeProjectFileRead(null);
+      const opened = await pending;
+      expect(opened?.threadId).toBe("thread-delayed");
+      expect(opened?.draftId).not.toBe(draft.draftId);
+    });
+
     // regression: #374 fix(permissions): default to Supervised and remember composer choices
     it("preserves a reused draft's own composer mode", async () => {
       testState.reset(draft);

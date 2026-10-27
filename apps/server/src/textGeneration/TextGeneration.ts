@@ -56,6 +56,7 @@ const resolveInstance = (
   promptOnlyRuntimeAvailable: boolean,
   operation: TextGenerationOp,
   instanceId: ProviderInstanceId,
+  externalInputs = false,
 ): Effect.Effect<ProviderInstance["textGeneration"], TextGenerationError> =>
   registry.getInstance(instanceId).pipe(
     Effect.flatMap(
@@ -80,7 +81,10 @@ const resolveInstance = (
               ),
             )
           : false;
-        if (exposed && (instance.driverKind !== "codex" || !promptOnlyRuntimeAvailable))
+        if (
+          (exposed || externalInputs) &&
+          (instance.driverKind !== "codex" || !promptOnlyRuntimeAvailable)
+        )
           return yield* new TextGenerationError({
             operation,
             detail:
@@ -149,28 +153,27 @@ export const make = Effect.gen(function* () {
         "generateReviewGuide",
         input.modelSelection.instanceId,
       ).pipe(Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input))),
-    generateThreadTitle: (input) =>
-      resolveInstance(
+    generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function* (input) {
+      const linkedContext =
+        input.linkedContext ??
+        (config.integrationCodexRuntime
+          ? yield* ThreadTitleLinks.resolveThreadTitleLinks(input).pipe(
+              Effect.provideService(
+                SourceControlProviderRegistry.SourceControlProviderRegistry,
+                sourceControl,
+              ),
+            )
+          : undefined);
+      const textGeneration = yield* resolveInstance(
         registry,
         content,
         Boolean(config.integrationCodexRuntime),
         "generateThreadTitle",
         input.modelSelection.instanceId,
-      ).pipe(
-        Effect.flatMap((textGeneration) =>
-          Effect.gen(function* () {
-            const linkedContext =
-              input.linkedContext ??
-              (yield* ThreadTitleLinks.resolveThreadTitleLinks(input).pipe(
-                Effect.provideService(
-                  SourceControlProviderRegistry.SourceControlProviderRegistry,
-                  sourceControl,
-                ),
-              ));
-            return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
-          }),
-        ),
-      ),
+        linkedContext !== undefined,
+      );
+      return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
+    }),
     generateDailyMemory: (input) =>
       resolveInstance(
         registry,

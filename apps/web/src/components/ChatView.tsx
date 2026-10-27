@@ -1080,6 +1080,9 @@ export default function ChatView(props: ChatViewProps) {
     startNewThreadForProject(activeProjectRef, handleNewThread);
   };
   const handleNewThreadInActiveProjectStable = useStableCallback(handleNewThreadInActiveProject);
+  const handleStartCleanThread = useStableCallback(() => {
+    if (activeProjectRef) void handleNewThread(activeProjectRef, { forceNew: true });
+  });
   const projectGroupingSettings = selectProjectGroupingSettings(settings);
   const activeDraftLogicalProjectKey =
     !isServerThread && activeProject
@@ -3358,7 +3361,7 @@ export default function ChatView(props: ChatViewProps) {
               onOpenProviderSetup={openProviderSetupStable}
               threadId={activeThread.id}
               threadError={timelineThreadError}
-              onStartCleanThread={handleNewThreadInActiveProjectStable}
+              onStartCleanThread={handleStartCleanThread}
               threadErrorClass={
                 threadErrorIsServerRuntimeError ? (serverRuntime?.lastErrorClass ?? null) : null
               }

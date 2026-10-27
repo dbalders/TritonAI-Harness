@@ -26,8 +26,10 @@ import { registerIntegrationWriteGate } from "../../integrations/IntegrationWrit
 import * as ExternalContent from "../../integrations/ExternalContent.ts";
 import { codexDynamicIntegrationToolName } from "../../integrations/IntegrationRegistry.ts";
 import * as IntegrationCodexRuntime from "../../provider/IntegrationCodexRuntime.ts";
+import { parseCodexTransportArgs } from "../../provider/CodexTransportArgs.ts";
 import {
   UCSD_AI_BASE_URL_ENV,
+  TRITONAI_API_KEY_ENV,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   CodexSettings,
   defaultInstanceIdForDriver,
@@ -1696,6 +1698,37 @@ export const layerAppServerClientFactory: Layer.Layer<
                 reason: "unavailable",
               }),
             });
+          const transport = yield* Effect.try({
+            try: () =>
+              parseCodexTransportArgs(
+                resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
+              ),
+            catch: (cause) =>
+              new ProviderAdapter.ProviderAdapterOpenSessionError({
+                driver: CODEX_PROVIDER,
+                providerSessionId: input.providerSessionId,
+                cause,
+              }),
+          });
+          const providerArgs =
+            transport.selectedProvider === undefined
+              ? makeTritonAiCodexConfigArgs(providerEnvironment, requestAnalytics.headers("chat"))
+              : [
+                  ...(transport.providerTransports.get(transport.selectedProvider) ?? []),
+                  "-c",
+                  `model_provider=${encodeCodexConfigString(transport.selectedProvider)}`,
+                ];
+          if (
+            transport.selectedProvider === undefined &&
+            !environment[TRITONAI_API_KEY_ENV]?.trim()
+          )
+            return yield* new ProviderAdapter.ProviderAdapterOpenSessionError({
+              driver: CODEX_PROVIDER,
+              providerSessionId: input.providerSessionId,
+              cause: new Error(
+                "Select an explicit model provider for the isolated Integrations runtime.",
+              ),
+            });
           const logger = makeCodexAppServerProtocolLogger({
             nativeEventLogger,
             threadId: input.threadId,
@@ -1712,9 +1745,9 @@ export const layerAppServerClientFactory: Layer.Layer<
             expiresAt: input.integrationBoundary.expiresAt,
             environment: childEnvironment,
             configArgs: [
-              ...makeTritonAiCodexConfigArgs(providerEnvironment, requestAnalytics.headers("chat")),
+              ...providerArgs,
               "-c",
-              "model_providers.ucsd.supports_websockets=false",
+              `model_providers.${transport.selectedProvider ?? "ucsd"}.supports_websockets=false`,
               "-c",
               "features.enable_request_compression=false",
               ...(input.integrationBoundary.modelCatalogPath

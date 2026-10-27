@@ -16,8 +16,8 @@ import {
   type ServerProviderModel,
   TextGenerationError,
 } from "@t3tools/contracts";
+import { parseCodexTransportArgs } from "../provider/CodexTransportArgs.ts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
-import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -307,84 +307,16 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         // Retain only the trusted runtime's provider transport settings. Other
         // launch overrides could add instructions, hooks, tools, or extra roots.
         const providerArgs: string[] = [];
-        // undefined means absent; null means a selector we cannot safely interpret.
-        let selectedProvider: string | null | undefined;
-        // An unrelated transport must not change native authentication or be queried here.
-        const providerTransports = new Map<string, string[]>();
-        {
-          const launchArgs = resolved
-            ? effectiveConfig.launchArgs
-            : resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment);
-          // These switches change the configuration source or endpoint. Dropping
-          // them could turn an unsupported route into an implicit native request.
-          if (
-            tokenizeCliArgs(launchArgs ?? "").some(
-              (arg) =>
-                ["--profile", "-p", "--oss", "--local-provider", "--remote", "--cd", "-C"].some(
-                  (flag) => arg === flag || arg.startsWith(flag + "="),
-                ) || /^-(?:p|C).+/.test(arg),
-            )
-          )
-            return yield* fail();
-          const args = codexExecLaunchArgs(launchArgs);
-          for (let index = 0; index < args.length; index++) {
-            const arg = args[index];
-            const value =
-              arg === "--config" || arg === "-c"
-                ? args[++index]
-                : arg?.startsWith("--config=")
-                  ? arg.slice("--config=".length)
-                  : arg?.startsWith("-c=")
-                    ? arg.slice("-c=".length)
-                    : undefined;
-            if (value === undefined) continue;
-            const separator = value.indexOf("=");
-            if (separator < 0) return yield* fail();
-            const key = value.slice(0, separator).trim();
-            const configValue = value.slice(separator + 1).trim();
-            if (/^(?:profile|profiles|oss_provider|codex_home)(?:\.|$)/.test(key))
-              return yield* fail();
-            if (key === "model_provider") {
-              // Codex parses TOML, falling back to a raw string after shell
-              // tokenization. Admit only unambiguous provider IDs in either
-              // form; escaped/structured selectors fail closed. Later overrides win.
-              const selector =
-                /^(?:"([A-Za-z0-9_-]+)"|'([A-Za-z0-9_-]+)'|([A-Za-z_][A-Za-z0-9_-]*))$/.exec(
-                  configValue,
-                );
-              selectedProvider =
-                selector && !(selector[3] && /^(?:true|false|inf|nan)$/.test(selector[3]))
-                  ? (selector[1] ?? selector[2] ?? selector[3] ?? null)
-                  : null;
-              continue;
-            }
-            // A dotted override replaces a scalar selector with a table. A
-            // later root assignment can replace it again, so validate only last.
-            if (key.startsWith("model_provider.")) {
-              selectedProvider = null;
-              continue;
-            }
-            // Do not silently drop alternate endpoint settings and then reuse
-            // native credentials. They are outside Help's transport allowlist.
-            if (/^(?:openai_base_url|chatgpt_base_url)(?:\.|$)/.test(key)) return yield* fail();
-            const isProviderTransport =
-              key === "model_providers" || key.startsWith("model_providers.");
-            const transport =
-              /^model_providers\.([A-Za-z0-9_-]+)\.(?:name|base_url|env_key|wire_api|requires_openai_auth|supports_websockets|model_catalog_url)$/.exec(
-                key,
-              );
-            if (isProviderTransport && !transport) return yield* fail();
-            if (transport) {
-              const provider = transport[1]!;
-              const overrides = providerTransports.get(provider) ?? [];
-              overrides.push("--config", `${key}=${configValue}`);
-              providerTransports.set(provider, overrides);
-            }
-          }
-        }
-
-        if (selectedProvider === null) return yield* fail();
-        if (selectedProvider === undefined && providerTransports.size > 0) return yield* fail();
+        const { selectedProvider: initialProvider, providerTransports } = yield* Effect.try({
+          try: () =>
+            parseCodexTransportArgs(
+              resolved
+                ? effectiveConfig.launchArgs
+                : resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment),
+            ),
+          catch: () => fail(),
+        });
+        let selectedProvider = initialProvider;
         if (
           selectedProvider === "openai" &&
           !providerTransports.has(selectedProvider) &&
