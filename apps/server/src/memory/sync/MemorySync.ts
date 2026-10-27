@@ -1,12 +1,7 @@
 /**
- * MemorySync - keeps this computer's memory vault in step with a folder in
- * the user's OneDrive, so each of their computers sees every computer's notes.
- *
- * The vault stays a normal local folder that agents read directly; Harness is
- * the sync client. A pass runs shortly after startup, every five minutes, when
- * sync is turned on, and on request. It holds the summarizer's lock so a note
- * is never uploaded half written or replaced while Memory writes it. What a
- * pass does to each file is decided by `planMemorySync`.
+ * Sync the local vault at startup, every five minutes, on enable, and on request.
+ * Hold the summarizer lock to prevent half-written uploads or replacing active writes.
+ * planMemorySync owns individual file actions.
  */
 import {
   ServerMemorySyncError,
@@ -146,7 +141,9 @@ export class MemorySync extends Context.Service<
   }
 >()("t3/memory/sync/MemorySync") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/**
+ * @public
+ */
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* ServerSettingsService;
@@ -202,7 +199,7 @@ export const make = Effect.gen(function* () {
       yield* fs.writeFile(temporary, bytes);
       yield* fs.rename(temporary, filePath);
     },
-    (effect, filePath, bytes) =>
+    (effect, filePath, _bytes) =>
       effect.pipe(
         Effect.mapError(() => new MemorySyncFailure({ message: `Could not write ${filePath}.` })),
       ),

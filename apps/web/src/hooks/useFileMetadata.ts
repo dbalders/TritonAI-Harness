@@ -6,6 +6,7 @@ import {
   normalizeProjectPathForComparison,
 } from "@t3tools/shared/path";
 import { useContext } from "react";
+
 import { useEnvironmentScope } from "../state/session";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";

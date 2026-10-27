@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { afterEach, vi } from "vite-plus/test";
+
 import * as ConnectionStorage from "./storage";
 
 const emptyCatalog = {
@@ -218,8 +219,8 @@ describe("browser GitHub routing permissions", () => {
       };
       const firstBrowser = Object.assign(new EventTarget(), { localStorage });
       const secondBrowser = Object.assign(new EventTarget(), { localStorage });
-      const first = ConnectionStorage.makeBrowserGitHubRoutingPermissions(firstBrowser);
-      const second = ConnectionStorage.makeBrowserGitHubRoutingPermissions(secondBrowser);
+      const first = ConnectionStorage.makeBrowserPullRequestRoutingPermissions(firstBrowser);
+      const second = ConnectionStorage.makeBrowserPullRequestRoutingPermissions(secondBrowser);
       const entry = {
         target: new PrimaryConnectionTarget({
           environmentId: EnvironmentId.make("first"),
@@ -267,7 +268,7 @@ describe("browser GitHub routing permissions", () => {
       expect(yield* second.get(entry)).toBe("off");
       expect(yield* first.get(other)).toBe("read");
       expect(
-        yield* ConnectionStorage.makeBrowserGitHubRoutingPermissions(firstBrowser).get(entry),
+        yield* ConnectionStorage.makeBrowserPullRequestRoutingPermissions(firstBrowser).get(entry),
       ).toBe("off");
 
       yield* first.set(entry, "read-write");

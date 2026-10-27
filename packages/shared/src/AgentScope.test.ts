@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
+
 import { describe, expect, it } from "@effect/vitest";
+
 import { AGENT_OOM_SCORE_ADJ, agentScopeCommand } from "./AgentScope.ts";
 import * as HostProcess from "./HostProcess.ts";
 

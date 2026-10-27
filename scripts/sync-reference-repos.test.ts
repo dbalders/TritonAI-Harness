@@ -1,15 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-
 import { assert, it } from "@effect/vitest";
-
 import * as Effect from "effect/Effect";
-
 import * as FileSystem from "effect/FileSystem";
-
 import * as Path from "effect/Path";
 
 import { referenceRepos } from "./lib/reference-repos.ts";
-
 import { planReferenceRepoSync, resolveReferenceRepoRef } from "./sync-reference-repos.ts";
 
 const effectSmol = referenceRepos[0]!;

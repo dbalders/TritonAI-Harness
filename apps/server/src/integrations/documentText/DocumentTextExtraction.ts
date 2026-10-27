@@ -436,13 +436,10 @@ function resolveNamespace(
 }
 
 /**
- * Reads the visible text runs of WordprocessingML with a single linear scan. Elements count as
- * WordprocessingML by their resolved namespace (transitional or strict), whatever prefix binds
- * it. Comments, processing instructions, and attribute values are skipped whole, CDATA is
- * literal text, and markup that is not well-formed is refused rather than read as plausible
- * text. A tab counts as text only inside a run; a paragraph's tab-stop definitions do not. Only the five predefined entities and numeric character references are decoded; a
- * document type declaration is refused, so entity expansion cannot multiply the output. The scan
- * stops once the character limit is reached, so the rest of a truncated body is not checked.
+ * Scan WordprocessingML namespaces linearly; skip comments, instructions, and attributes.
+ * CDATA is literal, tabs count only in runs, and malformed markup/DOCTYPE is rejected.
+ * Decode only predefined and numeric entities; stop at the character cap without
+ * validating the truncated remainder.
  */
 function wordprocessingText(xml: string, maxCharacters: number) {
   const text = new BoundedText(maxCharacters);

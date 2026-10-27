@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+
 import {
   COMPOSER_CONTEXT_KINDS,
   ComposerContextRecord,
@@ -177,7 +178,11 @@ describe("OrchestrationMessageContext", () => {
   });
 
   it("sends a message without the records the wire cannot carry", () => {
-    const wire = Schema.encodeUnknownSync(Schema.toCodecJson(OrchestrationMessageContext))({
+    const encodeOrchestrationMessageContext = Schema.encodeUnknownSync(
+      Schema.toCodecJson(OrchestrationMessageContext),
+    );
+
+    const wire = encodeOrchestrationMessageContext({
       version: 1,
       records: [
         decodeContext({ version: 1, records: [knownRecords.terminal] }).records[0],

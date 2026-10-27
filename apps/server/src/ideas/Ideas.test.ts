@@ -493,14 +493,14 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
       yield* Effect.gen(function* () {
         const ideas = yield* Ideas.make;
         const [idea] = (yield* ideas.list).ideas;
-        yield* Effect.all(
-          ["desktop-draft", "browser-draft", "desktop-draft"].map((draft) =>
+        yield* Effect.forEach(
+          ["desktop-draft", "browser-draft", "desktop-draft"],
+          (draft) =>
             ideas.feedback({
               ideaId: idea!.id,
               kind: "opened",
               draftThreadId: ThreadId.make(draft),
             }),
-          ),
           { concurrency: "unbounded" },
         );
         const recorded = (yield* ideas.list).ideas.find((entry) => entry.id === idea!.id);

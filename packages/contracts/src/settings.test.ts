@@ -286,7 +286,7 @@ describe("Codex custom model metadata", () => {
     });
 
     expect(
-      Schema.decodeUnknownSync(CodexSettings)(
+      compiledDecodeUnknownSync1(
         decoded.providerInstances[ProviderInstanceId.make("codex")]?.config,
       ).customModelMetadata["configured-model"],
     ).toEqual({
@@ -421,3 +421,5 @@ describe("server model preferences", () => {
     expect(decodeServerSettingsPatch(input)).toEqual(input);
   });
 });
+
+const compiledDecodeUnknownSync1 = Schema.decodeUnknownSync(CodexSettings);

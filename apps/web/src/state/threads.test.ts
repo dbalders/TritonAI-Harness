@@ -13,6 +13,7 @@ import { makeThreadProjectionFixture } from "../test-fixtures";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
+
 import { createRunningThreadKeepAliveAtom } from "./threads";
 
 const LOCAL = EnvironmentId.make("local");

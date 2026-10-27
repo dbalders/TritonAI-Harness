@@ -3,8 +3,9 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { decodeJwt } from "jose";
 import { vi } from "vite-plus/test";
-import * as Dpop from "./dpop";
+
 import { createBrowserDpopProof, generateBrowserDpopKey } from "./dpop";
+import * as Dpop from "./dpop";
 
 describe("browser DPoP proofs", () => {
   it.effect("signs relay resource proofs with an access-token hash", () =>

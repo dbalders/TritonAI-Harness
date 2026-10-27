@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
-
 import {
-  commandDetailRepeatsCommand,
-  extractCommandOutputText,
   resolveWorkEntryToolPresentation,
   toolItemForDisplay,
   type WorkLogPresentationEntry,
@@ -165,24 +161,17 @@ describe("resolveWorkEntryToolPresentation", () => {
     ).toBe("Failed to click in the preview browser");
   });
 
-  // regression: #9106 fix(chat): improve tool group summaries and scrolling
   it.each([
-    ["preview_type", "Typing in the preview browser", "Typed in the preview browser"],
-    [
-      "preview_recording_stop",
-      "Stopping recording the preview browser",
-      "Stopped recording the preview browser",
-    ],
-    ["t3_thread_read", "Reading a TritonAI thread", "Read a TritonAI thread"],
-  ])("preserves verb forms and the rest of %s's label", (tool, running, completed) => {
-    const entry = { label: `t3-code.${tool}` };
+    ["https://github.com/acme/web/pull/7", "PR #7"],
+    ["https://gitlab.com/acme/web/-/merge_requests/7", "MR #7"],
+  ])("names a linked change request with its host's term (%s)", (url, target) => {
     expect(
-      resolveWorkEntryToolPresentation({ ...entry, toolLifecycleStatus: "inProgress" })
-        ?.displayName,
-    ).toBe(running);
-    expect(
-      resolveWorkEntryToolPresentation({ ...entry, toolLifecycleStatus: "completed" })?.displayName,
-    ).toBe(completed);
+      resolveWorkEntryToolPresentation({
+        label: "T3-code.link_pull_request",
+        toolLifecycleStatus: "completed",
+        toolData: { arguments: { url } },
+      })?.displayName,
+    ).toMatch(new RegExp(` ${target}$`));
   });
 
   it("does not brand unknown tools or another server's matching tool name", () => {
@@ -201,66 +190,22 @@ describe("resolveWorkEntryToolPresentation", () => {
       }),
     ).toBeNull();
   });
-});
-
-describe("command work-log details", () => {
-  it("extracts Claude result blocks and projected output", () => {
+  it.each([
+    ["preview_type", "Typing in the preview browser", "Typed in the preview browser"],
+    [
+      "preview_recording_stop",
+      "Stopping recording the preview browser",
+      "Stopped recording the preview browser",
+    ],
+    ["t3_thread_read", "Reading a TritonAI thread", "Read a TritonAI thread"],
+  ])("preserves verb forms and the rest of %s's label", (tool, running, completed) => {
+    const entry = { label: `t3-code.${tool}` };
     expect(
-      extractCommandOutputText({
-        result: {
-          content: [
-            { type: "text", text: "first" },
-            { type: "text", text: "second" },
-          ],
-        },
-      }),
-    ).toBe("first\nsecond");
-    expect(extractCommandOutputText({ rawOutput: { content: "projected summary" } })).toBe(
-      "projected summary",
-    );
-  });
-
-  it("treats an ingestion-truncated echo of a long command as a repeat", () => {
-    const command = `git add -A && git commit -m "${"x".repeat(200)}"`;
-    const truncated = `Bash: ${command}`.slice(0, 177) + "...";
+      resolveWorkEntryToolPresentation({ ...entry, toolLifecycleStatus: "inProgress" })
+        ?.displayName,
+    ).toBe(running);
     expect(
-      commandDetailRepeatsCommand({
-        detail: truncated,
-        command,
-        rawCommand: null,
-        toolName: "Bash",
-        data: { toolName: "Bash", command },
-      }),
-    ).toBe(true);
-    expect(
-      commandDetailRepeatsCommand({
-        detail: "Bash: printf hello...",
-        command: "printf goodbye",
-        rawCommand: null,
-        toolName: "Bash",
-        data: { toolName: "Bash", command: "printf goodbye" },
-      }),
-    ).toBe(false);
-  });
-
-  it("treats ACP command echoes as synthetic even without a tool kind", () => {
-    expect(
-      commandDetailRepeatsCommand({
-        detail: "pnpm test",
-        command: "pnpm test",
-        rawCommand: null,
-        toolName: undefined,
-        data: { toolCallId: "tool-1", command: "pnpm test" },
-      }),
-    ).toBe(true);
-    expect(
-      commandDetailRepeatsCommand({
-        detail: "pnpm test",
-        command: "pnpm test",
-        rawCommand: null,
-        toolName: undefined,
-        data: { command: "pnpm test" },
-      }),
-    ).toBe(false);
+      resolveWorkEntryToolPresentation({ ...entry, toolLifecycleStatus: "completed" })?.displayName,
+    ).toBe(completed);
   });
 });

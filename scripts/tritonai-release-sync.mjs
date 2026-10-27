@@ -208,10 +208,8 @@ function mergeRelease({ releaseSha, worktree }) {
   const cleanMerge = gitStatus(["merge", "--no-edit", releaseSha], { cwd: worktree });
   if (cleanMerge.status === 0) return "clean";
 
-  run("git", ["merge", "--abort"], { cwd: worktree, check: false });
-  const oursMerge = gitStatus(["merge", "--no-edit", "-X", "ours", releaseSha], { cwd: worktree });
-  if (oursMerge.status === 0) return "conflict-auto-resolved-with-downstream";
-
+  // Retain both sides for semantic reconciliation; preference merges can produce
+  // valid syntax while silently dropping new upstream behavior.
   return "conflicted";
 }
 
@@ -243,7 +241,7 @@ ${report.summary}
 ## Review Notes
 
 - Preserve downstream TritonAI Harness branding and release-control behavior.
-- Review any \`-X ours\` conflict resolutions before merging.
+- Resolve conflicts against both parents and verify retained downstream and new upstream behavior.
 
 ## Labels
 
@@ -357,6 +355,7 @@ function main() {
     downstreamBranch,
     downstreamSha,
     syncBranch: branch,
+    worktree,
     mergeStatus: "not-run",
     installStatus: args.skipChecks ? "skipped" : "not-run",
     checkStatus: args.skipChecks ? "skipped" : "not-run",
@@ -369,7 +368,7 @@ function main() {
     report.mergeStatus = mergeRelease({ releaseSha, worktree });
     if (report.mergeStatus === "conflicted") {
       report.summary =
-        "Parent release merge still has unresolved conflicts after retrying with downstream conflict preference.";
+        "Parent release merge has conflicts. Reconcile both parents in the retained worktree before checks or publication.";
       console.log(JSON.stringify(report, null, 2));
       return 2;
     }
@@ -420,7 +419,7 @@ function main() {
     console.log(JSON.stringify({ ...report, labels, pr: prUrl }, null, 2));
     return report.status === "review-ready" ? 0 : 2;
   } finally {
-    if (args.keepWorktree) {
+    if (args.keepWorktree || report.mergeStatus === "conflicted") {
       console.error(`Kept sync worktree at ${worktree}`);
     } else if (NodeFS.existsSync(worktreeRoot)) {
       run("git", ["worktree", "remove", "--force", worktree], { cwd: repoRoot, check: false });

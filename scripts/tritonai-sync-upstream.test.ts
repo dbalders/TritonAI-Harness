@@ -387,3 +387,44 @@ it("installs the frozen release candidate before checks and reuses it on a later
     NodeFS.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+// Conflicts must remain reviewable, without a preference merge dropping upstream behavior.
+it("retains release conflicts before installation or PR publication", () => {
+  const fixture = createFixture();
+  let retained: string | undefined;
+  try {
+    prepareReleaseFixture(fixture);
+    const packagePath = NodePath.join(fixture.repo, "package.json");
+    const manifest = JSON.parse(NodeFS.readFileSync(packagePath, "utf8"));
+    NodeFS.writeFileSync(
+      packagePath,
+      `${JSON.stringify({ ...manifest, revision: "downstream" }, null, 2)}\n`,
+    );
+    git(fixture.repo, "add", "package.json");
+    git(fixture.repo, "commit", "-m", "conflicting downstream behavior");
+    git(fixture.repo, "push", "origin", "main");
+    const result = runReleaseSync(fixture, ["--create-pr"]);
+    assert.equal(result.status, 2, result.stderr);
+    retained = /Kept sync worktree at (.+)/u.exec(result.stderr)?.[1];
+    const report = JSON.parse(result.stdout.slice(result.stdout.indexOf("{\n")));
+    retained = report.worktree;
+    assert.equal(report.mergeStatus, "conflicted");
+    assert.equal(report.checkStatus, "not-run");
+    assert.equal(report.installStatus, "not-run");
+    assert.ok(retained && NodeFS.existsSync(retained));
+    const unresolved = NodeChildProcess.execFileSync(
+      "git",
+      ["diff", "--name-only", "--diff-filter=U"],
+      { cwd: retained, encoding: "utf8" },
+    );
+    assert.match(unresolved, /package\.json/u);
+    assert.ok(!NodeFS.existsSync(NodePath.join(fixture.trace, "install.json")));
+    assert.ok(!githubCalls(fixture).some((args) => args[0] === "pr" && args[1] === "create"));
+  } finally {
+    if (retained) {
+      git(fixture.repo, "worktree", "remove", "--force", retained);
+      NodeFS.rmSync(NodePath.dirname(retained), { recursive: true, force: true });
+    }
+    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

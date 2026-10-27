@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 
 const ALL_MCP_CAPABILITIES = [
   "integrations.invoke",
@@ -21,43 +22,30 @@ const ALL_MCP_CAPABILITIES = [
 ] as const;
 export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 
-/** A provider session T3 Code launched for one thread. */
 export interface McpThreadCaller {
   readonly threadId: ThreadId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
+  /** A delegated child task; its parent owns the work it hands back. */
+  readonly subagent?: boolean;
 }
 
-/** An agent T3 Code did not launch, signed in through MCP OAuth. */
 export interface McpClientCaller {
   readonly sessionId: string;
   readonly label: string;
-  /** Read only, or the most the threads it starts or changes may run with. */
   readonly access: AuthMcpClientAccess;
 }
 
-/**
- * The runtime mode a client caller's writes are capped at. A read-only client
- * never reaches a write (`McpToolAccess` refuses it first), so it maps to the
- * lowest mode rather than to nothing.
- */
+/** Read-only clients map to the lowest mode because McpToolAccess blocks writes first. */
 export const clientRuntimeModeCeiling = (client: McpClientCaller | undefined): RuntimeMode =>
   client === undefined || client.access === "read-only" ? "approval-required" : client.access;
 
-/**
- * Who is calling and what they may do. Tool parameters choose the target
- * (thread, project); the caller sets the limits. A thread caller's omitted
- * target falls back to its own thread; a client caller has no own thread, so
- * tools that act as the caller (delegate_task, preview, worktree handoff)
- * need `thread`.
- */
+/** Thread callers default to their own thread; client callers need thread for tools that act as the caller. */
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;
   readonly capabilities: ReadonlySet<McpCapability>;
   readonly issuedAt: number;
-  /** Optional absolute expiry. Registry-issued bearer credentials have none; they expire by liveness. */
   readonly expiresAt?: number;
-  /** Namespaces idempotency keys so two callers reusing a clientRequestId cannot collide. */
   readonly requestNamespace: string;
   readonly thread: McpThreadCaller | undefined;
   readonly client: McpClientCaller | undefined;
@@ -68,7 +56,16 @@ export class McpInvocationContext extends Context.Service<
   McpInvocationScope
 >()("t3/mcp/McpInvocationContext") {}
 
-/** The error a missing capability surfaces as; preview keeps its own so the broker can route it. */
+/**
+ * `McpSchema.EnabledWhen` for tools a delegated child must not see or call.
+ * EnabledWhen only receives the MCP client profile, so read the T3 caller from the request fiber.
+ */
+export const hiddenFromSubagents = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.thread?.subagent !== true;
+};
+
 export type McpCapabilityError<C extends McpCapability> = C extends "preview"
   ? PreviewAutomationUnavailableError
   : McpCapabilityUnavailableError;
@@ -98,17 +95,11 @@ export const requireMcpCapability = <const C extends McpCapability>(
   McpInvocationContext.pipe(
     Effect.filterOrFail(
       (invocation) => invocation.capabilities.has(capability),
-      // The conditional type narrows what the literal argument decided at runtime.
       (invocation) => missingCapability(invocation, capability) as McpCapabilityError<C>,
     ),
     Effect.withSpan("mcp.requireCapability"),
   );
 
-/**
- * Preview tabs and device sessions belong to the calling thread, so their
- * capabilities are only ever granted to thread callers. A scope that carries
- * one without a thread is refused the same way as a missing capability.
- */
 export const requireThreadMcpCapability = <const C extends "preview" | "device">(
   capability: C,
 ): Effect.Effect<McpThreadInvocationScope, McpCapabilityError<C>, McpInvocationContext> =>
@@ -127,7 +118,6 @@ const threadCallerRequired = (operation: string) =>
     message: `${operation} acts as the calling T3 thread, so it needs an agent running inside T3 Code. This MCP client signed in from outside a thread.`,
   });
 
-/** A scope with a thread caller, for tools whose whole surface acts as the caller. */
 export type McpThreadInvocationScope = McpInvocationScope & { readonly thread: McpThreadCaller };
 
 export const requireThreadScope = (scope: McpInvocationScope, operation: string) =>

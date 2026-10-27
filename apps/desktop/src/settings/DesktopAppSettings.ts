@@ -38,8 +38,7 @@ export interface DesktopSettings {
   readonly updateChannelConfiguredByUser: boolean;
   readonly wslBackendEnabled: boolean;
   readonly wslDistro: string | null;
-  // Changing this requires a desktop restart because the pool's primary spec is
-  // chosen once at layer init.
+  // Requires restart because the pool chooses its primary spec at layer initialization.
   readonly wslOnly: boolean;
 }
 
@@ -485,7 +484,6 @@ const writeSettings = Effect.fn("desktop.settings.writeSettings")(function* (inp
 });
 
 /** @public */
-/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -542,52 +540,65 @@ export const make = Effect.gen(function* () {
       );
       return yield* SynchronizedRef.setAndGet(settingsRef, settings);
     }).pipe(Effect.withSpan("desktop.settings.load")),
-    setComputerUseEnabled: (enabled) =>
+    setComputerUseEnabled: Effect.fn("DesktopAppSettings.setComputerUseEnabled")((enabled) =>
       persist((settings) => setComputerUseEnabled(settings, enabled)).pipe(
         Effect.withSpan("desktop.settings.setComputerUseEnabled", { attributes: { enabled } }),
       ),
-    setMainWindowBounds: (bounds, isMaximized) =>
-      persist((settings) => setMainWindowBounds(settings, bounds, isMaximized)).pipe(
-        Effect.withSpan("desktop.settings.setMainWindowBounds", {
-          attributes: {
-            x: bounds.x,
-            y: bounds.y,
-            width: bounds.width,
-            height: bounds.height,
-            isMaximized,
-          },
-        }),
-      ),
-    setServerExposureMode: (mode) =>
+    ),
+    setMainWindowBounds: Effect.fn("DesktopAppSettings.setMainWindowBounds")(
+      (bounds, isMaximized) =>
+        persist((settings) => setMainWindowBounds(settings, bounds, isMaximized)).pipe(
+          Effect.withSpan("desktop.settings.setMainWindowBounds", {
+            attributes: {
+              x: bounds.x,
+              y: bounds.y,
+              width: bounds.width,
+              height: bounds.height,
+              isMaximized,
+            },
+          }),
+        ),
+    ),
+    setServerExposureMode: Effect.fn("DesktopAppSettings.setServerExposureMode")((mode) =>
       persist((settings) => setServerExposureMode(settings, mode)).pipe(
         Effect.withSpan("desktop.settings.setServerExposureMode", { attributes: { mode } }),
       ),
-    setTailscaleServe: (input) =>
+    ),
+    setTailscaleServe: Effect.fn("DesktopAppSettings.setTailscaleServe")((input) =>
       persist((settings) => setTailscaleServe(settings, input)).pipe(
         Effect.withSpan("desktop.settings.setTailscaleServe", { attributes: input }),
       ),
-    setUpdateChannel: (channel) =>
+    ),
+    setUpdateChannel: Effect.fn("DesktopAppSettings.setUpdateChannel")((channel) =>
       persist((settings) => setUpdateChannel(settings, channel)).pipe(
         Effect.withSpan("desktop.settings.setUpdateChannel", { attributes: { channel } }),
       ),
-    setWslBackendEnabled: (enabled) =>
+    ),
+    setWslBackendEnabled: Effect.fn("DesktopAppSettings.setWslBackendEnabled")((enabled) =>
       persist((settings) => setWslBackendEnabled(settings, enabled)).pipe(
         Effect.withSpan("desktop.settings.setWslBackendEnabled", { attributes: { enabled } }),
       ),
-    setWslDistro: (distro) =>
+    ),
+    setWslDistro: Effect.fn("DesktopAppSettings.setWslDistro")((distro) =>
       persist((settings) => setWslDistro(settings, distro)).pipe(
         Effect.withSpan("desktop.settings.setWslDistro", {
           attributes: { distro: distro ?? null },
         }),
       ),
-    setWslOnly: (enabled) =>
+    ),
+    setWslOnly: Effect.fn("DesktopAppSettings.setWslOnly")((enabled) =>
       persist((settings) => setWslOnly(settings, enabled)).pipe(
         Effect.withSpan("desktop.settings.setWslOnly", { attributes: { enabled } }),
       ),
-    setLocalEnvironmentEnabled: (enabled) =>
-      persist((settings) => setLocalEnvironmentEnabled(settings, enabled)).pipe(
-        Effect.withSpan("desktop.settings.setLocalEnvironmentEnabled", { attributes: { enabled } }),
-      ),
+    ),
+    setLocalEnvironmentEnabled: Effect.fn("DesktopAppSettings.setLocalEnvironmentEnabled")(
+      (enabled) =>
+        persist((settings) => setLocalEnvironmentEnabled(settings, enabled)).pipe(
+          Effect.withSpan("desktop.settings.setLocalEnvironmentEnabled", {
+            attributes: { enabled },
+          }),
+        ),
+    ),
     applyWslWindowsFallback: persist(applyWslWindowsFallback).pipe(
       Effect.withSpan("desktop.settings.applyWslWindowsFallback"),
     ),
@@ -619,20 +630,34 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
       return DesktopAppSettings.of({
         get: SynchronizedRef.get(settingsRef),
         load: SynchronizedRef.get(settingsRef),
-        setComputerUseEnabled: (enabled) =>
+        setComputerUseEnabled: Effect.fn("DesktopAppSettings.setComputerUseEnabled")((enabled) =>
           update((settings) => setComputerUseEnabled(settings, enabled)),
-        setMainWindowBounds: (bounds, isMaximized) =>
-          update((settings) => setMainWindowBounds(settings, bounds, isMaximized)),
-        setServerExposureMode: (mode) =>
+        ),
+        setMainWindowBounds: Effect.fn("DesktopAppSettings.setMainWindowBounds")(
+          (bounds, isMaximized) =>
+            update((settings) => setMainWindowBounds(settings, bounds, isMaximized)),
+        ),
+        setServerExposureMode: Effect.fn("DesktopAppSettings.setServerExposureMode")((mode) =>
           update((settings) => setServerExposureMode(settings, mode)),
-        setTailscaleServe: (input) => update((settings) => setTailscaleServe(settings, input)),
-        setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
-        setWslBackendEnabled: (enabled) =>
+        ),
+        setTailscaleServe: Effect.fn("DesktopAppSettings.setTailscaleServe")((input) =>
+          update((settings) => setTailscaleServe(settings, input)),
+        ),
+        setUpdateChannel: Effect.fn("DesktopAppSettings.setUpdateChannel")((channel) =>
+          update((settings) => setUpdateChannel(settings, channel)),
+        ),
+        setWslBackendEnabled: Effect.fn("DesktopAppSettings.setWslBackendEnabled")((enabled) =>
           update((settings) => setWslBackendEnabled(settings, enabled)),
-        setWslDistro: (distro) => update((settings) => setWslDistro(settings, distro)),
-        setWslOnly: (enabled) => update((settings) => setWslOnly(settings, enabled)),
-        setLocalEnvironmentEnabled: (enabled) =>
-          update((settings) => setLocalEnvironmentEnabled(settings, enabled)),
+        ),
+        setWslDistro: Effect.fn("DesktopAppSettings.setWslDistro")((distro) =>
+          update((settings) => setWslDistro(settings, distro)),
+        ),
+        setWslOnly: Effect.fn("DesktopAppSettings.setWslOnly")((enabled) =>
+          update((settings) => setWslOnly(settings, enabled)),
+        ),
+        setLocalEnvironmentEnabled: Effect.fn("DesktopAppSettings.setLocalEnvironmentEnabled")(
+          (enabled) => update((settings) => setLocalEnvironmentEnabled(settings, enabled)),
+        ),
         applyWslWindowsFallback: update(applyWslWindowsFallback),
         applyWslWindowsFallbackInMemory: update(applyWslWindowsFallback),
       });

@@ -78,14 +78,6 @@ for (const relative of [
   });
 }
 
-for (const [field, mode] of [
-  ["app", 0o705],
-  ["executable", 0o705],
-  ["resource", 0o604],
-  ["resource", 0o044],
-]) {
-}
-
 // regression: #236 fix(desktop): harden macOS updates and release validation
 test(
   "checks preserved permissions in the actual updater ZIP",

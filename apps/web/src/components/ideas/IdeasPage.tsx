@@ -1,9 +1,6 @@
 /**
- * The Ideas page: a quiet list of tasks TritonAI could do next, in two groups,
- * "For you" and "Things to try". Opening one starts a draft the user reviews
- * before sending. Snooze, Dismiss, "Less like this", and "Not relevant" live in
- * each row's menu and hide it with an Undo; the server uses them to decide what
- * to suggest later.
+ * Ideas open as drafts for review. Row feedback hides the card with Undo and
+ * informs future suggestions in For you and Things to try.
  */
 import {
   isAtomCommandInterrupted,
@@ -375,7 +372,8 @@ function IdeaMoreMenu({
 }) {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   // Resolved when the submenu opens, so "In 1 hour" counts from then.
-  const presets = snoozeOpen ? resolveSnoozePresets(new Date(), timestampFormat) : [];
+  const [snoozeNow, setSnoozeNow] = useState(() => new Date());
+  const presets = snoozeOpen ? resolveSnoozePresets(snoozeNow, timestampFormat) : [];
   return (
     <Menu>
       <MenuTrigger
@@ -386,7 +384,13 @@ function IdeaMoreMenu({
         <EllipsisIcon />
       </MenuTrigger>
       <MenuPopup align="end">
-        <MenuSub open={snoozeOpen} onOpenChange={setSnoozeOpen}>
+        <MenuSub
+          open={snoozeOpen}
+          onOpenChange={(open) => {
+            if (open) setSnoozeNow(new Date());
+            setSnoozeOpen(open);
+          }}
+        >
           <MenuSubTrigger>
             <ClockIcon />
             Snooze
@@ -430,6 +434,7 @@ function SnoozedIdeas({
   timestampFormat: TimestampFormat;
   onWake: (idea: Idea) => void;
 }) {
+  const [now] = useState(() => new Date());
   return (
     <div className="px-2">
       <Collapsible>
@@ -451,7 +456,7 @@ function SnoozedIdeas({
                   <p className="truncate text-sm text-foreground">{ideaHeadline(idea.title)}</p>
                   {idea.snoozedUntil ? (
                     <p className="text-xs text-muted-foreground">
-                      Back {snoozeWakeDescription(idea.snoozedUntil, new Date(), timestampFormat)}
+                      Back {snoozeWakeDescription(idea.snoozedUntil, now, timestampFormat)}
                     </p>
                   ) : null}
                 </div>

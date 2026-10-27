@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import { projectFileCacheKey } from "./fileContentRevision";
 
 describe("file cache identity", () => {

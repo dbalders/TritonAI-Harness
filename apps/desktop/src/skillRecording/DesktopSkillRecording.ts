@@ -92,13 +92,18 @@ const make = Effect.gen(function* () {
         environment.platform !== "darwin" ||
         Electron.systemPreferences.isTrustedAccessibilityClient(true),
     ),
-    start: (ownerId) =>
+    start: Effect.fn("DesktopSkillRecording.start")((ownerId) =>
       crypto.randomUUIDv4().pipe(
         Effect.flatMap((sessionId) => Effect.promise(() => recorder.start(ownerId, sessionId))),
         Effect.orElseSucceed(() => ({ status: "unavailable" as const })),
       ),
-    stop: (sessionId, ownerId) => Effect.promise(() => recorder.stop(sessionId, ownerId)),
-    cancel: (sessionId, ownerId) => Effect.sync(() => recorder.cancel(sessionId, ownerId)),
+    ),
+    stop: Effect.fn("DesktopSkillRecording.stop")((sessionId, ownerId) =>
+      Effect.promise(() => recorder.stop(sessionId, ownerId)),
+    ),
+    cancel: Effect.fn("DesktopSkillRecording.cancel")((sessionId, ownerId) =>
+      Effect.sync(() => recorder.cancel(sessionId, ownerId)),
+    ),
   });
 });
 

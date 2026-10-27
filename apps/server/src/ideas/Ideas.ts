@@ -1,23 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off - Deterministic synchronous idea identity uses a content digest.
 // @effect-diagnostics globalDate:off - limits and labels use the host-local day.
 /**
- * Ideas - suggestion cards on the Ideas page: things TritonAI could do next
- * for the user, from their own threads, memory notes, and project files, and
- * from plugins, catalog skills, and a starter library.
- *
- * Ideas are generated in batches by the text generation model, checked against
- * the context it was shown, and stored with a key naming what each is about.
- * Feedback on a key decides whether it comes back: dismissed ideas return
- * after two weeks, rejected and used ones never do. When the model cannot help
- * (no context, failure, or the daily limit), ready-made starter ideas fill the
- * batch, so asking for more always adds something while any are left.
- *
- * Every idea is ready to send as written: one that leaves a blank for the user
- * is never shown. No more than two visible ideas share a project or tool, and
- * generated ideas go stale after a few days, since the work they describe moves on.
- *
- * Accepting an idea opens a draft on the client. The idea stays listed until a
- * message from it is sent, which is detected here from the thread messages.
+ * Generate grounded, ready-to-send ideas; fall back to remaining starters on failure or limits.
+ * Dismissed keys return after two weeks; rejected and used keys never return.
+ * Limit each source to two visible ideas and expire stale generated cards.
+ * Opening creates a draft; hide the card only after a user message is sent.
  */
 import * as NodeCrypto from "node:crypto";
 import {
@@ -269,7 +256,9 @@ const ideaColumns = (sql: SqlClient.SqlClient) => sql`
   hidden_at AS "hiddenAt"
 `;
 
-/** @public Service construction is part of the canonical Effect module API. */
+/**
+ * @public
+ */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
@@ -341,13 +330,11 @@ export const make = Effect.gen(function* () {
     );
 
   /**
-   * Whether a message was sent from an opened idea's draft, without trusting
-   * message times, which can come from a client with a skewed clock:
-   * - a draft thread recorded for the idea counts once it has any user message;
-   * - an existing thread counts once it has a user message it didn't have when opened.
-   * Without either, a message after the open containing the prompt's fixed text counts.
+   * Detect sends by message identity rather than client clocks: any message in a new
+   * draft thread, or an unseen user message in an existing thread.
+   * Without either record, fall back to prompt text in a message after opening.
    */
-  const wasSent = (row: IdeaRow, content: IdeaContent, openedAt: string) => {
+  const wasSent = Effect.fn("wasSent")((row: IdeaRow, content: IdeaContent, openedAt: string) => {
     if (content.action.kind === "resume-thread") {
       if (row.openedMessageIdsJson !== null) {
         return sql<{ readonly found: number }>`
@@ -385,7 +372,7 @@ export const make = Effect.gen(function* () {
         WHERE role = 'user' AND created_at > ${openedAt} AND instr(text, ${snippet}) > 0
       ) AS "found"
     `.pipe(Effect.map(([found]) => Boolean(found?.found)));
-  };
+  });
 
   const threadIsGone = (threadId: string) =>
     sql<{ readonly gone: number }>`
@@ -1304,11 +1291,7 @@ export const make = Effect.gen(function* () {
         }),
       )
       .pipe(
-        Effect.catch((error) =>
-          isIdeasError(error)
-            ? Effect.fail(error)
-            : toIdeasError("Couldn't save that change.")(error),
-        ),
+        Effect.catchIf((error) => !isIdeasError(error), toIdeasError("Couldn't save that change.")),
       );
 
   return Ideas.of({
