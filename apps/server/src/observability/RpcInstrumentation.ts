@@ -33,6 +33,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.ideasMarkViewed]: "ideas",
   [WS_METHODS.ideasSuggestMore]: "ideas",
   [WS_METHODS.ideasFeedback]: "ideas",
+  [WS_METHODS.gettingStartedRecord]: "server",
   [WS_METHODS.serverListProviderSkillCatalog]: "server",
   [WS_METHODS.serverInstallProviderSkill]: "server",
   [WS_METHODS.serverRemoveProviderSkill]: "server",

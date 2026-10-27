@@ -92,6 +92,10 @@ const PLAUSIBLE_EVENT_PROPERTIES = {
   "ideas.feedback": ["kind", "section"],
   "ideas.sent": ["section"],
   "ideas.generated": ["requested", "outcome", "generatedCount", "starterCount"],
+  "onboarding.started": CLIENT_EVENT_PROPERTIES,
+  "onboarding.chapter-completed": [...CLIENT_EVENT_PROPERTIES, "chapter"],
+  "onboarding.chapter-later": [...CLIENT_EVENT_PROPERTIES, "chapter"],
+  "onboarding.help-opened": [...CLIENT_EVENT_PROPERTIES, "chapter"],
 } as const satisfies Readonly<Record<string, ReadonlyArray<string>>>;
 
 const TelemetryEnvConfig = Config.all({

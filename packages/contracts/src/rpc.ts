@@ -390,6 +390,7 @@ import {
   ServerSettingsError,
   ServerSettingsPatch,
   DatabaseStorageStatus,
+  GettingStartedAnalyticsInput,
 } from "./settings.ts";
 import {
   ScheduledTaskDeleteInput,
@@ -566,6 +567,7 @@ export const WS_METHODS = {
   ideasMarkViewed: "ideas.markViewed",
   ideasSuggestMore: "ideas.suggestMore",
   ideasFeedback: "ideas.feedback",
+  gettingStartedRecord: "gettingStarted.record",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverSearchAcpRegistry: "server.searchAcpRegistry",
   serverPrepareAcpRegistryAgent: "server.prepareAcpRegistryAgent",
@@ -982,6 +984,12 @@ const WsIdeasFeedbackRpc = Rpc.make(WS_METHODS.ideasFeedback, {
   payload: IdeasFeedbackInput,
   success: IdeasSnapshot,
   error: Schema.Union([IdeasError, EnvironmentAuthorizationError]),
+});
+
+const WsGettingStartedRecordRpc = Rpc.make(WS_METHODS.gettingStartedRecord, {
+  payload: GettingStartedAnalyticsInput,
+  success: Schema.Void,
+  error: EnvironmentAuthorizationError,
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -2322,6 +2330,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIdeasMarkViewedRpc,
   WsIdeasSuggestMoreRpc,
   WsIdeasFeedbackRpc,
+  WsGettingStartedRecordRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerSearchAcpRegistryRpc,
   WsServerPrepareAcpRegistryAgentRpc,
