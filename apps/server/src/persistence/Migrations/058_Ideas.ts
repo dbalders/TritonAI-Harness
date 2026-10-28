@@ -4,13 +4,9 @@ import * as SqlClient from "effect/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // Every idea ever shown stays as a row: its `idea_key` names what it is about, so a dismissed,
-  // rejected, or used idea is not suggested again even when the model words it differently.
-  // `content_json` holds the card (icon, title, body, sources, action). `previous_status` is what
-  // an undo restores. `draft_thread_ids_json` lists the threads a new-thread idea's drafts become
-  // when sent, one per client that opened it. `opened_message_ids_json` lists the user messages a
-  // continue-in-thread idea's thread had when first opened; any other message is the send, which
-  // needs no clock comparison and survives the thread being reverted.
+  // idea_key preserves feedback across rewording; previous_status supports undo.
+  // content_json stores the card; draft_thread_ids_json tracks each client’s sent draft.
+  // opened_message_ids_json detects new sends without clocks, even after thread reverts.
   yield* sql`
     CREATE TABLE IF NOT EXISTS ideas (
       idea_id TEXT PRIMARY KEY,

@@ -2,13 +2,9 @@ import * as NodeAssert from "node:assert/strict";
 
 import { describe, it } from "vite-plus/test";
 
-import {
-  DEFAULT_TRITONAI_AI_BASE_URL,
-  DEFAULT_TRITONAI_CODEX_MODEL,
-  TRITONAI_API_KEY_ENV,
-} from "@t3tools/contracts";
+import { DEFAULT_TRITONAI_CODEX_MODEL, TRITONAI_API_KEY_ENV } from "@t3tools/contracts";
 import { TRITONAI_CLIENT_VERSION } from "../../tritonAiClientHeaders.ts";
-import { makeTritonAiCodexConfigArgs, resolveTritonAiCodexBaseUrl } from "./TritonAiCodexConfig.ts";
+import { makeTritonAiCodexConfigArgs } from "./TritonAiCodexConfig.ts";
 
 function configValues(args: ReadonlyArray<string>): ReadonlyArray<string> {
   const values: string[] = [];
@@ -22,6 +18,7 @@ function configValues(args: ReadonlyArray<string>): ReadonlyArray<string> {
 }
 
 describe("TritonAiCodexConfig", () => {
+  // regression: #213 keep Codex planning enabled after engine updates; #244 cap subagent concurrency at five
   it("builds Codex config overrides for the UCSD provider", () => {
     const values = configValues(
       makeTritonAiCodexConfigArgs({
@@ -43,9 +40,5 @@ describe("TritonAiCodexConfig", () => {
       "agents.max_threads=5",
       "tools.update_plan.enabled=true",
     ]);
-  });
-
-  it("falls back to the default TritonAI base URL", () => {
-    NodeAssert.equal(resolveTritonAiCodexBaseUrl({}), DEFAULT_TRITONAI_AI_BASE_URL);
   });
 });

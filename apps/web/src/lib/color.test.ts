@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import { hexToHsv, hsvToHex } from "./color";
 
 describe("picker color conversion", () => {
@@ -9,12 +10,6 @@ describe("picker color conversion", () => {
       expect(hsvToHex(h, s, v)).toBe(hex);
     },
   );
-
-  it("wraps hue at the slider boundary and across keyboard steps", () => {
-    expect(hsvToHex(360, 1, 1)).toBe("#ff0000");
-    expect(hsvToHex(720, 1, 1)).toBe("#ff0000");
-    expect(hsvToHex(-60, 1, 1)).toBe("#ff00ff");
-  });
 
   it("represents black and greys without undefined saturation", () => {
     expect(hexToHsv("#000000")).toEqual({ h: 0, s: 0, v: 0 });

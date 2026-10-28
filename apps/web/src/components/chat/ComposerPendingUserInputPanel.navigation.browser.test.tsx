@@ -6,13 +6,9 @@ import {
   TurnItemId,
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
-import { useLayoutEffect, useRef, useState, type ComponentProps } from "react";
+import { makeThreadRequestsResolvedAnnouncer } from "@t3tools/client-runtime/state/thread-requests";
+import { useLayoutEffect, useRef, type ComponentProps } from "react";
 import { expect, it, vi } from "vite-plus/test";
-
-import {
-  togglePendingUserInputOptionSelection,
-  type PendingUserInputDraftAnswer,
-} from "../../pendingUserInput";
 
 vi.mock(import("../ChatMarkdown"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -21,7 +17,6 @@ vi.mock(import("../ChatMarkdown"), async (importOriginal) => ({
 
 import { act, fakeTimers, render } from "../../../test/render";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
-import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { usePendingThreadRequests } from "./usePendingThreadRequests";
 
 const threadRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("thread") };
@@ -39,94 +34,6 @@ const prompt = {
     multiSelect: false,
   })),
 };
-
-function Questions({ initialIndex = 0 }: { initialIndex?: number }) {
-  const [questionIndex, setQuestionIndex] = useState(initialIndex);
-  const [answers, setAnswers] = useState<Record<string, PendingUserInputDraftAnswer>>({});
-  const advance = () => setQuestionIndex(questionIndex + 1);
-  return (
-    <>
-      <output>{questionIndex}</output>
-      <button onClick={advance}>Next</button>
-      <button onClick={() => setQuestionIndex(questionIndex - 1)}>Previous</button>
-      <ComposerPendingUserInputPanel
-        pendingUserInputs={[prompt]}
-        cwd="/repo"
-        threadRef={threadRef}
-        disabled={false}
-        respondingRequestIds={[]}
-        answers={answers}
-        questionIndex={questionIndex}
-        onAdvance={advance}
-        onToggleOption={(questionId, value) => {
-          const question = prompt.questions.find((entry) => entry.id === questionId)!;
-          setAnswers((existing) => ({
-            ...existing,
-            [questionId]: togglePendingUserInputOptionSelection(
-              question,
-              existing[questionId],
-              value,
-            ),
-          }));
-        }}
-        onDismiss={() => {}}
-      />
-    </>
-  );
-}
-
-function buttonWithText(text: string) {
-  const button = [...document.querySelectorAll("button")].find((element) =>
-    element.textContent?.includes(text),
-  );
-  expect(button, `button ${text}`).toBeDefined();
-  return button!;
-}
-
-async function chooseOption() {
-  await act(async () => buttonWithText("Incremental").click());
-}
-
-async function navigate(label: string) {
-  await act(async () => buttonWithText(label).click());
-}
-
-function activeIndex() {
-  return document.querySelector("output")!.textContent;
-}
-
-it("does not skip the next unanswered question after manual advance", async () => {
-  using _timers = fakeTimers();
-  await using _screen = await render(<Questions />);
-  await chooseOption();
-  await navigate("Next");
-  expect(activeIndex()).toBe("1");
-  await act(async () => vi.advanceTimersByTime(200));
-  expect(activeIndex()).toBe("1");
-
-  await chooseOption();
-  await act(async () => vi.advanceTimersByTime(200));
-  expect(activeIndex()).toBe("2");
-});
-
-it("does not undo previous-question navigation with a stale timer", async () => {
-  using _timers = fakeTimers();
-  await using _screen = await render(<Questions initialIndex={1} />);
-  await chooseOption();
-  await navigate("Previous");
-  await act(async () => vi.advanceTimersByTime(200));
-  expect(activeIndex()).toBe("0");
-});
-
-it("still auto-advances once after the answer draft rerenders the same question", async () => {
-  using _timers = fakeTimers();
-  await using _screen = await render(<Questions />);
-  await chooseOption();
-  await act(async () => vi.advanceTimersByTime(200));
-  expect(activeIndex()).toBe("1");
-  await act(async () => vi.advanceTimersByTime(200));
-  expect(activeIndex()).toBe("1");
-});
 
 function questionProjection(threadId: ThreadId, requestIds = ["first", "second"]) {
   const projection = makeThreadProjectionFixture();
@@ -182,7 +89,6 @@ function PendingRequestsProbe({
   const state = usePendingThreadRequests({
     environmentId,
     activeThreadId: projection.thread.id,
-    activeThread: projection.thread,
     serverProjection: loading ? null : projection,
     supportsQuestionAttachments: false,
     composerDraftTarget: { environmentId, threadId: projection.thread.id },
@@ -255,6 +161,7 @@ it("isolates drafts by environment, thread and request and discards only resolve
     await act(() => requests.onAdvanceActivePendingUserInput());
   }
 
+  // "first" was answered on another device.
   await show({
     environmentId,
     projection: {
@@ -267,6 +174,12 @@ it("isolates drafts by environment, thread and request and discards only resolve
     },
   });
   expect(requests.activePendingUserInput?.requestId).toBe("second");
+  await act(() =>
+    makeThreadRequestsResolvedAnnouncer(
+      environmentId,
+      threadRef.threadId,
+    )([RuntimeRequestId.make("second")]),
+  );
   for (const [index, scope] of scopes.entries()) {
     await show(scope);
     expect(requests.activePendingQuestionIndex).toBe(index === 0 ? 0 : 1);

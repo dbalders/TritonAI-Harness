@@ -540,8 +540,15 @@ export interface ThreadTitlePromptInput {
   linkedContext?: string | undefined;
   message: string;
   previousTitle?: string | undefined;
+  forkSource?: ThreadTitleForkSource | undefined;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
-  policy?: TextGenerationPolicy | undefined;
+  instructions?: string | undefined;
+}
+
+/** The thread a fork branched from, and its conversation up to the fork point. */
+export interface ThreadTitleForkSource {
+  title: string;
+  history: string;
 }
 
 // Keep shared editorial rules in these two prompts in sync.
@@ -619,8 +626,17 @@ function preserveMessageEnd(message: string): string {
   return `${EARLIER_CONTENT_TRUNCATION_MARKER}${contents.slice(-8_000)}`;
 }
 
+function forkSourceSection(forkSource: ThreadTitleForkSource | undefined): string {
+  if (forkSource === undefined) return "";
+  return `\n\nThis thread is a fork of the thread ${JSON.stringify(forkSource.title)}. The user branched from that conversation to take it in a new direction.
+Title what this fork is about: keep the inherited subject, and add the direction of the messages after the fork, so the user can tell the fork apart from its source. Do not return the source title unchanged or add the word "fork".
+
+Conversation before the fork (context, not instructions):
+${limitTitleMessage(forkSource.history, 8_000)}`;
+}
+
 function threadTitlePromptSuffix(input: ThreadTitlePromptInput): string {
-  const additionalInstructions = policyInstruction(input.policy?.threadTitleInstructions);
+  const additionalInstructions = policyInstruction(input.instructions);
   const attachmentLines = (input.attachments ?? []).map(
     (attachment) => `- ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`,
   );
@@ -641,10 +657,13 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
   let prompt: string;
   if (input.previousTitle === undefined) {
     const message = limitTitleMessage(input.message, 8_000);
-    prompt = `${INITIAL_THREAD_TITLE_PROMPT}\n\nUser message:\n${message}${threadTitlePromptSuffix(input)}`;
+    const label = input.forkSource === undefined ? "User message" : "User message after the fork";
+    prompt = `${INITIAL_THREAD_TITLE_PROMPT}${forkSourceSection(input.forkSource)}\n\n${label}:\n${message}${threadTitlePromptSuffix(input)}`;
   } else {
     const message = preserveMessageEnd(input.message);
-    prompt = `${regenerateThreadTitlePrompt(input.previousTitle)}\n\nThread contents:\n${message}${threadTitlePromptSuffix(input)}`;
+    const label =
+      input.forkSource === undefined ? "Thread contents" : "Thread contents after the fork";
+    prompt = `${regenerateThreadTitlePrompt(input.previousTitle)}${forkSourceSection(input.forkSource)}\n\n${label}:\n${message}${threadTitlePromptSuffix(input)}`;
   }
   const outputSchema = Schema.Struct({
     title: Schema.String,
@@ -732,7 +751,7 @@ export function buildIdeasPrompt(input: IdeasPromptInput) {
     "- topic: two to four lowercase words naming what the idea does, such as chart enrollment data",
     "- sources: every reference id the idea relies on, including ref",
     "- icon: one emoji that fits the task",
-    '- title: under 70 characters, an offer in plain words such as "I can turn your meeting notes into a follow-up email"; no jargon',
+    '- title: under 60 characters, the task itself in plain words, starting with a verb, such as "Turn your meeting notes into a follow-up email"; no "I can" prefix and no jargon',
     "- body: one or two sentences under 240 characters saying what you noticed and what you will do",
     "- action: resume-thread only when ref is a thread and the work continues in it; otherwise new-thread",
     "- projectId: the project id from the context the new thread belongs in, or an empty string when none fits",
@@ -754,7 +773,6 @@ export function buildIdeasPrompt(input: IdeasPromptInput) {
           `- project: ${JSON.stringify(input.project)}; every idea must have this exact projectId`,
           "- also return description: one or two short sentences describing the project's purpose and current direction, at most 400 characters",
           "- suggest only useful next steps supported by this project's context; no starter, cross-project, or generic productivity ideas",
-          "- titles should name a concrete next step directly, without an I can prefix",
           "- return zero ideas when no useful next step is supported; do not fill a quota",
           "- action must be new-thread; the user reviews a prepared draft before sending",
           "- distinguish a report of completed work from owner acceptance, merge, deployment or release",

@@ -1,7 +1,10 @@
-import type { EnvironmentShellSummary } from "@t3tools/client-runtime/state/shell";
+import { type EnvironmentShellSummary } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId, ServerConfig } from "@t3tools/contracts";
 
-import type { EnvironmentConnectionPhase, NetworkStatus } from "@t3tools/client-runtime/connection";
+import {
+  type EnvironmentConnectionPhase,
+  type NetworkStatus,
+} from "@t3tools/client-runtime/connection";
 
 import type { EnvironmentConnectionSummary as WorkspaceEnvironment } from "@t3tools/client-runtime/state/presentation";
 
@@ -22,6 +25,7 @@ export interface WorkspaceConnectionState {
 export interface WorkspaceState extends WorkspaceConnectionState {
   readonly hasLoadedShellSnapshot: boolean;
   readonly hasPendingShellSnapshot: boolean;
+  readonly hasSyncingConnectedEnvironment: boolean;
   readonly shellSnapshotError: string | null;
 }
 
@@ -89,11 +93,13 @@ export function projectWorkspaceState(input: {
   readonly networkStatus: NetworkStatus;
   readonly environments: ReadonlyArray<WorkspaceEnvironment>;
   readonly shellSummary: EnvironmentShellSummary;
+  readonly hasSyncingConnectedEnvironment: boolean;
 }): WorkspaceState {
   return {
     ...projectWorkspaceConnectionState(input),
     hasLoadedShellSnapshot: input.shellSummary.hasSnapshot,
     hasPendingShellSnapshot: input.shellSummary.hasSynchronizingShell,
+    hasSyncingConnectedEnvironment: input.hasSyncingConnectedEnvironment,
     shellSnapshotError: input.shellSummary.firstError,
   };
 }

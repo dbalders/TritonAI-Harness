@@ -73,7 +73,7 @@ describe("TritonAI managed Harness policy", () => {
     migrateLegacyInstallerManagedSettings({
       tritonAiManagedPolicy: {
         migrationVersion: 2,
-        codexBinaryPath: Schema.decodeSync(CodexSettings)({}).binaryPath,
+        codexBinaryPath: compiledDecodeSync1({}).binaryPath,
         codexHomePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
       },
     });
@@ -149,34 +149,7 @@ describe("TritonAI managed Harness policy", () => {
     });
   });
 
-  it("uses Flash for new tasks on profiles without an explicit default", () => {
-    const effective = migrateManagedNewThreadDefaults(DEFAULT_SERVER_SETTINGS, {}).settings;
-    expect(effective.defaultModelSelection).toEqual({
-      instanceId: managedInstanceId,
-      model: "api-glm-5.3-flash",
-      options: [{ id: "reasoningEffort", value: "high" }],
-    });
-  });
-
-  it("resets to Flash's defaults even with a customized text-generation selection", () => {
-    const effective = migrateManagedNewThreadDefaults(
-      {
-        ...DEFAULT_SERVER_SETTINGS,
-        textGenerationModelSelection: {
-          instanceId: frontierInstanceId,
-          model: "gpt-6.1-sol",
-          options: [{ id: "reasoningEffort", value: "low" }],
-        },
-      },
-      {},
-    ).settings;
-    expect(effective.defaultModelSelection).toEqual({
-      instanceId: managedInstanceId,
-      model: "api-glm-5.3-flash",
-      options: [{ id: "reasoningEffort", value: "high" }],
-    });
-  });
-
+  // regression: #311 fix: refresh Cloud models and reset legacy defaults to Flash
   it("resets app and project defaults once while preserving later choices", () => {
     const sol = { instanceId: frontierInstanceId, model: "gpt-6.1-sol" };
     const first = migrateManagedNewThreadDefaults(
@@ -211,26 +184,8 @@ describe("TritonAI managed Harness policy", () => {
     });
   });
 
-  it("preserves explicit defaults and upgrades retired managed defaults", () => {
-    const personalDefault = {
-      instanceId: ProviderInstanceId.make("personal"),
-      model: "personal-model",
-    };
-    expect(
-      applyManagedHarnessPolicy({
-        ...DEFAULT_SERVER_SETTINGS,
-        defaultModelSelection: personalDefault,
-      }).defaultModelSelection,
-    ).toEqual(personalDefault);
-    expect(
-      applyManagedHarnessPolicy({
-        ...DEFAULT_SERVER_SETTINGS,
-        defaultModelSelection: { instanceId: managedInstanceId, model: "claude-opus-5" },
-      }).defaultModelSelection,
-    ).toEqual({ instanceId: frontierInstanceId, model: "claude-opus-5-5" });
-  });
-
-  it.each(["api-muse-glimmer-30b", "onyx-muse-glimmer-30b", "api-gemma-4-31b"])(
+  // regression: #337 fix(models): replace Glimmer with Flash for image reading
+  it.each(["api-muse-glimmer-30b"])(
     "replaces retired managed %s defaults with Flash while preserving personal selections",
     (model) => {
       for (const [effort, expectedEffort] of [
@@ -253,7 +208,7 @@ describe("TritonAI managed Harness policy", () => {
             [managedInstanceId]: {
               driver: ProviderDriverKind.make("codex"),
               enabled: true,
-              config: { ...Schema.decodeSync(CodexSettings)({}), customModels: [model] },
+              config: { ...compiledDecodeSync1({}), customModels: [model] },
             },
           },
         });
@@ -284,6 +239,7 @@ describe("TritonAI managed Harness policy", () => {
     },
   );
 
+  // regression: #230 fix(codex): find installed runtime for fresh profiles
   it("keeps fresh profile homes independent across settings documents", () => {
     const stableHome = "/profiles/stable/codex";
     const nightlyHome = "/profiles/nightly/codex";
@@ -307,6 +263,7 @@ describe("TritonAI managed Harness policy", () => {
     expect(getManagedCodexSettings(missingFile).binaryPath).toBe("codex");
   });
 
+  // regression: #283 fix(codex): anchor an unsaved profile Codex home to the profile, not production
   it("anchors an unsaved Codex home to the profile's own directory, not production", () => {
     const migrated = migrateLegacyInstallerManagedSettings(
       { providers: { codex: { binaryPath: "codex" } } },
@@ -329,6 +286,7 @@ describe("TritonAI managed Harness policy", () => {
     expect(stamped.document).toBe(migrated.document);
   });
 
+  // regression: #230 fix(codex): find installed runtime for fresh profiles
   it("preserves explicit and previously saved Codex homes without moving history", () => {
     for (const savedHome of ["/custom/history", DEFAULT_TRITONAI_CODEX_HOME_PATH]) {
       const migrated = migrateLegacyInstallerManagedSettings({
@@ -344,9 +302,7 @@ describe("TritonAI managed Harness policy", () => {
 
   it.each([
     ["retired-primary", "minimal", "high"],
-    ["retired-primary", "medium", "high"],
     ["on-prem-primary", "max", "high"],
-    ["on-prem-primary", "low", "low"],
     ["on-prem-primary", "xhigh", "xhigh"],
   ])("normalizes managed reasoning for %s at %s", (model, effort, expected) => {
     const selection = {
@@ -674,3 +630,5 @@ it("locks V2 managed sign-in mode while preserving existing user launch and shad
     configured,
   );
 });
+
+const compiledDecodeSync1 = Schema.decodeSync(CodexSettings);

@@ -1,4 +1,5 @@
 import type { DesktopPreviewRecordingInput } from "@t3tools/contracts";
+
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 
 interface RecordingDecorationOptions {
@@ -72,7 +73,7 @@ export async function createRecordingCompositor(
   }
 }
 
-export class RecordingDecorations {
+class RecordingDecorations {
   private ring: {
     x: number;
     y: number;

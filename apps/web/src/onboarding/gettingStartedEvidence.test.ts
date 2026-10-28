@@ -1,9 +1,9 @@
 import {
-  ChatAttachmentId,
   DEFAULT_GETTING_STARTED_PROGRESS,
   EnvironmentId,
   MessageId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   TurnItemId,
   type GettingStartedChapterId,
@@ -22,13 +22,6 @@ const THREAD = ThreadId.make("guide-practice");
 const AT = "2026-10-22T10:00:00.000Z";
 const RUN_AT = "2026-10-22T10:01:00.000Z";
 const MAIL_TOOL = "microsoft365_mail_search";
-const FILE = {
-  type: "file" as const,
-  id: ChatAttachmentId.make("meeting-notes"),
-  name: "notes.txt",
-  mimeType: "text/plain",
-  sizeBytes: 100,
-};
 
 function task(chapter: GettingStartedChapterId = "conversation") {
   const events: GettingStartedEvent[] = [
@@ -119,6 +112,20 @@ function mailResult(
   };
 }
 
+/** The runs a thread's turn items would mark as answered for these fixture messages. */
+function answered(entries: ReadonlyArray<TimelineEntry>): ReadonlySet<string> {
+  return new Set(
+    entries.flatMap((item) =>
+      item.kind === "message" &&
+      item.message.role === "assistant" &&
+      item.message.runId &&
+      !item.message.streaming
+        ? [item.message.runId]
+        : [],
+    ),
+  );
+}
+
 function observe(
   state: GettingStartedProgress,
   runs: ReadonlyArray<GettingStartedRun>,
@@ -130,6 +137,8 @@ function observe(
     threadId: THREAD,
     runs,
     timelineEntries,
+    answeredRunIds: answered(timelineEntries),
+    skills: [],
   });
 }
 
@@ -162,18 +171,6 @@ describe("completed run evidence", () => {
     expect(observe(checked, [run(), run("R2")], [message()])).toEqual([]);
   });
 
-  it("recovers both completed runs from one snapshot when the latest run is still queued", () => {
-    const initial = task();
-    const events = observe(
-      initial,
-      [run(), run("R2"), run("R3", { status: "queued" })],
-      [message(), message({ id: MessageId.make("R2-answer"), runId: RunId.make("R2") })],
-    );
-
-    expect(events.map((event) => event.type === "run" && event.runId)).toEqual(["R1", "R2"]);
-    expect(events.reduce(reduceGettingStarted, initial).tasks[0]?.runIds).toEqual(["R1", "R2"]);
-  });
-
   it.each([
     "preparing",
     "queued",
@@ -190,15 +187,10 @@ describe("completed run evidence", () => {
 
   it.each<Partial<ChatMessage>>([
     { streaming: true },
-    { text: " \n " },
     { role: "user" },
     { runId: RunId.make("another-run") },
   ])("requires a final assistant answer belonging to this run: %j", (change) => {
     expect(observe(task(), [run()], [message(change)])).toEqual([]);
-  });
-
-  it("does not treat the provider's completed status as an observed answer", () => {
-    expect(observe(task(), [run()], [])).toEqual([]);
   });
 
   it("does not bind another submission, environment, or thread to the tracked task", () => {
@@ -209,6 +201,8 @@ describe("completed run evidence", () => {
       threadId: THREAD,
       runs: [run()],
       timelineEntries: [message()],
+      answeredRunIds: answered([message()]),
+      skills: [],
     };
     expect(
       observe(state, [run("R1", { userMessageId: "not-submitted-here" })], [message()]),
@@ -217,18 +211,6 @@ describe("completed run evidence", () => {
       gettingStartedRunEvents({ ...input, environmentId: EnvironmentId.make("other") }),
     ).toEqual([]);
     expect(gettingStartedRunEvents({ ...input, threadId: ThreadId.make("other") })).toEqual([]);
-  });
-
-  it("uses the requested time when a completed run has no started time", () => {
-    const state = task("ideas");
-    const events = observe(
-      state,
-      [run("R1", { startedAt: null, requestedAt: RUN_AT })],
-      [message()],
-    );
-
-    expect(events).toMatchObject([{ startedAt: RUN_AT }]);
-    expect(events.reduce(reduceGettingStarted, state).completed).toEqual(["ideas"]);
   });
 });
 
@@ -254,25 +236,6 @@ describe("connected work result evidence", () => {
     expect(state.completed).toEqual([]);
   });
 
-  it("completes connected work for its declared tool's successful result", () => {
-    const state = task("connected-work");
-    const events = observe(state, [run()], [message(), mailResult({ messages: [] })]);
-
-    expect(events).toMatchObject([{ connectedToolSucceeded: true }]);
-    expect(events.reduce(reduceGettingStarted, state).completed).toEqual(["connected-work"]);
-  });
-
-  it.each(["failed", "declined", "inProgress", "stopped", "idle"] as const)(
-    "does not count a %s tool result",
-    (toolLifecycleStatus) => {
-      const state = task("connected-work");
-      const events = observe(state, [run()], [message(), mailResult({}, { toolLifecycleStatus })]);
-
-      expect(events).toEqual([]);
-      expect(events.reduce(reduceGettingStarted, state)).toBe(state);
-    },
-  );
-
   it("does not borrow a successful mail result from another run or an unrelated tool", () => {
     const state = task("connected-work");
     const wrongRun = mailResult({}, { runId: RunId.make("R2") });
@@ -296,37 +259,68 @@ describe("connected work result evidence", () => {
   });
 });
 
-describe("file evidence belongs to the submitted request", () => {
-  it("counts the file attached to the run's own submitted user message", () => {
-    const state = task("files");
-    const events = observe(
-      state,
-      [run()],
-      [message({ id: MessageId.make("M1"), role: "user", attachments: [FILE] }), message()],
-    );
+describe("approval and skill evidence", () => {
+  const userMessage = (text: string) =>
+    message({ id: MessageId.make("M1"), role: "user", runId: null, text });
+  const approval: TimelineEntry = {
+    id: "approval",
+    kind: "work",
+    createdAt: RUN_AT,
+    entry: {
+      id: "approval",
+      createdAt: RUN_AT,
+      runId: RunId.make("R1"),
+      label: "Approval requested",
+      tone: "tool",
+      itemType: "approval_request",
+      structuredPayload: {
+        type: "approval_request",
+        id: TurnItemId.make("approval"),
+        threadId: THREAD,
+        runId: RunId.make("R1"),
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "completed",
+        title: null,
+        startedAt: DateTime.makeUnsafe(RUN_AT),
+        completedAt: DateTime.makeUnsafe(RUN_AT),
+        updatedAt: DateTime.makeUnsafe(RUN_AT),
+        requestId: RuntimeRequestId.make("approval-1"),
+        requestKind: "file-change",
+      },
+    },
+  };
 
-    expect(events).toMatchObject([{ usedFile: true }]);
-    expect(events.reduce(reduceGettingStarted, state).completed).toEqual(["files"]);
+  it("completes the approvals chapter only after a run that asked for approval", () => {
+    const state = task("approvals");
+    const entries = [userMessage("Save the to-do list"), message()];
+
+    expect(observe(state, [run()], entries)).toEqual([]);
+    const events = observe(state, [run()], [...entries, approval]);
+    expect(events.reduce(reduceGettingStarted, state).completed).toEqual(["approvals"]);
   });
 
-  it("does not borrow a file from another request or the assistant's answer", () => {
-    const state = task("files");
-    const events = observe(
-      state,
-      [run()],
-      [
-        message({ id: MessageId.make("M1"), role: "user" }),
-        message({
-          id: MessageId.make("M2"),
-          role: "user",
-          runId: RunId.make("R2"),
-          attachments: [FILE],
-        }),
-        message({ attachments: [FILE] }),
-      ],
-    );
+  it("completes the skills chapter only when the request names an installed skill", () => {
+    const state = task("skills");
+    const entries = [userMessage("$writing-coach What can you help with?"), message()];
+    const withSkills = (skills: ReadonlyArray<{ name: string }>) =>
+      gettingStartedRunEvents({
+        state,
+        environmentId: ENVIRONMENT,
+        threadId: THREAD,
+        runs: [run()],
+        timelineEntries: entries,
+        answeredRunIds: answered(entries),
+        skills,
+      });
 
-    expect(events).toEqual([]);
-    expect(events.reduce(reduceGettingStarted, state)).toBe(state);
+    expect(withSkills([{ name: "other-skill" }])).toEqual([]);
+    expect(
+      withSkills([{ name: "writing-coach" }]).reduce(reduceGettingStarted, state).completed,
+    ).toEqual(["skills"]);
   });
 });

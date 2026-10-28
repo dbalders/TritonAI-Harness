@@ -25,9 +25,9 @@ import * as References from "effect/References";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
-
-import { migrationEntries, runMigrations } from "../../persistence/Migrations.ts";
+import { runMigrations } from "../../persistence/Migrations.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
+
 import { CodexProviderCapabilitiesV2 } from "../Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "../EffectWorker.ts";
 import * as EventSink from "../EventSink.ts";
@@ -40,6 +40,7 @@ import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "@t3tools/provider-testing/replayWorkspace";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { migrationEntries } from "../../persistence/Migrations.ts";
 
 const PROJECT_ID = "project:cutover";
 const ACTIVE_THREAD = "thread:cutover:active";
@@ -72,11 +73,7 @@ const codexModelSelection = {
   model: "gpt-5.4",
 };
 
-/**
- * Seed the shipped Harness schema through migration 58, including a historical
- * site-local timeline name at slot 42. Cutover must preserve that recorded
- * identity and apply only the new V2 migrations starting at 59.
- */
+/** Slot 41 models site-local migrations sharing production ids; the V2 runner applies only ids above the recorded maximum. */
 const seedV1Database = (fixturePath: string, workspace: string) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -540,18 +537,29 @@ const makeCodexAdapter = (capturedTurns: Ref.Ref<ReadonlyArray<CapturedTurn>>) =
 
 const waitForIdle = Effect.fn("LegacyV1Cutover.waitForIdle")(function* (threadId: ThreadId) {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
-  for (let attempt = 0; attempt < 1_000; attempt += 1) {
-    const projection = yield* orchestrator.getThreadProjection(threadId);
-    if (
-      projection.runs.every(
-        (run) => !["queued", "starting", "running", "waiting"].includes(run.status),
-      )
-    ) {
-      return projection;
-    }
-    yield* Effect.sleep("5 millis");
+  const eventSink = yield* EventSink.EventSinkV2;
+  const isIdle = (projection: OrchestrationV2ThreadProjection) =>
+    projection.runs.every(
+      (run) => !["queued", "starting", "running", "waiting"].includes(run.status),
+    );
+  const afterSequence = yield* eventSink.latestSequence();
+  const current = yield* orchestrator.getThreadProjection(threadId);
+  if (isIdle(current)) {
+    return current;
   }
-  return yield* Effect.die(new Error("Cutover test timed out waiting for idle"));
+  // Projections commit with their events, so each later event is the only time to re-read.
+  const [idle] = yield* eventSink.stream({ afterSequence }).pipe(
+    Stream.mapEffect(() => orchestrator.getThreadProjection(threadId)),
+    Stream.filter(isIdle),
+    Stream.take(1),
+    Stream.runCollect,
+  );
+  if (idle === undefined) {
+    return yield* Effect.die(
+      new Error("Cutover test event stream ended before the thread went idle"),
+    );
+  }
+  return idle;
 });
 
 const layerBoot = (input: {
@@ -647,7 +655,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
           const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
           const longThreadId = ThreadId.make(LONG_THREAD);
 
-          // First boot: the real file-backed stack migrates the copied database.
           const boot1Logs: CapturedLog[] = [];
           const firstBoot = yield* Effect.scoped(
             Effect.gen(function* () {
@@ -663,7 +670,7 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 importedThreadCount: ALL_THREADS.length,
                 importedMessageCount: 14,
               });
-              // A repeated shell reconcile in the same boot is a no-op.
+
               assert.deepStrictEqual(yield* importer.reconcileShells, {
                 importedThreadCount: 0,
                 importedMessageCount: 0,
@@ -685,8 +692,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
               );
               assert.equal(pinnedShell?.pinOrderKey, "a0");
 
-              // Shells carry only the last user + latest message previews until a
-              // transcript is hydrated on demand.
               const activeShell = yield* projections.getThreadProjection(
                 ThreadId.make(ACTIVE_THREAD),
               );
@@ -697,8 +702,7 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 ["message:cutover:active:3", "message:cutover:active:4"],
               );
               assert.isEmpty(activeShell.providerThreads);
-              // The import contract is messages + metadata only: no checkpoints,
-              // tool items, or native sessions are presented as migrated.
+
               assert.isEmpty(
                 activeShell.turnItems.filter(
                   (item) => item.type !== "user_message" && item.type !== "assistant_message",
@@ -714,9 +718,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 DateTime.makeUnsafe("2026-01-09T00:00:00.000Z").toString(),
               );
 
-              // Lazy transcript import on first read. The snoozed thread stays
-              // unhydrated until after the restart to prove laziness survives a
-              // process boundary.
               for (const threadId of [
                 ACTIVE_THREAD,
                 ARCHIVED_THREAD,
@@ -779,8 +780,7 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 snoozed.thread.snoozedUntil?.toString(),
                 DateTime.makeUnsafe("2026-02-01T00:00:00.000Z").toString(),
               );
-              // Still preview-only: its transcript was never requested, so the
-              // middle message between the two shell previews is absent.
+
               assert.deepStrictEqual(
                 snoozed.messages.map((message) => message.id),
                 ["message:cutover:snoozed:1", "message:cutover:snoozed:3"],
@@ -802,8 +802,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 ["message:cutover:interrupted:2", 2, "interrupted"],
               ]);
 
-              // First continuation of a migrated thread: a fresh provider session
-              // receives the newest transcript suffix inside the 32k handoff.
               yield* orchestrator.dispatch({
                 type: "message.dispatch",
                 createdBy: "user",
@@ -832,9 +830,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
               assert.include(turns[0]!.text, "Context handoff (manual_context):");
               assert.include(turns[0]!.text, `User message:\n${CONTINUATION_PROMPT}`);
 
-              // The next continuation reuses the provider thread without a new
-              // handoff: the imported context is only reissued until a v2 run
-              // completes.
               yield* orchestrator.dispatch({
                 type: "message.dispatch",
                 createdBy: "user",
@@ -850,8 +845,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
               assert.equal(continuedAgain.contextHandoffs.length, 1);
               assert.equal((yield* Ref.get(capturedTurns)).length, 2);
 
-              // Drain the outbox worker so the persisted event count is settled
-              // before the restart boot re-reads it.
               const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
               yield* worker.drain();
 
@@ -906,10 +899,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
             ),
           );
 
-          // The copied database recorded a site-local migration under id 42, so
-          // the migrator skipped this build's AuthSessionClientConnection by
-          // id. The divergence is surfaced at startup while the rest of the
-          // cutover still runs.
           const divergenceLog = boot1Logs.find((log) =>
             String(log.message).includes("migration history diverges"),
           );
@@ -917,8 +906,7 @@ describe("orchestration v2 legacy v1 cutover", () => {
             "42:ThreadSummaryTimeline (this build: AuthSessionClientConnection)",
           ]);
           assert.equal(firstBoot.migration42Name, "ThreadSummaryTimeline");
-          // The skipped migration's columns never landed; the schema gap is
-          // what the startup warning points at.
+
           assert.notInclude(firstBoot.authSessionColumnNames, "client_surface");
           assert.notInclude(firstBoot.authSessionColumnNames, "client_app_version");
 
@@ -931,8 +919,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
             [SNOOZED_THREAD],
           );
 
-          // Restart: a fresh runtime on the same file repeats nothing, and the
-          // still-unhydrated snoozed transcript lands lazily after the restart.
           const boot2Logs: CapturedLog[] = [];
           yield* Effect.scoped(
             Effect.gen(function* () {
@@ -971,8 +957,7 @@ describe("orchestration v2 legacy v1 cutover", () => {
               WHERE application_event_version = 2
                 AND event_id LIKE 'migration:v1:%'
             `;
-              // The snoozed transcript hydration above appends its own two
-              // migration events (message + turn item); nothing else repeats.
+
               assert.equal(migrationEventCount[0]?.count, firstBoot.migrationEventCount + 2);
 
               const restarted = yield* projections.getThreadProjection(longThreadId);
@@ -984,8 +969,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
                 firstBoot.longProjection.runs.map((run) => run.status),
               );
 
-              // The v1 projection tables remain the untouched, read-only
-              // recovery source after migration and restart.
               const legacyMessageCount = yield* sql<{ readonly count: number }>`
               SELECT COUNT(*) AS count FROM projection_thread_messages
             `;
@@ -1017,8 +1000,6 @@ describe("orchestration v2 legacy v1 cutover", () => {
             ),
           );
 
-          // The recorded-name divergence persists across restarts; the warning
-          // fires again so it cannot be missed between upgrades.
           assert.isTrue(
             boot2Logs.some((log) => String(log.message).includes("migration history diverges")),
           );

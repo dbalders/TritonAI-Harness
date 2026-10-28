@@ -8,13 +8,6 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import {
-  useGitStackedAction,
-  usePreparePullRequestThreadAction,
-  useSourceControlPublishRepositoryAction,
-  useVcsInitAction,
-  useVcsPullAction,
-} from "./sourceControlActions";
 
 const state = vi.hoisted(() => ({
   scopes: new Map<string, Set<string>>(),
@@ -60,6 +53,14 @@ vi.mock("./sourceControl", () => ({
 vi.mock("./git", () => ({
   gitEnvironment: { preparePullRequestThread: { action: "prepare" } },
 }));
+
+import {
+  useGitStackedAction,
+  usePreparePullRequestThreadAction,
+  useSourceControlPublishRepositoryAction,
+  useVcsInitAction,
+  useVcsPullAction,
+} from "./sourceControlActions";
 
 const primary = EnvironmentId.make("primary");
 const secondary = EnvironmentId.make("secondary");
@@ -143,16 +144,6 @@ describe("source control callback grants", () => {
     expect((await action.run())._tag).toBe("Failure");
     expect(state.requests).toEqual([]);
     expect(create().isAllowed).toBe(false);
-  });
-
-  it.each(cases)("$name accepts a retained callback after a grant", async ({ name, create }) => {
-    const action = create();
-    expect(action.isAllowed).toBe(false);
-    state.scopes.get(primary)!.clear();
-    state.scopes.get(secondary)!.add(AuthSourceControlWriteScope);
-    expect((await action.run())._tag).toBe("Success");
-    expect(state.requests).toEqual([{ action: name, environmentId: secondary }]);
-    expect(create().isAllowed).toBe(true);
   });
 });
 

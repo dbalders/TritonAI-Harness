@@ -2,8 +2,8 @@
 
 ## First checkout
 
-Install `vp` using the [root README](../../README.md#install-vp). The checkout requires Node 24;
-Bun is optional. From the repository root:
+Install `vp` using the [root README](../../README.md#install-vp). It provides the Node version
+pinned in `package.json` (Node 26), so no separate Node install is needed. From the repository root:
 
 ```sh
 vp i
@@ -20,6 +20,39 @@ The desktop app supplies its own protected keyring.
 
 Prefer a container? See [Dev container](../internals/devcontainer.md) for VS Code and Codespaces setup.
 
+## GitCafe mirror (optional)
+
+GitHub is the source of truth. [git.cafe/pingdotgg/t3code](https://git.cafe/pingdotgg/t3code) is a
+two-way synced mirror with much higher API rate limits, which helps when many agents work at once.
+You never need it to contribute.
+
+Pushes, PRs, comments, reviews, labels, and issue edits made on GitCafe sync to GitHub within
+about a minute, and PR and issue numbers match. CI runs on GitHub, and its checks show up on
+GitCafe.
+
+```sh
+git remote set-url origin https://git.cafe/pingdotgg/t3code.git
+git remote add github https://github.com/pingdotgg/t3code.git
+gh repo set-default pingdotgg/t3code   # `gh` is still used for merging
+bun install -g @gitcafe/cli@latest   # `cafe` needs Bun 1.2 or newer
+cafe auth login && cafe auth http setup
+cafe skills install --global  # optional: cafe-* skills for coding agents
+```
+
+With `origin` on git.cafe, work through GitCafe and leave GitHub's API alone:
+
+- Push to `origin`, open PRs with `cafe pr create` (`--head owner/repo:branch` from a fork) or
+  `cafe stack submit`, and use `cafe` for everything after that. Link the git.cafe PR URL, not the
+  github.com one, wherever a tool tracks the PR, so polling stays on GitCafe.
+- Read checks with `cafe pr status <n>`, and GitHub Actions logs with `cafe ci logs <run>` (run ids
+  from `cafe ci list --pr <n>`). `cafe ci rerun <run>` reruns one. These need `cafe` 0.11 or newer.
+- Write closing references as `Fixes pingdotgg/t3code#<n>`. GitCafe turns a bare `#<n>` in text it
+  syncs to GitHub into a git.cafe link, and GitHub does not close issues from those.
+- Merge with `gh pr merge <n> --match-head-commit <sha>`, because `cafe pr merge` cannot pin the
+  commit you reviewed.
+- `cafe` commands differ from `gh`: `cafe issue comments <n>` not `--comments`, `cafe pr status`
+  not `pr checks`.
+
 ## Choosing a dev process
 
 Use `vp run dev` for server and web, or `vp run dev:desktop` for the Electron client.
@@ -32,7 +65,12 @@ Add `--browser` to open a browser automatically.
 ### State and ports
 
 Linked worktrees default to their own `.t3/userdata`, even when `T3CODE_HOME` is set.
-The main checkout defaults to `~/.t3/dev/userdata`. An explicit `--home-dir` wins in both cases.
+The main checkout defaults to `~/.t3/dev`. An explicit `--home-dir` wins in both cases.
+The first start in a worktree seeds its empty database from a read-only copy of
+`~/.t3/userdata/statev2.sqlite` if the source is at most 500 MiB. Larger sources warn
+and dev starts with an empty database. `--no-seed` or `T3CODE_DEV_SEED=0` skips seeding.
+To copy a larger source, run `vp run migrate-dev-db` with dev stopped. It may use
+substantial disk space before pruning.
 Never run a development server against the live `~/.t3/userdata`.
 See [test data](../../AGENTS.md#test-data) for copying a consistent database snapshot.
 
@@ -64,6 +102,14 @@ when changing this setup:
 The workarounds live in the [web entry](../../apps/web/src/bootstrap.ts),
 [Tailwind plugin](../../apps/web/vite/tailwind.ts), and
 [startup warmup](../../apps/web/vite/warmBundledDev.ts).
+
+`vp run dev --share --built` skips the Vite dev server. It runs `vp build --watch` for the web
+app, and the backend serves `apps/web/dist` on the same tailnet URL and pairing flow. Use it when
+someone tests over a slow link or only needs to use the app: loads are production size, and the
+first load does not wait for dev bundling. There is no HMR. After an edit, wait for the
+`built in` line (about 6 s), then reload. Until the first build exists, the URL shows a page that
+reloads by itself. The license manifest is not generated in this mode. `--built` requires
+`--share` and the `dev` mode.
 
 #### Reusable dev credential
 
@@ -107,7 +153,19 @@ for the security model.
 
 ## Checks
 
-Run checks for the files and packages you changed:
+`vp run check:changed` runs CI's fast checks for your branch's changes: format and lint of the
+changed files, `knip:check` when code or a manifest changes, the generated GraphQL checks, typecheck
+of the affected packages and their dependents, and the test files beside the changed files. It maps
+files to packages with [ci-changes.cjs](../../.github/scripts/ci-changes.cjs), as CI does. It
+compares against the merge base with `origin/main`, or with a ref you pass. CI still runs the full
+test suites and the jobs the summary lists, so a local pass does not promise a green CI run.
+
+The steps run side by side, so a run takes about as long as its slowest step, usually knip's
+exports pass at about 10 s. When the files are exactly those of the last passing run, it prints that
+run's summary instead of running again. Any change to a file, the install, or a generated file runs
+the checks again.
+
+While you iterate, run single checks:
 
 ```sh
 vp test run <files>
@@ -134,12 +192,9 @@ This includes a real PowerShell quoting test;
 the desktop native interfaces are mocked, so it does not prove packaged-app behavior.
 Manual dispatch still accepts a package and optional test files for broader investigation.
 
-TypeScript workspaces typecheck with tsc-rs, which has Effect diagnostics built in.
-Keep `typescript`, `@effect/tsgo`, and the `effect-tsgo patch` prepare step: editors
-still use them for Effect quick fixes and refactors. Keep `@effect/tsgo` on the
-effect-tsgo version that tsc-rs ports (see the tsc-rs README), or the two disagree
-on rule names.
-Marketing keeps `astro check` for Astro files.
+TypeScript workspaces typecheck with `tsc`. The `typescript` catalog entry is
+`@tsc-rs/typescript`, the tsc-rs drop-in, with Effect diagnostics, quick fixes, and
+refactors built in. VS Code uses it through `js/ts.tsdk.path` in `.vscode/settings.json`.
 
 Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
 [ci.yml](../../.github/workflows/ci.yml) for its current jobs.

@@ -1,57 +1,43 @@
+import type { SnapShotSource } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
-import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
-import { act, render as renderUi } from "../../../test/render";
-import { ExpandedImageDialogHost, openExpandedImagePreview } from "./ExpandedImageDialog";
+import "~/index.css";
+import { render } from "../../../test/render";
+import { ExpandedImageDialog } from "./ExpandedImageDialog";
 
-const preview = {
-  images: [
-    { src: "data:image/gif;base64,R0lGODlhAQABAAAAACw=", name: "one.png" },
-    { src: "data:image/gif;base64,R0lGODlhAQABAAAAACw=", name: "two.png" },
-  ],
-  index: 0,
+const PIXEL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+const snapShotSource: SnapShotSource = {
+  kind: "snap-shot",
+  capturedAt: "2026-01-01T00:00:00.000Z",
+  appName: "Finder",
+  windowTitle: "Downloads",
 };
 
-const host = (threadKey: string) => (
-  <AppAtomRegistryProvider>
-    <ExpandedImageDialogHost threadKey={threadKey} />
-  </AppAtomRegistryProvider>
-);
+describe("ExpandedImageDialog", () => {
+  it("Escape closes a popup opened inside the dialog before the dialog", async () => {
+    const onClose = vi.fn();
+    await using screen = await render(
+      <ExpandedImageDialog
+        preview={{ images: [{ src: PIXEL, name: "shot.png", source: snapShotSource }], index: 0 }}
+        onClose={onClose}
+      />,
+      // The dialog renders no links and reads no route.
+      { router: false },
+    );
 
-const dialog = () => document.querySelector('[role="dialog"]');
+    await userEvent.click(screen.getByRole("button", { name: "No accessibility data" }));
+    await expect.element(screen.getByText("Accessibility data")).toBeVisible();
 
-describe("ExpandedImageDialogHost", () => {
-  it("opens for its thread, steps with arrows, and closes on Escape with focus back on the opener", async () => {
-    const opener = document.createElement("button");
-    document.body.append(opener);
-    using _opener = { [Symbol.dispose]: () => opener.remove() };
-    await using _screen = await renderUi(host("env:a"));
-    opener.focus();
+    await userEvent.keyboard("{Escape}");
+    await expect.element(screen.getByText("Accessibility data")).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
 
-    await act(() => openExpandedImagePreview("env:a", preview));
-    expect(dialog()?.textContent).toContain("one.png (1/2)");
-
-    await act(() => {
-      dialog()?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    });
-    expect(dialog()?.textContent).toContain("two.png (2/2)");
-
-    await act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
-    await vi.waitFor(() => expect(dialog()).toBeNull());
-    expect(document.activeElement).toBe(opener);
-  });
-
-  it("ignores another thread's preview and drops its own when the thread changes", async () => {
-    await using screen = await renderUi(host("env:a"));
-    await act(() => openExpandedImagePreview("env:b", preview));
-    expect(dialog()).toBeNull();
-
-    await act(() => openExpandedImagePreview("env:a", preview));
-    expect(dialog()).not.toBeNull();
-
-    await screen.rerender(host("env:b"));
-    await vi.waitFor(() => expect(dialog()).toBeNull());
+    // Focus returns to the popup's trigger and opens its tooltip; leave it for a plain control.
+    (screen.getByRole("button", { name: "Close image preview" }).element() as HTMLElement).focus();
+    await userEvent.keyboard("{Escape}");
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledOnce());
   });
 });

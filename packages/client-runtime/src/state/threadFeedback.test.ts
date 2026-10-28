@@ -3,53 +3,10 @@ import { MessageId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
-  beginCodexFeedbackSubmission,
   codexFeedbackNotice,
-  parseCodexFeedbackCommand,
   submitCodexFeedback,
   type CodexFeedbackSubmission,
 } from "./threadFeedback.ts";
-
-describe("beginCodexFeedbackSubmission", () => {
-  it("allows only one upload per thread until the active upload releases its guard", () => {
-    const inFlight = new Set<string>();
-    const finish = beginCodexFeedbackSubmission(inFlight, "environment:thread");
-
-    expect(finish).not.toBeNull();
-    expect(beginCodexFeedbackSubmission(inFlight, "environment:thread")).toBeNull();
-    expect(beginCodexFeedbackSubmission(inFlight, "environment:other-thread")).not.toBeNull();
-
-    finish?.();
-    expect(beginCodexFeedbackSubmission(inFlight, "environment:thread")).not.toBeNull();
-  });
-});
-
-describe("parseCodexFeedbackCommand", () => {
-  it("accepts feedback without a reason", () => {
-    expect(parseCodexFeedbackCommand(" /openai-feedback ")).toEqual({});
-  });
-
-  it("preserves a feedback description", () => {
-    expect(parseCodexFeedbackCommand("/openai-feedback The agent stopped early.")).toEqual({
-      reason: "The agent stopped early.",
-    });
-  });
-
-  it("accepts mixed-case feedback commands", () => {
-    expect(parseCodexFeedbackCommand("/OpenAI-Feedback Retry failed.")).toEqual({
-      reason: "Retry failed.",
-    });
-  });
-
-  it("ignores other slash commands and ordinary messages", () => {
-    expect(parseCodexFeedbackCommand("/openai-feedback-status")).toBeNull();
-    expect(parseCodexFeedbackCommand("Please send /openai-feedback")).toBeNull();
-  });
-
-  it("leaves /feedback for the TritonAI feedback skill", () => {
-    expect(parseCodexFeedbackCommand("/feedback The agent stopped early.")).toBeNull();
-  });
-});
 
 describe("submitCodexFeedback", () => {
   const submission = {

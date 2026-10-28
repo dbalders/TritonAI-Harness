@@ -4,46 +4,55 @@ import { userEvent } from "vite-plus/test/browser";
 import { render, type Screen } from "../../../test/render";
 import { SecretInput } from "./SecretInput";
 
-const input = (screen: Screen) => screen.container.querySelector("input")!;
+const input = (screen: Screen) => screen.getByLabelText("API key", { exact: true });
 
-async function edit(screen: Screen, value: string) {
-  await userEvent.clear(input(screen));
-  if (value) await userEvent.type(input(screen), value);
-  await userEvent.click(document.body);
+function settings(onCommit: (value: string) => void) {
+  return (
+    <>
+      <SecretInput aria-label="API key" configured value="" onCommit={onCommit} />
+      <button type="button">Another setting</button>
+    </>
+  );
 }
+
+const blur = (screen: Screen) =>
+  userEvent.click(screen.getByRole("button", { name: "Another setting", exact: true }));
 
 describe("SecretInput", () => {
   it("preserves a configured secret on empty edits and commits a replacement", async () => {
     const onCommit = vi.fn();
-    await using screen = await render(<SecretInput configured value="" onCommit={onCommit} />);
-    expect(input(screen).type).toBe("password");
+    await using screen = await render(settings(onCommit));
+    await expect.element(input(screen)).toHaveAttribute("type", "password");
 
     await userEvent.click(input(screen));
-    await userEvent.click(document.body);
+    await blur(screen);
     expect(onCommit).not.toHaveBeenCalled();
 
-    await edit(screen, "replacement");
+    // These cases verify draft/commit boundaries, so fill in one browser command.
+    // A timed-out per-character type can keep sending keys into the following test.
+    await userEvent.fill(input(screen), "replacement");
+    await expect.element(input(screen)).toHaveValue("replacement");
+    expect(onCommit).not.toHaveBeenCalled();
+    await blur(screen);
     expect(onCommit).toHaveBeenCalledExactlyOnceWith("replacement");
-    expect(input(screen).value).toBe("");
-  });
-
-  it("allows clearing an unsaved draft", async () => {
-    const onCommit = vi.fn();
-    await using screen = await render(<SecretInput value="draft" onCommit={onCommit} />);
-    await edit(screen, "");
-    expect(onCommit).toHaveBeenCalledExactlyOnceWith("");
+    await expect.element(input(screen)).toHaveValue("");
   });
 
   it("keeps an in-progress replacement when settings refresh", async () => {
     const onCommit = vi.fn();
-    const ui = () => <SecretInput configured value="" onCommit={onCommit} />;
+    const ui = () => settings(onCommit);
     await using screen = await render(ui());
 
-    await userEvent.type(input(screen), "replacement");
+    await userEvent.fill(input(screen), "replacement");
+    await expect.element(input(screen)).toHaveValue("replacement");
     await screen.rerender(ui());
-    expect(input(screen).value).toBe("replacement");
+    await expect.element(input(screen)).toHaveValue("replacement");
+    expect(onCommit).not.toHaveBeenCalled();
 
+    await expect.element(input(screen)).toHaveFocus();
     await userEvent.keyboard("{Enter}");
     expect(onCommit).toHaveBeenCalledExactlyOnceWith("replacement");
+    await expect.element(input(screen)).not.toHaveFocus();
+    await expect.element(input(screen)).toHaveValue("");
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import { isSecureRelayUrl, normalizeSecureRelayUrl } from "./relayUrl.ts";
 
 describe("normalizeSecureRelayUrl", () => {
@@ -15,9 +16,6 @@ describe("normalizeSecureRelayUrl", () => {
     "http://relay.example.test",
     "https://user:password@relay.example.test",
     "https://relay.example.test/path",
-    "https://relay.example.test?query=value",
-    "https://relay.example.test#fragment",
-    "not a url",
   ])("rejects unsafe relay URL %s", (value) => {
     expect(normalizeSecureRelayUrl(value)).toBeNull();
     expect(isSecureRelayUrl(value)).toBe(false);

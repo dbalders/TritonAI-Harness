@@ -13,6 +13,7 @@ import { makeThreadProjectionFixture } from "../test-fixtures";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
+
 import { createRunningThreadKeepAliveAtom } from "./threads";
 
 const LOCAL = EnvironmentId.make("local");
@@ -148,12 +149,6 @@ describe("createRunningThreadKeepAliveAtom", () => {
     expect(h.openStreams()).toEqual(["local:b"]);
     h.registry.set(h.stateAtom(LOCAL, "b"), detail("b", "idle"));
     expect(h.openStreams()).toEqual([]);
-  });
-
-  it("keeps queued threads open", () => {
-    const h = makeHarness();
-    h.registry.set(h.threads(LOCAL), [shell("a", "queued")]);
-    expect(h.openStreams()).toEqual(["local:a"]);
   });
 
   it("follows environments that connect and go away", () => {

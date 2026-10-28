@@ -10,9 +10,11 @@ import {
   PROMPT_LINK_MAX_PROMPT_LENGTH,
   type PromptLinkRepository,
 } from "@t3tools/shared/promptLinks";
+
 import { type ComposerThreadTarget, useComposerDraftStore } from "~/composerDraftStore";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { configuredHostedAppUrl } from "~/hostedPairing";
+
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
 /** A shareable link to a prompt on the hosted app, or null when the prompt cannot fit in one. */

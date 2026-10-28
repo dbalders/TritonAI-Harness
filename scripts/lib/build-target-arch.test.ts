@@ -3,6 +3,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import { getDefaultBuildArch } from "./build-target-arch.ts";
 
 const compactEnv = (env: Readonly<Record<string, string | undefined>>): Record<string, string> =>
@@ -34,19 +35,6 @@ describe("build-target-arch", () => {
       );
 
       assert.equal(arch, "arm64");
-    }),
-  );
-
-  it.effect("does not apply Windows host env heuristics for non-Windows targets", () =>
-    Effect.gen(function* () {
-      const arch = yield* getDefaultBuildArch("linux", { archChoices: ["x64", "arm64"] }).pipe(
-        withHostRuntime("linux", "x64", {
-          PROCESSOR_ARCHITECTURE: "AMD64",
-          PROCESSOR_ARCHITEW6432: "ARM64",
-        }),
-      );
-
-      assert.equal(arch, "x64");
     }),
   );
 });

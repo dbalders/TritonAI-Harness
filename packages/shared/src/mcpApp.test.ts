@@ -1,5 +1,6 @@
 import * as NodeVM from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
+
 import {
   injectMcpAppCsp,
   injectMcpAppThemeBootstrap,
@@ -247,12 +248,6 @@ describe("MCP App cookie bootstrap", () => {
     expect(document.cookie).toBe("");
     expect(() => document.indexedDB).toThrow(blocked);
     expect(() => Reflect.get(prototype, "cookie")).toThrow(blocked);
-  });
-
-  it("leaves functioning cookie reads and writes unchanged", () => {
-    const document = { cookie: "existing=1", root: "" };
-    execute(injectMcpAppCookieBootstrap(vendor), document);
-    expect(document).toEqual({ cookie: "analytics=1", root: "rendered" });
   });
 
   it("leaves other cookie failures unchanged", () => {

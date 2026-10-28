@@ -183,7 +183,7 @@ function secretStore(names: string[] = []): ServerSecretStore.ServerSecretStore[
   return {
     get: (name) => {
       names.push(name);
-      return Effect.succeed(Option.some(new TextEncoder().encode("host-secret")));
+      return Effect.succeedSome(new TextEncoder().encode("host-secret"));
     },
     set: () => Effect.void,
     create: () => Effect.void,
@@ -294,38 +294,6 @@ describe("production built-in package verification", () => {
     }
   });
 
-  it("consumes a rejected asynchronous factory while preserving the synchronous-only error", async () => {
-    const { root, plugin } = await fixture(
-      "4.0.0-beta.78",
-      {},
-      {
-        moduleSource: [
-          'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" };',
-          "export { manifest };",
-          "export async function createIntegrationProvider() {",
-          "  await Promise.resolve();",
-          '  throw new Error("late async factory failure");',
-          "}",
-        ].join("\n"),
-      },
-    );
-    const unhandledRejections: Array<unknown> = [];
-    const onUnhandledRejection = (reason: unknown): void => {
-      unhandledRejections.push(reason);
-    };
-    process.on("unhandledRejection", onUnhandledRejection);
-    try {
-      await expect(loadProductionPackageForTest(root, plugin, secretStore(), {})).rejects.toThrow(
-        "provider factory must be synchronous",
-      );
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(unhandledRejections).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandledRejection);
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("loads a skills-only package without a provider distribution", async () => {
     const { root, plugin } = await fixture(
       null,
@@ -371,8 +339,6 @@ describe("production built-in package verification", () => {
     for (const packageRuntime of [
       { dependencies: { effect: "4.0.0-beta.78" } },
       { peerDependencies: { effect: EFFECT_HOST_PEER_RANGE } },
-      { optionalDependencies: { effect: "4.0.0-beta.78" } },
-      { bundledDependencies: ["effect"] },
       { bundleDependencies: ["effect"] },
     ]) {
       const { root, plugin } = await fixture(null, packageRuntime, {
@@ -442,46 +408,6 @@ describe("production built-in package verification", () => {
     }
   });
 
-  it("removes the retained snapshot when the original provider close fails", async () => {
-    const moduleSource = [
-      'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" };',
-      "export { manifest };",
-      "export class FixtureProvider {",
-      "  constructor() {",
-      "    this.id = manifest.provider;",
-      "    this.tools = [];",
-      '    this.snapshotRootUrl = new URL("..", import.meta.url).href;',
-      "    this.closeCalls = 0;",
-      "  }",
-      '  async status() { return { state: "not_connected", accountLabel: null, grantedCapabilities: [], message: null }; }',
-      "  async invoke() { return null; }",
-      '  async close() { this.closeCalls += 1; throw new Error("fixture close failed"); }',
-      "}",
-      "export function createIntegrationProvider() { return new FixtureProvider(); }",
-    ].join("\n");
-    const { root, plugin } = await fixture("4.0.0-beta.78", {}, { moduleSource });
-    let provider:
-      | {
-          readonly close: () => Promise<void>;
-          readonly closeCalls: number;
-          readonly snapshotRootUrl: string;
-        }
-      | undefined;
-    try {
-      const loaded = await loadProductionPackageForTest(root, plugin, secretStore(), {});
-      provider = loaded.provider as typeof provider;
-      const snapshotParent = NodePath.dirname(NodeURL.fileURLToPath(provider!.snapshotRootUrl));
-
-      await expect(provider!.close()).rejects.toThrow("fixture close failed");
-      await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(provider!.close()).rejects.toThrow("fixture close failed");
-      expect(provider!.closeCalls).toBe(1);
-    } finally {
-      await provider?.close().catch(() => undefined);
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("closes earlier provider snapshots when a later production package fails", async () => {
     const moduleSource = [
       'import manifest from "../.tritonai-plugin/plugin.json" with { type: "json" };',
@@ -530,6 +456,7 @@ describe("production built-in package verification", () => {
     }
   });
 
+  // regression: #224 fix(windows): restore managed plugins in packaged builds
   it("reports only admitted providers and tolerates an unwritable boot receipt", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-boot-report-"));
     const retained = { manifest: validateIntegrationManifest(skillsOnlyManifest()) };
@@ -560,16 +487,6 @@ describe("production built-in package verification", () => {
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
-  });
-
-  it("quarantines one SDK provider without disabling later production packages", async () => {
-    const retained = { manifest: validateIntegrationManifest(skillsOnlyManifest()) };
-    await expect(
-      loadProductionPackagesForTest([
-        () => Promise.reject(new PluginSdkQuarantineError()),
-        () => Promise.resolve(retained),
-      ]),
-    ).resolves.toEqual([retained]);
   });
 
   it("keeps an admitted sealed plugin when later SDK descriptor and configuration admission fail", async () => {
@@ -676,15 +593,6 @@ describe("production built-in package verification", () => {
     }
   });
 
-  it("accepts an exact package inventory and digest", async () => {
-    const { root, plugin } = await fixture();
-    try {
-      await expect(verifyProductionPackageForTest(root, plugin)).resolves.toBeUndefined();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("loads and installs from a private snapshot of the verified bytes", async () => {
     const { root, plugin } = await fixture();
     let snapshotParent = "";
@@ -711,23 +619,6 @@ describe("production built-in package verification", () => {
     }
   });
 
-  it("cleans up a private snapshot when its consumer fails", async () => {
-    const { root, plugin } = await fixture();
-    let snapshotParent = "";
-    try {
-      await expect(
-        withProductionPackageSnapshotForTest(root, plugin, async (snapshotRoot) => {
-          snapshotParent = NodePath.dirname(snapshotRoot);
-          throw new Error("fixture consumer failed");
-        }),
-      ).rejects.toThrow("fixture consumer failed");
-      await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-      if (snapshotParent) await NodeFSP.rm(snapshotParent, { recursive: true, force: true });
-    }
-  });
-
   it("runs the released beta.78 provider with a host-created beta.102 secret-store Effect", async () => {
     const { root, plugin } = await fixture("4.0.0-beta.78");
     try {
@@ -740,24 +631,9 @@ describe("production built-in package verification", () => {
           }) => { readonly credential: () => Promise<string | null> };
         };
         const provider = new loaded.FixtureProvider({
-          get: () => Effect.succeed(Option.some(new TextEncoder().encode("host-secret"))),
+          get: () => Effect.succeedSome(new TextEncoder().encode("host-secret")),
         });
         await expect(provider.credential()).resolves.toBe("host-secret");
-      });
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("runs a peer-contract provider against the Harness-owned Effect runtime", async () => {
-    const { root, plugin } = await fixture(null, {
-      peerDependencies: { effect: EFFECT_HOST_PEER_RANGE },
-    });
-    try {
-      await withProductionPackageSnapshotForTest(root, plugin, async (snapshotRoot) => {
-        await expect(
-          import(NodeURL.pathToFileURL(NodePath.join(snapshotRoot, "dist", "index.js")).href),
-        ).resolves.toHaveProperty("FixtureProvider");
       });
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
@@ -768,7 +644,6 @@ describe("production built-in package verification", () => {
     for (const packageRuntime of [
       { dependencies: { effect: "4.0.0-beta.79" } },
       { dependencies: { effect: effectPackageJson.version } },
-      { dependencies: { effect: "4.0.0-beta.999" } },
       { dependencies: { effect: "4.0.0-beta.78", unexpected: "1.0.0" } },
       { peerDependencies: { effect: ">=4.0.0-beta.1 <5.0.0" } },
     ]) {

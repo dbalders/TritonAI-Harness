@@ -1,7 +1,9 @@
 import { MessageCircle, Trash2 } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
+
 import { isCommentSubmitShortcut } from "./commentSubmitShortcut";
 
 interface DiffCommentSecondaryAction {
@@ -79,8 +81,7 @@ export function DiffCommentAnnotation({
     );
   }
 
-  // Editable file annotations inherit Pierre's transparent native caret and selection.
-  // Comments use a native textarea, so they need their own visible text feedback.
+  // Pierre hides native carets and selection; textarea comments need their own visible feedback.
   return (
     <div
       data-diff-comment-annotation

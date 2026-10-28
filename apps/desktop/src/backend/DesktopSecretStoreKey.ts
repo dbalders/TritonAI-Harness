@@ -216,15 +216,12 @@ const captureLegacySecretFingerprints = Effect.fn(
 )(function* (secretsDir: string, activeKey: Uint8Array) {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
-  const entries = yield* fileSystem
-    .readDirectory(secretsDir)
-    .pipe(
-      Effect.catch((cause) =>
-        cause.reason._tag === "NotFound"
-          ? Effect.succeed([] as ReadonlyArray<string>)
-          : Effect.fail(cause),
-      ),
-    );
+  const entries = yield* fileSystem.readDirectory(secretsDir).pipe(
+    Effect.catchIf(
+      (cause) => cause.reason._tag === "NotFound",
+      (_cause) => Effect.succeed([] as ReadonlyArray<string>),
+    ),
+  );
   const values: LegacySecretValue[] = [];
   for (const entry of entries) {
     if (!entry.endsWith(".bin")) continue;
@@ -341,10 +338,9 @@ const readInitializedMarker = Effect.fn("desktop.secretStoreKey.readInitializedM
       }
       return Option.some<"initialized">("initialized");
     }),
-    Effect.catch((cause) =>
-      cause.reason._tag === "NotFound"
-        ? Effect.succeed(Option.none<"initialized" | "invalid">())
-        : Effect.fail(cause),
+    Effect.catchIf(
+      (cause) => cause.reason._tag === "NotFound",
+      (_cause) => Effect.succeed(Option.none<"initialized" | "invalid">()),
     ),
   );
 });
@@ -396,9 +392,10 @@ const migrateLegacyValue = Effect.fn("desktop.secretStoreKey.migrateLegacyValue"
   const fileSystem = yield* FileSystem.FileSystem;
   const secretPath = environment.path.join(secretsDir, `${name}.bin`);
   const storedOption = yield* fileSystem.readFile(secretPath).pipe(
-    Effect.map(Option.some),
-    Effect.catch((cause) =>
-      cause.reason._tag === "NotFound" ? Effect.succeed(Option.none()) : Effect.fail(cause),
+    Effect.asSome,
+    Effect.catchIf(
+      (cause) => cause.reason._tag === "NotFound",
+      (_cause) => Effect.succeedNone,
     ),
   );
   if (Option.isNone(storedOption)) return;
@@ -500,9 +497,10 @@ export const resolve = Effect.fn("desktop.secretStoreKey.resolve")(function* () 
   yield* fileSystem.chmod(environment.stateDir, 0o700);
 
   const wrapped = yield* fileSystem.readFile(wrappedKeyPath).pipe(
-    Effect.map(Option.some),
-    Effect.catch((cause) =>
-      cause.reason._tag === "NotFound" ? Effect.succeed(Option.none()) : Effect.fail(cause),
+    Effect.asSome,
+    Effect.catchIf(
+      (cause) => cause.reason._tag === "NotFound",
+      (_cause) => Effect.succeedNone,
     ),
   );
   const initialized = yield* readInitializedMarker(initializedPath);
@@ -517,7 +515,7 @@ export const resolve = Effect.fn("desktop.secretStoreKey.resolve")(function* () 
   }
 
   const loadedMaterial = yield* Option.match(wrapped, {
-    onNone: () =>
+    onNone: Effect.fn("onNone")(() =>
       Effect.gen(function* () {
         const activeKey = yield* crypto.randomBytes(DATA_KEY_BYTES);
         const legacySecretFingerprints = yield* captureLegacySecretFingerprints(
@@ -529,6 +527,7 @@ export const resolve = Effect.fn("desktop.secretStoreKey.resolve")(function* () 
           legacySecretFingerprints,
         } satisfies DesktopSecretStoreKeyMaterial;
       }),
+    ),
     onSome: (bytes) =>
       safeStorage.decryptString(Uint8Array.from(bytes)).pipe(
         Effect.mapError((cause) =>

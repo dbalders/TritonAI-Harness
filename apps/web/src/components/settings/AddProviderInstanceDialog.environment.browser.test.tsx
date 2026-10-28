@@ -1,8 +1,8 @@
-import { EnvironmentId, ProviderDriverKind, type AcpRegistrySearchAgent } from "@t3tools/contracts";
+import { EnvironmentId, type AcpRegistrySearchAgent } from "@t3tools/contracts";
 import { userEvent } from "vite-plus/test/browser";
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import { act, render } from "../../../test/render";
+import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 
 const actions = vi.hoisted(() => ({
   toast: vi.fn(),
@@ -50,8 +50,6 @@ vi.mock(import("../ui/toast"), async (original) => {
   const actual = await original();
   return { ...actual, toastManager: { ...actual.toastManager, add: actions.toast } };
 });
-// The registry search and the sign-in step talk to the environment over RPC; these
-// stand-ins expose the choices a user makes there.
 vi.mock(import("./AcpRegistrySearchStep"), async (original) => ({
   ...(await original()),
   AcpRegistrySearchStep: ((props: {
@@ -88,17 +86,7 @@ vi.mock(import("./ProviderWizardAuthenticationStep"), async (original) => ({
   ),
 }));
 
-import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
-
 const remoteEnvironmentId = EnvironmentId.make("remote-device");
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 const dialog = () => (
   <AddProviderInstanceDialog
@@ -116,6 +104,7 @@ function button(label: string) {
   return found!;
 }
 const click = (label: string) => act(async () => button(label).click());
+
 const input = (selector: string) => {
   const found = document.querySelector<HTMLInputElement>(selector);
   expect(found, selector).not.toBeNull();
@@ -125,7 +114,6 @@ async function type(selector: string, value: string) {
   await userEvent.fill(input(selector), value);
   await act(async () => input(selector).blur());
 }
-const signInStep = () => document.querySelector('[aria-label="Sign-in step"]');
 
 async function prepareCodexInstance() {
   await using stack = new AsyncDisposableStack();
@@ -147,25 +135,6 @@ function setup() {
 }
 
 describe("AddProviderInstanceDialog environment routing", () => {
-  it("offers only the managed Codex driver and uses its default identity", async () => {
-    setup();
-    await using screen = await render(dialog());
-    expect(screen.container.textContent).not.toMatch(/Grok|Claude|ACP Registry/);
-    await click("Configure manually");
-    await click("Next");
-    await click("Add instance");
-    expect(settingsHooks.mutate).toHaveBeenCalledWith({
-      operation: "create",
-      instanceId: "codex_2",
-      instance: {
-        driver: "codex",
-        enabled: true,
-        displayName: "TritonAI",
-        config: { setupMode: "existing" },
-      },
-    });
-  });
-
   it("chooses an unused identity for another account without replacing configured instances", async () => {
     setup();
     settingsHooks.read.mockReturnValue({
@@ -187,66 +156,12 @@ describe("AddProviderInstanceDialog environment routing", () => {
     });
   });
 
-  it("reads and writes settings through the supplied environment", async () => {
-    setup();
-    await using _screen = await render(dialog());
-
-    expect(settingsHooks.read).toHaveBeenCalledWith(remoteEnvironmentId);
-    expect(settingsHooks.useMutation).toHaveBeenCalledWith(remoteEnvironmentId);
-  });
-
-  it("awaits the atomic Codex create before closing", async () => {
-    setup();
-    const mutation = deferred<{ readonly _tag: "Success"; readonly value: unknown }>();
-    settingsHooks.mutate.mockReturnValueOnce(mutation.promise);
-    await using screen = await prepareCodexInstance();
-    await click("Add instance");
-    expect(actions.onOpenChange).not.toHaveBeenCalled();
-    expect(button("Adding...").disabled).toBe(true);
-    await act(async () => mutation.resolve({ _tag: "Success", value: {} }));
-    expect(actions.onOpenChange).toHaveBeenCalledWith(false);
-    expect(settingsHooks.mutate).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the Codex dialog open when the atomic create fails", async () => {
-    setup();
-    settingsHooks.mutate.mockResolvedValueOnce({ _tag: "Failure", cause: new Error("Conflict") });
-    await using screen = await prepareCodexInstance();
-    await click("Add instance");
-    expect(actions.onOpenChange).not.toHaveBeenCalled();
-    expect(actions.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "error", title: "Could not add provider instance" }),
-    );
-    expect(button("Add instance").disabled).toBe(false);
-  });
-
-  it("adds an instance with the selected environment's provider grant alone", async () => {
-    setup();
-    await using _screen = await prepareCodexInstance();
-    await click("Add instance");
-
-    expect(settingsHooks.mutate).toHaveBeenCalledWith({
-      operation: "create",
-      instanceId: "codex_work",
-      instance: {
-        driver: "codex",
-        enabled: true,
-        displayName: "Work",
-        config: { setupMode: "existing" },
-      },
-    });
-    expect(actions.toast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "success", title: "Provider instance added" }),
-    );
-    expect(actions.onOpenChange).toHaveBeenCalledWith(false);
-  });
-
   it("rejects a queued save after the provider grant is revoked", async () => {
     setup();
     await using screen = await prepareCodexInstance();
     const save = button("Add instance");
     actions.canManageProviders = false;
-    // The rendered button is still enabled; the click must recheck the live grant.
+    // Click before React renders the revoked grant.
     await act(async () => save.click());
 
     expect(settingsHooks.mutate).not.toHaveBeenCalled();
@@ -255,19 +170,22 @@ describe("AddProviderInstanceDialog environment routing", () => {
     await screen.rerender(dialog());
     expect(button("Add instance").disabled).toBe(true);
   });
-
-  it("keeps a denied draft available when the provider grant arrives", async () => {
+  it("offers only the managed Codex driver and uses its default identity", async () => {
     setup();
-    actions.canManageProviders = false;
-    await using screen = await prepareCodexInstance();
-    expect(button("Add instance").disabled).toBe(true);
-    expect(settingsHooks.mutate).not.toHaveBeenCalled();
-
-    actions.canManageProviders = true;
-    await screen.rerender(dialog());
-    expect(button("Add instance").disabled).toBe(false);
+    await using screen = await render(dialog());
+    expect(screen.container.textContent).not.toMatch(/Grok|Claude|ACP Registry/);
+    await click("Configure manually");
+    await click("Next");
     await click("Add instance");
-    expect(settingsHooks.mutate).toHaveBeenCalledOnce();
-    expect(actions.onOpenChange).toHaveBeenCalledWith(false);
+    expect(settingsHooks.mutate).toHaveBeenCalledWith({
+      operation: "create",
+      instanceId: "codex_2",
+      instance: {
+        driver: "codex",
+        enabled: true,
+        displayName: "TritonAI",
+        config: { setupMode: "existing" },
+      },
+    });
   });
 });

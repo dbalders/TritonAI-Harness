@@ -27,12 +27,9 @@ export function redactHelpText(value: string): string {
 }
 
 export function safeHelpText(value: string, limit: number): string {
-  return (
-    redactHelpText(value)
-      // oxlint-disable-next-line no-control-regex -- Strip control characters from untrusted support text.
-      .replace(/[\u0000-\u001f\u007f]/g, " ")
-      .slice(0, limit)
-  );
+  return redactHelpText(value)
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .slice(0, limit);
 }
 
 export function helpSettingRequested(key: string, question: string): boolean {

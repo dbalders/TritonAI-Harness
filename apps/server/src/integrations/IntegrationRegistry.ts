@@ -84,11 +84,9 @@ export interface IntegrationInvocationContext {
 
 export interface IntegrationLifecycleContext extends IntegrationInvocationContext {
   /**
-   * Admit the provider's final external commit point. The provider must await this immediately
-   * before a narrow, internally bounded commit tail and recover before rejecting that tail. The
-   * host journals admission first, rejects admission when cancellation already won, and faults the
-   * provider if the admitted tail outlives its watchdog. Fallible commit-tail work must use the
-   * returned signal, which aborts shortly before that watchdog fires.
+   * Await admission immediately before a bounded external commit tail; recover before rejection.
+   * The host journals first, rejects prior cancellation, and faults watchdog overruns.
+   * Use the returned signal for fallible tail work; it aborts before the watchdog.
    */
   beginCommit(): Promise<AbortSignal>;
 }
@@ -230,7 +228,7 @@ export interface IntegrationProviderFault {
  * Records a provider fault in the server trace. Server logs reach the trace file only as events on
  * an active span, and a fault is reported from outside any span, so the warning gets its own.
  */
-export const logProviderFault = (fault: IntegrationProviderFault) =>
+const logProviderFault = (fault: IntegrationProviderFault) =>
   Effect.logWarning("integrations.provider.faulted", fault).pipe(
     Effect.withSpan("integrations.provider.faulted", {
       attributes: {
@@ -673,7 +671,7 @@ function capabilityNames(manifest: IntegrationManifest, ids: ReadonlyArray<strin
  * The refusal, if any, that the persisted install state alone imposes on a tool: not installed,
  * a version that does not match the catalog, disabled, or none of its capabilities selected.
  */
-export function persistedToolUnavailability(
+function persistedToolUnavailability(
   manifest: IntegrationManifest,
   tool: IntegrationManifest["tools"][number],
   installed: InstalledIntegrationState | undefined,
@@ -1150,11 +1148,9 @@ export class RegistryRuntime {
     await NodeFSP.rm(stagingRoot, { recursive: true, force: true });
     for (const integration of this.#catalog.values()) {
       const { manifest } = integration;
-      // Only this reviewed included plugin starts on. Manifest capability defaults alone
-      // never install another integration, and an explicit removal always wins.
-      // Migration policy: this new package ID has no previously shipped uninstall history.
-      // Legacy state without an installed record or removal marker means first appearance;
-      // old state cannot distinguish an unpublished experimental removal from no install.
+      // Only this reviewed included plugin starts enabled; capability defaults install nothing.
+      // Explicit removal wins. For this new package ID, absent install/removal records mean
+      // first appearance; unpublished experimental removals cannot be inferred from legacy state.
       const installed =
         ownRecordValue(this.#state.installed, manifest.id) ??
         (manifest.id === "ucsd-assistant" && !this.#state.uninstalled?.includes(manifest.id)
@@ -2091,15 +2087,8 @@ export class RegistryRuntime {
   }
 
   /**
-   * Refresh credentials for connected integrations that no tool call has touched recently.
-   *
-   * Providers only renew inside `prepare`, which runs on invocation, so an integration nobody
-   * calls never rotates its credential. Remote grants with a finite refresh-token lifetime
-   * expire on exactly that silence and send the user back through a browser sign-in. Touching
-   * an idle provider keeps the grant rolling without waiting for someone to use it.
-   *
-   * Opportunistic by design: a provider that cannot refresh right now reports through its own
-   * status, and the next real invocation surfaces it.
+   * Refresh idle credentials via prepare so finite-lived remote grants keep rotating.
+   * Failures remain opportunistic: provider status and the next invocation surface them.
    */
   async refreshIdleCredentials(options: {
     readonly idleThresholdMs: number;
@@ -3797,7 +3786,7 @@ export const startupLayer = Layer.effectDiscard(
             await registry.list();
           },
           catch: () => undefined,
-        }).pipe(Effect.catch(() => Effect.void)),
+        }).pipe(Effect.ignore),
       ),
       Effect.forkScoped,
     );

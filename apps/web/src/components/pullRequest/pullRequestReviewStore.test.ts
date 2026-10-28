@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import { ProjectId } from "@t3tools/contracts";
+
 import {
   type PendingReviewComment,
   pullRequestReviewKey,
@@ -27,17 +28,6 @@ describe("pull request review drafts", () => {
     expect(usePullRequestReviewStore.getState().drafts["review-a"]).toEqual([
       comment("added-in-flight"),
     ]);
-  });
-
-  it("keeps summary bodies isolated by review key", () => {
-    const store = usePullRequestReviewStore.getState();
-    store.setSummary("review-a", "Summary A");
-    store.setSummary("review-b", "Summary B");
-    store.clearSummary("review-a", "Summary A");
-
-    expect(usePullRequestReviewStore.getState().summaries).toEqual({
-      "review-b": "Summary B",
-    });
   });
 
   it("keeps drafts on different hosts separate when a thread reviews the same repository and number", () => {

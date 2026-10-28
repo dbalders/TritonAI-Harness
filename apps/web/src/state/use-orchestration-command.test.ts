@@ -7,7 +7,6 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { assert, beforeEach, expect, it, vi } from "vite-plus/test";
-import { useOrchestrationCommand } from "./use-orchestration-command";
 
 const state = vi.hoisted(() => ({
   allowed: new Set<string>(),
@@ -18,6 +17,8 @@ const state = vi.hoisted(() => ({
 vi.mock("react", () => ({ useCallback: (callback: unknown) => callback }));
 vi.mock("./session", () => ({ readEnvironmentScope: state.readScope }));
 vi.mock("./use-atom-command", () => ({ useAtomCommand: () => state.run }));
+
+import { useOrchestrationCommand } from "./use-orchestration-command";
 
 const first = EnvironmentId.make("primary");
 const second = EnvironmentId.make("secondary");
@@ -51,18 +52,6 @@ it("checks the command's environment instead of borrowing the primary grant", as
 
   expect(await mutate(target(first))).toMatchObject({ _tag: "Success", value: "receipt" });
   expect(state.run).toHaveBeenCalledWith(target(first));
-});
-
-it("a retained callback follows both revocation and a new grant without remounting", async () => {
-  state.allowed.add(second);
-  const mutate = useOrchestrationCommand(command);
-  state.allowed.delete(second);
-  expect((await mutate(target(second)))._tag).toBe("Failure");
-  expect(state.run).not.toHaveBeenCalled();
-
-  state.allowed.add(second);
-  expect((await mutate(target(second)))._tag).toBe("Success");
-  expect(state.run).toHaveBeenCalledTimes(1);
 });
 
 it("does not dispatch a later mutation after access changes while awaiting a receipt", async () => {

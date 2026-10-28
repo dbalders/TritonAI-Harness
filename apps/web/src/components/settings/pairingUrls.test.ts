@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
 
 describe("settings pairing URL helpers", () => {

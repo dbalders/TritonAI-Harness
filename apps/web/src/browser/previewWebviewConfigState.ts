@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
+
 import { previewBridge } from "~/components/preview/previewBridge";
 
 const PREVIEW_CONFIG_STALE_TIME_MS = 5 * 60_000;
@@ -42,7 +43,7 @@ export type PreviewWebviewConfigError = typeof PreviewWebviewConfigError.Type;
 
 type PreviewConfigBridge = Pick<DesktopPreviewBridge, "getPreviewConfig">;
 
-export const loadPreviewWebviewConfig = (
+const loadPreviewWebviewConfig = (
   environmentId: EnvironmentId,
   profileId?: string,
   bridge: PreviewConfigBridge | null = previewBridge,
@@ -57,15 +58,7 @@ export const loadPreviewWebviewConfig = (
   });
 };
 
-/**
- * `Atom.family` keys on its argument, so the environment and profile are
- * folded into one string: passing an object would allocate a fresh entry on
- * every render.
- *
- * The profile is the tail rather than a second field, so an id containing the
- * delimiter round-trips whole instead of being truncated into a different
- * profile's key.
- */
+// Atom.family needs a primitive key; keep profile last so delimiter-containing ids round-trip.
 const CONFIG_KEY_DELIMITER = "\u0000";
 
 const configKey = (environmentId: EnvironmentId, profileId: string | undefined): string =>

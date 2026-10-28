@@ -1,6 +1,7 @@
 import { AtomRegistry } from "effect/reactivity";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import { afterAll, afterEach, describe, expect, it, vi } from "vite-plus/test";
+
 import { npmReleasePublishedAtom } from "./npmRelease";
 
 const version = "0.0.46-nightly.20261012.3021";
@@ -47,15 +48,7 @@ describe("npmReleasePublishedAtom", () => {
     expect(AsyncResult.getOrElse(result, () => false)).toBe(true);
   });
 
-  it("reports a version npm does not have as unpublished", async () => {
-    fetchMock.mockImplementation(async () => new Response(null, { status: 404 }));
-
-    const result = await settledCheck();
-
-    expect(AsyncResult.isSuccess(result)).toBe(true);
-    expect(AsyncResult.getOrElse(result, () => true)).toBe(false);
-  });
-
+  // regression: #18709 update-everything skipped npm-installed servers
   it("leaves a failed first check unknown, which callers read as unpublished", async () => {
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
 

@@ -8,11 +8,8 @@ import { getIntegrationRegistryOptional } from "./IntegrationRegistry.ts";
 import { forkParked } from "../serverActivation.ts";
 
 /**
- * Remote OAuth grants renew only inside `prepare`, which the registry runs on tool invocation.
- * An integration nobody calls therefore never rotates its credential, and a provider whose
- * refresh token has a finite life expires on that silence: n8n drops a refresh token 30 days
- * after its last rotation, sending the user back through a browser sign-in for no reason other
- * than disuse. This sweep touches idle connections so the window keeps rolling.
+ * Touch idle connections through prepare so finite-lived OAuth refresh grants keep rotating.
+ * Without this sweep, disuse alone can force the user to sign in again.
  */
 const DEFAULT_IDLE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;

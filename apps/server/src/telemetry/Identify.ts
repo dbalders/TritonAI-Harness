@@ -1,11 +1,6 @@
 /**
- * Anonymous install identity for product analytics.
- *
- * A random UUID persisted under userdata. It is not derived from the machine,
- * the person, or provider accounts, and it is separate from the environment ID
- * so it can be reset without affecting pairing or auth. Deleting the file while
- * the server is stopped resets it.
- *
+ * Persist a random install UUID independent of auth, provider accounts, and environment ID.
+ * Delete its file while stopped to reset analytics identity without affecting pairing.
  * @module Identify
  */
 import * as Crypto from "effect/Crypto";
@@ -51,8 +46,9 @@ export const getAnonymousInstallId = Effect.gen(function* () {
       const linkNoClobber = (destination: string) =>
         fileSystem.link(tempPath, destination).pipe(
           Effect.as(true),
-          Effect.catch((cause) =>
-            cause.reason._tag === "AlreadyExists" ? Effect.succeed(false) : Effect.fail(cause),
+          Effect.catchIf(
+            (cause) => cause.reason._tag === "AlreadyExists",
+            () => Effect.succeed(false),
           ),
         );
       const linked = yield* linkNoClobber(anonymousIdPath);

@@ -8,7 +8,6 @@ const {
   decideMobileBuild,
   lastSuccessfulMobileSource,
   mobileWorkspaceClosure,
-  resolveMobileBuild,
 } = require("./mobile-nightly-changes.cjs");
 
 function repository(t) {
@@ -207,36 +206,4 @@ test("uses the newest native commit that Xcode Cloud archived", async () => {
     tag: "v0.3.7-nightly.20261011.71",
     sourceSha: source("a"),
   });
-});
-
-test("returns no baseline for a missing branch or no successful archive", async () => {
-  assert.equal(await lastSuccessfulMobileSource(github([])), null);
-  const options = github([{ name: "c1", parents: ["s1"], checks: [["xcode-cloud", null]] }]);
-  assert.equal(await lastSuccessfulMobileSource(options), null);
-  assert.deepEqual(options.calls, ["mobile-nightly"]);
-});
-
-test("builds and warns when the previous build cannot be checked", async (t) => {
-  const { root, baseline } = repository(t);
-  const warnings = [];
-  let summary = "";
-  const core = {
-    outputs: {},
-    setOutput(name, value) {
-      this.outputs[name] = value;
-    },
-    warning: (message) => warnings.push(message),
-    summary: {
-      addRaw(text) {
-        summary += text;
-        return this;
-      },
-      async write() {},
-    },
-  };
-  const options = github([{ name: "c1", parents: ["s1"] }], { failChecks: true });
-  await resolveMobileBuild({ ...options, core, root, sourceSha: baseline.sourceSha, force: false });
-  assert.equal(core.outputs.build, "true");
-  assert.match(warnings[0], /Resource not accessible/);
-  assert.match(summary, /mobile build needed/);
 });

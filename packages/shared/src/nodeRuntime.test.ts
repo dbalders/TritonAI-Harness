@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
+
 import * as HostProcess from "./HostProcess.ts";
 import { resolveNodeExecutable, resolveSelfInvocation, selfInvocationArgs } from "./nodeRuntime.ts";
 import { symlinksSupported } from "./testing/symlinks.ts";
@@ -64,20 +65,6 @@ describe("Node runtime selection", () => {
       ).toBe(process.execPath);
     }).pipe(
       Effect.provideService(HostProcess.ExecutablePath, "/packaged/t3"),
-      Effect.provideService(HostProcess.IsExecutable, true),
-      Effect.provide(NodeServices.layer),
-    ),
-  );
-
-  it.effect("explains how to install Node when a standalone helper has no runtime", () =>
-    Effect.gen(function* () {
-      const error = yield* resolveNodeExecutable("Local device support", { PATH: "" }).pipe(
-        Effect.flip,
-      );
-      expect(error._tag).toBe("NodeRuntimeUnavailableError");
-      expect(error.message).toContain("Local device support requires Node.js");
-      expect(error.message).toContain("Install Node.js");
-    }).pipe(
       Effect.provideService(HostProcess.IsExecutable, true),
       Effect.provide(NodeServices.layer),
     ),

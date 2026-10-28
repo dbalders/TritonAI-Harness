@@ -4,7 +4,7 @@ import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
+
 import * as PlatformError from "effect/PlatformError";
 
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -59,7 +59,7 @@ const makeSafeStorageLayer = (options?: {
 
 const makeDialogLayer = (response = 0) =>
   Layer.succeed(ElectronDialog.ElectronDialog, {
-    pickFolder: () => Effect.succeed(Option.none()),
+    pickFolder: () => Effect.succeedNone,
     pickFiles: () => Effect.succeed([]),
     confirm: () => Effect.succeed(false),
     showMessageBox: () => Effect.succeed({ response, checkboxChecked: false }),

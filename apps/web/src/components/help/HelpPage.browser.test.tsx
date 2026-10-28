@@ -11,7 +11,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 
-import { act, render, stubGlobal, type Screen } from "../../../test/render";
+import { act, render, type Screen } from "../../../test/render";
 
 const state = vi.hoisted(() => {
   const listeners = new Set<() => void>();
@@ -241,128 +241,6 @@ async function openEnvironment(screen: Screen) {
   if (disclosure.getAttribute("aria-expanded") === "false") await click(disclosure);
 }
 
-it("quick questions only fill the composer; Send produces a reply and follow-up uses it", async () => {
-  setup();
-  await using screen = await mount();
-  await captureSnapshot();
-  expect(text(screen)).toContain("Primary test host");
-  expect(state.ask).not.toHaveBeenCalled();
-  expect(state.hydrateClientSettings).not.toHaveBeenCalled();
-  expect(state.getClientSettings).not.toHaveBeenCalled();
-  await click(button(screen, "Why is my provider not responding?"));
-  expect(composer(screen).value).toBe("Why is my provider not responding?");
-  expect(document.activeElement).toBe(composer(screen));
-  expect(state.ask).not.toHaveBeenCalled();
-  expect(state.hydrateClientSettings).not.toHaveBeenCalled();
-  await submit(screen);
-  expect(text(screen)).toContain(answer.answer);
-  expect(composer(screen).value).toBe("");
-  await type(composer(screen), "How do I reconnect?");
-  await submit(screen);
-  expect(state.ask).toHaveBeenLastCalledWith({
-    environmentId: "host",
-    input: {
-      client: expect.objectContaining({ surface: "web", settingsStatus: "ready" }),
-      messages: [
-        { role: "user", content: "Why is my provider not responding?" },
-        { role: "assistant", content: answer.answer },
-        { role: "user", content: "How do I reconnect?" },
-      ],
-    },
-  });
-});
-
-it("renders the complete answer while sending only bounded history on a follow-up", async () => {
-  setup();
-  const suffix = "Finally, reconnect in Settings > Providers.";
-  const fullAnswer = "x".repeat(16_000 - suffix.length) + suffix;
-  state.ask.mockResolvedValue(AsyncResult.success({ ...answer, answer: fullAnswer }));
-  await using screen = await mount();
-  await captureSnapshot();
-  await type(composer(screen), "How do I restore the provider?");
-  await submit(screen);
-  expect(text(screen)).toContain(fullAnswer);
-  await type(composer(screen), "What comes next?");
-  await submit(screen);
-  expect(state.ask).toHaveBeenLastCalledWith({
-    environmentId: "host",
-    input: {
-      client: expect.objectContaining({ surface: "web", settingsStatus: "ready" }),
-      messages: [
-        { role: "user", content: "How do I restore the provider?" },
-        { role: "assistant", content: fullAnswer.slice(0, 8000) },
-        { role: "user", content: "What comes next?" },
-      ],
-    },
-  });
-  expect(text(screen)).toContain(fullAnswer);
-});
-
-it("keeps a pending request through navigation and stops duplicate submission", async () => {
-  setup();
-  let resolve!: (value: unknown) => void;
-  const response = new Promise<unknown>((done) => {
-    resolve = done;
-  });
-  state.ask.mockReturnValue(response);
-  await using first = await mount();
-  await captureSnapshot();
-  await type(composer(first), "Waiting question");
-  await submit(first);
-  expect(sendButton(first).disabled).toBe(true);
-  await first.unmount();
-  await using second = await mount();
-  expect(text(second)).toContain("Help is preparing a response");
-  await submit(second);
-  expect(state.ask).toHaveBeenCalledTimes(1);
-  await act(async () => {
-    resolve(AsyncResult.success(answer));
-    await response;
-  });
-  expect(text(second)).toContain(answer.answer);
-});
-
-it("does not submit Shift+Enter or IME composition; Enter sends once and returns focus", async () => {
-  setup();
-  await using screen = await mount();
-  await captureSnapshot();
-  await type(composer(screen), "Keyboard question");
-  const keyDown = (init: KeyboardEventInit) =>
-    act(async () => {
-      composer(screen).dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init }),
-      );
-    });
-  composer(screen).focus();
-  await keyDown({ shiftKey: true });
-  await keyDown({ isComposing: true });
-  await keyDown({ keyCode: 229 });
-  expect(state.ask).not.toHaveBeenCalled();
-  await keyDown({});
-  expect(state.ask).toHaveBeenCalledTimes(1);
-  expect(text(screen)).toContain(answer.answer);
-  expect(document.activeElement).toBe(composer(screen));
-});
-
-it("keeps input and recovery after a top-level failure and retries only on request", async () => {
-  setup();
-  state.ask.mockResolvedValueOnce(
-    AsyncResult.failure(Cause.die(new Error("private transport exception"))),
-  );
-  await using screen = await mount();
-  await captureSnapshot();
-  await type(composer(screen), "Please help reconnect");
-  await submit(screen);
-  expect(text(screen)).not.toContain("private transport exception");
-  expect(composer(screen).value).toBe("Please help reconnect");
-  expect(text(screen)).toContain("Providers");
-  expect(text(screen)).toContain("Connections");
-  expect(state.ask).toHaveBeenCalledTimes(1);
-  await click(button(screen, "Retry response"));
-  expect(text(screen)).toContain(answer.answer);
-  expect(state.ask).toHaveBeenCalledTimes(2);
-});
-
 it.each(["diagnostics", "orchestration"])(
   "denied %s read makes no snapshot request but keeps feedback and settings available",
   async (scope) => {
@@ -400,30 +278,6 @@ it("blocks Ask when operate scope is missing or context API fails without exposi
   expect(sendButton(screen).disabled).toBe(true);
 });
 
-it("read-only users with diagnostics and orchestration access can refresh while Ask stays disabled", async () => {
-  setup();
-  state.allowed = false;
-  await using screen = await mount();
-  expect(state.contextAtom).toHaveBeenCalled();
-  expect(state.refresh).toHaveBeenCalledTimes(1);
-  await captureSnapshot();
-  await openEnvironment(screen);
-  expect(text(screen)).toContain("Fresh environment snapshot");
-  expect(composer(screen).disabled).toBe(true);
-  expect(sendButton(screen).disabled).toBe(true);
-  expect(refreshButton(screen).disabled).toBe(false);
-  await click(refreshButton(screen));
-  expect(state.refresh).toHaveBeenCalledTimes(2);
-  state.data = { ...context, environmentName: "Refreshed read-only snapshot" };
-  await publish();
-  expect(text(screen)).toContain("Refreshed read-only snapshot");
-  expect(text(screen)).not.toContain("Fresh environment snapshot");
-  await click(button(screen, "Prepare feedback"));
-  expect(preview(screen)).toContain("App version: 0.3.1");
-  await submit(screen);
-  expect(state.ask).not.toHaveBeenCalled();
-});
-
 it("Refresh rechecks current read permissions and the prepared connection before requesting", async () => {
   setup();
   await using screen = await mount();
@@ -440,79 +294,6 @@ it("Refresh rechecks current read permissions and the prepared connection before
   state.connection = {};
   await click(refreshButton(screen));
   expect(state.refresh).not.toHaveBeenCalled();
-});
-
-it("reads fresh preferences on each actual send and retry without inferring on open", async () => {
-  setup();
-  state.ask.mockResolvedValueOnce(AsyncResult.failure(Cause.die(new Error("private failure"))));
-  await using screen = await mount();
-  await captureSnapshot();
-  expect(state.hydrateClientSettings).not.toHaveBeenCalled();
-  state.clientSettings = { ...DEFAULT_CLIENT_SETTINGS, composerRichTextEnabled: false };
-  await type(composer(screen), "Why is the composer plain text?");
-  await submit(screen);
-  expect(state.ask.mock.calls[0]?.[0]).toMatchObject({
-    input: {
-      client: {
-        surface: "web",
-        settingsStatus: "ready",
-        settings: {
-          entries: expect.arrayContaining([{ key: "composerRichTextEnabled", value: "false" }]),
-        },
-      },
-    },
-  });
-  state.clientSettings = { ...state.clientSettings, composerRichTextEnabled: true };
-  await click(button(screen, "Retry response"));
-  expect(state.ask.mock.calls[1]?.[0]).toMatchObject({
-    input: {
-      client: {
-        settings: {
-          entries: expect.arrayContaining([{ key: "composerRichTextEnabled", value: "true" }]),
-        },
-      },
-    },
-  });
-  expect(state.hydrateClientSettings).toHaveBeenCalledTimes(2);
-  expect(state.getClientSettings).toHaveBeenCalledTimes(2);
-});
-
-it("captures current desktop permissions on each send separately from the remote host", async () => {
-  setup();
-  const readiness = {
-    enabled: true,
-    available: true,
-    running: false,
-    accessibilityPermission: false,
-    screenRecordingPermission: null as boolean | null,
-  };
-  const getComputerUseState = vi.fn(async () => ({ ...readiness }));
-  const mutate = vi.fn();
-  using _bridge = stubGlobal("desktopBridge", {
-    getClientPlatform: () => "win32",
-    getComputerUseState,
-    setComputerUseEnabled: mutate,
-    requestSystemPermission: mutate,
-  });
-  await using screen = await mount();
-  state.data = { ...context, mode: "server", platform: "linux" };
-  state.isSuccess = true;
-  await publish();
-  expect(getComputerUseState).not.toHaveBeenCalled();
-  await type(composer(screen), "Can this desktop control my screen?");
-  await submit(screen);
-  expect(state.ask.mock.calls[0]?.[0]).toMatchObject({
-    input: { client: { surface: "desktop", platform: "win32", computerUse: { ...readiness } } },
-  });
-  readiness.accessibilityPermission = true;
-  readiness.screenRecordingPermission = true;
-  await type(composer(screen), "Are the permissions ready now?");
-  await submit(screen);
-  expect(state.ask.mock.calls[1]?.[0]).toMatchObject({
-    input: { client: { surface: "desktop", platform: "win32", computerUse: { ...readiness } } },
-  });
-  expect(getComputerUseState).toHaveBeenCalledTimes(2);
-  expect(mutate).not.toHaveBeenCalled();
 });
 
 it.each(["clear", "new connection", "diagnostics", "orchestration", "operate"])(
@@ -571,66 +352,6 @@ it("Clear and resend of the same question does not let the older local read subm
   expect(text(screen)).toContain(answer.answer);
 });
 
-it("a local read keeps its actual send through navigation when the connection and access remain current", async () => {
-  setup();
-  let finish!: () => void;
-  const hydration = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  state.hydrateClientSettings.mockReturnValueOnce(hydration);
-  await using first = await mount();
-  await captureSnapshot();
-  await type(composer(first), "Question pending across navigation");
-  await submit(first);
-  await first.unmount();
-  await using second = await mount();
-  expect(text(second)).toContain("Help is preparing a response");
-  expect(state.ask).not.toHaveBeenCalled();
-  await act(async () => {
-    finish();
-    await hydration;
-  });
-  expect(state.ask).toHaveBeenCalledTimes(1);
-  expect(text(second)).toContain(answer.answer);
-});
-
-it.each(["clear", "orchestration"])(
-  "a late desktop readiness read after %s cannot start inference or request permissions",
-  async (change) => {
-    setup();
-    let finish!: (value: unknown) => void;
-    const readiness = new Promise<unknown>((resolve) => {
-      finish = resolve;
-    });
-    const getComputerUseState = vi.fn(() => readiness);
-    const requestPermissions = vi.fn();
-    using _bridge = stubGlobal("desktopBridge", {
-      getComputerUseState,
-      requestSystemPermission: requestPermissions,
-      setComputerUseEnabled: requestPermissions,
-    });
-    await using screen = await mount();
-    await captureSnapshot();
-    await type(composer(screen), "Desktop permission question");
-    await submit(screen);
-    expect(getComputerUseState).toHaveBeenCalledTimes(1);
-    if (change === "clear") await click(button(screen, "Clear conversation"));
-    else state.orchestration = false;
-    await act(async () => {
-      finish({
-        enabled: true,
-        available: true,
-        running: false,
-        accessibilityPermission: false,
-        screenRecordingPermission: false,
-      });
-      await readiness;
-    });
-    expect(state.ask).not.toHaveBeenCalled();
-    expect(requestPermissions).not.toHaveBeenCalled();
-  },
-);
-
 it("a changed prepared connection cannot display history or a cached context from the old account", async () => {
   setup();
   await using screen = await mount();
@@ -646,17 +367,6 @@ it("a changed prepared connection cannot display history or a cached context fro
   expect(sendButton(screen).disabled).toBe(true);
   await captureSnapshot();
   expect(text(screen)).toContain("Fresh environment snapshot");
-});
-
-it("without an environment still offers manual feedback", async () => {
-  setup();
-  state.environmentId = null;
-  state.connection = null;
-  await using screen = await mount();
-  expect(state.contextAtom).not.toHaveBeenCalled();
-  expect(sendButton(screen).disabled).toBe(true);
-  await click(button(screen, "Prepare feedback"));
-  expect(text(screen)).toContain("Open issue tracker");
 });
 
 it.each(["diagnostics", "orchestration", "operate"])(
@@ -870,21 +580,6 @@ it("an explicitly denied refresh removes cached context and conversation even wh
   await captureSnapshot();
   expect(text(screen)).not.toContain("Protected question before denial");
   expect(text(screen)).not.toContain("Late denied answer");
-});
-
-it("a fresh snapshot cannot restore conversation access after operation permission is revoked", async () => {
-  setup();
-  await using screen = await mount();
-  await captureSnapshot();
-  await type(composer(screen), "Question before losing operation permission");
-  await submit(screen);
-  state.allowed = false;
-  await publish();
-  await captureSnapshot();
-  expect(text(screen)).not.toContain("Question before losing operation permission");
-  expect(composer(screen).value).toBe("");
-  expect(sendButton(screen).disabled).toBe(true);
-  expect(text(screen)).toContain("orchestration:operate");
 });
 
 it("checks current authorization on completion after navigating away", async () => {

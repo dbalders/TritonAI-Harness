@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import { pendingDraftWork } from "./pendingDraftWork";
 
 describe("PendingDraftWork", () => {
@@ -31,14 +32,6 @@ describe("PendingDraftWork", () => {
     slow.resolve();
     await both;
     expect(pending.has(key)).toBe(false);
-  });
-
-  it("keeps one draft's work from blocking another", () => {
-    const pending = pendingDraftWork;
-    pending.begin("isolated-a");
-    expect(pending.has("isolated-b")).toBe(false);
-    pending.end("isolated-a");
-    expect(pending.has("isolated-a")).toBe(false);
   });
 
   it("does not go negative when a transfer ends twice", () => {

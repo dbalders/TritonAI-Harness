@@ -6,6 +6,7 @@ import {
 } from "@t3tools/client-runtime/state/presentation";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
+
 import { environmentCatalog } from "../connection/catalog";
 import { serverEnvironment } from "./server";
 

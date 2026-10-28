@@ -207,12 +207,19 @@ $null = [Threading.ManualResetEvent]::new($false).WaitOne()`;
           child.kill("SIGKILL");
           await exited;
         }
-      await NodeFSP.rm(home, { recursive: true, force: true });
+      // Windows can retain the copied executable's handle briefly after process exit.
+      await NodeFSP.rm(home, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      });
       await NodeFSP.rm(`${runtimeRoot}.lock`, { recursive: true, force: true });
     },
   };
 }
 
+// regression: #426 fix(provider): recover interrupted Codex updates and coordinate sessions
 describe("native managed Codex lifecycle", () => {
   it("reads the same native boot identity in separate processes", async () => {
     const f = await fixture();
@@ -233,7 +240,7 @@ describe("native managed Codex lifecycle", () => {
     } finally {
       await f.close();
     }
-  }, 120_000);
+  });
 
   it.each(["exit-replace", "release-replace"])(
     "preserves a replacement lock when its former owner exits (%s)",
@@ -248,7 +255,6 @@ describe("native managed Codex lifecycle", () => {
         await f.close();
       }
     },
-    120_000,
   );
 
   it("keeps a recorded child protected after the Harness lease owner is killed", async () => {
@@ -274,7 +280,7 @@ describe("native managed Codex lifecycle", () => {
     } finally {
       await f.close();
     }
-  }, 120_000);
+  });
 
   it.skipIf(nativePlatform !== "win32")(
     "retries a native Windows directory lock and activates after its handle closes",
@@ -305,7 +311,6 @@ describe("native managed Codex lifecycle", () => {
         await f.close();
       }
     },
-    120_000,
   );
   it("recovers on restart after the updater is killed between native directory moves", async () => {
     const f = await fixture();
@@ -323,7 +328,7 @@ describe("native managed Codex lifecycle", () => {
     } finally {
       await f.close();
     }
-  }, 120_000);
+  });
 
   it("defers activation while a leased native executable runs, then updates after it exits", async () => {
     const f = await fixture();
@@ -344,5 +349,5 @@ describe("native managed Codex lifecycle", () => {
     } finally {
       await f.close();
     }
-  }, 120_000);
+  });
 });
