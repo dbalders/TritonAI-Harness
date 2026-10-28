@@ -77,14 +77,14 @@ function addLoadedTools(requestTools: unknown[], loaded: unknown): void {
           entry.name === tool.name &&
           Array.isArray(entry.tools),
       );
-      if (existing === undefined) {
-        requestTools.push(tool);
-        continue;
+      const target = existing ?? { ...tool, tools: [] as unknown[] };
+      if (existing === undefined) requestTools.push(target);
+      const present = new Set(loadedToolNames(target.tools));
+      for (const inner of tool.tools) {
+        if (!Predicate.isObject(inner) || present.has(String(inner.name))) continue;
+        present.add(String(inner.name));
+        target.tools.push(inner);
       }
-      const present = new Set(loadedToolNames(existing.tools));
-      for (const inner of tool.tools)
-        if (Predicate.isObject(inner) && !present.has(String(inner.name)))
-          existing.tools.push(inner);
     } else if (!loadedToolNames(requestTools).includes(String(tool.name))) {
       requestTools.push(tool);
     }
@@ -183,11 +183,18 @@ export function toCodexToolSearchEvent(data: string): string {
   return data;
 }
 
+/** Rewrites one event's data, which SSE allows to span several `data:` lines. */
 function rewriteSseEvent(event: string, rewrite: (data: string) => string): string {
-  return event
-    .split("\n")
-    .map((line) =>
-      line.startsWith("data:") ? `data: ${rewrite(line.slice(5).trimStart())}` : line,
+  const lines = event.split("\n");
+  const dataLines = lines.filter((line) => line.startsWith("data:"));
+  if (dataLines.length === 0) return event;
+  const data = dataLines.map((line) => line.slice(line.startsWith("data: ") ? 6 : 5)).join("\n");
+  const rewritten = rewrite(data);
+  if (rewritten === data) return event;
+  const first = lines.indexOf(dataLines[0]!);
+  return lines
+    .flatMap((line, index) =>
+      index === first ? [`data: ${rewritten}`] : line.startsWith("data:") ? [] : [line],
     )
     .join("\n");
 }

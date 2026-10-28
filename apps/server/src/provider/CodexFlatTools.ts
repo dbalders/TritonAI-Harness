@@ -31,8 +31,26 @@ class CodexFlatToolSetupError extends Schema.TaggedError<CodexFlatToolSetupError
   { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
 ) {}
 
-// Codex reserves these tool-search namespaces; see its app-server dynamic tool validation.
-const RESERVED_NAMESPACES = new Set(["functions", "tool_search", "web", "multi_agent_v1"]);
+// Codex 0.161 rejects a whole thread whose dynamic tools use one of these namespaces (its
+// app-server `validate_dynamic_tools`), so tools that would land in one stay direct.
+const RESERVED_NAMESPACES = new Set([
+  "api_tool",
+  "browser",
+  "computer",
+  "container",
+  "file_search",
+  "functions",
+  "image_gen",
+  "mcp",
+  "multi_agent_v1",
+  "multi_tool_use",
+  "python",
+  "python_user_visible",
+  "submodel_delegator",
+  "terminal",
+  "tool_search",
+  "web",
+]);
 
 /**
  * Groups a plugin tool under its plugin (the canonical name's first segment, such as "n8n") so

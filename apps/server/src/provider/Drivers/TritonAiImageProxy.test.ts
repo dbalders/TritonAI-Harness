@@ -446,6 +446,39 @@ describe("TritonAI tool search translation", () => {
       expect(toCodexToolSearchEvent(unchanged)).toBe(unchanged);
   });
 
+  it("adds each found tool once, even when one search lists it twice", () => {
+    for (const namespace of ["microsoft365", "google"]) {
+      const body = searchedThread();
+      const output = body.input[2] as { tools: unknown[] };
+      output.tools = [{ type: "namespace", name: namespace, tools: [mailSearch, mailSearch] }];
+      translateToolSearchForGateway(body);
+      const found = (body.tools as Array<{ name?: string; tools?: Array<{ name: string }> }>)
+        .filter((tool) => tool.name === namespace)
+        .map((tool) => ({ tools: tool.tools ?? [] }));
+      expect(found).toHaveLength(1);
+      expect(
+        found[0]!.tools.filter((tool) => tool.name === "microsoft365_mail_search"),
+      ).toHaveLength(1);
+    }
+  });
+
+  it.effect("rewrites a search call whose event data spans several lines", () =>
+    Effect.gen(function* () {
+      const events = [
+        'event: response.output_item.done\ndata: {"type":"response.output_item.done",\n' +
+          'data: "item":{"type":"function_call","name":"tool_search","call_id":"s",' +
+          '"arguments":"{\\"query\\":\\"mail\\"}"}}\n\n',
+        sse({ type: "response.completed", response: { output: [] } }),
+      ];
+      const gateway = yield* scriptedGateway(events, { translateToolSearch: () => true });
+      const reply = yield* post(`${gateway.baseUrl}/responses`, searchedThread());
+      const text = yield* Effect.promise(() => reply.text());
+      expect(text).toContain("event: response.output_item.done\ndata: ");
+      expect(text).toContain('"type":"tool_search_call"');
+      expect(text).not.toContain('"name":"tool_search"');
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("translates search both ways only for models that need it", () =>
     Effect.gen(function* () {
       const searchCall = {
