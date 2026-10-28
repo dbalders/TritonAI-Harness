@@ -298,7 +298,7 @@ describe("public skill repository", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       yield* repository.refreshCatalog();
 
-      const saved = yield* Schema.decodeEffect(CatalogJson)(
+      const saved = yield* compiledDecodeEffect1(
         yield* fileSystem.readFileString(yield* snapshotFilePath),
       );
       expect(saved.revision).toBe(REVISION);
@@ -311,7 +311,7 @@ describe("public skill repository", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       yield* fileSystem.writeFileString(
         yield* snapshotFilePath,
-        yield* Schema.encodeEffect(CatalogJson)(SAVED_CATALOG),
+        yield* compiledEncodeEffect2(SAVED_CATALOG),
       );
       const read = yield* PublicSkillRepository.pipe(
         Effect.flatMap((repository) => repository.readCatalog),
@@ -365,3 +365,6 @@ describe("public skill repository", () => {
     );
   });
 });
+
+const compiledDecodeEffect1 = Schema.decodeEffect(CatalogJson);
+const compiledEncodeEffect2 = Schema.encodeEffect(CatalogJson);

@@ -1,5 +1,7 @@
 import type { EnvironmentId, OrchestrationV2RunStatus, ThreadId } from "@t3tools/contracts";
-import { BookOpenIcon, CheckIcon, MessageCircleIcon } from "lucide-react";
+import type { InlineSkill } from "@t3tools/shared/inlineSkills";
+import { useNavigate } from "@tanstack/react-router";
+import { BookOpenIcon, CheckIcon, LifeBuoyIcon, MessageCircleIcon } from "lucide-react";
 import { useEffect } from "react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -10,6 +12,7 @@ import {
 } from "../../onboarding/gettingStartedEvidence";
 import { mergeIdeaPrompt } from "../ideas/ideaDraft";
 import {
+  prepareGettingStartedHelp,
   useGettingStarted,
   useGettingStartedEnabled,
   updateGettingStarted,
@@ -29,15 +32,18 @@ interface GuideChatInput {
     requestedAt?: string | null;
   } | null;
   timelineEntries: ReadonlyArray<TimelineEntry>;
+  answeredRunIds: ReadonlySet<string>;
   isWorking: boolean;
   hasPendingApproval: boolean;
   hasPendingQuestion: boolean;
+  skills: ReadonlyArray<InlineSkill>;
 }
 
 export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBannerStackItem | null {
   const state = useGettingStarted();
   const enabled = useGettingStartedEnabled();
-  const { environmentId, threadId, run, runs, timelineEntries } = input;
+  const navigate = useNavigate();
+  const { environmentId, threadId, run, runs, timelineEntries, answeredRunIds, skills } = input;
   const task = state.tasks.find(
     (item) =>
       item.chapter === state.activeChapter &&
@@ -52,10 +58,12 @@ export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBanne
       threadId,
       runs,
       timelineEntries,
+      answeredRunIds,
+      skills,
     })) {
       void updateGettingStarted(event);
     }
-  }, [enabled, environmentId, runs, state, threadId, timelineEntries]);
+  }, [answeredRunIds, enabled, environmentId, runs, skills, state, threadId, timelineEntries]);
 
   if (
     !enabled ||
@@ -66,6 +74,7 @@ export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBanne
   )
     return null;
   const complete = state.completed.includes(task.chapter);
+  const failed = run !== null && ["failed", "interrupted", "cancelled"].includes(run.status);
   const prepareFollowUp = () => {
     if (!threadId) return;
     const ref = scopeThreadRef(environmentId, threadId);
@@ -90,7 +99,7 @@ export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBanne
   } else if (input.isWorking) {
     title = "Your assistant is working";
     description = "Watch its activity below. The stop control lets you interrupt the task.";
-  } else if (run && ["failed", "interrupted", "cancelled"].includes(run.status)) {
+  } else if (failed) {
     title = "This task hasn't finished yet";
     description = "Your progress is saved. Review the error and try again here when you're ready.";
   } else if (complete) {
@@ -108,14 +117,23 @@ export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBanne
   } else if (task.chapter === "files") {
     description =
       "Use the paperclip to attach a suitable file, then ask about it. The guide waits for an attached-file request to finish.";
+  } else if (task.chapter === "connected-work" && task.toolNames.length === 0) {
+    description =
+      "These practice emails are made up, so nothing personal is shared. Send the request, and connect your own email later when you're ready.";
   } else if (task.chapter === "connected-work" && task.runIds.length === 0) {
     description =
       "Ask a small question about your connected email. This chapter completes after a relevant email tool runs successfully and you receive an answer.";
+  } else if (task.chapter === "approvals") {
+    description =
+      "Send this request. Saving a file changes your computer, so it stops and asks you first. Approve or decline; either choice completes the chapter.";
+  } else if (task.chapter === "skills") {
+    description =
+      "The $ name at the start picks the skill. Send the request to see what the skill can do for you.";
   }
   return {
     id: "getting-started",
     variant: "info",
-    priority: "notice",
+    group: "attention",
     icon: complete ? <CheckIcon /> : <MessageCircleIcon />,
     title,
     description,
@@ -143,6 +161,19 @@ export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBanne
             }
           >
             I've checked against the notes
+          </Button>
+        ) : null}
+        {failed ? (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => {
+              prepareGettingStartedHelp(environmentId, task.chapter);
+              void navigate({ to: "/help" });
+            }}
+          >
+            <LifeBuoyIcon />
+            Ask Help
           </Button>
         ) : null}
         <Button

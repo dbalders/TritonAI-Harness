@@ -1,22 +1,14 @@
 /**
- * The Ideas page: suggestion cards for what TritonAI could do next, grouped by
- * where they came from. Opening one starts a draft the user reviews before
- * sending. Dismiss, snooze, "Less like this", and "Not relevant" hide a card
- * with an Undo; the server uses them to decide what to suggest later.
+ * Ideas open as drafts for review. Row feedback hides the card with Undo and
+ * informs future suggestions in For you and Things to try.
  */
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type {
-  EnvironmentId,
-  Idea,
-  IdeaFeedbackKind,
-  IdeaSection,
-  IdeasFeedbackInput,
-} from "@t3tools/contracts";
+import type { EnvironmentId, Idea, IdeaFeedbackKind, IdeasFeedbackInput } from "@t3tools/contracts";
 import { ChevronRightIcon, ClockIcon, EllipsisIcon, SparklesIcon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { isElectron } from "../../env";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
@@ -28,23 +20,26 @@ import { resolveSnoozePresets, snoozeWakeDescription } from "../Sidebar.snooze";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "../ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuShortcut,
+  MenuSub,
+  MenuSubPopup,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "../ui/menu";
 import { ScrollArea } from "../ui/scroll-area";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { IDEA_GROUPS, ideaBasis, ideaHeadline, ideasInGroup, type IdeaGroup } from "./ideaDisplay";
 import { useOpenIdeaDraft } from "./useOpenIdeaDraft";
 import { GettingStartedContextHint } from "../onboarding/GettingStartedContextHint";
-
-const SECTIONS: ReadonlyArray<{ readonly section: IdeaSection; readonly title: string }> = [
-  { section: "continue", title: "Pick up where you left off" },
-  { section: "projects", title: "From your projects" },
-  { section: "tools", title: "Try with your tools" },
-  { section: "new", title: "New in TritonAI" },
-  { section: "starter", title: "Ideas to try" },
-];
 
 type HideKind = Extract<IdeaFeedbackKind, "dismissed" | "rejected" | "less-like-this" | "snoozed">;
 
@@ -218,30 +213,39 @@ export function IdeasPage() {
   } else {
     content = (
       <>
-        {SECTIONS.map(({ section, title }) => {
-          const ideas = visible.filter((idea) => idea.section === section);
-          if (ideas.length === 0) return null;
-          return (
-            <section key={section} aria-label={title} className="flex flex-col gap-1">
-              <h2 className="px-3 text-sm font-semibold text-foreground">{title}</h2>
-              <ul className="flex flex-col">
-                {ideas.map((idea) => (
-                  <li key={idea.id}>
-                    <IdeaCard
-                      idea={idea}
-                      timestampFormat={timestampFormat}
-                      onOpen={handleOpen}
-                      onHide={hideIdea}
-                    />
-                  </li>
-                ))}
-              </ul>
-            </section>
-          );
-        })}
+        <div className="flex flex-col gap-1.5 px-2">
+          <div className="flex items-center gap-3">
+            <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+              Ready-to-send tasks from your work and tools. Nothing runs until you send it.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void handleSuggestMore()}
+              disabled={generating}
+              aria-busy={generating}
+            >
+              <SparklesIcon />
+              {generating ? "Finding ideas…" : "Suggest more"}
+            </Button>
+          </div>
+          {data.message && !generating ? (
+            <p className="text-xs text-muted-foreground">{data.message}</p>
+          ) : null}
+        </div>
+        {IDEA_GROUPS.map((group) => (
+          <IdeaGroupList
+            key={group.id}
+            group={group}
+            ideas={ideasInGroup(visible, group)}
+            timestampFormat={timestampFormat}
+            onOpen={handleOpen}
+            onHide={hideIdea}
+          />
+        ))}
         {visible.length === 0 && !generating ? (
-          <p className="px-3 text-sm text-muted-foreground">
-            You're all caught up. Ask for more ideas below.
+          <p className="px-2 text-sm text-muted-foreground">
+            You're all caught up. Use Suggest more for new ideas.
           </p>
         ) : null}
         {snoozed.length > 0 ? (
@@ -251,20 +255,6 @@ export function IdeasPage() {
             onWake={(idea) => void runFeedback(idea, "restored")}
           />
         ) : null}
-        <div className="flex flex-col items-center gap-2 pt-2">
-          <Button
-            variant="outline"
-            onClick={() => void handleSuggestMore()}
-            disabled={generating}
-            aria-busy={generating}
-          >
-            <SparklesIcon />
-            {generating ? "Finding ideas…" : "Suggest more"}
-          </Button>
-          {data.message && !generating ? (
-            <p className="text-center text-xs text-muted-foreground">{data.message}</p>
-          ) : null}
-        </div>
       </>
     );
   }
@@ -280,14 +270,10 @@ export function IdeasPage() {
           </WorkspaceBreadcrumb>
         </WorkspacePageHeader>
         <ScrollArea className="min-h-0 flex-1">
-          <WorkspacePageContainer className="gap-5">
+          <WorkspacePageContainer className="max-w-2xl gap-7">
             <GettingStartedContextHint chapters={["ideas"]} />
-            <p className="px-3 text-sm text-muted-foreground">
-              Suggestions from your recent work, your tools, and what TritonAI can do. Opening one
-              starts a draft you can change before sending.
-            </p>
             {actionError ? (
-              <p role="alert" className="px-3 text-sm text-destructive-foreground">
+              <p role="alert" className="px-2 text-sm text-destructive-foreground">
                 {actionError}
               </p>
             ) : null}
@@ -301,107 +287,139 @@ export function IdeasPage() {
 
 type TimestampFormat = Parameters<typeof resolveSnoozePresets>[1];
 
-function IdeaCard({
-  idea,
-  timestampFormat,
-  onOpen,
-  onHide,
-}: {
-  idea: Idea;
-  timestampFormat: TimestampFormat;
-  onOpen: (idea: Idea) => void;
-  onHide: (idea: Idea, kind: HideKind, snoozedUntil?: string) => void;
-}) {
+interface IdeaActions {
+  readonly timestampFormat: TimestampFormat;
+  readonly onOpen: (idea: Idea) => void;
+  readonly onHide: (idea: Idea, kind: HideKind, snoozedUntil?: string) => void;
+}
+
+function IdeaGroupList({
+  group,
+  ideas,
+  ...actions
+}: IdeaActions & { group: IdeaGroup; ideas: ReadonlyArray<Idea> }) {
+  if (ideas.length === 0) return null;
+  return (
+    <section aria-label={group.title} className="flex flex-col gap-1">
+      <h2 className="flex items-baseline gap-1.5 px-2 text-sm font-semibold text-foreground">
+        {group.title}
+        <span className="font-normal text-muted-foreground">{ideas.length}</span>
+      </h2>
+      <ul className="flex flex-col divide-y divide-border/70">
+        {ideas.map((idea) => (
+          <li key={idea.id} className="py-0.5">
+            <IdeaRow idea={idea} {...actions} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function IdeaRow({ idea, timestampFormat, onOpen, onHide }: IdeaActions & { idea: Idea }) {
+  const headline = ideaHeadline(idea.title);
+  const basis = ideaBasis(idea.sources);
   return (
     <article
-      aria-label={idea.title}
-      className="flex gap-3 rounded-lg p-3 focus-within:bg-muted/50 hover:bg-muted/50"
+      aria-label={headline}
+      className="group/idea flex flex-col gap-2 rounded-lg px-2 py-2.5 focus-within:bg-muted/50 hover:bg-muted/50 sm:flex-row sm:items-center sm:gap-3"
     >
-      <span aria-hidden className="mt-0.5 w-7 shrink-0 text-center text-2xl leading-none">
-        {idea.icon}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start gap-2">
-          <h3 className="min-w-0 flex-1 text-sm font-medium text-foreground">{idea.title}</h3>
-          {idea.openedAt !== null ? (
-            <Badge variant="info" size="sm">
-              Draft open
-            </Badge>
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <span
+          aria-hidden
+          className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-base leading-none"
+        >
+          {idea.icon}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start gap-2">
+            <h3 className="min-w-0 text-sm font-medium text-foreground">{headline}</h3>
+            {idea.openedAt !== null ? (
+              <Badge variant="info" size="sm">
+                Draft open
+              </Badge>
+            ) : null}
+          </div>
+          <p className="mt-0.5 line-clamp-1 text-sm text-muted-foreground">{idea.body}</p>
+          {basis ? (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground/75">{basis}</p>
           ) : null}
         </div>
-        <p className="mt-1 text-sm text-muted-foreground">{idea.body}</p>
-        {idea.sources.length > 0 ? (
-          <ul aria-label="Based on" className="mt-2 flex flex-wrap gap-1">
-            {idea.sources.map((source) => (
-              <li key={source.label}>
-                <Badge variant="outline" size="sm">
-                  {source.label}
-                </Badge>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <div className="mt-2.5 flex flex-wrap items-center gap-1">
-          <Button size="xs" onClick={() => onOpen(idea)}>
-            {idea.action.kind === "resume-thread" ? "Continue in thread" : "Open draft"}
-          </Button>
-          <IdeaSnoozeMenu
-            timestampFormat={timestampFormat}
-            onSnooze={(snoozedUntil) => onHide(idea, "snoozed", snoozedUntil)}
-          />
-          <Button size="xs" variant="ghost" onClick={() => onHide(idea, "dismissed")}>
-            <XIcon />
-            Dismiss
-          </Button>
-          <Menu>
-            <MenuTrigger
-              render={<Button size="icon-xs" variant="ghost" aria-label="More options" />}
-            >
-              <EllipsisIcon />
-            </MenuTrigger>
-            <MenuPopup align="start">
-              <MenuItem onClick={() => onHide(idea, "less-like-this")}>Less like this</MenuItem>
-              <MenuItem onClick={() => onHide(idea, "rejected")}>Not relevant</MenuItem>
-            </MenuPopup>
-          </Menu>
-        </div>
+      </div>
+      {/* Shown on hover or focus where the pointer can hover; always shown on touch screens. */}
+      <div className="flex shrink-0 items-center gap-1 ps-11 transition-opacity sm:ps-0 sm:[@media(any-hover:hover)]:opacity-0 sm:[@media(any-hover:hover)]:group-hover/idea:opacity-100 sm:[@media(any-hover:hover)]:group-focus-within/idea:opacity-100 sm:[@media(any-hover:hover)]:has-[[data-popup-open]]:opacity-100">
+        <Button size="xs" onClick={() => onOpen(idea)}>
+          {idea.action.kind === "resume-thread" ? "Continue in thread" : "Open draft"}
+        </Button>
+        <IdeaMoreMenu
+          headline={headline}
+          timestampFormat={timestampFormat}
+          onHide={(kind, snoozedUntil) => onHide(idea, kind, snoozedUntil)}
+        />
       </div>
     </article>
   );
 }
 
-function IdeaSnoozeMenu({
+function IdeaMoreMenu({
+  headline,
   timestampFormat,
-  onSnooze,
+  onHide,
 }: {
+  headline: string;
   timestampFormat: TimestampFormat;
-  onSnooze: (snoozedUntil: string) => void;
+  onHide: (kind: HideKind, snoozedUntil?: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  // Resolved when the menu opens, so "In 1 hour" counts from the click.
-  const presets = open ? resolveSnoozePresets(new Date(), timestampFormat) : [];
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  // Resolved when the submenu opens, so "In 1 hour" counts from then.
+  const [snoozeNow, setSnoozeNow] = useState(() => new Date());
+  const presets = snoozeOpen ? resolveSnoozePresets(snoozeNow, timestampFormat) : [];
   return (
-    <Menu open={open} onOpenChange={setOpen}>
-      <MenuTrigger render={<Button size="xs" variant="ghost" />}>
-        <ClockIcon />
-        Snooze
+    <Menu>
+      <MenuTrigger
+        render={
+          <Button size="icon-xs" variant="ghost" aria-label={`More options for ${headline}`} />
+        }
+      >
+        <EllipsisIcon />
       </MenuTrigger>
-      <MenuPopup align="start">
-        {presets.map((preset) => (
-          <MenuItem key={preset.id} onClick={() => onSnooze(preset.snoozedUntil)}>
-            {preset.label}
-            <MenuShortcut>{preset.whenLabel}</MenuShortcut>
-          </MenuItem>
-        ))}
-        <MenuSeparator />
-        <MenuItem
-          onClick={async () => {
-            const choice = await requestCustomSnooze();
-            if (choice) onSnooze(choice.snoozedUntil);
+      <MenuPopup align="end">
+        <MenuSub
+          open={snoozeOpen}
+          onOpenChange={(open) => {
+            if (open) setSnoozeNow(new Date());
+            setSnoozeOpen(open);
           }}
         >
-          Custom…
+          <MenuSubTrigger>
+            <ClockIcon />
+            Snooze
+          </MenuSubTrigger>
+          <MenuSubPopup>
+            {presets.map((preset) => (
+              <MenuItem key={preset.id} onClick={() => onHide("snoozed", preset.snoozedUntil)}>
+                {preset.label}
+                <MenuShortcut>{preset.whenLabel}</MenuShortcut>
+              </MenuItem>
+            ))}
+            <MenuSeparator />
+            <MenuItem
+              onClick={async () => {
+                const choice = await requestCustomSnooze();
+                if (choice) onHide("snoozed", choice.snoozedUntil);
+              }}
+            >
+              Custom…
+            </MenuItem>
+          </MenuSubPopup>
+        </MenuSub>
+        <MenuItem onClick={() => onHide("dismissed")}>
+          <XIcon />
+          Dismiss
         </MenuItem>
+        <MenuSeparator />
+        <MenuItem onClick={() => onHide("less-like-this")}>Less like this</MenuItem>
+        <MenuItem onClick={() => onHide("rejected")}>Not relevant</MenuItem>
       </MenuPopup>
     </Menu>
   );
@@ -416,10 +434,11 @@ function SnoozedIdeas({
   timestampFormat: TimestampFormat;
   onWake: (idea: Idea) => void;
 }) {
+  const [now] = useState(() => new Date());
   return (
-    <div className="mx-3">
+    <div className="px-2">
       <Collapsible>
-        <CollapsibleTrigger className="group flex items-center gap-1 text-sm font-semibold text-foreground">
+        <CollapsibleTrigger className="group flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground">
           <ChevronRightIcon className="size-4 transition-transform group-data-[panel-open]:rotate-90" />
           Snoozed ({ideas.length})
         </CollapsibleTrigger>
@@ -427,14 +446,17 @@ function SnoozedIdeas({
           <ul className="mt-2 flex flex-col gap-2">
             {ideas.map((idea) => (
               <li key={idea.id} className="flex items-center gap-3">
-                <span aria-hidden className="w-7 shrink-0 text-center text-lg leading-none">
+                <span
+                  aria-hidden
+                  className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-base leading-none"
+                >
                   {idea.icon}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-foreground">{idea.title}</p>
+                  <p className="truncate text-sm text-foreground">{ideaHeadline(idea.title)}</p>
                   {idea.snoozedUntil ? (
                     <p className="text-xs text-muted-foreground">
-                      Back {snoozeWakeDescription(idea.snoozedUntil, new Date(), timestampFormat)}
+                      Back {snoozeWakeDescription(idea.snoozedUntil, now, timestampFormat)}
                     </p>
                   ) : null}
                 </div>

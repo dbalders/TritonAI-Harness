@@ -80,6 +80,12 @@ are not counted) with its kind and the card's section, `ideas.sent` when a card'
 `ideas.generated` for each batch with whether the user asked for it, its outcome, and how many
 generated and starter cards it added. Card text, prompts, and file or thread names are never sent.
 
+The experimental guided tour reports `onboarding.started` the first time someone starts it,
+`onboarding.chapter-completed` and `onboarding.chapter-later` with the chapter id, and
+`onboarding.help-opened` with the chapter id when they ask Help from the tour. Each carries the
+connection's client props. Joining `aid` with LiteLLM's `harness-install:` end-user ID shows
+whether installs that finished the tour keep making model requests; no new gateway tags are needed.
+
 Token totals cover the main agent. Child agents and model rerouting prevent a turn
 from representing one provider/model combination's full cost. For provider
 comparisons, require complete usage, no observed subagents, and no mixed models.

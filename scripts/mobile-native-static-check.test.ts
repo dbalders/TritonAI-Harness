@@ -1,5 +1,4 @@
 import { assert, it } from "@effect/vitest";
-
 import * as Effect from "effect/Effect";
 
 import { requireKotlinTools } from "./mobile-native-static-check.ts";

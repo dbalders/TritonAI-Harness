@@ -2,6 +2,7 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
+
 import {
   composerFileNeedsReattach,
   DraftId,
@@ -9,18 +10,6 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
 } from "../composerDraftStore";
-import {
-  awaitAttachmentUploads,
-  getUploadedAttachments,
-  readAttachmentUpload,
-  releaseAttachmentUpload,
-  releaseDraftAttachment,
-  releaseDraftAttachments,
-  releasePersistedAttachmentUpload,
-  retryAttachmentUpload,
-  startAttachmentUpload,
-  useAttachmentUploadStore,
-} from "./attachmentUploadQueue";
 
 const mocks = vi.hoisted(() => ({
   connectionStateAtom: vi.fn(),
@@ -63,6 +52,19 @@ vi.mock("../state/session", () => ({
   readEnvironmentScope: mocks.readEnvironmentScope,
   readPreparedConnection: mocks.readPreparedConnection,
 }));
+
+import {
+  awaitAttachmentUploads,
+  getUploadedAttachments,
+  readAttachmentUpload,
+  releaseAttachmentUpload,
+  releaseDraftAttachment,
+  releaseDraftAttachments,
+  releasePersistedAttachmentUpload,
+  retryAttachmentUpload,
+  startAttachmentUpload,
+  useAttachmentUploadStore,
+} from "./attachmentUploadQueue";
 
 type ProgressListener = (event: {
   readonly lengthComputable: boolean;

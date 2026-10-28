@@ -1,10 +1,6 @@
 /**
- * Pseudonymous product analytics delivered to Plausible.
- *
- * Buffers product events in memory and sends them to the TritonAI Plausible
- * property over Effect's HTTP client. Events carry a random install ID (`aid`)
- * so installs can be counted; see Identify.ts.
- *
+ * Buffer product events for Plausible with a random install ID (aid).
+ * This identifies installations, not people.
  * @module AnalyticsService
  */
 import {
@@ -92,6 +88,10 @@ const PLAUSIBLE_EVENT_PROPERTIES = {
   "ideas.feedback": ["kind", "section"],
   "ideas.sent": ["section"],
   "ideas.generated": ["requested", "outcome", "generatedCount", "starterCount"],
+  "onboarding.started": CLIENT_EVENT_PROPERTIES,
+  "onboarding.chapter-completed": [...CLIENT_EVENT_PROPERTIES, "chapter"],
+  "onboarding.chapter-later": [...CLIENT_EVENT_PROPERTIES, "chapter"],
+  "onboarding.help-opened": [...CLIENT_EVENT_PROPERTIES, "chapter"],
 } as const satisfies Readonly<Record<string, ReadonlyArray<string>>>;
 
 const TelemetryEnvConfig = Config.all({
@@ -169,7 +169,9 @@ export class AnalyticsService extends Context.Service<
   static readonly layerTest = Layer.succeed(
     AnalyticsService,
     AnalyticsService.of({
-      record: () => Effect.void,
+      record: Effect.fn("AnalyticsService.record")(function () {
+        return Effect.void;
+      }),
       flush: Effect.void,
     }),
   );

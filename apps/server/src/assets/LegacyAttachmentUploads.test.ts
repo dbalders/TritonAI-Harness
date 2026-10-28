@@ -41,10 +41,10 @@ const fixture = Effect.gen(function* () {
     const uploadId =
       uploadIds.get(key) ?? `00000000-0000-4000-8000-${String(++uploadSequence).padStart(12, "0")}`;
     uploadIds.set(key, uploadId);
-    return Schema.decodeUnknownSync(EnvironmentOrchestrationAttachmentUpload)({
+    return compiledDecodeSync1({
       uploadId,
       file: [
-        Schema.decodeUnknownSync(Schema.toCodecJson(Multipart.PersistedFileSchema))({
+        compiledDecodeSync2({
           key: "file",
           name: "report.txt",
           contentType: "text/plain",
@@ -166,3 +166,6 @@ it.layer(layer)("legacy multipart attachments after V2 cutover", (it) => {
       }),
   );
 });
+
+const compiledDecodeSync1 = Schema.decodeSync(EnvironmentOrchestrationAttachmentUpload);
+const compiledDecodeSync2 = Schema.decodeSync(Schema.toCodecJson(Multipart.PersistedFileSchema));

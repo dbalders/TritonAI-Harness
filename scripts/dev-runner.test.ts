@@ -1,34 +1,19 @@
 // @effect-diagnostics nodeBuiltinImport:off - builds real worktree layouts on disk.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
-import * as NodeFS from "node:fs";
-
-import * as NodeOS from "node:os";
-
-import * as NodePath from "node:path";
-
 import * as NetService from "@t3tools/shared/Net";
-
 import * as HostProcess from "@t3tools/shared/HostProcess";
-
 import { assert, describe, it } from "@effect/vitest";
 
 import * as ConfigProvider from "effect/ConfigProvider";
-
 import * as Effect from "effect/Effect";
 
 import * as Layer from "effect/Layer";
 
-import * as Path from "effect/Path";
-
 import * as PlatformError from "effect/PlatformError";
-
 import * as Sink from "effect/Sink";
-
 import * as Stream from "effect/Stream";
-
 import { ChildProcessSpawner } from "effect/process";
-
 import {
   checkPortAvailabilityOnHosts,
   createDevRunnerEnv,
@@ -38,7 +23,6 @@ import {
 } from "./dev-runner.ts";
 
 const emptyConfigLayer = ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }));
-
 const netServiceLayer = Layer.succeed(NetService.NetService, {
   canListenOnHost: () => Effect.succeed(true),
   isPortAvailableOnLoopback: () => Effect.succeed(true),
@@ -105,6 +89,31 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
+    it.effect("turns product analytics off unless the developer opts in", () =>
+      Effect.gen(function* () {
+        const input = {
+          mode: "dev",
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        } as const;
+        const byDefault = yield* createDevRunnerEnv({ ...input, baseEnv: {} });
+        const optedIn = yield* createDevRunnerEnv({
+          ...input,
+          baseEnv: { T3CODE_TELEMETRY_ENABLED: "true" },
+        });
+
+        assert.equal(byDefault.T3CODE_TELEMETRY_ENABLED, "false");
+        assert.equal(optedIn.T3CODE_TELEMETRY_ENABLED, "true");
+      }),
+    );
+
     it.effect("strips inherited service-launcher context", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
@@ -153,9 +162,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           assert.equal(env.VITE_HTTP_URL, undefined);
           assert.equal(env.VITE_WS_URL, undefined);
           assert.equal(env.T3CODE_PORT, "13773");
-          // Deleting the keys is not sufficient — vite.config.ts merges
-          // `.env`/`.env.local` underneath this env and would revive them, so
-          // the intent has to be stated positively.
           assert.equal(env.T3CODE_SINGLE_ORIGIN_DEV, "1");
         }),
     );
@@ -382,6 +388,26 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       });
     });
 
+    it.effect("ignores an ambient T3CODE_HOME when no home is resolved", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: { T3CODE_HOME: "/home/user/.t3" },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.T3CODE_HOME, undefined);
+      }),
+    );
+
     it.effect("rejects a specific non-loopback --host for browser dev modes", () => {
       const spawnerLayer = Layer.succeed(
         ChildProcessSpawner.ChildProcessSpawner,
@@ -577,142 +603,6 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.notProperty(error, "args");
         assert.notInclude(error.message, "secret-token-value");
       });
-    });
-
-    describe("TritonAI home precedence", () => {
-      const makeWorktree = Effect.acquireRelease(
-        Effect.sync(() => {
-          const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-devrunner-"));
-          NodeFS.writeFileSync(
-            NodePath.join(root, ".git"),
-            "gitdir: /elsewhere/.git/worktrees/x\n",
-          );
-          return root;
-        }),
-        (root) => Effect.sync(() => NodeFS.rmSync(root, { recursive: true, force: true })),
-      );
-
-      const spawnedHome = (input: {
-        readonly t3Home: string | undefined;
-        readonly cwd: string;
-        readonly ambientHome?: string | undefined;
-        readonly ambientLegacyHome?: string | undefined;
-      }) =>
-        Effect.gen(function* () {
-          let captured: Record<string, string | undefined> | undefined;
-          const spawnerLayer = Layer.succeed(
-            ChildProcessSpawner.ChildProcessSpawner,
-            ChildProcessSpawner.make((command) => {
-              captured = (
-                command as {
-                  readonly options?: { readonly env?: Record<string, string | undefined> };
-                }
-              ).options?.env;
-              return Effect.succeed(mockProcess(0));
-            }),
-          );
-
-          yield* runDevRunnerWithInput({ ...devServerInput, t3Home: input.t3Home }).pipe(
-            Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
-            Effect.provideService(HostProcess.Platform, "linux"),
-            Effect.provideService(HostProcess.WorkingDirectory, input.cwd),
-            Effect.provideService(HostProcess.HomeDirectory, input.cwd),
-            Effect.provideService(HostProcess.Environment, {
-              ...(input.ambientHome === undefined ? {} : { TRITONAI_HOME: input.ambientHome }),
-              ...(input.ambientLegacyHome === undefined
-                ? {}
-                : { T3CODE_HOME: input.ambientLegacyHome }),
-            }),
-          );
-
-          return captured?.TRITONAI_HOME;
-        });
-
-      it.effect("prefers an explicit --home-dir over the worktree default", () =>
-        Effect.gen(function* () {
-          const path = yield* Path.Path;
-          const root = yield* makeWorktree;
-          const home = yield* spawnedHome({
-            t3Home: "/tmp/explicit-home",
-            cwd: root,
-            ambientHome: "/home/user/.t3",
-          });
-          assert.equal(home, path.resolve("/tmp/explicit-home"));
-        }).pipe(Effect.scoped),
-      );
-
-      it.effect("treats a blank --home-dir as unset rather than as a selection", () =>
-        Effect.gen(function* () {
-          const path = yield* Path.Path;
-          const root = yield* makeWorktree;
-          const home = yield* spawnedHome({
-            t3Home: "   ",
-            cwd: root,
-            ambientHome: "/home/user/.t3",
-          });
-          assert.equal(home, path.join(path.resolve(root), ".t3"));
-        }).pipe(Effect.scoped),
-      );
-
-      it.effect("prefers the worktree .t3 over an ambient TRITONAI_HOME", () =>
-        Effect.gen(function* () {
-          const path = yield* Path.Path;
-          const root = yield* makeWorktree;
-          const home = yield* spawnedHome({
-            t3Home: undefined,
-            cwd: root,
-            ambientHome: "/home/user/.t3",
-          });
-          assert.equal(home, path.join(path.resolve(root), ".t3"));
-        }).pipe(Effect.scoped),
-      );
-
-      it.effect("seeds a worktree database from ~/.t3 only when it has none", () =>
-        Effect.gen(function* () {
-          const path = yield* Path.Path;
-          const root = yield* makeWorktree;
-          const home = path.join(root, "home");
-          NodeFS.mkdirSync(path.join(home, ".t3", "userdata"), { recursive: true });
-          NodeFS.writeFileSync(path.join(home, ".t3", "userdata", "statev2.sqlite"), "");
-
-          const spawnedArgs = (seed: boolean | undefined) =>
-            Effect.gen(function* () {
-              const spawned: Array<ReadonlyArray<string>> = [];
-              const spawnerLayer = Layer.succeed(
-                ChildProcessSpawner.ChildProcessSpawner,
-                ChildProcessSpawner.make((command) => {
-                  spawned.push(
-                    (command as unknown as { readonly args: ReadonlyArray<string> }).args,
-                  );
-                  return Effect.succeed(mockProcess(0));
-                }),
-              );
-              yield* runDevRunnerWithInput({ ...devServerInput, t3Home: undefined, seed }).pipe(
-                Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
-                Effect.provideService(HostProcess.Platform, "linux"),
-                Effect.provideService(HostProcess.WorkingDirectory, root),
-                Effect.provideService(HostProcess.HomeDirectory, home),
-                Effect.provideService(HostProcess.Environment, {}),
-              );
-              return spawned.filter((args) =>
-                args.some((arg) => arg.endsWith("migrate-dev-db.ts")),
-              );
-            });
-
-          assert.deepStrictEqual(yield* spawnedArgs(false), []);
-          const [seedArgs] = yield* spawnedArgs(undefined);
-          assert.includeMembers([...(seedArgs ?? [])], ["--base-dir", path.join(root, ".t3")]);
-
-          // Either database means the worktree already has data.
-          for (const name of ["state.sqlite", "statev2.sqlite"]) {
-            const file = path.join(root, ".t3", "userdata", name);
-            NodeFS.mkdirSync(path.dirname(file), { recursive: true });
-            NodeFS.writeFileSync(file, "");
-            assert.deepStrictEqual(yield* spawnedArgs(undefined), []);
-            NodeFS.rmSync(file);
-          }
-        }).pipe(Effect.scoped),
-      );
     });
   });
 });

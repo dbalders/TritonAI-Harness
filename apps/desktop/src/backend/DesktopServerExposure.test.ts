@@ -1,41 +1,25 @@
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
-
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
-
 import { assert, describe, it } from "@effect/vitest";
-
 import * as Deferred from "effect/Deferred";
-
 import * as Effect from "effect/Effect";
-
 import * as Fiber from "effect/Fiber";
-
 import * as FileSystem from "effect/FileSystem";
-
 import * as Layer from "effect/Layer";
-
 import * as Sink from "effect/Sink";
-
 import * as Stream from "effect/Stream";
-
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-
 import * as DesktopConfig from "../app/DesktopConfig.ts";
-
 import * as DesktopNetworkInterfaces from "./DesktopNetworkInterfaces.ts";
-
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
-
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
 const encoder = new TextEncoder();
 
 const emptyNetworkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces = {};
-
 const lanNetworkInterfaces: DesktopNetworkInterfaces.NetworkInterfaces = {
   en0: [
     {

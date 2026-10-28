@@ -1,4 +1,3 @@
-import { type EnvironmentProject } from "../state/models.ts";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProjectId } from "@t3tools/contracts";
@@ -9,6 +8,7 @@ import {
   getDefaultCloneUrl,
   normalizePastedCloneUrl,
 } from "./projects.ts";
+import type { EnvironmentProject } from "../state/models.ts";
 
 describe("add project shared logic", () => {
   it("routes owner/repository shorthand to GitHub over HTTPS", () => {

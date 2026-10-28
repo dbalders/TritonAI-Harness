@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import type * as AcpSchema from "effect-acp/compat";
+
 import { responsePayloads } from "@t3tools/shared/mcpResponsePayloads";
 
 const MAX_CONNECTIONS = 16;
@@ -81,7 +82,7 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
   options: AcpMcpOverAcpBridgeOptions,
 ): Effect.fn.Return<AcpMcpOverAcpBridge> {
   const fetchImplementation = options.fetchImplementation ?? fetch;
-  const connections = new Map<string, Connection>();
+  const connections = yield* Effect.sync(() => new Map<string, Connection>());
 
   const connectionFor = (connectionId: string): Effect.Effect<Connection, AcpMcpOverAcpError> =>
     Effect.suspend(() => {

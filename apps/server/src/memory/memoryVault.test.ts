@@ -36,8 +36,9 @@ it.layer(NodeServices.layer)("memory skills", (it) => {
         path.join(root, ".tritonai-harness", "memory", "general"),
         path.join(root, ".tritonai-harness-nightly", "memory", "general"),
       ];
-      yield* Effect.all(
-        vaults.map((vaultPath) =>
+      yield* Effect.forEach(
+        vaults,
+        (vaultPath) =>
           installMemorySkill({
             skillsDirectory,
             vaultPath,
@@ -47,7 +48,6 @@ it.layer(NodeServices.layer)("memory skills", (it) => {
               device,
             }),
           }),
-        ),
         { concurrency: "unbounded" },
       );
 

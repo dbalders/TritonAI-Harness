@@ -52,6 +52,8 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [75, "CodexUsageNativeTurnIndex"],
   [76, "RepairClientSettlementTimestamps"],
   [77, "WebhookDedupe"],
+  [78, "ShellStopRequestIndex"],
+  [79, "ThreadMessageSearch"],
 ];
 
 it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(

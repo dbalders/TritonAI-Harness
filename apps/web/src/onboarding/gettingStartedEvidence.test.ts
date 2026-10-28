@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   MessageId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
   TurnItemId,
   type GettingStartedChapterId,
@@ -111,6 +112,20 @@ function mailResult(
   };
 }
 
+/** The runs a thread's turn items would mark as answered for these fixture messages. */
+function answered(entries: ReadonlyArray<TimelineEntry>): ReadonlySet<string> {
+  return new Set(
+    entries.flatMap((item) =>
+      item.kind === "message" &&
+      item.message.role === "assistant" &&
+      item.message.runId &&
+      !item.message.streaming
+        ? [item.message.runId]
+        : [],
+    ),
+  );
+}
+
 function observe(
   state: GettingStartedProgress,
   runs: ReadonlyArray<GettingStartedRun>,
@@ -122,6 +137,8 @@ function observe(
     threadId: THREAD,
     runs,
     timelineEntries,
+    answeredRunIds: answered(timelineEntries),
+    skills: [],
   });
 }
 
@@ -170,7 +187,6 @@ describe("completed run evidence", () => {
 
   it.each<Partial<ChatMessage>>([
     { streaming: true },
-    { text: " \n " },
     { role: "user" },
     { runId: RunId.make("another-run") },
   ])("requires a final assistant answer belonging to this run: %j", (change) => {
@@ -185,6 +201,8 @@ describe("completed run evidence", () => {
       threadId: THREAD,
       runs: [run()],
       timelineEntries: [message()],
+      answeredRunIds: answered([message()]),
+      skills: [],
     };
     expect(
       observe(state, [run("R1", { userMessageId: "not-submitted-here" })], [message()]),
@@ -238,5 +256,71 @@ describe("connected work result evidence", () => {
 
     expect(events).toEqual([]);
     expect(events.reduce(reduceGettingStarted, state)).toBe(state);
+  });
+});
+
+describe("approval and skill evidence", () => {
+  const userMessage = (text: string) =>
+    message({ id: MessageId.make("M1"), role: "user", runId: null, text });
+  const approval: TimelineEntry = {
+    id: "approval",
+    kind: "work",
+    createdAt: RUN_AT,
+    entry: {
+      id: "approval",
+      createdAt: RUN_AT,
+      runId: RunId.make("R1"),
+      label: "Approval requested",
+      tone: "tool",
+      itemType: "approval_request",
+      structuredPayload: {
+        type: "approval_request",
+        id: TurnItemId.make("approval"),
+        threadId: THREAD,
+        runId: RunId.make("R1"),
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "completed",
+        title: null,
+        startedAt: DateTime.makeUnsafe(RUN_AT),
+        completedAt: DateTime.makeUnsafe(RUN_AT),
+        updatedAt: DateTime.makeUnsafe(RUN_AT),
+        requestId: RuntimeRequestId.make("approval-1"),
+        requestKind: "file-change",
+      },
+    },
+  };
+
+  it("completes the approvals chapter only after a run that asked for approval", () => {
+    const state = task("approvals");
+    const entries = [userMessage("Save the to-do list"), message()];
+
+    expect(observe(state, [run()], entries)).toEqual([]);
+    const events = observe(state, [run()], [...entries, approval]);
+    expect(events.reduce(reduceGettingStarted, state).completed).toEqual(["approvals"]);
+  });
+
+  it("completes the skills chapter only when the request names an installed skill", () => {
+    const state = task("skills");
+    const entries = [userMessage("$writing-coach What can you help with?"), message()];
+    const withSkills = (skills: ReadonlyArray<{ name: string }>) =>
+      gettingStartedRunEvents({
+        state,
+        environmentId: ENVIRONMENT,
+        threadId: THREAD,
+        runs: [run()],
+        timelineEntries: entries,
+        answeredRunIds: answered(entries),
+        skills,
+      });
+
+    expect(withSkills([{ name: "other-skill" }])).toEqual([]);
+    expect(
+      withSkills([{ name: "writing-coach" }]).reduce(reduceGettingStarted, state).completed,
+    ).toEqual(["skills"]);
   });
 });

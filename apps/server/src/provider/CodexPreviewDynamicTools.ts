@@ -2,6 +2,7 @@ import * as Clock from "effect/Clock";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import {
   PreviewAutomationSnapshot,
+  PreviewAutomationActInputs,
   PreviewAutomationUnavailableError,
   type PreviewAutomationOperation,
   type PreviewTabId,
@@ -46,21 +47,23 @@ const codexWebResearchToolNames = new Set([
   "preview_open",
   "preview_navigate",
   "preview_snapshot",
-  "preview_click",
-  "preview_type",
-  "preview_press",
-  "preview_scroll",
+  "preview_act",
   "preview_evaluate",
   "preview_wait_for",
 ]);
 // Provider discovery must not initialize the orchestration facade through the
 // MCP handler graph. Resolve the shared toolkit once a live session asks for it.
-const loadPreviewTools = Effect.promise(async () => {
+const readPreviewTools = async () => {
   const { PreviewToolkit } = await import("../mcp/toolkits/preview/tools.ts");
-  return Object.values(PreviewToolkit.tools).filter((tool) =>
-    codexWebResearchToolNames.has(tool.name),
-  );
-});
+  return Object.values(PreviewToolkit.tools)
+    .filter((tool) => codexWebResearchToolNames.has(tool.name))
+    .map((tool) => ({
+      ...tool,
+      decodeParameters: Schema.decodeUnknownEffect(tool.parametersSchema),
+    }));
+};
+let previewToolsPromise: ReturnType<typeof readPreviewTools> | undefined;
+const loadPreviewTools = Effect.promise(() => (previewToolsPromise ??= readPreviewTools()));
 
 export const getCodexPreviewDynamicToolDefinitions = loadPreviewTools.pipe(
   Effect.map((tools): ReadonlyArray<CodexPreviewDynamicToolDefinition> =>
@@ -122,8 +125,16 @@ const invokeAuthorizedCodexPreviewDynamicTool = Effect.fn(
   }
 
   const tool = (yield* loadPreviewTools).find((tool) => tool.name === input.name)!;
-  const parameters = yield* Schema.decodeUnknownEffect(tool.parametersSchema)(input.arguments);
-  const { tabId, timeoutMs, ...args } = parameters as {
+  const parameters = yield* tool.decodeParameters(input.arguments);
+  let actionOperation: PreviewAutomationOperation | undefined;
+  let operationParameters: unknown = parameters;
+  if (input.name === "preview_act") {
+    const act = parameters as { action: keyof typeof PreviewAutomationActInputs };
+    const { action, ...args } = act;
+    actionOperation = action;
+    operationParameters = yield* decodePreviewActions[action](args);
+  }
+  const { tabId, timeoutMs, ...args } = operationParameters as {
     tabId?: PreviewTabId;
     timeoutMs?: number;
     readonly [key: string]: unknown;
@@ -133,17 +144,13 @@ const invokeAuthorizedCodexPreviewDynamicTool = Effect.fn(
     preview_open: "open",
     preview_navigate: "navigate",
     preview_snapshot: "snapshot",
-    preview_click: "click",
-    preview_type: "type",
-    preview_press: "press",
-    preview_scroll: "scroll",
     preview_evaluate: "evaluate",
     preview_wait_for: "waitFor",
   };
   // The managed adapter checks live turn ownership and write consent before entering
   // this path. Reuse the same broker operation as MCP without introducing a service
   // dependency from the provider adapter back into the orchestration facade.
-  const operation = operations[input.name]!;
+  const operation = actionOperation ?? operations[input.name]!;
   const { invokePreviewOperation, normalizePreviewOpenInput } = yield* Effect.promise(
     () => import("../mcp/toolkits/preview/handlers.ts"),
   );
@@ -223,3 +230,14 @@ export const invokeCodexPreviewDynamicTool = Effect.fn("invokeCodexPreviewDynami
     });
   },
 );
+
+const decodePreviewActions = {
+  click: Schema.decodeUnknownEffect(PreviewAutomationActInputs.click),
+  type: Schema.decodeUnknownEffect(PreviewAutomationActInputs.type),
+  hover: Schema.decodeUnknownEffect(PreviewAutomationActInputs.hover),
+  select: Schema.decodeUnknownEffect(PreviewAutomationActInputs.select),
+  drag: Schema.decodeUnknownEffect(PreviewAutomationActInputs.drag),
+  upload: Schema.decodeUnknownEffect(PreviewAutomationActInputs.upload),
+  press: Schema.decodeUnknownEffect(PreviewAutomationActInputs.press),
+  scroll: Schema.decodeUnknownEffect(PreviewAutomationActInputs.scroll),
+};

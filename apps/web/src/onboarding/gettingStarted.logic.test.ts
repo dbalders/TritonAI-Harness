@@ -10,7 +10,12 @@ import {
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { reduceGettingStarted, type GettingStartedEvent } from "./gettingStarted.logic";
+import {
+  gettingStartedAnalyticsEvents,
+  gettingStartedSkillRecipes,
+  reduceGettingStarted,
+  type GettingStartedEvent,
+} from "./gettingStarted.logic";
 
 const ENVIRONMENT = EnvironmentId.make("getting-started-local");
 const OTHER_ENVIRONMENT = EnvironmentId.make("getting-started-remote");
@@ -37,11 +42,18 @@ function start() {
   });
 }
 
-function tracked(chapter: GettingStartedChapterId) {
+function tracked(chapter: GettingStartedChapterId, toolNames: ReadonlyArray<string> = []) {
   return apply(
     start(),
     { type: "select", chapter },
-    { type: "track", chapter, environmentId: ENVIRONMENT, threadId: THREAD, at: TRACKED_AT },
+    {
+      type: "track",
+      chapter,
+      environmentId: ENVIRONMENT,
+      threadId: THREAD,
+      at: TRACKED_AT,
+      toolNames,
+    },
   );
 }
 
@@ -56,6 +68,8 @@ function successfulRun(overrides: Partial<RunEvent> = {}): RunEvent {
     hasAnswer: true,
     connectedToolSucceeded: false,
     usedFile: false,
+    answeredApproval: false,
+    usedSkill: false,
     ...overrides,
   };
 }
@@ -439,18 +453,71 @@ describe("conversation practice", () => {
 
 describe("doing useful work", () => {
   it.each([
-    { chapter: "connected-work", evidence: { connectedToolSucceeded: true } },
-    { chapter: "files", evidence: { usedFile: true } },
-  ] as const)("rejected $chapter evidence does not consume the run id", ({ chapter, evidence }) => {
-    const progress = tracked(chapter);
-    const incomplete = reduceGettingStarted(progress, successfulRun());
+    {
+      chapter: "connected-work",
+      toolNames: ["microsoft365_mail_search"],
+      evidence: { connectedToolSucceeded: true },
+    },
+    { chapter: "files", toolNames: [], evidence: { usedFile: true } },
+    { chapter: "approvals", toolNames: [], evidence: { answeredApproval: true } },
+    { chapter: "skills", toolNames: [], evidence: { usedSkill: true } },
+  ] as const)(
+    "rejected $chapter evidence does not consume the run id",
+    ({ chapter, toolNames, evidence }) => {
+      const progress = tracked(chapter, toolNames);
+      const incomplete = reduceGettingStarted(progress, successfulRun());
 
-    expect(incomplete).toEqual(progress);
-    const completed = reduceGettingStarted(incomplete, successfulRun(evidence));
-    expect(completed.completed).toEqual([chapter]);
-    expect(completed.tasks[0]?.runIds).toEqual(["first-run"]);
-    expect(
-      reduceGettingStarted(completed, successfulRun({ runId: "late-extra", ...evidence })),
-    ).toEqual(completed);
+      expect(incomplete).toEqual(progress);
+      const completed = reduceGettingStarted(incomplete, successfulRun(evidence));
+      expect(completed.completed).toEqual([chapter]);
+      expect(completed.tasks[0]?.runIds).toEqual(["first-run"]);
+      expect(
+        reduceGettingStarted(completed, successfulRun({ runId: "late-extra", ...evidence })),
+      ).toEqual(completed);
+    },
+  );
+});
+
+describe("practice without a connected account", () => {
+  it("completes connected work from the sample-email draft, which declares no email tools", () => {
+    expect(reduceGettingStarted(tracked("connected-work"), successfulRun()).completed).toEqual([
+      "connected-work",
+    ]);
+  });
+});
+
+describe("usage events", () => {
+  it("reports a first start and each chapter newly finished or saved for later", () => {
+    const started = start();
+    const deferred = reduceGettingStarted(started, { type: "later" });
+    const restarted = reduceGettingStarted(deferred, { type: "restart" });
+
+    expect(gettingStartedAnalyticsEvents(DEFAULT_GETTING_STARTED_PROGRESS, started)).toEqual([
+      { event: "started" },
+    ]);
+    expect(gettingStartedAnalyticsEvents(started, deferred)).toEqual([
+      { event: "chapter-later", chapter: "welcome" },
+    ]);
+    expect(gettingStartedAnalyticsEvents(started, { ...started, completed: ["welcome"] })).toEqual([
+      { event: "chapter-completed", chapter: "welcome" },
+    ]);
+    expect(gettingStartedAnalyticsEvents(deferred, restarted)).toEqual([]);
+  });
+});
+
+describe("starter skill recipes", () => {
+  it("offers everyday recipes the person can run now, best first", () => {
+    const recipes = gettingStartedSkillRecipes(
+      new Set(["skill-creator", "gmail", "google-calendar", "outlook-mail", "outlook-calendar"]),
+      new Map([
+        ["google-workspace", new Set(["gmail", "google-calendar"])],
+        ["microsoft-365", new Set<string>()],
+      ]),
+    );
+
+    expect(recipes.map(({ id, prompt }) => [id, prompt.split(" Give")[0]])).toEqual([
+      ["morning-brief", "$google-calendar $gmail"],
+      ["make-a-skill", expect.stringMatching(/^\$skill-creator /)],
+    ]);
   });
 });

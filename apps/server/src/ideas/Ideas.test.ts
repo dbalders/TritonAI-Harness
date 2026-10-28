@@ -398,6 +398,31 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
       }),
   );
 
+  it.effect("shows a saved starter card with the library's current title", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const starter = GENERAL_STARTERS[0]!;
+        const content = yield* encodeIdeaContent({
+          icon: starter.icon,
+          title: "I can do the old wording",
+          body: starter.body,
+          sources: [],
+          action: { kind: "new-thread", projectId: null, prompt: starter.prompt },
+        });
+        yield* sql`
+          INSERT INTO ideas (idea_id, idea_key, section, content_json, status, created_at, updated_at)
+          VALUES ('saved-starter', ${`starter:${starter.id}`}, 'starter', ${content}, 'active', ${iso(NOW)}, ${iso(NOW)})
+        `;
+        const ideas = yield* Ideas.make;
+        const saved = (yield* ideas.list).ideas.find((idea) => idea.id === "saved-starter");
+        assert.strictEqual(saved?.title, starter.title);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("never brings back an idea whose draft was sent after its card was dismissed", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));
@@ -468,14 +493,14 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
       yield* Effect.gen(function* () {
         const ideas = yield* Ideas.make;
         const [idea] = (yield* ideas.list).ideas;
-        yield* Effect.all(
-          ["desktop-draft", "browser-draft", "desktop-draft"].map((draft) =>
+        yield* Effect.forEach(
+          ["desktop-draft", "browser-draft", "desktop-draft"],
+          (draft) =>
             ideas.feedback({
               ideaId: idea!.id,
               kind: "opened",
               draftThreadId: ThreadId.make(draft),
             }),
-          ),
           { concurrency: "unbounded" },
         );
         const recorded = (yield* ideas.list).ideas.find((entry) => entry.id === idea!.id);

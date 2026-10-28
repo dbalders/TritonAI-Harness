@@ -1,4 +1,5 @@
 import { assert, describe, it } from "vite-plus/test";
+
 import { getProjectFilePickerMatches } from "./ProjectFilePicker.logic";
 
 function pathsForQuery(entries: Parameters<typeof getProjectFilePickerMatches>[0], query: string) {

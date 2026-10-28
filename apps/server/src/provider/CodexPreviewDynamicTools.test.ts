@@ -66,7 +66,7 @@ it.effect("requires approval for preview actions but not for status reads", () =
         ?.requiresApproval,
     ).toBe(false);
     expect(
-      codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_click")
+      codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_act")
         ?.requiresApproval,
     ).toBe(true);
   }),

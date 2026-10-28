@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 import * as HttpApiSchema from "effect/http-api/HttpApiSchema";
+
 import {
   AuthSessionId,
   ForwardCompatibleArray,
@@ -94,8 +95,7 @@ const authScopeResponseFields = {
   permissions: Schema.optionalKey(ForwardCompatibleArray(AuthEnvironmentScope)),
 };
 
-// Only clients talking to an old server use these parent checks. Servers never
-// expand stored grants, and an explicitly empty permissions array grants nothing.
+// Client-only fallback for old servers. Servers never expand grants; empty permissions grant nothing.
 const legacyParents: Partial<Record<AuthEnvironmentScope, AuthEnvironmentScope>> = {
   [AuthFilesystemReadScope]: AuthOrchestrationReadScope,
   [AuthDiagnosticsReadScope]: AuthOrchestrationReadScope,
@@ -262,6 +262,17 @@ export const AuthWebSocketTicketResult = Schema.Struct({
   expiresAt: Schema.DateTimeUtc,
 });
 export type AuthWebSocketTicketResult = typeof AuthWebSocketTicketResult.Type;
+
+/**
+ * Media routes share a ticket across requests; RPC uses a separate ticket.
+ * Use a path segment so the DPoP mint proof covers it; `htu` excludes query parameters,
+ * which could be stripped to change the ticket's use.
+ * Older clients mint at the bare path and receive tickets valid for either use.
+ */
+export const AuthWebSocketTicketUse = Schema.Literals(["rpc", "media"]);
+export type AuthWebSocketTicketUse = typeof AuthWebSocketTicketUse.Type;
+
+export const AuthWebSocketTicketParams = Schema.Struct({ use: AuthWebSocketTicketUse });
 
 export const AuthPairingCredentialResult = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -471,9 +482,7 @@ export class AuthMcpRegistrationError extends Schema.Error<AuthMcpRegistrationEr
   }
 }
 
-/**
- * Every field is checked by the server, so all are optional here.
- */
+/** Fields are optional here because the server validates them. */
 export const AuthMcpAuthorizationRequest = Schema.Struct({
   response_type: Schema.optionalKey(Schema.String),
   client_id: Schema.optionalKey(Schema.String),
@@ -485,20 +494,14 @@ export const AuthMcpAuthorizationRequest = Schema.Struct({
 });
 export type AuthMcpAuthorizationRequest = typeof AuthMcpAuthorizationRequest.Type;
 
-/**
- * The server has already validated the request; nothing here is trusted by the
- * client except for display.
- */
+/** Server-validated request details, trusted by the client only for display. */
 export const AuthMcpApprovalDetails = Schema.Struct({
   /** Self-declared by the client, so shown as such. */
   clientName: Schema.String,
   redirectHost: Schema.String,
   environmentHost: Schema.String,
   csrfToken: Schema.optionalKey(Schema.String),
-  /**
-   * What that session may approve in one click: only access whose scopes it
-   * holds. Anything else still needs a pairing code. Absent with `csrfToken`.
-   */
+  /** Only scopes held by this session qualify; others need a pairing code. Absent with `csrfToken`. */
   oneClickAccess: Schema.optionalKey(Schema.Array(AuthMcpClientAccess)),
 });
 export type AuthMcpApprovalDetails = typeof AuthMcpApprovalDetails.Type;

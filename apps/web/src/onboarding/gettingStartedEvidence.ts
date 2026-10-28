@@ -4,6 +4,7 @@ import type {
   OrchestrationV2RunStatus,
   ThreadId,
 } from "@t3tools/contracts";
+import { matchInlineSkills, type InlineSkill } from "@t3tools/shared/inlineSkills";
 import { compactDynamicToolOutput, toolOutputIndicatesFailure } from "@t3tools/shared/toolOutput";
 import { workEntryIndicatesToolSuccess, type TimelineEntry } from "../session-logic";
 import { reduceGettingStarted, type GettingStartedEvent } from "./gettingStarted.logic";
@@ -35,8 +36,11 @@ export function gettingStartedRunEvents(input: {
   threadId: ThreadId;
   runs: ReadonlyArray<GettingStartedRun>;
   timelineEntries: ReadonlyArray<TimelineEntry>;
+  /** Runs with a finished assistant reply. Timeline entries carry no assistant text. */
+  answeredRunIds: ReadonlySet<string>;
+  skills: ReadonlyArray<InlineSkill>;
 }): GettingStartedEvent[] {
-  const { state, environmentId, threadId, runs, timelineEntries } = input;
+  const { state, environmentId, threadId, runs, timelineEntries, answeredRunIds, skills } = input;
   let progress = state;
   const events: GettingStartedEvent[] = [];
   for (const run of runs) {
@@ -51,14 +55,7 @@ export function gettingStartedRunEvents(input: {
         task.messageIds.includes(run.userMessageId),
     );
     if (pending.length === 0) continue;
-    const hasAnswer = timelineEntries.some(
-      (item) =>
-        item.kind === "message" &&
-        item.message.role === "assistant" &&
-        item.message.runId === run.runId &&
-        !item.message.streaming &&
-        item.message.text.trim().length > 0,
-    );
+    const hasAnswer = answeredRunIds.has(run.runId);
     if (!hasAnswer) continue;
     const allowedTools = pending
       .filter((task) => task.chapter === "connected-work")
@@ -86,6 +83,16 @@ export function gettingStartedRunEvents(input: {
     const usedFile =
       userMessage?.kind === "message" &&
       (userMessage.message.attachments ?? []).some((attachment) => attachment.type === "file");
+    // The run finished, so any approval it asked for was answered, either way.
+    const answeredApproval = timelineEntries.some(
+      (item) =>
+        item.kind === "work" &&
+        item.entry.runId === run.runId &&
+        item.entry.structuredPayload?.type === "approval_request",
+    );
+    const usedSkill =
+      userMessage?.kind === "message" &&
+      !matchInlineSkills(userMessage.message.text, skills).next().done;
     const event: GettingStartedEvent = {
       type: "run",
       environmentId,
@@ -97,6 +104,8 @@ export function gettingStartedRunEvents(input: {
       hasAnswer,
       connectedToolSucceeded,
       usedFile,
+      answeredApproval,
+      usedSkill,
       generation: state.generation,
     };
     // Rejected evidence can become usable later; do not queue a settings write for it.

@@ -6,8 +6,8 @@ import {
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
 import type { ThreadActionMenuId } from "../components/threadActionMenu.logic";
-import { useThreadActionMenu } from "./useThreadActionMenu";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -144,6 +144,8 @@ vi.mock("./useThreadActions", () => ({
     ),
 }));
 
+import { useThreadActionMenu } from "./useThreadActionMenu";
+
 const target = {
   environmentId: EnvironmentId.make("secondary"),
   threadId: ThreadId.make("thread"),
@@ -154,6 +156,7 @@ const createMenu = () =>
     threadRef: target,
     projectCwd: "/project",
     onStartRename: () => recordEffect("rename"),
+    canShareWithGuest: false,
   });
 
 beforeEach(() => {

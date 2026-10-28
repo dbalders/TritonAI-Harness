@@ -112,12 +112,10 @@ export const withCodexHelpAuthOwner = Effect.fn("withCodexHelpAuthOwner")(functi
           status.authToken !== null ||
           status.requiresOpenaiAuth !== true
         )
-          return yield* Effect.fail(
-            new TextGenerationError({
-              operation: "generateHelp",
-              detail: "Native Help authentication is unavailable.",
-            }),
-          );
+          return yield* new TextGenerationError({
+            operation: "generateHelp",
+            detail: "Native Help authentication is unavailable.",
+          });
         return yield* readSnapshot(canonicalHome);
       }),
   );

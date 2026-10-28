@@ -42,15 +42,9 @@ function versionCore(version: string): string {
 }
 
 /**
- * The skew a user can act on: the connected server runs an older T3 Code than
- * this client (or than `clientVersion`, the version this client is about to
- * update to), so the server is the side that needs updating.
- *
- * Two nightly builds compare their full versions, including the date and run.
- * Other combinations compare their core `major.minor.patch` only, so a stable
- * build and a nightly build with the same core do not cause an update warning.
- * A server ahead of the client does not need an update. Versions that do not
- * parse as semver fall back to plain string inequality.
+ * Warn only when the server is older. Compare full versions for two nightlies,
+ * core versions for other valid semver pairs, and string inequality for invalid versions.
+ * clientVersion may identify the client’s pending update.
  */
 export function resolveVersionMismatch(
   serverVersion: string | null | undefined,
@@ -92,12 +86,9 @@ export function resolveServerConfigVersionMismatch(
 }
 
 /**
- * TritonAI Harness only accepts the desktop-owned informational capability.
- *
- * An upstream server may advertise `boot-service` or `respawn`, but those
- * paths install the public `t3` npm package at the TritonAI client version.
- * TritonAI versions are not published through that distribution, so treating
- * those capabilities as actionable would install the wrong product or fail.
+ * Only the desktop-owned informational update capability applies to Harness.
+ * Upstream boot-service/respawn installs public t3 npm versions and would select
+ * the wrong product for Harness version numbers.
  */
 export function resolveServerSelfUpdateCapability(
   serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
@@ -107,15 +98,6 @@ export function resolveServerSelfUpdateCapability(
 }
 
 /** One sentence explaining the safe downstream response to version skew. */
-export function serverUpdateGuidance(
-  capability: ServerSelfUpdateCapability | null,
-  serverLabel: string = "server",
-): string {
-  if (capability === "desktop-managed") {
-    return `The ${serverLabel} is run by the TritonAI Harness desktop app on its machine — update the desktop app there to sync them.`;
-  }
-  return `Automatic updates are unavailable for the ${serverLabel}; update it through its approved TritonAI Harness distribution.`;
-}
 
 export function supportsDesktopAppUpdate(
   _serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
