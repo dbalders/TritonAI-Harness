@@ -1,5 +1,11 @@
 # TritonAI Harness
 
+## Plugin channel membership (David, 2026-10-27)
+
+- Requests to use the latest Plugins release authorize updating the source pin, versions, and digests for plugins already selected for that channel. Preserve the existing plugin IDs and channel membership during those updates.
+- Never regenerate Stable's selection from the Nightly catalog or all available plugins. A plugin's absence from Stable is intentional unless David explicitly directs otherwise.
+- Adding a Nightly plugin to Stable requires David's explicit approval for that plugin. General release, merge, or "include the latest changes" instructions do not authorize promotion. See [plugin channel membership](docs/operations/release.md#plugin-channel-membership).
+
 TritonAI Harness is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
 
 You can think of TritonAI Harness as an open source "bring-your-own-subscription" alternative to apps like Claude Desktop, Codex App, Cursor Glass and Conductor.
