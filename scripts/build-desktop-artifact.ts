@@ -23,7 +23,7 @@ import { fromYaml } from "@t3tools/shared/schemaYaml";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
-import extractZip from "extract-zip";
+import extractWindowsCuaDriverArchive from "@electron-internal/extract-zip";
 import rootPackageJson from "../package.json" with { type: "json" };
 import webPackageJson from "../apps/web/package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
@@ -1552,6 +1552,8 @@ export const LINUX_CAPTURE_EXTRA_RESOURCES = [
 export const LINUX_BROWSER_SECRET_EXTRA_RESOURCES = [
   { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
 ] as const;
+
+export { extractWindowsCuaDriverArchive };
 
 export const CUA_DRIVER_VERSION = "0.19.3" as const;
 
@@ -3369,7 +3371,7 @@ const stageCuaDriver = Effect.fn("stageCuaDriver")(function* (input: {
   yield* fs.makeDirectory(extractedDirectory, { recursive: true });
   if (input.platform === "win") {
     yield* Effect.tryPromise({
-      try: () => extractZip(archivePath, { dir: extractedDirectory }),
+      try: () => extractWindowsCuaDriverArchive(archivePath, { dir: extractedDirectory }),
       catch: (cause) =>
         new CuaDriverArtifactError({
           operation: "extract",
