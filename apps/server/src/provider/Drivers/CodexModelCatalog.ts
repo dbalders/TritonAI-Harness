@@ -4,6 +4,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
+import { tritonAiHostedModelIds } from "../../managedPolicy.ts";
 import * as ProcessRunner from "../../processRunner.ts";
 
 const MANAGED_MODEL_CATALOG_FILE = "tritonai-model-catalog.json";
@@ -81,10 +82,10 @@ function managedModelFromTemplate(input: {
     effective_context_window_percent: 95,
     experimental_supported_tools: [],
     input_modalities: [...input.inputModalities],
-    // On the managed gateway these are campus-hosted models. The gateway drops Codex's
-    // client-side tool_search, so Harness's gateway proxy translates it into an ordinary
-    // function (TritonAiGatewayProxy). Search lets Codex defer plugin tools instead of sending
-    // every schema on each request. Elsewhere nothing translates it.
+    // The gateway drops Codex's client-side tool_search, so Harness's gateway proxy translates
+    // it for campus-hosted models on the managed gateway (TritonAiImageProxy). Search lets Codex
+    // defer plugin tools instead of sending every schema on each request. Nothing translates it
+    // for other models.
     supports_search_tool: input.searchTool,
     use_responses_lite: false,
     auto_review_model_override: null,
@@ -158,7 +159,7 @@ export function buildTritonAiCodexModelCatalog(
         name: metadata.name,
         inputModalities,
         priority,
-        searchTool: options.managedGateway,
+        searchTool: options.managedGateway && tritonAiHostedModelIds.has(slug),
       }),
     );
     priority += 1;

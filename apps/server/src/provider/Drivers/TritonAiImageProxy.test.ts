@@ -253,10 +253,12 @@ const scriptedGateway = Effect.fn(function* (
   options: TritonAiImageProxyOptions,
 ) {
   const received: any[] = [];
+  const receivedHeaders: NodeHttp.IncomingHttpHeaders[] = [];
   const server = NodeHttp.createServer(async (req, res) => {
     const parts: Buffer[] = [];
     for await (const chunk of req) parts.push(Buffer.from(chunk));
     received.push(JSON.parse(Buffer.concat(parts).toString()));
+    receivedHeaders.push(req.headers);
     res.writeHead(200, { "content-type": "text/event-stream" });
     for (const event of events) res.write(event);
     res.end();
@@ -275,7 +277,11 @@ const scriptedGateway = Effect.fn(function* (
   );
   const address = server.address();
   if (!address || typeof address === "string") return yield* Effect.die("Missing test address");
-  return { received, ...(yield* startProxy(`http://127.0.0.1:${address.port}/v1`, {}, options)) };
+  return {
+    received,
+    receivedHeaders,
+    ...(yield* startProxy(`http://127.0.0.1:${address.port}/v1`, {}, options)),
+  };
 });
 
 // Codex 0.161's client-side tool search, as sent for hosted models with deferred plugin tools.
@@ -462,6 +468,8 @@ describe("TritonAI tool search translation", () => {
       expect(hostedText).not.toContain('"name":"tool_search"');
       expect(JSON.stringify(gateway.received[0])).not.toContain("tool_search_call");
       expect(JSON.stringify(gateway.received[0].tools)).toContain("microsoft365_mail_search");
+      // The rewritten reply is read as text, so it must not come back compressed.
+      expect(gateway.receivedHeaders[0]?.["accept-encoding"]).toBeUndefined();
 
       const native = yield* post(`${gateway.baseUrl}/responses`, {
         ...searchedThread(),

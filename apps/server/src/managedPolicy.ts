@@ -103,6 +103,13 @@ function loadManagedConfig(): { readonly config: ManagedConfig; readonly digest:
 
 const loadedManagedConfig = loadManagedConfig();
 export const managedConfig = loadedManagedConfig.config;
+
+/** Campus-hosted models on the on-prem route, whose tool search the gateway proxy translates. */
+export const tritonAiHostedModelIds: ReadonlySet<string> = new Set(
+  managedConfig.models.catalog
+    .filter((model) => model.route === "on-prem")
+    .map((model) => model.id),
+);
 const managedConfigDigest = loadedManagedConfig.digest;
 
 let migrationStatus: TritonAiManagedPolicyDiagnostics["migrationStatus"] = "not-needed";

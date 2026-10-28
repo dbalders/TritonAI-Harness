@@ -285,6 +285,8 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
         "connection",
         "content-length",
         "transfer-encoding",
+        // A reply rewritten as text must arrive uncompressed.
+        ...(rewriteSearchReply ? ["accept-encoding"] : []),
       ]);
       const response = yield* client.execute(
         HttpClientRequest.make(request.method)(target, { headers, body }),

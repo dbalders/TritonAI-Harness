@@ -93,7 +93,7 @@ import {
   type CodexTurnTokenUsageState,
 } from "../../provider/CodexTurnTokenUsage.ts";
 import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
-import { managedConfig } from "../../managedPolicy.ts";
+import { tritonAiHostedModelIds } from "../../managedPolicy.ts";
 import type { CodexEffectiveRuntime } from "../../provider/CodexManagedRuntime.ts";
 import { classifyCodexManagedError } from "../../provider/CodexManagedErrors.ts";
 import {
@@ -1635,13 +1635,6 @@ function isSensitiveCodexProtocolKey(key: string): boolean {
     normalized.endsWith("secret")
   );
 }
-
-// Campus-hosted models, served through the on-prem route.
-const tritonAiHostedModelIds = new Set(
-  managedConfig.models.catalog
-    .filter((model) => model.route === "on-prem")
-    .map((model) => model.id),
-);
 
 export const layerAppServerClientFactory: Layer.Layer<
   CodexAppServerClientFactory,
