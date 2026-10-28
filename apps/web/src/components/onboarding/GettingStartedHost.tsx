@@ -77,6 +77,7 @@ function useStarterRecipes(
     readonly environmentId: string;
     readonly skills: ReadonlyMap<string, ReadonlySet<string>>;
   } | null>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Refresh connected plugin skills for the active chapter and environment.
   useEffect(() => {
     if (!active || !environmentId) return;
     let current = true;

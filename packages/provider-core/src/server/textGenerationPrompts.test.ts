@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import { normalizeCliError } from "./textGenerationUtils.ts";
 
 describe("normalizeCliError", () => {

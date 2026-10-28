@@ -153,12 +153,10 @@ it.live.each([
                   mode === "null-generic-transport" &&
                   method === "thread/backgroundTerminals/list"
                 )
-                  return yield* Effect.fail(
-                    new CodexAppServerTransportError({
-                      operation: "read-input-stream",
-                      cause: new Error("unclassified transport failure"),
-                    }),
-                  );
+                  return yield* new CodexAppServerTransportError({
+                    operation: "read-input-stream",
+                    cause: new Error("unclassified transport failure"),
+                  });
                 const removedHere =
                   conclusiveEnd &&
                   ((mode.endsWith("initial") &&
@@ -171,11 +169,9 @@ it.live.each([
                       terminationSent));
                 if (removedHere) {
                   yield* nativeClient.raw.request("fixture/removeOwned", {});
-                  return yield* Effect.fail(
-                    mode.includes("-exited-")
-                      ? new CodexAppServerProcessExitedError({ code: 0 })
-                      : new CodexAppServerInputStreamEndedError({}),
-                  );
+                  return yield* mode.includes("-exited-")
+                    ? new CodexAppServerProcessExitedError({ code: 0 })
+                    : new CodexAppServerInputStreamEndedError({});
                 }
                 if (
                   conclusiveEnd &&

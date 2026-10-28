@@ -103,12 +103,10 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-// Agents see these issues verbatim, so they must never carry submitted values. Ajv messages and
-// the params read below come from the schema; instance paths and `additionalProperties` params
-// may name submitted property keys, which the formatter caps. That holds only for the Ajv
-// configuration in compileJsonSchema: discriminator and `$data` stay disabled, no custom keywords
-// or formats are added, and strict mode rejects unknown formats at compile time. Other params,
-// such as `propertyNames`' submitted `propertyName`, are never read.
+// Never include submitted values in agent-visible validation errors. Cap property keys
+// from paths/additionalProperties; ignore value-bearing params such as propertyName.
+// This assumes compileJsonSchema disables discriminator/$data/custom keywords/formats
+// and strict mode rejects unknown formats.
 function pluginSchemaIssue(error: ErrorObject): SchemaIssue.Issue {
   const path = error.instancePath
     .split("/")
@@ -462,10 +460,10 @@ export async function loadPluginSdkIntegration(input: {
     }
 
     const configurationSchema = compileJsonSchema(artifact.sdkManifest.configurationSchema);
-    const configuration = await Schema.decodeUnknownPromise(configurationSchema)(
-      input.configuration,
-      { errors: "all", onExcessProperty: "error" },
-    );
+    const configuration = await Schema.decodePromise(configurationSchema)(input.configuration, {
+      errors: "all",
+      onExcessProperty: "error",
+    });
     if (!isRecord(configuration)) {
       throw new Error("Plugin SDK configuration must decode to an object.");
     }

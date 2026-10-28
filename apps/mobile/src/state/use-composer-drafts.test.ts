@@ -1,30 +1,19 @@
-import { getPendingTaskRuntimeMode } from "./use-composer-drafts";
-import { composerDraftsLoadFailedAtom } from "./use-composer-drafts";
-import { setStickyComposerRuntimeMode } from "./use-composer-drafts";
-import { stickyComposerRuntimeModeAtom } from "./use-composer-drafts";
-
 import { PrimaryConnectionTarget } from "@t3tools/client-runtime/connection";
-
 import { createEnvironmentThreadShellAtoms } from "@t3tools/client-runtime/state/threads";
-
 import {
   applyShellStreamEvent,
   createEnvironmentSnapshotAtom,
+  EMPTY_SHELL_STATE,
   type EnvironmentShellState,
   type EnvironmentShellStatus,
 } from "@t3tools/client-runtime/state/shell";
-
 import {
   v2ShellSnapshot,
   v2ThreadShell,
 } from "../../../../packages/client-runtime/src/state/orchestrationV2TestFixtures";
-
 import * as Option from "effect/Option";
-
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
-
 import { afterEach, describe, expect, it } from "@effect/vitest";
-
 import {
   CommandId,
   ComposerContextId,
@@ -37,8 +26,63 @@ import {
   type OrchestrationV2ShellSnapshot,
   type ModelSelection,
 } from "@t3tools/contracts";
-
 import { onTestFinished, vi } from "vite-plus/test";
+import { type DraftComposerAttachment } from "../lib/composerImages";
+import {
+  collectComposerContextReferences,
+  formatComposerContextReference,
+} from "@t3tools/shared/composerContextReferences";
+import { appAtomRegistry } from "./atom-registry";
+import { startComposerDraftOperation } from "./composerDraftOperations";
+import { threadOutboxManager } from "./thread-outbox";
+import {
+  appendComposerDraftAttachments,
+  captureComposerDraftInsertion,
+  countComposerDraftAttachmentsAfterSelection,
+  getComposerDraftAfterSelection,
+  archiveCloudComposerDrafts,
+  clearComposerDraftContent,
+  clearComposerDraftContentState,
+  subscribeComposerDraftModelReconciliation,
+  clearComposerDraftsEnvironment,
+  ComposerDraftPersistenceError,
+  composerDraftsAtom,
+  composerCloudDraftsAtom,
+  createNewTaskDraft,
+  createComposerDraftContextHistory,
+  setComposerDraftContext,
+  decodePersistedComposerState,
+  ensureComposerDraftsLoaded,
+  type ComposerDraft,
+  findNewTaskDraftKeys,
+  flushComposerDrafts,
+  getComposerDraftSnapshot,
+  mergeComposerDraftContentState,
+  migrateLegacyNewTaskDraft,
+  modelOptionMemoryAtom,
+  releaseUnusedComposerAttachmentFiles,
+  removeComposerDraftsForEnvironment,
+  replaceComposerDraftAttachments,
+  resetComposerDraftsLoadState,
+  restoreComposerDraftSnapshotState,
+  restoreCloudComposerDrafts,
+  retargetNewTaskDraft,
+  setComposerDraftText,
+  insertComposerDraftContext,
+  insertComposerDraftText,
+  rememberComposerDraftSelection,
+  setComposerDraftAttachmentUpload,
+  waitForComposerDraftsLoaded,
+  setStickyComposerModelSelection,
+  stickyComposerModelSelectionAtom,
+  undoComposerDraftMergeState,
+  updateComposerDraftSettings,
+} from "./use-composer-drafts";
+import { retainComposerAttachmentFileForPreview } from "../lib/composerAttachmentPreviewRetention";
+import { getPendingTaskRuntimeMode } from "./use-composer-drafts";
+import { composerDraftsLoadFailedAtom } from "./use-composer-drafts";
+import { setStickyComposerRuntimeMode } from "./use-composer-drafts";
+import { stickyComposerRuntimeModeAtom } from "./use-composer-drafts";
 
 const composerDraftFileMocks = vi.hoisted(() => {
   let document = JSON.stringify({ schemaVersion: 1, drafts: {} });
@@ -155,13 +199,9 @@ vi.mock("../lib/composerImages", async (importOriginal) => ({
 }));
 
 vi.mock("../lib/uuid", () => ({ uuidv4: () => "uuid", randomHex: () => "0000" }));
-
 vi.mock("./assets", () => ({ assetEnvironment: {} }));
-
 vi.mock("./attachments", () => ({ attachmentEnvironment: {} }));
-
 vi.mock("./session", () => ({ environmentSession: {} }));
-
 vi.mock("@t3tools/client-runtime/state/runtime", () => ({
   createEnvironmentRpcCommand: () => Symbol("rpc-command"),
   executeAtomQuery: () => {
@@ -180,63 +220,6 @@ vi.mock("../lib/attachmentUpload", () => ({
 vi.mock("../features/sharing/incoming-share-storage", () => ({
   loadIncomingShareDrafts: incomingShareStorageMocks.load,
 }));
-
-import type { DraftComposerAttachment } from "../lib/composerImages";
-
-import {
-  collectComposerContextReferences,
-  formatComposerContextReference,
-} from "@t3tools/shared/composerContextReferences";
-
-import { appAtomRegistry } from "./atom-registry";
-
-import { threadOutboxManager } from "./thread-outbox";
-
-import {
-  appendComposerDraftAttachments,
-  captureComposerDraftInsertion,
-  countComposerDraftAttachmentsAfterSelection,
-  getComposerDraftAfterSelection,
-  archiveCloudComposerDrafts,
-  clearComposerDraftContent,
-  clearComposerDraftContentState,
-  subscribeComposerDraftModelReconciliation,
-  clearComposerDraftsEnvironment,
-  ComposerDraftPersistenceError,
-  composerDraftsAtom,
-  composerCloudDraftsAtom,
-  createNewTaskDraft,
-  createComposerDraftContextHistory,
-  setComposerDraftContext,
-  decodePersistedComposerState,
-  ensureComposerDraftsLoaded,
-  type ComposerDraft,
-  findNewTaskDraftKeys,
-  flushComposerDrafts,
-  getComposerDraftSnapshot,
-  mergeComposerDraftContentState,
-  migrateLegacyNewTaskDraft,
-  modelOptionMemoryAtom,
-  releaseUnusedComposerAttachmentFiles,
-  removeComposerDraftsForEnvironment,
-  replaceComposerDraftAttachments,
-  resetComposerDraftsLoadState,
-  restoreComposerDraftSnapshotState,
-  restoreCloudComposerDrafts,
-  retargetNewTaskDraft,
-  setComposerDraftText,
-  insertComposerDraftContext,
-  insertComposerDraftText,
-  rememberComposerDraftSelection,
-  setComposerDraftAttachmentUpload,
-  waitForComposerDraftsLoaded,
-  setStickyComposerModelSelection,
-  stickyComposerModelSelectionAtom,
-  undoComposerDraftMergeState,
-  updateComposerDraftSettings,
-} from "./use-composer-drafts";
-
-import { retainComposerAttachmentFileForPreview } from "../lib/composerAttachmentPreviewRetention";
 
 const DRAFT: ComposerDraft = {
   text: "hello",
@@ -307,9 +290,9 @@ function modelReconciliationHarness(
     ],
   };
   const shellStateAtom = Atom.make<EnvironmentShellState>({
+    ...EMPTY_SHELL_STATE,
     snapshot: Option.some(initialSnapshot),
     status: initialStatus,
-    error: Option.none(),
   });
   const shellResultAtom = Atom.map(shellStateAtom, AsyncResult.success);
   const snapshotAtom = createEnvironmentSnapshotAtom(() => shellResultAtom)(environmentId);
@@ -450,7 +433,6 @@ describe("mobile composer drafts", () => {
       );
     }
   });
-
   it.each([false, true])(
     "restores deleted file chips and releases undo history (uploaded: %s)",
     async (uploaded) => {
@@ -781,7 +763,6 @@ describe("mobile composer drafts", () => {
     expect(getComposerDraftSnapshot(key)).toEqual(before);
     await cleanup.promise;
   });
-
   it.each(["environment-1:thread", "environment-1:new-task:draft"])(
     "preserves the captured paste selection across async writes in %s",
     async (key) => {
@@ -1002,6 +983,37 @@ describe("mobile composer drafts", () => {
     expect(clearComposerDraftContentState(restored, draftKey)[draftKey]?.context).toBeUndefined();
     setComposerDraftText(draftKey, "Fix next");
     expect(getComposerDraftSnapshot(draftKey).context).toBeUndefined();
+  });
+
+  it("keeps each draft's caret when another composer moves its own caret", () => {
+    const threadKey = "caret-environment:caret-thread";
+    const newTaskKey = "caret-environment:new-task:caret-draft";
+    setComposerDraftText(threadKey, "Fix this next");
+    setComposerDraftText(newTaskKey, "Another task");
+    rememberComposerDraftSelection(threadKey, "Fix this next", { start: 4, end: 8 });
+    rememberComposerDraftSelection(newTaskKey, "Another task", { start: 2, end: 2 });
+    insertComposerDraftContext(threadKey, {
+      text: "[Build output](t3-context://v1/terminal/caret-terminal)",
+      context: {
+        version: 1,
+        records: [
+          {
+            version: 1,
+            kind: "terminal",
+            contextId: ComposerContextId.make("caret-terminal"),
+            label: "Build output",
+            terminalId: "main",
+            terminalLabel: "Terminal",
+            lineStart: 1,
+            lineEnd: 1,
+            text: "Build failed",
+          },
+        ],
+      },
+    });
+    expect(getComposerDraftSnapshot(threadKey).text).toBe(
+      "Fix [Build output](t3-context://v1/terminal/caret-terminal) next",
+    );
   });
 
   it("releases videos rejected by the live draft limit and keeps accepted files", async () => {
@@ -1915,114 +1927,6 @@ describe("mobile composer drafts", () => {
     expect(findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), to)).toEqual([key]);
   });
 
-  // regression: #374 fix(permissions): default to Supervised and remember composer choices
-  it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
-    "persists and reloads the last %s composer choice without changing existing drafts",
-    async (runtimeMode) => {
-      vi.useFakeTimers();
-      const existingDraft: ComposerDraft = { ...DRAFT, runtimeMode: "approval-required" };
-      composerDraftFileMocks.setDocument({
-        schemaVersion: 1,
-        drafts: { "environment-1:thread-1": existingDraft },
-      });
-      await waitForComposerDraftsLoaded();
-      setStickyComposerRuntimeMode(runtimeMode);
-      await flushComposerDrafts();
-
-      expect(JSON.parse(composerDraftFileMocks.getDocument()).stickyRuntimeMode).toBe(runtimeMode);
-      appAtomRegistry.set(stickyComposerRuntimeModeAtom, null);
-      resetComposerDraftsLoadState();
-      await waitForComposerDraftsLoaded();
-
-      expect(appAtomRegistry.get(stickyComposerRuntimeModeAtom)).toBe(runtimeMode);
-      expect(getComposerDraftSnapshot("environment-1:thread-1")).toEqual(existingDraft);
-    },
-  );
-
-  // regression: #374 fix(permissions): default to Supervised and remember composer choices
-  it("keeps a newer composer choice while an older saved choice is loading", async () => {
-    vi.useFakeTimers();
-    composerDraftFileMocks.setDocument({
-      schemaVersion: 1,
-      drafts: {},
-      stickyRuntimeMode: "full-access",
-    });
-    composerDraftFileMocks.blockRead();
-    const loading = waitForComposerDraftsLoaded();
-    setStickyComposerRuntimeMode("auto");
-    composerDraftFileMocks.releaseRead();
-    await loading;
-    await flushComposerDrafts();
-
-    expect(appAtomRegistry.get(stickyComposerRuntimeModeAtom)).toBe("auto");
-    expect(JSON.parse(composerDraftFileMocks.getDocument()).stickyRuntimeMode).toBe("auto");
-  });
-
-  // regression: #374 fix(permissions): default to Supervised and remember composer choices
-  it("loads older draft documents without inventing a remembered mode", () => {
-    expect(
-      decodePersistedComposerState({ schemaVersion: 1, drafts: {} }).stickyRuntimeMode,
-    ).toBeNull();
-  });
-
-  // regression: #374 fix(permissions): default to Supervised and remember composer choices
-  it("does not freeze the project fallback into a pending task before preferences load", async () => {
-    composerDraftFileMocks.setDocument({
-      schemaVersion: 1,
-      drafts: {},
-      stickyRuntimeMode: "approval-required",
-    });
-    composerDraftFileMocks.blockRead();
-    const loading = waitForComposerDraftsLoaded();
-    try {
-      expect(getPendingTaskRuntimeMode("new-task:cold-start", "full-access")).toBeNull();
-    } finally {
-      composerDraftFileMocks.releaseRead();
-      await loading;
-    }
-    expect(getPendingTaskRuntimeMode("new-task:cold-start", "full-access")).toBe(
-      "approval-required",
-    );
-  });
-
-  // regression: #374 fix(permissions): default to Supervised and remember composer choices
-  it("allows retry after preference loading fails without submitting the fallback", async () => {
-    composerDraftFileMocks.setReadError(new Error("Preferences temporarily unreadable"));
-    await expect(waitForComposerDraftsLoaded()).rejects.toThrow();
-    expect(appAtomRegistry.get(composerDraftsLoadFailedAtom)).toBe(true);
-    expect(getPendingTaskRuntimeMode("new-task:retry", "full-access")).toBeNull();
-
-    composerDraftFileMocks.setReadError(null);
-    composerDraftFileMocks.setDocument({
-      schemaVersion: 1,
-      drafts: {},
-      stickyRuntimeMode: "approval-required",
-    });
-    await waitForComposerDraftsLoaded();
-
-    expect(appAtomRegistry.get(composerDraftsLoadFailedAtom)).toBe(false);
-    expect(getPendingTaskRuntimeMode("new-task:retry", "full-access")).toBe("approval-required");
-  });
-
-  // regression: #374 fix(permissions): default to Supervised and remember composer choices
-  it("uses an explicit choice after a persistent read failure without overwriting saved drafts", async () => {
-    vi.useFakeTimers();
-    const savedDocument = { schemaVersion: 1, drafts: { "environment-1:thread-1": DRAFT } };
-    composerDraftFileMocks.setDocument(savedDocument);
-    composerDraftFileMocks.setReadError(new Error("Preferences remain unreadable"));
-    await expect(waitForComposerDraftsLoaded()).rejects.toThrow();
-    expect(getPendingTaskRuntimeMode("new-task:explicit", "full-access")).toBeNull();
-
-    appAtomRegistry.set(composerDraftsAtom, {
-      "new-task:explicit": { text: "New task", attachments: [], runtimeMode: "approval-required" },
-    });
-    setStickyComposerRuntimeMode("approval-required");
-    expect(getPendingTaskRuntimeMode("new-task:explicit", "full-access")).toBe("approval-required");
-    expect(getPendingTaskRuntimeMode("new-task:next", "full-access")).toBe("approval-required");
-    await expect(flushComposerDrafts()).rejects.toThrow();
-    expect(JSON.parse(composerDraftFileMocks.getDocument())).toEqual(savedDocument);
-  });
-
   it("merges persisted option memory without replacing newer choices", async () => {
     composerDraftFileMocks.setDocument({
       schemaVersion: 1,
@@ -2408,6 +2312,32 @@ describe("mobile composer drafts", () => {
     });
   });
 
+  it("aborts operations running for drafts an environment removal drops", async () => {
+    const environmentId = EnvironmentId.make("environment-removed");
+    composerDraftFileMocks.setDocument({ schemaVersion: 1, drafts: {} });
+    appAtomRegistry.set(composerDraftsAtom, {
+      "new-task:removed-draft": {
+        ...DRAFT,
+        project: {
+          environmentId,
+          projectId: ProjectId.make("project-removed"),
+          createdAt: "2026-09-05T00:00:00.000Z",
+        },
+      },
+      "environment-kept:thread-kept": DRAFT,
+    });
+    const newTask = startComposerDraftOperation("new-task:removed-draft");
+    const emptyThread = startComposerDraftOperation(`${environmentId}:thread-empty`);
+    const kept = startComposerDraftOperation("environment-kept:thread-kept");
+
+    await clearComposerDraftsEnvironment(environmentId);
+
+    expect(newTask.signal.aborted).toBe(true);
+    expect(emptyThread.signal.aborted).toBe(true);
+    expect(kept.signal.aborted).toBe(false);
+    kept.finish();
+  });
+
   it("lands a still-debounced draft write when flushed", async () => {
     const draftKey = "environment-1:thread-1";
     setComposerDraftText(draftKey, "typed right before the restart");
@@ -2714,5 +2644,101 @@ describe("mobile composer drafts", () => {
       },
     });
     expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+  });
+  it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
+    "persists and reloads the last %s composer choice without changing existing drafts",
+    async (runtimeMode) => {
+      vi.useFakeTimers();
+      const existingDraft: ComposerDraft = { ...DRAFT, runtimeMode: "approval-required" };
+      composerDraftFileMocks.setDocument({
+        schemaVersion: 1,
+        drafts: { "environment-1:thread-1": existingDraft },
+      });
+      await waitForComposerDraftsLoaded();
+      setStickyComposerRuntimeMode(runtimeMode);
+      await flushComposerDrafts();
+
+      expect(JSON.parse(composerDraftFileMocks.getDocument()).stickyRuntimeMode).toBe(runtimeMode);
+      appAtomRegistry.set(stickyComposerRuntimeModeAtom, null);
+      resetComposerDraftsLoadState();
+      await waitForComposerDraftsLoaded();
+
+      expect(appAtomRegistry.get(stickyComposerRuntimeModeAtom)).toBe(runtimeMode);
+      expect(getComposerDraftSnapshot("environment-1:thread-1")).toEqual(existingDraft);
+    },
+  );
+  it("keeps a newer composer choice while an older saved choice is loading", async () => {
+    vi.useFakeTimers();
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {},
+      stickyRuntimeMode: "full-access",
+    });
+    composerDraftFileMocks.blockRead();
+    const loading = waitForComposerDraftsLoaded();
+    setStickyComposerRuntimeMode("auto");
+    composerDraftFileMocks.releaseRead();
+    await loading;
+    await flushComposerDrafts();
+
+    expect(appAtomRegistry.get(stickyComposerRuntimeModeAtom)).toBe("auto");
+    expect(JSON.parse(composerDraftFileMocks.getDocument()).stickyRuntimeMode).toBe("auto");
+  });
+  it("loads older draft documents without inventing a remembered mode", () => {
+    expect(
+      decodePersistedComposerState({ schemaVersion: 1, drafts: {} }).stickyRuntimeMode,
+    ).toBeNull();
+  });
+  it("does not freeze the project fallback into a pending task before preferences load", async () => {
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {},
+      stickyRuntimeMode: "approval-required",
+    });
+    composerDraftFileMocks.blockRead();
+    const loading = waitForComposerDraftsLoaded();
+    try {
+      expect(getPendingTaskRuntimeMode("new-task:cold-start", "full-access")).toBeNull();
+    } finally {
+      composerDraftFileMocks.releaseRead();
+      await loading;
+    }
+    expect(getPendingTaskRuntimeMode("new-task:cold-start", "full-access")).toBe(
+      "approval-required",
+    );
+  });
+  it("allows retry after preference loading fails without submitting the fallback", async () => {
+    composerDraftFileMocks.setReadError(new Error("Preferences temporarily unreadable"));
+    await expect(waitForComposerDraftsLoaded()).rejects.toThrow();
+    expect(appAtomRegistry.get(composerDraftsLoadFailedAtom)).toBe(true);
+    expect(getPendingTaskRuntimeMode("new-task:retry", "full-access")).toBeNull();
+
+    composerDraftFileMocks.setReadError(null);
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {},
+      stickyRuntimeMode: "approval-required",
+    });
+    await waitForComposerDraftsLoaded();
+
+    expect(appAtomRegistry.get(composerDraftsLoadFailedAtom)).toBe(false);
+    expect(getPendingTaskRuntimeMode("new-task:retry", "full-access")).toBe("approval-required");
+  });
+  it("uses an explicit choice after a persistent read failure without overwriting saved drafts", async () => {
+    vi.useFakeTimers();
+    const savedDocument = { schemaVersion: 1, drafts: { "environment-1:thread-1": DRAFT } };
+    composerDraftFileMocks.setDocument(savedDocument);
+    composerDraftFileMocks.setReadError(new Error("Preferences remain unreadable"));
+    await expect(waitForComposerDraftsLoaded()).rejects.toThrow();
+    expect(getPendingTaskRuntimeMode("new-task:explicit", "full-access")).toBeNull();
+
+    appAtomRegistry.set(composerDraftsAtom, {
+      "new-task:explicit": { text: "New task", attachments: [], runtimeMode: "approval-required" },
+    });
+    setStickyComposerRuntimeMode("approval-required");
+    expect(getPendingTaskRuntimeMode("new-task:explicit", "full-access")).toBe("approval-required");
+    expect(getPendingTaskRuntimeMode("new-task:next", "full-access")).toBe("approval-required");
+    await expect(flushComposerDrafts()).rejects.toThrow();
+    expect(JSON.parse(composerDraftFileMocks.getDocument())).toEqual(savedDocument);
   });
 });

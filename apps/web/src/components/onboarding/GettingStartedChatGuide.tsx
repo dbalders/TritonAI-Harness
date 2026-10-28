@@ -133,7 +133,7 @@ export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBanne
   return {
     id: "getting-started",
     variant: "info",
-    priority: "notice",
+    group: "attention",
     icon: complete ? <CheckIcon /> : <MessageCircleIcon />,
     title,
     description,

@@ -69,17 +69,17 @@ it("navigates to registered settings anchors while keeping rejected destinations
     ].join("\n\n"),
   );
   expect(hrefs(screen)).toEqual([
-    "/settings/general#computer-use",
-    "/settings/storage#storage-worktrees",
+    "/settings/maintenance#computer-use",
+    "/settings/worktrees#storage-worktrees",
   ]);
   for (const label of ["Wrong route", "Displaced ID", "Unknown route", "Empty anchor"]) {
     expect(screen.container.textContent).toContain(label);
   }
   expect(location(screen)).toEqual({ pathname: "/", hash: "" });
-  await act(async () => anchor(screen, "/settings/general#computer-use").click());
+  await act(async () => anchor(screen, "/settings/maintenance#computer-use").click());
   await expect
     .poll(() => location(screen))
-    .toEqual({ pathname: "/settings/general", hash: "computer-use" });
+    .toEqual({ pathname: "/settings/maintenance", hash: "computer-use" });
   expect(state.openExternal).not.toHaveBeenCalled();
 });
 

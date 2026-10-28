@@ -306,19 +306,6 @@ function verifyPluginPayload(appPath, composition, asar, version, parseImports) 
   };
 }
 
-function diskImageCapacityMib(source) {
-  const pending = [source];
-  let bytes = 0;
-  while (pending.length) {
-    const file = pending.pop();
-    const stat = fs.lstatSync(file);
-    bytes += Math.max(4096, stat.size, Number.isFinite(stat.blocks) ? stat.blocks * 512 : 0);
-    if (stat.isDirectory())
-      for (const child of fs.readdirSync(file)) pending.push(path.join(file, child));
-  }
-  return Math.max(512, Math.ceil((bytes * 1.3) / 1024 / 1024) + 128);
-}
-
 function detachAndClean(mountPoint, scratch, runCommand) {
   // Never recursively delete a mountpoint if detach failed: retain it for recovery.
   runCommand("hdiutil", ["detach", mountPoint, "-force"], { label: "Detach candidate disk image" });
@@ -619,6 +606,8 @@ async function verifyPackagedBoot({
   let child;
   let processes;
   let bootError;
+  let bootResult;
+  let cleanupError;
   let interruption;
   let loggedBytes = 0;
   const captureOutput = (chunk) => {
@@ -788,7 +777,7 @@ async function verifyPackagedBoot({
     if (!stillVisible)
       throw new Error("Packaged Harness window disappeared during the boot stability check.");
     if (interruption) throw interruption;
-    return {
+    bootResult = {
       ...result,
       keychain: "mock-for-isolated-boot",
       credentialStorage: "not-verified",
@@ -797,9 +786,7 @@ async function verifyPackagedBoot({
     };
   } catch (error) {
     bootError = error;
-    throw error;
   } finally {
-    let cleanupError;
     try {
       if (application && processes)
         await closeBootApplication(application, processes, closeTimeoutMs);
@@ -816,14 +803,14 @@ async function verifyPackagedBoot({
     } catch (error) {
       cleanupError ||= error;
     }
-    if (cleanupError) {
-      if (!bootError && !interruption) throw cleanupError;
+    if (cleanupError && (bootError || interruption)) {
       process.stderr.write(`[harness-mac] ${cleanupError.message}\n`);
     }
-    // A signal during shutdown must also cancel a pending successful return.
-    // Preserve its exit status even if evaluation or cleanup failed afterward.
-    if (interruption) throw interruption;
   }
+  if (interruption) throw interruption;
+  if (bootError) throw bootError;
+  if (cleanupError) throw cleanupError;
+  return bootResult;
 }
 
 async function finalizeMacRelease({
@@ -934,12 +921,9 @@ async function finalizeMacRelease({
   const zipName = `TritonAI-Harness-${version}-arm64.zip`;
   const zip = path.join(output, zipName);
   const dmg = path.join(output, `TritonAI-Harness-${version}-arm64.dmg`);
-  // Staple the app itself before packaging. The Installer copies it out of a DMG mounted with
-  // hdiutil (which never ingests the DMG's ticket), and the updater ZIP has no DMG at all, so an
-  // unstapled app needs Apple's online lookup on first launch and fails Gatekeeper offline.
-  // Electron Builder must still build its ZIP (it only writes app-update.yml for ZIP or DMG
-  // targets), so submit that archive of the signed app instead of compressing it again. Apple
-  // notarizes code hashes: stapling the app below fails if this ZIP held different code.
+  // Staple the app before packaging so offline Gatekeeper works for Installer and updater ZIPs.
+  // Notarize Electron Builder’s ZIP of that signed app; it also supplies app-update.yml.
+  // Stapling fails if the notarized archive contained different code hashes.
   const appSubmission = regularFile(path.join(dist, zipName));
   const appReceipt = notarize(appSubmission, "signed app", notary, exec);
   fs.writeFileSync(

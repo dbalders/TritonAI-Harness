@@ -3,6 +3,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import { getDefaultBuildArch } from "./build-target-arch.ts";
 
 const compactEnv = (env: Readonly<Record<string, string | undefined>>): Record<string, string> =>

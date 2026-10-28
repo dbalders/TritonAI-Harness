@@ -14,8 +14,9 @@ export const layerFromSnapshot = (read: () => Promise<IntegrationsListResult | u
   Layer.sync(HelpIntegrations, () =>
     HelpIntegrations.of({
       snapshot: Effect.tryPromise(read).pipe(
-        Effect.catchCause(() => Effect.succeed(undefined)),
-        Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(undefined) }),
+        Effect.catchCause(() => Effect.void),
+        Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.void }),
+        Effect.map((value) => value ?? undefined),
       ),
     }),
   );

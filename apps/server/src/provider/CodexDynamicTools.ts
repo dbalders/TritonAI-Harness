@@ -216,12 +216,6 @@ export const gateDynamicToolCall = Effect.fn("CodexDynamicTools.gateDynamicToolC
   },
 );
 
-function normalizeDynamicToolNames(
-  dynamicTools: ReadonlyArray<CodexDynamicToolDefinition> | undefined,
-): ReadonlyArray<string> {
-  return [...new Set((dynamicTools ?? []).map((tool) => tool.name))].sort();
-}
-
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value && typeof value === "object") {
@@ -294,13 +288,9 @@ export interface DynamicToolApprovalPlan {
 }
 
 /**
- * What a dynamic tool call needs approved. Plugin writes ask per tool. The two browser tools that
- * load pages decide by destination instead of their static annotation (which made preview_open
- * always ask and preview_navigate never ask): loading an external website asks, under one
- * browsing grant shared by both tools, and a blank tab or local dev server does not. Opening a tab
- * under a named profile (its saved sign-ins) also asks. Every browser call shares the one session
- * grant, because an existing tab's profile is not visible here; the prompt says so.
- * dynamicToolApprovalRequired still exempts Full access.
+ * Plugin writes approve per tool. Browser calls share a browsing session grant;
+ * external destinations and named profiles require consent, blank/local pages do not.
+ * Full access bypasses dynamic-tool approval.
  */
 export function planDynamicToolApproval(input: {
   readonly requiresApproval: boolean | undefined;

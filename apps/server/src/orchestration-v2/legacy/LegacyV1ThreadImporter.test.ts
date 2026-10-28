@@ -882,7 +882,7 @@ it.layer(layerTest)("Harness V1 goal continuity", (it) => {
         );
         const eventSink = yield* EventSink.EventSinkV2;
         const occurredAt = DateTime.makeUnsafe(at);
-        const nativeOwner = yield* Schema.decodeUnknownEffect(OrchestrationV2ProviderThread)({
+        const nativeOwner = yield* compiledDecodeEffect1({
           id: ProviderThreadId.make("provider-thread:goal-import"),
           driver: ProviderDriverKind.make("codex"),
           providerInstanceId: projection.thread.providerInstanceId,
@@ -929,3 +929,5 @@ it.layer(layerTest)("Harness V1 goal continuity", (it) => {
       }),
   );
 });
+
+const compiledDecodeEffect1 = Schema.decodeEffect(OrchestrationV2ProviderThread);

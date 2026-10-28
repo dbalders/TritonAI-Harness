@@ -6,6 +6,7 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
 import * as browserDefaults from "~/browser/browserDefaults";
 import { BrowserSettingsReadError, openUrlInPreview } from "~/browser/openFileInPreview";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
@@ -16,6 +17,7 @@ import {
   resetPreviewStateForTests,
   setActivePreviewTab,
 } from "~/previewStateStore";
+
 import { openPreviewSession } from "./openPreviewSession";
 
 const threadRef = {

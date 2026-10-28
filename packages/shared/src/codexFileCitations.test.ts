@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import { codexFileCitationMarkdown, resolveCodexFileCitationLink } from "./codexFileCitations.ts";
 
 describe("resolveCodexFileCitationLink", () => {

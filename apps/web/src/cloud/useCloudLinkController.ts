@@ -35,12 +35,9 @@ export interface CloudLinkDesiredState {
 }
 
 /**
- * Whether the link has a working managed tunnel. The local tunnel config can
- * outlive a relay link that drifted to publish-only, and clients then get
- * `endpoint_provider_not_managed`. So when relay discovery has this
- * environment's record, it must also say managed. Older environment servers
- * predate managedTunnelActive; for them a link always implies a tunnel. A link
- * the relay rejected (usually after a Deregister) gives no access at all.
+ * A known relay record must advertise a managed tunnel; stale local config is insufficient.
+ * Older servers without managedTunnelActive retain legacy link semantics.
+ * A relay-rejected link grants no access.
  */
 function isManagedTunnelActive(
   linkState: EnvironmentCloudLinkStateResult,
@@ -55,13 +52,9 @@ function isManagedTunnelActive(
 }
 
 /**
- * Drives the primary environment's TritonAI Connect link. TritonAI Connect (managed
- * tunnel) and agent-activity publishing are independent capabilities backed by
- * a single relay link, so consumers express the full desired state and
- * `reconcileCloudState` applies it: unlink when neither is wanted, otherwise
- * (re)link with the mode the managed-tunnel bit implies and set the publish
- * preference. Re-linking only happens when the managed-tunnel mode actually
- * changes, so flipping publish alone is cheap.
+ * Reconcile tunnel and activity publishing independently on one relay link.
+ * Unlink when neither is desired; relink only when tunnel mode changes.
+ * Publishing-only preference changes reuse the link.
  */
 export function useCloudLinkController() {
   const { getToken, isSignedIn } = useAuth();
@@ -156,10 +149,7 @@ export function useCloudLinkController() {
     const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
     if (!canManageLink()) return false;
 
-    // A failure after this point may follow a partially applied mutation (e.g.
-    // the link succeeded but the preference update did not), so every exit —
-    // success or failure — refreshes the rendered state to whatever the server
-    // actually holds now.
+    // A failed mutation may have partially applied, so refresh server state on every exit.
     if (!wantsLink) {
       // Unlink works without a relay token — a failed token read must not
       // leave the user unable to turn TritonAI Connect off.

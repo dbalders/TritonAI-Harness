@@ -5,7 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
+
 import { canonicalJson, type JsonValue } from "@t3tools/shared/pluginSdkContract";
 import { verifyPluginSdkArtifact } from "@t3tools/shared/pluginSdkArtifact";
 
@@ -187,7 +187,7 @@ function artifact(
 
 function secretStore(): ServerSecretStore.ServerSecretStore["Service"] {
   return {
-    get: () => Effect.succeed(Option.some(new TextEncoder().encode("scoped-secret"))),
+    get: () => Effect.succeedSome(new TextEncoder().encode("scoped-secret")),
     set: () => Effect.void,
     create: () => Effect.void,
     getOrCreateRandom: (_name, size) => Effect.succeed(new Uint8Array(size)),

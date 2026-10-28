@@ -84,13 +84,6 @@ for (const [version, channel, prerelease] of [
   );
 }
 
-for (const [channel, tag, lookupFails] of [
-  ["stable", "v1.2.3-rc.1", false],
-  ["nightly", "v1.2.3-nightly.20261017.1", false],
-  ["stable", "v1.2.3-rc.1", true],
-]) {
-}
-
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stable-assets-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

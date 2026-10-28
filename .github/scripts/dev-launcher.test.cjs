@@ -130,6 +130,3 @@ test("missing lsof fails closed without signaling the recorded process", posix, 
     process.kill(unrelated.pid, 0);
   }
 });
-
-for (const command of ["stop", "restart"]) {
-}

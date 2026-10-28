@@ -1,5 +1,6 @@
 import { MessagesSquareIcon } from "lucide-react";
 import { createPortal } from "react-dom";
+
 import { useThreadContextDragGhost } from "./threadContextDrag";
 
 export function ThreadContextDragGhost() {

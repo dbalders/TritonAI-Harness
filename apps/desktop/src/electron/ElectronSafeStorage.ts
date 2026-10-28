@@ -83,16 +83,18 @@ const make = ElectronSafeStorage.of({
     try: () => Electron.safeStorage.getSelectedStorageBackend(),
     catch: (cause) => new ElectronSafeStorageAvailabilityError({ cause }),
   }),
-  encryptString: (value) =>
+  encryptString: Effect.fn("ElectronSafeStorage.encryptString")((value) =>
     Effect.try({
       try: () => Electron.safeStorage.encryptString(value),
       catch: (cause) => new ElectronSafeStorageEncryptError({ cause }),
     }),
-  decryptString: (value) =>
+  ),
+  decryptString: Effect.fn("ElectronSafeStorage.decryptString")((value) =>
     Effect.try({
       try: () => Electron.safeStorage.decryptString(Buffer.from(value)),
       catch: (cause) => new ElectronSafeStorageDecryptError({ cause }),
     }),
+  ),
 });
 
 export const layer = Layer.succeed(ElectronSafeStorage, make);
