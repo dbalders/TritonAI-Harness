@@ -1,6 +1,5 @@
 const NodeFSP = require("node:fs/promises");
 const NodeOS = require("node:os");
-const extractZip = require("extract-zip");
 const NodeFS = require("node:fs");
 const NodePath = require("node:path");
 
@@ -58,9 +57,10 @@ function assertMacosBundlePermissions(appPath) {
 }
 
 async function verifyMacosUpdateZip(archive) {
+  const { extract } = await import("@electron-internal/extract-zip");
   const scratch = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "verify-macos-update-"));
   try {
-    await extractZip(NodePath.resolve(archive), { dir: scratch });
+    await extract(NodePath.resolve(archive), { dir: scratch });
     const apps = (await NodeFSP.readdir(scratch)).filter((name) => name.endsWith(".app"));
     if (apps.length !== 1) throw new Error("Updater ZIP must contain exactly one app bundle.");
     assertMacosBundlePermissions(NodePath.join(scratch, apps[0]));
