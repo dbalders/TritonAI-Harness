@@ -1574,6 +1574,39 @@ describe("storage cleanup reports and local file policies", () => {
       }),
     ),
   );
+  it.live.each([
+    "fatal: not a git repository: /missing-git-directory",
+    "fatal: gitfile does not point to a valid repository: /worktree/.git",
+  ])("retains an invalid worktree when Git reports %s", (stderr) =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const git = yield* GitVcsDriver.GitVcsDriver;
+        const { service, fs, worktree } = yield* cleanupFixture().pipe(
+          Effect.provideService(GitVcsDriver.GitVcsDriver, {
+            ...git,
+            execute: (input) =>
+              git
+                .execute(input)
+                .pipe(
+                  Effect.map((result) =>
+                    input.operation === "StorageCleanup.branchChanged" && result.exitCode !== 0
+                      ? { ...result, stderr }
+                      : result,
+                  ),
+                ),
+          }),
+        );
+        yield* fs.writeFileString(`${worktree}/.git`, "gitdir: /missing-git-directory\n");
+        const report = yield* service.runNow;
+        expect(report.entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Repository or branch changed",
+        });
+        expect(yield* fs.readFileString(`${worktree}/tracked.txt`)).toBe("original\n");
+        expect(report.bytesFreed).toBe(0);
+      }),
+    ),
+  );
   it.live("compares the checked-out branch without a full status", () =>
     runCleanupTest(
       Effect.gen(function* () {
