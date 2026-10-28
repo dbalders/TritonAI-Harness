@@ -51,14 +51,14 @@ jobs:
             body=body.replace(old,new,1)
           p.write_text(source[:start]+body+source[end:])
           PY
-          node --input-type=module - <<'JS'
+          cat > scripts/.windows-stage-probe.mjs <<'JS'
           import * as NodeServices from '@effect/platform-node/NodeServices';
           import * as Effect from 'effect/Effect';
           import * as FileSystem from 'effect/FileSystem';
           import * as Layer from 'effect/Layer';
           import * as Path from 'effect/Path';
           import { FetchHttpClient } from 'effect/unstable/http';
-          import { stageCuaDriver } from './scripts/build-desktop-artifact.ts';
+          import { stageCuaDriver } from './build-desktop-artifact.ts';
           console.log({node:process.version,platform:process.platform,arch:process.arch});
           setTimeout(()=>{console.error('PROBE exceeded 180 seconds');process.exit(124)},180000).unref();
           await Effect.runPromise(Effect.gen(function*(){
@@ -75,3 +75,4 @@ jobs:
             yield* Effect.log('PROBE complete');
           }).pipe(Effect.scoped,Effect.provide(Layer.mergeAll(NodeServices.layer,FetchHttpClient.layer))));
           JS
+          node scripts/.windows-stage-probe.mjs
