@@ -4,7 +4,6 @@ import { vi } from "vite-plus/test";
 import {
   EnvironmentId,
   AuthSourceControlWriteScope,
-  AuthOrchestrationOperateScope,
   AuthStandardClientScopes,
   ProjectId,
   PullRequestOperationError,
