@@ -157,7 +157,7 @@ const AUTOMATION_PROMPT = "Triage the inbox\n\nLabel every new issue and close d
 describe("MessagesTimeline messages", () => {
   it("settles when equally long messages have very different rendered heights", async () => {
     const props = baseProps();
-    const tall = message("a\n\n".repeat(6000), { role: "assistant" }, "tall");
+    const tall = message("a".repeat(18_000), { role: "assistant" }, "tall");
     const earlier = Array.from({ length: 80 }, (_, index) =>
       message(
         `<details><summary>Reply ${index}</summary>${"compact ".repeat(2250)}</details>`,
@@ -172,9 +172,13 @@ describe("MessagesTimeline messages", () => {
       maxNestedCommits = Math.max(maxNestedCommits, nestedCommits);
     };
     const timeline = (entries: Entry[]) => (
-      <Profiler id="timeline" onRender={onRender}>
-        <MessagesTimeline {...props} timelineEntries={entries} />
-      </Profiler>
+      <>
+        {/* Exercise a large measured row without parsing thousands of Markdown paragraphs. */}
+        <style>{'[data-message-id="tall"] { min-height: 120000px; }'}</style>
+        <Profiler id="timeline" onRender={onRender}>
+          <MessagesTimeline {...props} timelineEntries={entries} />
+        </Profiler>
+      </>
     );
     await using screen = await renderElement(timeline([tall]));
     await vi.waitFor(() =>
