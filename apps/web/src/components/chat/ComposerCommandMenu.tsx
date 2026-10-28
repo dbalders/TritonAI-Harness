@@ -4,13 +4,13 @@ import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";
-import type {
-  ProjectEntry,
-  ProviderDriverKind,
-  PullRequestContextMetadata,
-  ScopedThreadRef,
-  ServerProviderSkill,
-  ServerProviderSlashCommand,
+import {
+  type ProjectEntry,
+  type ProviderDriverKind,
+  type PullRequestContextMetadata,
+  type ScopedThreadRef,
+  type ServerProviderSkill,
+  type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import {
   BlocksIcon,
@@ -22,7 +22,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { memo, useLayoutEffect, useRef } from "react";
-import type { ComposerSlashCommand, ComposerTriggerKind } from "../../composer-logic";
+
+import { type ComposerSlashCommand, type ComposerTriggerKind } from "../../composer-logic";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { Command, CommandGroup, CommandItem, CommandList } from "../ui/command";

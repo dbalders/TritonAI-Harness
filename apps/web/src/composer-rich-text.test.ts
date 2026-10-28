@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import { parseInlineMarkdown } from "./composer-rich-text";
 
 describe("composer rich text markdown", () => {

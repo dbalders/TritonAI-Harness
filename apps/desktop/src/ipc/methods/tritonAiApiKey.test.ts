@@ -62,7 +62,7 @@ function makeBackendPoolLayer(
     readonly desiredRunning?: boolean;
   }) =>
     ({
-      currentConfig: Effect.succeed(Option.some(currentConfig)),
+      currentConfig: Effect.succeedSome(currentConfig),
       snapshot: Effect.succeed({
         desiredRunning: backendOptions?.desiredRunning ?? true,
       } as DesktopBackendManager.DesktopBackendSnapshot),

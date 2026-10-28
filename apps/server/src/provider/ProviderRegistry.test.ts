@@ -1,44 +1,23 @@
-import { type ServerProviderSlashCommand } from "@t3tools/contracts";
-import { type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
-
 import { vi } from "vite-plus/test";
-
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-
 import * as CodexInstallation from "./CodexInstallation.ts";
-
+import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
-
 import { describe, it, assert, expect } from "@effect/vitest";
-
 import * as DateTime from "effect/DateTime";
-
 import * as Deferred from "effect/Deferred";
-
 import * as Effect from "effect/Effect";
-
 import * as Exit from "effect/Exit";
-
 import * as Fiber from "effect/Fiber";
-
 import * as Layer from "effect/Layer";
-
 import * as PubSub from "effect/PubSub";
-
 import * as Ref from "effect/Ref";
-
 import * as Schema from "effect/Schema";
-
 import * as Scope from "effect/Scope";
-
 import * as Sink from "effect/Sink";
-
 import * as Stream from "effect/Stream";
-
 import * as TestClock from "effect/testing/TestClock";
-
 import {
   EnvironmentId,
   ClaudeSettings,
@@ -50,80 +29,50 @@ import {
   ServerSettings,
   ServerSettingsError,
   ServerProvider,
+  type ServerProviderSlashCommand,
   type ServerSettings as ContractServerSettings,
 } from "@t3tools/contracts";
-
 import { HttpClient, HttpClientResponse } from "effect/http";
-
 import { ChildProcessSpawner } from "effect/process";
-
 import { deepMerge } from "@t3tools/shared/Struct";
-
 import { createModelCapabilities } from "@t3tools/shared/model";
-
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
-
-import { checkCodexProviderStatus } from "./CodexProvider.ts";
-
+import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
-
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
-
 import * as ModelManifest from "./ModelManifest.ts";
-
 import { applyProviderCompatibility } from "./providerCompatibility.ts";
-
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
-
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
-
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-
 import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
-
 import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
-
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
-
 import * as ProviderInstanceRegistryHydration from "./ProviderInstanceRegistryHydration.ts";
-
 import * as ServerConfig from "../config.ts";
-
 import * as ServerSettingsModule from "../serverSettings.ts";
-
 import {
   readProviderStatusCache,
   resolveProviderStatusCachePath,
   writeProviderStatusCache,
 } from "./providerStatusCache.ts";
-
 import { COMPACT_SLASH_COMMAND } from "@t3tools/provider-core/server/snapshotProbe";
-
-import type {
-  ProviderInstance,
-  ProviderWorkspaceSnapshot,
+import {
+  type ProviderInstance,
+  type ProviderWorkspaceSnapshot,
 } from "@t3tools/provider-core/server/driver";
-
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
-
 import * as ProviderRegistry from "./ProviderRegistry.ts";
-
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
 const decodeServerProvider = Schema.decodeSync(ServerProvider);
-
 const encodeServerProvider = Schema.encodeSync(ServerProvider);
-
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
-
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
-
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
 
 const disabledDefaultSlots = (
@@ -137,15 +86,12 @@ const disabledDefaultSlots = (
   );
 
 const defaultClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)({ enabled: true });
-
 const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({});
 
 process.env.T3CODE_CURSOR_ENABLED = "1";
 
 const encoder = new TextEncoder();
-
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
-
 const withBundledCompatibility = (snapshot: ServerProvider) =>
   applyProviderCompatibility(
     snapshot,
@@ -363,6 +309,9 @@ const awaitPersistedProvider = (
 const layerTestNodeServices = Layer.mergeAll(
   ProviderLatestVersions.layer,
   NodeServices.layer,
+  Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
+    endpoint: Effect.succeed("unused-private-pipe"),
+  }),
   Layer.mock(CodexInstallation.CodexInstallation)({
     managedDirectory: "unused-managed-installation",
   }),
@@ -376,6 +325,79 @@ it.layer(
   Layer.mergeAll(layerTestNodeServices, ServerSettingsModule.layerTest(), layerTestHttpClient),
 )("ProviderRegistry", (it) => {
   describe("checkCodexProviderStatus", () => {
+    it.effect("uses the app-server account and model list for provider status", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+          Effect.succeed(
+            makeCodexProbeSnapshot({
+              skills: [
+                {
+                  name: "github:gh-fix-ci",
+                  path: "/Users/test/.codex/skills/gh-fix-ci/SKILL.md",
+                  enabled: true,
+                  displayName: "CI Debug",
+                  shortDescription: "Debug failing GitHub Actions checks",
+                },
+              ],
+            }),
+          ),
+        );
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.installed, true);
+        assert.strictEqual(status.version, "1.0.0");
+        assert.strictEqual(status.auth.status, "authenticated");
+        assert.strictEqual(status.auth.type, "chatgpt");
+        assert.strictEqual(status.auth.label, "ChatGPT Pro 200 Subscription");
+        assert.strictEqual(status.auth.email, "test@example.com");
+        assert.deepStrictEqual(status.setup, { canAuthenticate: false, canInstall: false });
+        assert.deepStrictEqual(status.models, [
+          {
+            slug: "api-glm-5.3-flash",
+            name: "GLM 5.3 Flash",
+            shortName: "Flash",
+            isCustom: false,
+            isDefault: true,
+            capabilities: {
+              ...codexModelCapabilities,
+              optionDescriptors: [
+                selectDescriptor("reasoningEffort", "Reasoning", [
+                  { id: "low", label: "Low" },
+                  { id: "high", label: "High", isDefault: true },
+                  { id: "xhigh", label: "Extra High" },
+                ]),
+              ],
+            },
+          },
+        ]);
+        assert.deepStrictEqual(status.skills, [
+          {
+            name: "github:gh-fix-ci",
+            path: "/Users/test/.codex/skills/gh-fix-ci/SKILL.md",
+            enabled: true,
+            displayName: "CI Debug",
+            shortDescription: "Debug failing GitHub Actions checks",
+          },
+        ]);
+        assert.deepStrictEqual(status.slashCommands.slice(1), [
+          {
+            name: "feedback",
+            description: "Report a problem or idea to the TritonAI team",
+            input: { hint: "Describe the problem or idea (optional)" },
+          },
+          {
+            name: "goal",
+            description: "Set a goal Codex keeps working toward until it is done",
+            input: { hint: "Objective, or pause, resume, clear" },
+          },
+          {
+            name: "openai-feedback",
+            description: "Send this thread and Codex logs to OpenAI",
+            input: { hint: "Describe the issue (optional)" },
+          },
+        ]);
+      }),
+    );
+
     it.effect("returns unauthenticated when app-server requires OpenAI auth", () =>
       Effect.gen(function* () {
         const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
@@ -395,6 +417,10 @@ it.layer(
           status.message,
           "Codex CLI is not authenticated. Run `codex login` and try again.",
         );
+        assert.deepStrictEqual(status.usageLimits?.unavailable, {
+          reason: "probeFailed",
+          message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+        });
       }),
     );
 
@@ -414,28 +440,6 @@ it.layer(
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.auth.status, "unknown");
       }),
-    );
-
-    it.effect(
-      "uses gateway authentication and skips native subscription usage for managed routes",
-      () =>
-        Effect.gen(function* () {
-          const status = yield* checkCodexProviderStatus(
-            defaultCodexSettings,
-            (input) => {
-              assert.isTrue(input.skipNativeUsage);
-              return Effect.succeed(makeCodexProbeSnapshot());
-            },
-            { TRITONAI_API_KEY: "fixture-gateway-key" },
-            { status: "authenticated", type: "apiKey", label: "TritonAI access key" },
-          );
-          assert.deepStrictEqual(status.auth, {
-            status: "authenticated",
-            type: "apiKey",
-            label: "TritonAI access key",
-          });
-          assert.isUndefined(status.usageLimits);
-        }),
     );
   });
 
@@ -673,8 +677,6 @@ it.layer(
         message: "Checking ACP authentication, models, and commands in the background...",
         models: [{ slug: "default", name: "Default", isCustom: false, capabilities: null }],
       } satisfies ServerProvider;
-      // A saved sign-in confirmation marks the readiness snapshot authenticated
-      // before discovery has run.
       const confirmedCheckingProvider = {
         ...checkingProvider,
         auth: { status: "authenticated" },
@@ -705,6 +707,44 @@ it.layer(
           { slug: "default", name: "Default", isCustom: false, capabilities: null },
           { slug: "gpt-5.6-sol", name: "GPT-5.6-Sol", isCustom: false, capabilities: null },
         ],
+      );
+    });
+
+    it("drops Grok models a completed probe no longer advertises", () => {
+      const previousProvider = {
+        instanceId: ProviderInstanceId.make("grok"),
+        driver: ProviderDriverKind.make("grok"),
+        status: "ready",
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated" },
+        checkedAt: "2026-09-30T00:00:00.000Z",
+        version: "1.0.44",
+        models: [
+          { slug: "grok-4.7", name: "Grok 4.7", isCustom: false, capabilities: null },
+          { slug: "codexhub-removed", name: "Removed", isCustom: false, capabilities: null },
+        ],
+        slashCommands: [],
+        skills: [],
+      } as const satisfies ServerProvider;
+      const refreshedProvider = {
+        ...previousProvider,
+        checkedAt: "2026-09-30T00:01:00.000Z",
+        models: [previousProvider.models[0]],
+      } satisfies ServerProvider;
+      const acpFailedProvider = {
+        ...refreshedProvider,
+        status: "warning",
+        message: "Grok CLI is installed but ACP initialize failed.",
+      } satisfies ServerProvider;
+
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(previousProvider, refreshedProvider).models,
+        [previousProvider.models[0]],
+      );
+      assert.deepStrictEqual(
+        ProviderRegistry.mergeProviderSnapshot(previousProvider, acpFailedProvider).models,
+        [...previousProvider.models],
       );
     });
 
@@ -1261,6 +1301,98 @@ it.layer(
       );
     });
 
+    it.effect(
+      "a second request for a cwd being scanned gets its result, even if the first leaves",
+      () =>
+        Effect.gen(function* () {
+          const driver = ProviderDriverKind.make("codex");
+          const instanceId = ProviderInstanceId.make("codex");
+          const provider = {
+            instanceId,
+            driver,
+            status: "ready",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            checkedAt: "2026-06-10T00:00:00.000Z",
+            version: "1.0.0",
+            models: [],
+            slashCommands: [],
+            skills: [],
+          } as const satisfies ServerProvider;
+          const scanStarted = yield* Deferred.make<void>();
+          const releaseScan = yield* Deferred.make<void>();
+          const scans = yield* Ref.make(0);
+          const instance: ProviderInstance = {
+            instanceId,
+            driverKind: driver,
+            continuationIdentity: { driverKind: driver, continuationKey: "codex:instance:codex" },
+            displayName: undefined,
+            enabled: true,
+            snapshot: {
+              resolveMaintenance: () =>
+                Effect.succeed(
+                  makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: driver,
+                    packageName: null,
+                  }),
+                ),
+              getSnapshot: Effect.succeed(provider),
+              refresh: Effect.succeed(provider),
+              streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
+            },
+            snapshotForCwd: () =>
+              Ref.update(scans, (count) => count + 1).pipe(
+                Effect.andThen(Deferred.succeed(scanStarted, undefined)),
+                Effect.andThen(Deferred.await(releaseScan)),
+                Effect.as(provider),
+              ),
+            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            textGeneration: {} as ProviderInstance["textGeneration"],
+          };
+          const layerInstanceRegistry = Layer.succeed(
+            ProviderInstanceRegistry.ProviderInstanceRegistry,
+            {
+              getInstance: (requestedId) =>
+                Effect.succeed(requestedId === instanceId ? instance : undefined),
+              listInstances: Effect.succeed([instance]),
+              listUnavailable: Effect.succeed([]),
+              streamChanges: Stream.empty,
+              subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+            },
+          );
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const runtimeServices = yield* Layer.build(
+            ProviderRegistry.layer.pipe(
+              Layer.provideMerge(layerInstanceRegistry),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), {
+                  prefix: "t3-provider-registry-shared-workspace-scan-",
+                }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ).pipe(Scope.provide(scope));
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            const refresh = registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
+            const first = yield* Effect.forkChild(refresh);
+            yield* Deferred.await(scanStarted);
+            const second = yield* Effect.forkChild(refresh, { startImmediately: true });
+            yield* Fiber.interrupt(first);
+            yield* Deferred.succeed(releaseScan, undefined);
+            assert.deepStrictEqual(
+              (yield* Fiber.join(second))[0]?.workspaceSnapshots?.map((snapshot) => snapshot.cwd),
+              ["/workspace"],
+            );
+            assert.strictEqual(yield* Ref.get(scans), 1);
+          }).pipe(Effect.provide(runtimeServices));
+        }),
+    );
+
     it.effect("publishes workspace skills while machine health is in error", () =>
       Effect.gen(function* () {
         const driver = ProviderDriverKind.make("codex");
@@ -1278,7 +1410,6 @@ it.layer(
           slashCommands: [COMPACT_SLASH_COMMAND],
           skills: [],
         } as const satisfies ServerProvider;
-        // Codex's account check failed; its skill scan did not.
         const unhealthyProvider = {
           ...healthyProvider,
           status: "error",
@@ -1349,8 +1480,6 @@ it.layer(
           yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
           assert.deepStrictEqual((yield* workspaceOf)?.slashCommands, [COMPACT_SLASH_COMMAND]);
 
-          // An expired scan runs while the account check fails: the skills are
-          // current, but commands that ride on the health check are unknown.
           yield* TestClock.adjust(PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS);
           yield* Ref.set(scanResult, { ...unhealthyProvider, skills: laterSkills });
           yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
@@ -1362,14 +1491,10 @@ it.layer(
           assert.strictEqual(provider?.status, "error");
           assert.strictEqual(provider?.message, unhealthyProvider.message);
 
-          // A pending entry is rescanned on the next request; an empty scan
-          // removes the skills.
           yield* Ref.set(scanResult, { ...unhealthyProvider, skills: [] });
           yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
           assert.deepStrictEqual((yield* workspaceOf)?.skills, []);
 
-          // A driver that discovers its own commands reports them even while
-          // health is in error.
           const discoveredCommand = { name: "review", description: "Review changes" };
           yield* Ref.set(scanResult, {
             ...unhealthyProvider,
@@ -1381,7 +1506,6 @@ it.layer(
           assert.deepStrictEqual(discovered?.slashCommands, [discoveredCommand]);
           assert.strictEqual(discovered?.slashCommandsPending, undefined);
 
-          // Once health recovers, the next scan restores the full entry.
           yield* TestClock.adjust(PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS);
           yield* Ref.set(scanResult, { ...healthyProvider, skills: laterSkills });
           yield* registry.refreshWorkspaceSnapshot({ instanceId, cwd: "/workspace" });
@@ -2163,8 +2287,6 @@ it.layer(
   describe("checkClaudeProviderStatus", () => {
     it.effect("reports a logged-out CLI as unauthenticated", () =>
       Effect.gen(function* () {
-        // The capability probe resolves for a logged-out CLI, so `tokenSource:
-        // "none"` is the only thing separating it from an authenticated one.
         const status = yield* checkClaudeProviderStatus(
           defaultClaudeSettings,
           claudeCapabilities({
@@ -2263,8 +2385,6 @@ it.layer(
 
     it.effect("keeps an API key install authenticated when it reports no token source", () =>
       Effect.gen(function* () {
-        // `ANTHROPIC_API_KEY` never populates `tokenSource`, so reading that
-        // field alone would log the install out.
         const status = yield* checkClaudeProviderStatus(
           defaultClaudeSettings,
           claudeCapabilities({
@@ -2288,10 +2408,6 @@ it.layer(
 
     it.effect("keeps a CLI that says nothing about its account authenticated", () =>
       Effect.gen(function* () {
-        // Profile-authenticated installs report no token source at all, and a
-        // CLI too old to send an account payload reports nothing whatsoever.
-        // Only `tokenSource: "none"` disproves authentication; saying nothing
-        // is not the same as saying no.
         const status = yield* checkClaudeProviderStatus(
           defaultClaudeSettings,
           claudeCapabilities(),

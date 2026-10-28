@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { confirmTerminalClose, isTerminalCloseConfirmPending } from "./terminalCloseConfirm";
 
 const { confirmMock, readLocalApiMock } = vi.hoisted(() => {
   const confirmMock = vi.fn<(message: string, options?: unknown) => Promise<boolean>>();
@@ -16,6 +15,8 @@ const { confirmMock, readLocalApiMock } = vi.hoisted(() => {
 vi.mock("~/localApi", () => ({
   readLocalApi: () => readLocalApiMock(),
 }));
+
+import { confirmTerminalClose, isTerminalCloseConfirmPending } from "./terminalCloseConfirm";
 
 describe("terminal close confirmation", () => {
   beforeEach(() => {

@@ -22,6 +22,7 @@ export function documentTextWorkerLimitsInEffect(heapMb: number): boolean {
   const heapLimitMb = NodeV8.getHeapStatistics().heap_size_limit / (1024 * 1024);
   if (heapLimitMb > heapMb + HEAP_LIMIT_ALLOWANCE_MB) return false;
   try {
+    // oxlint-disable-next-line no-new -- Construction must throw when string code generation is disabled.
     new Function("return 1");
     return false;
   } catch (error) {
@@ -30,7 +31,7 @@ export function documentTextWorkerLimitsInEffect(heapMb: number): boolean {
 }
 
 /**
- * Entry for `t3 __document-text <format> <max-characters> <heap-mb>`: reads one document from
+ * Entry for `t3 __integration-document-text <format> <max-characters> <heap-mb>`: reads one document from
  * stdin and writes one JSON result line to stdout. bin.ts dispatches here before the CLI module
  * graph loads, so the process starts quickly and holds no server state or credentials.
  */

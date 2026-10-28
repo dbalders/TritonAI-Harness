@@ -1,11 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - Tests exercise the Node filesystem build boundary.
 
 import * as NodeFSP from "node:fs/promises";
-
 import * as NodeOS from "node:os";
-
 import * as NodePath from "node:path";
-
 import * as NodeURL from "node:url";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -13,12 +10,10 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { generateThirdPartyLicenseManifest } from "./third-party-licenses.js";
 
 const tempDirectories: string[] = [];
-
 const REPOSITORY_ROOT = NodePath.resolve(
   NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),
   "../..",
 );
-
 const DEVICE_TOOL_VERSIONS = JSON.parse(
   await NodeFSP.readFile(
     NodePath.join(REPOSITORY_ROOT, "apps/server/src/device/deviceToolVersions.json"),
@@ -237,7 +232,6 @@ describe("third-party license generation", () => {
       name: "fixture-app",
       dependencies: { "demo-dependency": "1.2.3", "@types/demo": "1.0.0" },
     });
-    // The DefinitelyTyped shape, and the csstype / undici-types one it pulls in.
     await write("@types/demo", {
       main: "",
       types: "index.d.ts",
@@ -265,7 +259,6 @@ describe("third-party license generation", () => {
   it.each([
     {
       shape: "a JS entry next to its declarations",
-      // The @shikijs/types shape: a types condition next to a real JS entry.
       entry: {
         main: "./dist/index.mjs",
         exports: { ".": { types: "./dist/index.d.mts", import: "./dist/index.mjs" } },

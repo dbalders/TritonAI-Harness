@@ -84,12 +84,8 @@ export const IdeasSnapshot = Schema.Struct({
 export type IdeasSnapshot = typeof IdeasSnapshot.Type;
 
 /**
- * - `opened`: the user opened the idea's draft.
- * - `dismissed`: not now; the same idea can come back after a while.
- * - `rejected`: not relevant; never suggested again.
- * - `less-like-this`: hides it and shows fewer ideas from its section.
- * - `snoozed`: hidden until `snoozedUntil`.
- * - `restored`: undoes the last of the above that hid it.
+ * Opened records a draft; dismissed allows a later suggestion; rejected never returns.
+ * Less-like-this reduces its section, snoozed hides until snoozedUntil, and restored undoes hiding.
  */
 export const IdeaFeedbackKind = Schema.Literals([
   "opened",

@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+
 import * as KeyedLock from "./KeyedLock.ts";
 
 describe("KeyedLock", () => {

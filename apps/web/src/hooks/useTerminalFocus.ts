@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+
 import { isTerminalFocused } from "../lib/terminalFocus";
 
 function subscribeToTerminalFocusChanges(listener: () => void): () => void {

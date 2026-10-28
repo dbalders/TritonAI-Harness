@@ -39,6 +39,8 @@ const ONBOARDING_PROJECT_TITLE = "TritonAI";
 const PROJECT_CREATE_WAIT_TIMEOUT_MS = 5_000;
 
 const EMPTY_SHELL_STATE: EnvironmentShellState = {
+  generation: 0,
+  removedAt: new Map(),
   snapshot: Option.none(),
   status: "empty",
   error: Option.none(),

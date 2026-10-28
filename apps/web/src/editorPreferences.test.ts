@@ -6,7 +6,6 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { assert, beforeEach, expect, it, vi } from "vite-plus/test";
-import { useOpenInPreferredEditor } from "./editorPreferences";
 
 const state = vi.hoisted(() => ({
   allowed: new Set<string>(),
@@ -27,6 +26,8 @@ vi.mock("./hooks/useLocalStorage", () => ({
   setLocalStorageItem: state.setPreference,
   useLocalStorage: vi.fn(),
 }));
+
+import { useOpenInPreferredEditor } from "./editorPreferences";
 
 const primary = EnvironmentId.make("primary");
 const secondary = EnvironmentId.make("secondary");

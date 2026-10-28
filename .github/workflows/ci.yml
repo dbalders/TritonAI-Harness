@@ -71,6 +71,9 @@ jobs:
   # only bought us idle runners between dependency layers. The concurrency
   # limit stays at the default 4 so peak load per runner is unchanged.
   test:
+    permissions:
+      contents: read
+      id-token: write
     name: Test
     runs-on: ubuntu-24.04
     # Include browser/native setup and the expanded v0.1.1 workspace suite.
@@ -115,6 +118,9 @@ jobs:
   # separate workers, so no two server test files ever share a machine and the
   # isolation that flag buys is preserved exactly.
   test_server:
+    permissions:
+      contents: read
+      id-token: write
     name: Test Server ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     # Browser dependency setup can take ten minutes before the serial tests start.
@@ -327,6 +333,9 @@ jobs:
         run: node scripts/mobile-native-static-check.ts
 
   release_smoke:
+    permissions:
+      contents: read
+      id-token: write
     name: Release Smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 10

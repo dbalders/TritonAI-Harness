@@ -1,65 +1,40 @@
-import { type ClaudeSettings } from "@t3tools/contracts";
-import { type CodexSettings } from "@t3tools/contracts";
-import { type ProviderInstanceConfigMap } from "@t3tools/contracts";
-
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-
 import * as CodexInstallation from "./CodexInstallation.ts";
-
+import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
-
 import { describe, expect, it } from "@effect/vitest";
-
 import { vi } from "vite-plus/test";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
-
-import { EnvironmentId, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
-
+import {
+  EnvironmentId,
+  type ClaudeSettings,
+  type CodexSettings,
+  ProviderDriverKind,
+  type ProviderInstanceConfigMap,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
-
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-
 import * as HostProcess from "@t3tools/shared/HostProcess";
-
 import * as DateTime from "effect/DateTime";
-
 import * as Effect from "effect/Effect";
-
 import * as FileSystem from "effect/FileSystem";
-
 import * as Layer from "effect/Layer";
-
 import * as Path from "effect/Path";
-
 import * as Stream from "effect/Stream";
-
 import * as TestClock from "effect/testing/TestClock";
-
 import { HttpClient, HttpClientResponse } from "effect/http";
-
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-
 import * as ServerConfig from "../config.ts";
-
 import * as ServerSettings from "../serverSettings.ts";
-
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
-
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
-
 import * as ModelManifest from "./ModelManifest.ts";
-
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
-
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
-
 import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
-
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
-
 import * as ProviderHostLive from "./ProviderHostLive.ts";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
@@ -180,6 +155,11 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
   const layerBaseDeps = ServerConfig.layerTest(process.cwd(), {
     prefix: "provider-instance-registry-test",
   }).pipe(
+    Layer.provideMerge(
+      Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
+        endpoint: Effect.succeed("unused-private-pipe"),
+      }),
+    ),
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(
       Layer.mock(CodexInstallation.CodexInstallation)({
@@ -209,9 +189,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     Layer.provideMerge(ModelManifest.layerTest),
     Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
-
   const layerBase = ProviderHostLive.layer.pipe(Layer.provideMerge(layerBaseDeps));
-
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
     Layer.provideMerge(layerBase),
   );
@@ -307,8 +285,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
           [claudeId]: {
             driver: ProviderDriverKind.make("claudeAgent"),
             enabled: true,
-            // Packaged desktop builds start the server in $HOME, where some
-            // `claude` wrappers refuse to run.
+            // Packaged desktop starts in $HOME, where some claude wrappers refuse to run.
             environment: [{ name: "T3_CLAUDE_REQUIRED_CWD", value: stateDir, sensitive: false }],
             config: makeClaudeConfig({
               enabled: true,

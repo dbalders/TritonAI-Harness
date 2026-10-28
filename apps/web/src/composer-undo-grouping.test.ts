@@ -3,6 +3,7 @@ import { history, undo } from "@tiptap/pm/history";
 import { EditorState, TextSelection, type Transaction } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import { describe, expect, it } from "vite-plus/test";
+
 import {
   COMPOSER_UNDO_GROUP_DELAY,
   type ComposerChangeKind,
@@ -46,11 +47,7 @@ function composer(text = "") {
       }
       return api;
     },
-    /**
-     * The transaction the composer's `handlePaste` dispatches: a plain insert,
-     * tagged by `markAsClipboardEdit`. ProseMirror's own paste path would tag
-     * it, but the composer takes every text paste before that path runs.
-     */
+    // The custom paste path bypasses ProseMirror's clipboard tagging.
     paste: (s: string) => {
       clock += 80;
       dispatch(markAsClipboardEdit(state.tr.insertText(s), "paste"));

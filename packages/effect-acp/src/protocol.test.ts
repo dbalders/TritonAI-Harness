@@ -15,8 +15,10 @@ import * as Stream from "effect/Stream";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+
 import { it, assert, expect } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+
 import * as AcpSchema from "./schema.ts";
 import * as AcpProtocol from "./protocol.ts";
 import {
@@ -494,10 +496,11 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
           headers: [],
         }),
       );
-
-      const response = yield* Schema.decodeUnknownEffect(
+      const decodeJsonRpcErrorResponse = Schema.decodeEffect(
         Schema.fromJsonString(JsonRpcErrorResponse),
-      )(yield* Queue.take(output));
+      );
+
+      const response = yield* decodeJsonRpcErrorResponse(yield* Queue.take(output));
       assert.equal(response.id, 9);
       assert.equal(response.error.code, -32603);
     }),

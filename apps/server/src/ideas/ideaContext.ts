@@ -1,12 +1,6 @@
 /**
- * What the idea generator is shown, and how its answer is checked.
- *
- * Every item in the context carries a reference id (`thread:<id>`,
- * `note:<day>`, `file:<project>:<path>`, `plugin:<id>`, `skill:<id>`). The
- * model must point each idea at those ids, and an idea whose references are not
- * in the context is dropped, so a card never cites something that does not
- * exist. An idea that leaves a blank for the user to fill in is dropped too.
- * Labels and sections come from the context, not from the model.
+ * Accept only existing context reference IDs; reject placeholders.
+ * Labels and sections come from the context, never from the model.
  */
 import {
   type IdeaAction,

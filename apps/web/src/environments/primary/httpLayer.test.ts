@@ -2,6 +2,7 @@ import type { DesktopBridge } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { HttpClient } from "effect/http";
+
 import { __resetDesktopPrimaryAuthForTests } from "./desktopAuth";
 import * as PrimaryEnvironmentHttpLayer from "./httpLayer";
 

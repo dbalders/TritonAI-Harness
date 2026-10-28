@@ -4,8 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
-const { EventEmitter, once } = require("node:events");
-const { spawn, execFileSync } = require("node:child_process");
+const { EventEmitter } = require("node:events");
+
 const { test } = require("node:test");
 const { createRequire } = require("node:module");
 const { initSync, parse } = createRequire(
@@ -17,15 +17,12 @@ const { failureExitCode } = require("./finalize-macos-release.cjs");
 const {
   macReleaseIdentity,
   findKeptStage,
-  getNotaryConfig,
   verifyPluginPayload: verifyPluginPayloadWithImports,
   isolatedBootEnvironment,
   withMountedDmg,
   verifyPackagedBoot,
   finalizeMacRelease,
-  processSnapshot,
   trackBootProcesses,
-  stapleAccepted,
 } = require("./finalize-macos-release.cjs");
 const verifyPluginPayload = (...args) => verifyPluginPayloadWithImports(...args, parseImports);
 
@@ -765,9 +762,6 @@ test("finalization recovers a lost stapling connection on the accepted app and D
   assert.deepEqual(report.appNotarization, { status: "Accepted", id: "notary-job" });
   assert.deepEqual(report.notarization, { status: "Accepted", id: "notary-job" });
 });
-
-for (const target of ["app", "dmg"]) {
-}
 
 test("successful staple recovery still requires strict ticket validation before packaging", async (t) => {
   const f = fixture(t),

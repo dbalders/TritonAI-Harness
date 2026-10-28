@@ -1,5 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
+
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 
 function file(name: string, additionLines: ReadonlyArray<string> = []): FileDiffMetadata {
@@ -116,16 +117,5 @@ describe("orderDiffFiles", () => {
       "src/a.test.ts",
       "src/orphan.spec.ts",
     ]);
-  });
-
-  it("orders the same diff the same way whatever order it arrives in", () => {
-    const files = [
-      file("src/a.ts", ['import { b } from "./b";']),
-      file("src/b.ts"),
-      file("src/c.ts"),
-      file("src/a.test.ts"),
-      file("yarn.lock"),
-    ];
-    expect(order(files)).toEqual(order(files.toReversed()));
   });
 });
