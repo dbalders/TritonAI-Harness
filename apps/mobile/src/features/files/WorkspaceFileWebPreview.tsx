@@ -72,13 +72,9 @@ function DocumentWebPreview(props: { readonly uri: string }) {
           allowsBackForwardNavigationGestures
           allowsFullscreenVideo
           setSupportMultipleWindows={false}
-          onShouldStartLoadWithRequest={(request) => {
-            if (request.isTopFrame !== false && isPdfPreviewUri(request.url)) {
-              setLinkedPdf(request.url);
-              return false;
-            }
-            return true;
-          }}
+          onShouldStartLoadWithRequest={(request) =>
+            request.url.split("#", 1)[0] === props.uri.split("#", 1)[0]
+          }
           startInLoadingState
           onLoadProgress={(event) => {
             setLoadProgress(event.nativeEvent.progress);

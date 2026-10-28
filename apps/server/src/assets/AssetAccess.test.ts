@@ -73,7 +73,7 @@ import {
 } from "./AssetAccess.ts";
 
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
-
+import * as HtmlPreviewTestkit from "./HtmlPreview.testkit.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 import * as GitHubCredentials from "@t3tools/source-control-github/server/GitHubCredentials";
@@ -147,6 +147,7 @@ const oversizedScreenshotItem = {
 };
 
 const layerTest = Layer.mergeAll(
+  HtmlPreviewTestkit.layer,
   NodeHttpPlatform.layer,
   Layer.mock(Orchestrator.OrchestratorV2)({
     getTurnItem: ({ itemId }) =>
@@ -223,7 +224,7 @@ describe("AssetAccess", () => {
         const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-mcp-html-" });
         const error = yield* readMcpAppHtml(path.join(directory, "missing.html")).pipe(Effect.flip);
         expect(error._tag).toBe("PlatformError");
-        expect(error.reason._tag).toBe("NotFound");
+        if (error._tag === "PlatformError") expect(error.reason._tag).toBe("NotFound");
       }).pipe(Effect.provide(NodeServices.layer)),
     );
   });

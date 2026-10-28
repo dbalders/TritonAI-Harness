@@ -1,0 +1,94 @@
+// @effect-diagnostics nodeBuiltinImport:off - verifies termination of the owned parser PID.
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+
+import * as HtmlPreview from "./HtmlPreview.ts";
+import * as HtmlPreviewTestkit from "./HtmlPreview.testkit.ts";
+
+it.effect("retains a failed input's diagnostic cause", () =>
+  Effect.gen(function* () {
+    const preview = yield* HtmlPreview.HtmlPreview;
+    const cause = new Error("Synthetic descriptor read failure");
+    const error = yield* preview.render(Effect.fail(cause)).pipe(Effect.flip);
+    expect(error.reason).toBe("processing");
+    expect(error.cause).toBe(cause);
+  }).pipe(Effect.provide(HtmlPreviewTestkit.layer.pipe(Layer.provide(NodeServices.layer)))),
+);
+
+it.effect("loads eight visible previews concurrently without busy responses", () =>
+  Effect.gen(function* () {
+    const preview = yield* HtmlPreview.HtmlPreview;
+    const results = yield* Effect.forEach(
+      Array.from({ length: 8 }, (_, i) => i),
+      (i) => preview.render(Effect.succeed(`<p>Synthetic concurrent report ${i}</p>`)),
+      { concurrency: "unbounded" },
+    );
+    for (const [i, result] of results.entries()) {
+      expect(result.html).toContain(`Synthetic concurrent report ${i}`);
+      expect(result.headers["Content-Security-Policy"]).toContain("connect-src 'none'");
+    }
+  }).pipe(Effect.provide(HtmlPreviewTestkit.layer.pipe(Layer.provide(NodeServices.layer)))),
+);
+
+it.effect("sanitizes UTF-8 through the bounded server worker", () =>
+  Effect.gen(function* () {
+    const preview = yield* HtmlPreview.HtmlPreview;
+    const result = yield* preview.render(
+      Effect.succeed('<p>Résumé ☃</p><script>throw new Error("author script")</script>'),
+    );
+    expect(result.html).toContain("Résumé ☃");
+    expect(result.html).not.toContain("author script");
+    expect(result.headers["Content-Security-Policy"]).toContain("connect-src 'none'");
+    expect(result.headers["Referrer-Policy"]).toBe("no-referrer");
+  }).pipe(Effect.provide(HtmlPreviewTestkit.layer.pipe(Layer.provide(NodeServices.layer)))),
+);
+
+it.effect("kills a synchronous parser when the request is cancelled", () =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const started = yield* Deferred.make<number>();
+    const observedSpawner = ChildProcessSpawner.ChildProcessSpawner.of({
+      ...spawner,
+      spawn: (command) =>
+        spawner.spawn(command).pipe(
+          Effect.map((child) => ({
+            ...child,
+            stdout: child.stdout.pipe(
+              Stream.tap(() => Deferred.succeed(started, Number(child.pid))),
+            ),
+          })),
+        ),
+    });
+    const testLayer = HtmlPreview.layerWithCommand({
+      command: process.execPath,
+      args: ["-e", 'process.stdout.write("ready"); while (true) {}'],
+    }).pipe(Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, observedSpawner)));
+    yield* Effect.gen(function* () {
+      const preview = yield* HtmlPreview.HtmlPreview;
+      const request = yield* preview
+        .render(Effect.succeed("<p>Synthetic</p>"))
+        .pipe(Effect.forkScoped);
+      const pid = yield* Deferred.await(started);
+      // This continuation runs while the child remains in its synchronous loop.
+      expect(() => process.kill(pid, 0)).not.toThrow();
+      yield* Fiber.interrupt(request);
+      expect(() => process.kill(pid, 0)).toThrow();
+    }).pipe(Effect.provide(testLayer), Effect.scoped);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("refuses HTML when the runtime cannot resolve a worker", () =>
+  Effect.gen(function* () {
+    const preview = yield* HtmlPreview.HtmlPreview;
+    const error = yield* preview.render(Effect.succeed("<p>Synthetic</p>")).pipe(Effect.flip);
+    expect(error.reason).toBe("unavailable");
+  }).pipe(
+    Effect.provide(HtmlPreview.layerWithCommand(null).pipe(Layer.provide(NodeServices.layer))),
+  ),
+);

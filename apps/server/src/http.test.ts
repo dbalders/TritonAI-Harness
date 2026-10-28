@@ -15,13 +15,10 @@ import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServerResponse } from "effect/http";
 import { openMediaFile } from "./assets/MediaFile.ts";
+import * as HtmlPreviewTestkit from "./assets/HtmlPreview.testkit.ts";
+import * as HtmlPreview from "./assets/HtmlPreview.ts";
 
-import {
-  injectMcpAppCsp,
-  injectMcpAppCookieBootstrap,
-  injectMcpAppThemeBootstrap,
-  MCP_APP_MAX_HTML_BYTES,
-} from "@t3tools/shared/mcpApp";
+import { injectMcpAppCsp, MCP_APP_MAX_HTML_BYTES } from "@t3tools/shared/mcpApp";
 import { ORCHESTRATION_PROTOCOL_HEADER } from "@t3tools/contracts";
 
 import * as ServerConfig from "./config.ts";
@@ -30,54 +27,120 @@ import { assetResponseHeaders, assetFileResponse, downloadContentDisposition } f
 import * as ServerHttp from "./http.ts";
 
 describe("MCP app asset responses", () => {
-  it.effect(
-    "transforms existing snapshots only with explicit render intent and fresh metadata",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-mcp-theme-" });
-        const file = path.join(directory, "app.html");
-        const html = injectMcpAppCsp(
-          "<html><head><script>vendor()</script></head><body>☃</body></html>",
-          undefined,
-        );
-        yield* fs.writeFileString(file, html);
-        for (const method of ["GET", "HEAD"] as const) {
-          const response = HttpServerResponse.toWeb(
-            yield* assetFileResponse(
-              { path: file, mimeType: "text/html", renderIntent: "mcp-app" },
-              "bytes=0-1",
-              undefined,
-              method,
+  it.effect("rejects busy GET and HEAD previews before reading their HTML descriptor", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-html-admission-" });
+      const filePath = yield* fs
+        .realPath(directory)
+        .pipe(Effect.map((root) => path.join(root, "report.html")));
+      yield* fs.writeFileString(filePath, `<p>${"x".repeat(1024 * 1024)}</p>`);
+      const file = yield* openMediaFile(filePath);
+      if (file === null) throw new Error("Expected a validated descriptor");
+      using reads = vi.spyOn(file.handle, "read");
+      for (const method of ["GET", "HEAD"] as const) {
+        const response = HttpServerResponse.toWeb(
+          yield* assetFileResponse({ path: filePath, file }, undefined, undefined, method).pipe(
+            Effect.provideService(
+              HtmlPreview.HtmlPreview,
+              HtmlPreview.HtmlPreview.of({
+                render: () => Effect.fail(new HtmlPreview.HtmlPreviewError({ reason: "busy" })),
+              }),
             ),
-          );
-          const expected = injectMcpAppCookieBootstrap(injectMcpAppThemeBootstrap(html));
-          expect(response.status).toBe(200);
-          expect(response.headers.get("content-length")).toBe(
-            String(new TextEncoder().encode(expected).byteLength),
-          );
-          expect(response.headers.get("etag")).toBeNull();
-          expect(response.headers.get("last-modified")).toBeNull();
-          expect(response.headers.get("content-security-policy")).toBe(
-            "sandbox allow-scripts allow-forms allow-popups allow-downloads",
-          );
-          expect(yield* Effect.promise(() => response.text())).toBe(
-            method === "HEAD" ? "" : expected,
-          );
+          ),
+        );
+        expect(response.status).toBe(503);
+      }
+      expect(reads).not.toHaveBeenCalled();
+    }).pipe(Effect.scoped, Effect.provide(layerFileResponse)),
+  );
+  it.effect("applies the offline policy even when a caller requests MCP app intent", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-mcp-theme-" });
+      const file = path.join(directory, "app.html");
+      const html = injectMcpAppCsp(
+        "<html><head><script>vendor()</script></head><body>☃</body></html>",
+        undefined,
+      );
+      yield* fs.writeFileString(file, html);
+      for (const method of ["GET", "HEAD"] as const) {
+        const response = HttpServerResponse.toWeb(
+          yield* assetFileResponse(
+            { path: file, mimeType: "text/html", renderIntent: "mcp-app" },
+            "bytes=0-1",
+            undefined,
+            method,
+          ),
+        );
+        expect(response.status).toBe(200);
+        expect(Number(response.headers.get("content-length"))).toBeGreaterThan(0);
+        expect(response.headers.get("etag")).toBeNull();
+        expect(response.headers.get("last-modified")).toBeNull();
+        expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+        expect(response.headers.get("content-security-policy")).toContain("script-src 'nonce-");
+        expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+        const text = yield* Effect.promise(() => response.text());
+        if (method === "HEAD") expect(text).toBe("");
+        else {
+          expect(text).toContain("☃");
+          expect(text).not.toContain("vendor()");
+          expect(text).toContain("<script nonce=");
         }
-        for (const download of [false, true]) {
-          const response = HttpServerResponse.toWeb(
-            yield* assetFileResponse({
-              path: file,
-              mimeType: "text/html",
-              download,
-              ...(download ? { renderIntent: "mcp-app" as const } : {}),
-            }),
-          );
-          expect(yield* Effect.promise(() => response.text())).toBe(html);
+      }
+      for (const download of [false, true]) {
+        const response = HttpServerResponse.toWeb(
+          yield* assetFileResponse({
+            path: file,
+            mimeType: "text/html",
+            download,
+            ...(download ? { renderIntent: "mcp-app" as const } : {}),
+          }),
+        );
+        const text = yield* Effect.promise(() => response.text());
+        if (download) expect(text).toBe(html);
+        else {
+          expect(text).not.toContain("vendor()");
+          expect(response.headers.get("cache-control")).toBe("private, no-store");
         }
-      }).pipe(Effect.provide(layerFileResponse)),
+      }
+    }).pipe(Effect.provide(layerFileResponse)),
+  );
+
+  it.effect("sanitizes the validated HTML descriptor after its path is replaced", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-html-descriptor-" });
+      const filePath = yield* fs
+        .realPath(directory)
+        .pipe(Effect.map((root) => path.join(root, "report.html")));
+      yield* fs.writeFileString(filePath, "<p>Original report</p>");
+      const file = yield* openMediaFile(filePath);
+      if (file === null) throw new Error("Expected a validated file");
+      yield* fs.rename(filePath, `${filePath}.old`);
+      yield* fs.writeFileString(filePath, "<p>Replacement report</p>");
+      const response = HttpServerResponse.toWeb(yield* assetFileResponse({ path: filePath, file }));
+      const body = yield* Effect.promise(() => response.text());
+      expect(body).toContain("Original report");
+      expect(body).not.toContain("Replacement report");
+    }).pipe(Effect.scoped, Effect.provide(layerFileResponse)),
+  );
+
+  it.effect("previews generated documents larger than the MCP snapshot limit", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-html-large-" });
+      const file = path.join(directory, "report.html");
+      yield* fs.writeFileString(file, `<p>${"x".repeat(6 * 1024 * 1024)}</p>`);
+      const response = HttpServerResponse.toWeb(yield* assetFileResponse({ path: file }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+      expect(Number(response.headers.get("content-length"))).toBeGreaterThan(6 * 1024 * 1024);
+    }).pipe(Effect.provide(layerFileResponse)),
   );
 
   it.effect("rejects oversized captures before transforming them", () =>
@@ -139,7 +202,9 @@ describe("browser API CORS", () => {
   });
 });
 
-const layerFileResponse = Layer.mergeAll(NodeHttpPlatform.layer, NodeServices.layer);
+const layerFileResponse = Layer.mergeAll(NodeHttpPlatform.layer, HtmlPreviewTestkit.layer).pipe(
+  Layer.provideMerge(NodeServices.layer),
+);
 
 const makeStaticRequest = Effect.fn("HttpTest.makeStaticRequest")(function* (staticDir: string) {
   const config = yield* ServerConfig.ServerConfig;
@@ -713,7 +778,7 @@ describe("assetResponseHeaders", () => {
       assetResponseHeaders("/attachments/upload.bin", { mimeType: "text/html" }),
     ).toMatchObject({
       "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-downloads",
+      "Content-Security-Policy": "default-src 'none'; sandbox",
     });
   });
 

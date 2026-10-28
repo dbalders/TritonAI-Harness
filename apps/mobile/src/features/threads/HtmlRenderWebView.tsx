@@ -16,7 +16,6 @@ import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { mobileHtmlRenderTheme } from "../../lib/htmlRenderTheme";
-import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useAssetUrlState, useRefreshAssetUrl } from "../../state/assets";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 
@@ -142,13 +141,8 @@ export function HtmlRenderWebView(props: {
         nestedScrollEnabled={props.nested && overflow.y}
         overScrollMode={props.nested ? "never" : "always"}
         onShouldStartLoadWithRequest={(request) =>
-          request.isTopFrame === false ||
           withoutFragment(request.url) === withoutFragment(props.uri)
         }
-        onOpenWindow={(event) => {
-          const url = event.nativeEvent.targetUrl;
-          if (/^https?:/i.test(url)) void tryOpenExternalUrl(url, "html-render");
-        }}
         onLoadEnd={() => {
           setLoaded(true);
           shownTheme.current = theme;

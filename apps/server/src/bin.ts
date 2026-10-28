@@ -20,6 +20,9 @@ if (
   if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {
     const { runAcpMcpCliFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");
     await runAcpMcpCliFastPath(command, process.argv.slice(3));
+  } else if (command === "__html-preview") {
+    const { runHtmlPreviewWorker } = await import("./assets/htmlPreviewWorker.ts");
+    await runHtmlPreviewWorker(process.argv.slice(3));
   } else if (command === "__document-text") {
     // Attachment text extraction in a separate, killable process; see integrations/IntegrationDocumentText.ts.
     const { runDocumentTextWorker } =

@@ -106,6 +106,29 @@ export const readMediaFileHeader = (filePath: string, file: OpenMediaFile, byteC
     catch: (cause) => new MediaFileReadError({ path: filePath, cause }),
   });
 
+export const readMediaFileBounded = Effect.fn("readMediaFileBounded")(function* (
+  filePath: string,
+  file: OpenMediaFile,
+  limit: number,
+) {
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const chunks: Array<Uint8Array> = [];
+      let position = 0;
+      while (position <= limit) {
+        const bytes = new Uint8Array(Math.min(64 * 1024, limit + 1 - position));
+        const { bytesRead } = await file.handle.read(bytes, 0, bytes.length, position);
+        if (bytesRead === 0) break;
+        position += bytesRead;
+        if (position > limit) return null;
+        chunks.push(bytes.subarray(0, bytesRead));
+      }
+      return Buffer.concat(chunks, position);
+    },
+    catch: (cause) => new MediaFileReadError({ path: filePath, cause }),
+  });
+});
+
 export const statMediaFile = Effect.fn("statMediaFile")(function* (
   filePath: string,
   file: OpenMediaFile,

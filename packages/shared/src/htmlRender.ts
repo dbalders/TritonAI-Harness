@@ -6,6 +6,7 @@ import {
 } from "./themePalettes.ts";
 import { EVENT_CODE_SHORTCUT_KEYS } from "./keybindings.ts";
 
+export const HTML_RENDER_MAX_PAGE_BYTES = 25 * 1024 * 1024;
 export const HTML_RENDER_TOOL_NAME = "html_render";
 export const HTML_RENDER_MIN_HEIGHT = 80;
 export const HTML_RENDER_MAX_HEIGHT = 2000;
@@ -270,28 +271,9 @@ export function readHtmlRenderContentHeight(data: unknown): number | undefined {
   return typeof height === "number" && Number.isFinite(height) && height > 0 ? height : undefined;
 }
 
-export function readHtmlRenderLinkRequest(data: unknown):
-  | {
-      readonly id: string | number;
-      readonly url: string;
-      readonly metaKey: boolean;
-      readonly ctrlKey: boolean;
-    }
-  | undefined {
-  if (typeof data !== "object" || data === null) return undefined;
-  const { jsonrpc, id, method, params } = data as Record<string, unknown>;
-  if (jsonrpc !== "2.0" || method !== OPEN_LINK_METHOD) return undefined;
-  if (typeof id !== "string" && typeof id !== "number") return undefined;
-  if (typeof params !== "object" || params === null) return undefined;
-  const { url, metaKey, ctrlKey } = params as Record<string, unknown>;
-  return typeof url === "string" && /^https?:\/\//i.test(url)
-    ? { id, url, metaKey: metaKey === true, ctrlKey: ctrlKey === true }
-    : undefined;
-}
-
 /**
  * The image a framed render's reader clicked, if `data` is an open-image
- * notification for an http(s) or inline image URL. Server-side publishing
+ * notification for an inline raster image URL. Server-side publishing
  * inlines local images, so most arrive as `data:image/` URLs.
  */
 export function readHtmlRenderImageRequest(
@@ -302,7 +284,11 @@ export function readHtmlRenderImageRequest(
   if (jsonrpc !== "2.0" || method !== OPEN_IMAGE_METHOD) return undefined;
   if (typeof params !== "object" || params === null) return undefined;
   const { src, name } = params as Record<string, unknown>;
-  if (typeof src !== "string" || !/^(?:https?:\/\/|data:image\/)/i.test(src)) return undefined;
+  if (
+    typeof src !== "string" ||
+    !/^data:image\/(?:png|jpeg|gif|webp|avif|bmp|x-icon);base64,/i.test(src)
+  )
+    return undefined;
   const label = typeof name === "string" ? name.trim().slice(0, HTML_RENDER_MAX_TITLE_LENGTH) : "";
   return { src, name: label || "Image" };
 }
@@ -352,10 +338,6 @@ export function htmlRenderShortcutsMessage(
   blocked: ReadonlyArray<HtmlRenderShortcut>,
 ) {
   return { jsonrpc: "2.0", method: SHORTCUTS_METHOD, params: { shortcuts, blocked } } as const;
-}
-
-export function htmlRenderResult(id: string | number) {
-  return { jsonrpc: "2.0", id, result: {} } as const;
 }
 
 const THEME_FRAGMENT_KEY = "t3-theme";

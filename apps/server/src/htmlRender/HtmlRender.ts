@@ -4,6 +4,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   clampHtmlRenderHeight,
   HTML_RENDER_COLUMN_WIDTH,
+  HTML_RENDER_MAX_PAGE_BYTES,
   HTML_RENDER_MAX_TITLE_LENGTH,
   HTML_RENDER_MEASURE_FONTS,
   HTML_RENDER_MEASURE_WIDTHS,
@@ -33,12 +34,13 @@ import { createAttachmentId } from "../attachmentStore.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
 import * as HeadlessChrome from "./headlessChrome.ts";
+import * as HtmlPreviewWorker from "../assets/HtmlPreview.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 import * as PreviewBrowserHost from "../preview/PreviewBrowserHost.ts";
 
 const MIB = 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * MIB;
-const MAX_PAGE_BYTES = 25 * MIB;
+const MAX_PAGE_BYTES = HTML_RENDER_MAX_PAGE_BYTES;
 const formatMib = (bytes: number) => `${(bytes / MIB).toFixed(1)} MiB`;
 
 export class HtmlRenderImagesNotFoundError extends Schema.TaggedError<HtmlRenderImagesNotFoundError>()(
@@ -153,11 +155,10 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
   gif: "image/gif",
   webp: "image/webp",
   avif: "image/avif",
-  svg: "image/svg+xml",
   bmp: "image/bmp",
   ico: "image/x-icon",
 };
-const IMAGE_EXTENSIONS = Object.keys(IMAGE_MIME_TYPES).join("|");
+const IMAGE_EXTENSIONS = [...Object.keys(IMAGE_MIME_TYPES), "svg"].join("|");
 const ABSOLUTE_PATH = String.raw`(?:/(?!/)|[a-z]:[\\/])`;
 const LOCAL_IMAGE_PATTERN = new RegExp(
   String.raw`(["'\x60])(${ABSOLUTE_PATH}(?:(?!\1)[^\r\n]){0,2048}?\.(?:${IMAGE_EXTENSIONS}))\1` +
@@ -198,43 +199,7 @@ const isImageBytes = (bytes: Uint8Array) => {
   ) {
     return true;
   }
-  return hasSvgRoot(new TextDecoder().decode(bytes.subarray(0, 4096)));
-};
-
-const after = (text: string, token: string, from: number) => {
-  const at = text.indexOf(token, from);
-  return at === -1 ? -1 : at + token.length;
-};
-
-const hasSvgRoot = (text: string) => {
-  let at = 0;
-  while (at !== -1) {
-    while (/\s/.test(text.charAt(at))) at += 1;
-    if (text.startsWith("<?", at)) at = after(text, "?>", at + 2);
-    else if (text.startsWith("<!--", at)) at = after(text, "-->", at + 4);
-    else if (text.slice(at, at + 9).toLowerCase() === "<!doctype") at = afterDoctype(text, at + 9);
-    // XML names are case-sensitive, and only these characters can end one here.
-    else return /^<svg[ \t\r\n/>]/.test(text.slice(at, at + 5));
-  }
   return false;
-};
-
-const afterDoctype = (text: string, from: number) => {
-  let inSubset = false;
-  let at = from;
-  while (at !== -1 && at < text.length) {
-    const char = text[at];
-    if (char === '"' || char === "'") at = after(text, char, at + 1);
-    else if (inSubset && text.startsWith("<!--", at)) at = after(text, "-->", at + 4);
-    else if (inSubset && text.startsWith("<?", at)) at = after(text, "?>", at + 2);
-    else if (char === ">" && !inSubset) return at + 1;
-    else {
-      if (char === "[") inSubset = true;
-      else if (char === "]") inSubset = false;
-      at += 1;
-    }
-  }
-  return -1;
 };
 
 const inlineLocalImages = Effect.fn("HtmlRender.inlineLocalImages")(function* (html: string) {
@@ -243,13 +208,15 @@ const inlineLocalImages = Effect.fn("HtmlRender.inlineLocalImages")(function* (h
   const files = yield* Effect.forEach(
     [...new Set(references.map((reference) => reference.path))],
     (path) =>
-      fileSystem.stat(filePathFor(path)).pipe(
-        Effect.map((info) => ({
-          path,
-          size: info.type === "File" ? Number(info.size) : undefined,
-        })),
-        Effect.orElseSucceed(() => ({ path, size: undefined })),
-      ),
+      /\.svg$/i.test(path)
+        ? Effect.succeed({ path, size: undefined })
+        : fileSystem.stat(filePathFor(path)).pipe(
+            Effect.map((info) => ({
+              path,
+              size: info.type === "File" ? Number(info.size) : undefined,
+            })),
+            Effect.orElseSucceed(() => ({ path, size: undefined })),
+          ),
     { concurrency: 8 },
   );
   const oversized = files.find((file) => file.size !== undefined && file.size > MAX_IMAGE_BYTES);
@@ -342,7 +309,10 @@ const make = Effect.gen(function* () {
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const services = yield* Effect.context<
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+    | FileSystem.FileSystem
+    | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | HtmlPreviewWorker.HtmlPreview
   >();
   const browsers = yield* Semaphore.make(MAX_CONCURRENT_BROWSERS);
   // Chrome's sandbox stays on unless the operator explicitly turns it off.

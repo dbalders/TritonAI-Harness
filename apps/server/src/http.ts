@@ -5,7 +5,7 @@ import {
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
-import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
+import { HTML_RENDER_MAX_PAGE_BYTES } from "@t3tools/shared/htmlRender";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as ByteSize from "effect/ByteSize";
 import * as Data from "effect/Data";
@@ -30,6 +30,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import * as ServerConfig from "./config.ts";
+import * as HtmlPreview from "./assets/HtmlPreview.ts";
 import { ASSET_ROUTE_PREFIX, readMcpAppHtml, resolveAsset } from "./assets/AssetAccess.ts";
 import { githubMediaResponse } from "./assets/GitHubMediaFetch.ts";
 import { statMediaFile, streamMediaFile, type OpenMediaFile } from "./assets/MediaFile.ts";
@@ -58,12 +59,7 @@ import {
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
-// The sandbox gives the document an opaque origin: scripts run, but same-origin
-// cookies, storage, and API calls are out of reach. No modals: agent HTML can
-// open without a click (inline renders, and mobile loads it as the top document),
-// and must not raise blocking dialogs.
-const HTML_CONTENT_SECURITY_POLICY =
-  "sandbox allow-scripts allow-forms allow-popups allow-downloads";
+const HTML_CONTENT_SECURITY_POLICY = "default-src 'none'; sandbox";
 
 // Types a browser may render as a document if a proxy strips the disposition
 // header. Downloads of these fall back to octet-stream.
@@ -175,22 +171,41 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   method: "GET" | "HEAD" = "GET",
 ) {
   const headers = assetResponseHeaders(asset.path, asset);
-  if (
-    asset.renderIntent === "mcp-app" &&
-    !asset.download &&
-    headers["Content-Type"] === "text/html; charset=utf-8"
-  ) {
-    const bytes = yield* readMcpAppHtml(asset.path);
-    if (bytes === null) {
-      return HttpServerResponse.text("MCP app is too large to preview.", { status: 413 });
-    }
-    const body = new TextEncoder().encode(
-      injectMcpAppCookieBootstrap(injectMcpAppThemeBootstrap(new TextDecoder().decode(bytes))),
+  if (!asset.download && headers["Content-Type"] === "text/html; charset=utf-8") {
+    const load = readMcpAppHtml(
+      asset.path,
+      asset.file,
+      asset.renderIntent === "mcp-app" ? undefined : HTML_RENDER_MAX_PAGE_BYTES + 128 * 1024,
+    ).pipe(
+      Effect.flatMap((bytes) =>
+        bytes === null
+          ? Effect.fail(new HtmlPreview.HtmlPreviewError({ reason: "too_large" }))
+          : Effect.succeed(new TextDecoder().decode(bytes)),
+      ),
     );
-    headers["Content-Length"] = String(body.byteLength);
-    return method === "HEAD"
-      ? HttpServerResponse.empty({ status: 200, headers })
-      : HttpServerResponse.uint8Array(body, { headers });
+    return yield* (yield* HtmlPreview.HtmlPreview).render(load).pipe(
+      Effect.map((preview) => {
+        const body = new TextEncoder().encode(preview.html);
+        Object.assign(headers, preview.headers, { "Content-Length": String(body.byteLength) });
+        return method === "HEAD"
+          ? HttpServerResponse.empty({ status: 200, headers })
+          : HttpServerResponse.uint8Array(body, { headers });
+      }),
+      Effect.catchTags({
+        HtmlPreviewError: (error) =>
+          Effect.succeed(
+            HttpServerResponse.text(
+              error.reason === "too_large"
+                ? "HTML is too large to preview. Download the file to inspect it."
+                : "HTML preview is temporarily unavailable. Download the file to inspect it.",
+              {
+                status: error.reason === "too_large" ? 413 : 503,
+                headers: { "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" },
+              },
+            ),
+          ),
+      }),
+    );
   }
   const mediaFile = asset.file;
   const mediaInfo = mediaFile ? yield* statMediaFile(asset.path, mediaFile) : undefined;

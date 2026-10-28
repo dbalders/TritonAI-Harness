@@ -22,6 +22,7 @@ import * as ServerConfig from "../config.ts";
 import * as HtmlRender from "./HtmlRender.ts";
 import { HtmlRenderBrowserError } from "./headlessChrome.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
+import * as HtmlPreviewTestkit from "../assets/HtmlPreview.testkit.ts";
 
 const TEST_BROWSER_ENV = "T3CODE_TEST_HEADLESS_SHELL";
 
@@ -32,6 +33,7 @@ const layerHtmlRender = (
   ),
 ) =>
   HtmlRender.layer.pipe(
+    Layer.provide(HtmlPreviewTestkit.layer),
     Layer.provide(
       Layer.succeed(
         PreviewBrowser.PreviewBrowser,
@@ -60,9 +62,9 @@ describe("HtmlRender", () => {
       const htmlRender = yield* HtmlRender.HtmlRender;
       const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-html-images-" });
       const png = path.join(directory, "shot.png");
-      const svg = path.join(directory, "logo.svg");
+      const raster = path.join(directory, "logo.png");
       yield* fileSystem.writeFile(png, PNG_BYTES);
-      yield* fileSystem.writeFileString(svg, "<svg/>");
+      yield* fileSystem.writeFile(raster, PNG_BYTES);
       const kept = [
         "https://example.com/a.png",
         "//cdn.example.com/b.png",
@@ -73,18 +75,17 @@ describe("HtmlRender", () => {
       const prepared = yield* htmlRender.prepare(
         [
           "<!doctype html><html><head><title>Shots</title></head><body>",
-          `<img src="${png}"><div style="background:url(${svg})"></div>`,
-          `<script>const shots = ['${png}', \`${svg}\`];</script>`,
+          `<img src="${png}"><div style="background:url(${raster})"></div>`,
+          `<script>const shots = ['${png}', \`${raster}\`];</script>`,
           ...kept.map((src) => `<img src="${src}">`),
           "</body></html>",
         ].join(""),
       );
 
       const pngUri = `data:image/png;base64,${Base64.encode(PNG_BYTES)}`;
-      const svgUri = `data:image/svg+xml;base64,${Base64.encode("<svg/>")}`;
       expect(prepared).toContain(`<img src="${pngUri}">`);
-      expect(prepared).toContain(`url(${svgUri})`);
-      expect(prepared).toContain(`['${pngUri}', \`${svgUri}\`]`);
+      expect(prepared).toContain(`url(${pngUri})`);
+      expect(prepared).toContain(`['${pngUri}', \`${pngUri}\`]`);
       expect(prepared).not.toContain(directory);
       for (const src of kept) expect(prepared).toContain(`<img src="${src}">`);
       expect(prepared.indexOf("<head>")).toBeLessThan(prepared.indexOf('<style id="t3-theme">'));
@@ -114,13 +115,14 @@ describe("HtmlRender", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("inlines an SVG behind processing instructions and a doctype subset", () =>
+  it.effect("reports unsupported SVG and SVG disguised as raster as missing", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const htmlRender = yield* HtmlRender.HtmlRender;
       const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-html-images-" });
       const svg = path.join(directory, "styled.svg");
+      const disguised = path.join(directory, "styled.png");
       const source = [
         '<?xml version="1.0"?>',
         '<?xml-stylesheet href="theme.css"?>',
@@ -128,10 +130,11 @@ describe("HtmlRender", () => {
         '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"/>',
       ].join("\n");
       yield* fileSystem.writeFileString(svg, source);
-
-      const prepared = yield* htmlRender.prepare(`<img src="${svg}">`);
-
-      expect(prepared).toContain(`data:image/svg+xml;base64,${Base64.encode(source)}`);
+      yield* fileSystem.writeFileString(disguised, source);
+      const error = yield* htmlRender
+        .prepare(`<img src="${svg}"><img src="${disguised}">`)
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ paths: [svg, disguised] });
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -316,6 +319,46 @@ describe("HtmlRender", () => {
     },
   );
 
+  it.live("screenshots offline markup without executing page-authored scripts", (ctx) =>
+    Effect.gen(function* () {
+      const executable = (yield* HostProcess.Environment)[TEST_BROWSER_ENV];
+      if (!executable) return ctx.skip(`Set ${TEST_BROWSER_ENV} to run this test.`);
+      yield* Effect.gen(function* () {
+        const htmlRender = yield* HtmlRender.HtmlRender;
+        const preview = yield* htmlRender.preview({
+          html: [
+            '<!doctype html><html><head></head><body><div id="page" tabindex="0" style="height:300px;background:var(--accent)"></div>',
+            '<img src="/nonexistent/t3-missing.png" hidden>',
+            "<script>",
+            "const root = getComputedStyle(document.documentElement);",
+            'const page = document.getElementById("page"); page.focus();',
+            'const focus = getComputedStyle(page); console.log("focus", focus.outlineWidth, focus.outlineOffset, page.getBoundingClientRect().width, document.documentElement.scrollWidth);',
+            'console.log("ready", 3); console.info(root.getPropertyValue("--font-sans"));',
+            'console.warn(root.getPropertyValue("--background")); console.error("boom");',
+            "</script>",
+            '<script>throw new Error("broken chart");</script>',
+            "</body></html>",
+          ].join(""),
+          width: 400,
+          appearance: "dark",
+        });
+
+        const png = Buffer.from(preview.png, "base64");
+        expect(png.readUInt32BE(0)).toBe(0x89504e47);
+        expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([400, 300]);
+        expect(preview).toMatchObject({
+          width: 400,
+          contentHeight: 300,
+          capturedHeight: 300,
+          missingImages: ["/nonexistent/t3-missing.png"],
+        });
+        expect(
+          preview.consoleMessages.some((message) => /ready 3|boom|broken chart/.test(message.text)),
+        ).toBe(false);
+      }).pipe(Effect.provide(layerHtmlRender(executable)));
+    }),
+  );
+
   it.live("keeps every local file but the page itself out of the browser", (ctx) =>
     Effect.gen(function* () {
       const executable = (yield* HostProcess.Environment)[TEST_BROWSER_ENV];
@@ -338,7 +381,7 @@ describe("HtmlRender", () => {
         });
 
         const texts = preview.consoleMessages.map((message) => message.text);
-        expect(texts).toContain("secret: none");
+        expect(texts).not.toContain("frame loaded");
         expect(texts.join(" ")).not.toContain("abc123");
       }).pipe(Effect.scoped, Effect.provide(layerHtmlRender(executable)));
     }),

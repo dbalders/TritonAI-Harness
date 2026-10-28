@@ -21,10 +21,10 @@ const Html = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512_0
 });
 
 const PAGE_RULES =
-  'Write one self-contained document with inline <style> and <script>. Local images written as absolute file paths (src="/abs/shot.png", CSS url(/abs/bg.webp), or a JS string) are inlined automatically; remote http(s) URLs, such as a CDN chart library, load as-is.';
+  'Write one self-contained, offline document with inline <style>. Page-authored JavaScript, SVG, canvas, nested documents, external resources and navigation are unavailable in safe preview. Use HTML/CSS for charts and diagrams, or embed a raster image. Local raster images written as absolute file paths (src="/abs/shot.png" or CSS url(/abs/bg.webp)) are inlined automatically. Remote http(s) URLs and CDN chart libraries do not load. Expandable details and ordinary inputs work, but forms do not submit.';
 
 export const HtmlPreviewTool = Tool.make("html_preview", {
-  description: `Render an HTML page in T3's headless browser and get back a PNG screenshot, contentHeight (the height the page needs at this width), and its console output: log, info, warning, error, and uncaught exceptions, with stack traces pointing into page.html. console.log is a fine way to report your own checks. Use it to check and iterate on a page before html_render. The first preview on a machine can report that T3 is still installing its preview browser; call again a minute later. ${PAGE_RULES} The page gets the theme variables and layout described in html_render.`,
+  description: `Render an HTML page in T3's headless browser and get back a PNG screenshot, contentHeight (the height the page needs at this width), and browser console diagnostics. Page scripts, including console.log checks, do not run. Inspect the screenshot to check and iterate on a page before html_render. The first preview on a machine can report that T3 is still installing its preview browser; call again a minute later. ${PAGE_RULES} The page gets the theme variables and layout described in html_render.`,
   parameters: Schema.Struct({
     html: Html,
     width: Schema.optional(
