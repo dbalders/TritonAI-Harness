@@ -12,6 +12,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   gettingStartedAnalyticsEvents,
+  gettingStartedSkillRecipes,
   reduceGettingStarted,
   type GettingStartedEvent,
 } from "./gettingStarted.logic";
@@ -501,5 +502,20 @@ describe("usage events", () => {
       { event: "chapter-completed", chapter: "welcome" },
     ]);
     expect(gettingStartedAnalyticsEvents(deferred, restarted)).toEqual([]);
+  });
+});
+
+describe("starter skill recipes", () => {
+  it("offers everyday recipes for the skills the person has, best first", () => {
+    const recipes = gettingStartedSkillRecipes(
+      new Set(["skill-creator", "gmail", "google-calendar", "ucsd-campus-search", "agent-tools"]),
+    );
+
+    expect(recipes.map((recipe) => recipe.id)).toEqual([
+      "morning-brief",
+      "campus-answer",
+      "make-a-skill",
+    ]);
+    expect(recipes[0]?.prompt).toMatch(/^\$google-calendar \$gmail Give me a short morning brief/);
   });
 });

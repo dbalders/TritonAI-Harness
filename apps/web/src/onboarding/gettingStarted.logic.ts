@@ -72,8 +72,82 @@ Practice emails (fictional):
 3. From Marco Diaz, "Budget numbers": Could you send me the final travel budget by Wednesday so I can submit it?
 4. From IT Service Desk, "Ticket closed": Your request for a new monitor has been completed.`;
 
-export function gettingStartedSkillPrompt(skillName: string): string {
-  return `$${skillName} In plain language, tell me what this skill helps with and suggest one small task I could try with it right now. Don't change any files.`;
+export interface GettingStartedSkillRecipe {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  /** Ready-to-review request, starting with the `$skill` names it uses. */
+  readonly prompt: string;
+}
+
+/**
+ * Everyday starter recipes, best first. Each one lists the skill sets that can
+ * run it; plugin skills only appear once their account is connected, so the
+ * list follows what the person has set up. `skill-creator` ships with Codex,
+ * so there is always at least one card.
+ */
+const STARTER_SKILL_RECIPES: ReadonlyArray<{
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly skillSets: ReadonlyArray<ReadonlyArray<string>>;
+  readonly request: string;
+}> = [
+  {
+    id: "morning-brief",
+    title: "Morning brief",
+    description: "Today's meetings and the emails waiting on you.",
+    skillSets: [
+      ["outlook-calendar", "outlook-mail"],
+      ["google-calendar", "gmail"],
+    ],
+    request:
+      "Give me a short morning brief: today's meetings with their times, then up to five emails from the last day that need my reply. Only read; don't draft, change, move, or send anything.",
+  },
+  {
+    id: "recent-files",
+    title: "Find a recent file",
+    description: "See what you've been working on lately.",
+    skillSets: [["onedrive-files"], ["google-drive"]],
+    request:
+      "List the five files I changed most recently, with one line on what each seems to be. Only read; don't change anything.",
+  },
+  {
+    id: "campus-answer",
+    title: "Look up a campus answer",
+    description: "Find official UC San Diego guidance, with links.",
+    skillSets: [["ucsd-campus-search"]],
+    request:
+      "Find the official UC San Diego guidance on getting a campus parking permit and summarize it in three short bullets, with links to the original pages.",
+  },
+  {
+    id: "jira-plate",
+    title: "What's on my plate in Jira",
+    description: "Your open issues, newest first.",
+    skillSets: [["ucsd-jira"]],
+    request:
+      "List my open Jira issues, newest first, with each one's status. Only read; don't change anything.",
+  },
+  {
+    id: "make-a-skill",
+    title: "Make your own skill",
+    description: "Turn work you repeat into a saved recipe.",
+    skillSets: [["skill-creator"]],
+    request:
+      "Help me plan a skill for a task I repeat every week. Ask me what the task is first, and don't create any files yet.",
+  },
+];
+
+/** Up to three starter recipes the person can run with the skills they have now. */
+export function gettingStartedSkillRecipes(
+  available: ReadonlySet<string>,
+): ReadonlyArray<GettingStartedSkillRecipe> {
+  return STARTER_SKILL_RECIPES.flatMap(({ skillSets, request, ...recipe }) => {
+    const skills = skillSets.find((set) => set.every((name) => available.has(name)));
+    return skills
+      ? [{ ...recipe, prompt: `${skills.map((name) => `$${name}`).join(" ")} ${request}` }]
+      : [];
+  }).slice(0, 3);
 }
 
 export type GettingStartedEvent = (

@@ -1,10 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import type {
-  GettingStartedChapterId,
-  IntegrationSummary,
-  ServerProviderSkill,
-} from "@t3tools/contracts";
-import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
+import type { GettingStartedChapterId, IntegrationSummary } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { LifeBuoyIcon } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -17,7 +12,8 @@ import {
   GETTING_STARTED_CHAPTERS,
   GETTING_STARTED_SAMPLE,
   GETTING_STARTED_SAMPLE_EMAILS,
-  gettingStartedSkillPrompt,
+  gettingStartedSkillRecipes,
+  type GettingStartedSkillRecipe,
 } from "../../onboarding/gettingStarted.logic";
 import {
   openGettingStarted,
@@ -67,13 +63,10 @@ function usableMail(integration: IntegrationSummary | null): boolean {
   );
 }
 
-/** Installed skills first. Repo skills don't apply in the TritonAI folder, and Memory is managed. */
-const STARTER_SKILL_SCOPE_ORDER = ["user", "admin", "system"];
-
-/** A few skills the person can start themselves, from their default assistant. */
-function useStarterSkills(
+/** Starter recipes that use skills the person can run from their default assistant. */
+function useStarterRecipes(
   environmentId: ReturnType<typeof usePrimaryEnvironmentId>,
-): ReadonlyArray<ServerProviderSkill> {
+): ReadonlyArray<GettingStartedSkillRecipe> {
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const config = environmentId ? serverConfigs.get(environmentId) : undefined;
   if (!config) return [];
@@ -82,20 +75,13 @@ function useStarterSkills(
     config.settings.defaultModelSelection,
   );
   const provider = config.providers.find((item) => item.instanceId === selection?.instanceId);
-  const rank = (skill: ServerProviderSkill) => {
-    const index = STARTER_SKILL_SCOPE_ORDER.indexOf(skill.scope ?? "user");
-    return index === -1 ? STARTER_SKILL_SCOPE_ORDER.length : index;
-  };
-  return (provider?.skills ?? [])
-    .filter(
-      (skill) =>
-        skill.enabled &&
-        skill.userInvocable !== false &&
-        skill.scope !== "repo" &&
-        !skill.name.startsWith("tritonai-memory-"),
-    )
-    .toSorted((left, right) => rank(left) - rank(right))
-    .slice(0, 3);
+  return gettingStartedSkillRecipes(
+    new Set(
+      (provider?.skills ?? [])
+        .filter((skill) => skill.enabled && skill.userInvocable !== false)
+        .map((skill) => skill.name),
+    ),
+  );
 }
 
 /** The chapter tray never replaces a route or traps focus; exercises use ordinary app controls. */
@@ -106,7 +92,7 @@ export function GettingStartedHost() {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { prepare, pending, error } = useGettingStartedActions(environmentId);
-  const starterSkills = useStarterSkills(environmentId);
+  const starterRecipes = useStarterRecipes(environmentId);
   const [connectionRevision, setConnectionRevision] = useState(0);
   const [computerHelpGeneration, setComputerHelpGeneration] = useState<number | null>(null);
   const computerHelpSeen = computerHelpGeneration === state.generation;
@@ -375,24 +361,22 @@ export function GettingStartedHost() {
     target = "composer";
     content = (
       <>
-        {starterSkills.length > 0 ? (
+        {starterRecipes.length > 0 ? (
           <div className="grid gap-2">
-            {starterSkills.map((skill) => (
+            {starterRecipes.map((recipe) => (
               <Button
-                key={skill.name}
+                key={recipe.id}
                 size="sm-multiline"
                 variant="outline"
                 className="justify-start text-left"
                 disabled={pending}
-                onClick={() => void prepare("skills", gettingStartedSkillPrompt(skill.name))}
+                onClick={() => void prepare("skills", recipe.prompt)}
               >
                 <span className="grid gap-0.5">
-                  <span className="font-medium">{formatProviderSkillDisplayName(skill)}</span>
-                  {skill.shortDescription || skill.description ? (
-                    <span className="line-clamp-2 text-xs text-muted-foreground">
-                      {skill.shortDescription ?? skill.description}
-                    </span>
-                  ) : null}
+                  <span className="font-medium">{recipe.title}</span>
+                  <span className="line-clamp-2 text-xs text-muted-foreground">
+                    {recipe.description}
+                  </span>
                 </span>
               </Button>
             ))}
