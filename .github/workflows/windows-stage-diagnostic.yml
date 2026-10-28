@@ -1,0 +1,77 @@
+name: Windows staging diagnostic
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - diag/windows-nightly-staging-20261028
+    paths:
+      - .github/workflows/windows-stage-diagnostic.yml
+permissions:
+  contents: read
+jobs:
+  staging:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - name: Build source bundles
+        run: vp run build:desktop
+      - name: Trace isolated staging operations
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/build-desktop-artifact.ts')
+          source=p.read_text()
+          start=source.index('const stageCuaDriver = Effect.fn(')
+          end=source.index('export const stageBrowserSecret', start)
+          body=source[start:end].replace('const stageCuaDriver =', 'export const stageCuaDriver =', 1)
+          replacements=[
+            ('  const response = yield* httpClient.get(asset.url).pipe(', '  yield* Effect.log("PROBE Cua download starting", asset.url);\n  const response = yield* httpClient.get(asset.url).pipe('),
+            ('  const archiveBytes = new Uint8Array(', '  yield* Effect.log("PROBE Cua response headers received");\n  const archiveBytes = new Uint8Array('),
+            ('  const actualSha256 = NodeCrypto.createHash', '  yield* Effect.log("PROBE Cua body received", archiveBytes.length);\n  const actualSha256 = NodeCrypto.createHash'),
+            ('  if (input.platform === "win") {', '  yield* Effect.log("PROBE Cua archive extraction starting");\n  if (input.platform === "win") {'),
+            ('  const executableName =', '  yield* Effect.log("PROBE Cua archive extracted");\n  const executableName ='),
+            ('    const prepared = yield* Effect.try({', '    yield* Effect.log("PROBE Cua PE preparation starting");\n    const prepared = yield* Effect.try({'),
+            ('    yield* fs.writeFile(destinationPath, prepared);', '    yield* Effect.log("PROBE Cua PE prepared; writing executable");\n    yield* fs.writeFile(destinationPath, prepared);\n    yield* Effect.log("PROBE Cua executable written");'),
+          ]
+          for old,new in replacements:
+            assert old in body, old
+            body=body.replace(old,new,1)
+          p.write_text(source[:start]+body+source[end:])
+          PY
+          node --input-type=module - <<'JS'
+          import * as NodeServices from '@effect/platform-node/NodeServices';
+          import * as Effect from 'effect/Effect';
+          import * as FileSystem from 'effect/FileSystem';
+          import * as Layer from 'effect/Layer';
+          import * as Path from 'effect/Path';
+          import { FetchHttpClient } from 'effect/unstable/http';
+          import { stageCuaDriver } from './scripts/build-desktop-artifact.ts';
+          console.log({node:process.version,platform:process.platform,arch:process.arch});
+          setTimeout(()=>{console.error('PROBE exceeded 180 seconds');process.exit(124)},180000).unref();
+          await Effect.runPromise(Effect.gen(function*(){
+            const fs=yield* FileSystem.FileSystem;
+            const path=yield* Path.Path;
+            const stage=yield* fs.makeTempDirectoryScoped({prefix:'nightly-stage-probe-'});
+            yield* Effect.log('PROBE copying desktop bundle',stage);
+            yield* fs.copy(path.resolve('apps/desktop/dist-electron'),path.join(stage,'dist-electron'));
+            yield* Effect.log('PROBE desktop bundle copied; copying resources');
+            const resources=path.join(stage,'resources');
+            yield* fs.copy(path.resolve('apps/desktop/resources'),resources);
+            yield* Effect.log('PROBE resources copied; staging Cua');
+            yield* stageCuaDriver({stageResourcesDir:resources,platform:'win',arch:'x64',verbose:true});
+            yield* Effect.log('PROBE complete');
+          }).pipe(Effect.scoped,Effect.provide(Layer.mergeAll(NodeServices.layer,FetchHttpClient.layer))));
+          JS
