@@ -57,6 +57,111 @@ const layerTest = Layer.mergeAll(
   ),
 );
 
+it.effect.each(["acceptForSession", "acceptAlways", undefined, "expired"] as const)(
+  "keeps a one-time approval pending after an invalid durable response: %s",
+  (decision) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const threadId = ThreadId.make("one-time-write-approval");
+      const requestId = RuntimeRequestId.make("one-time-request");
+      const sessionId = ProviderSessionId.make("one-time-session");
+      const now = yield* DateTime.now;
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("create-one-time"),
+        threadId,
+        projectId: ProjectId.make("one-time-project"),
+        title: "Synthetic write approval",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* projections.apply({
+        id: EventId.make("one-time-session"),
+        type: "provider-session.attached",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: sessionId,
+          driver: adapter.driver,
+          providerInstanceId: instanceId,
+          status: "ready",
+          cwd: "/repo",
+          model: "gpt-6",
+          capabilities: CodexProviderCapabilitiesV2,
+          createdAt: now,
+          updatedAt: now,
+          lastError: null,
+        },
+      });
+      yield* projections.apply({
+        id: EventId.make("one-time-request"),
+        type: "runtime-request.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: requestId,
+          nodeId: NodeId.make("one-time-node"),
+          providerTurnId: null,
+          nativeRequestRef: null,
+          kind: "permission",
+          status: "pending",
+          responseCapability: { type: "live", providerSessionId: sessionId },
+          createdAt: now,
+          resolvedAt: null,
+          allowedDecisions: ["accept", "decline", "cancel"],
+          ...(decision === "expired" ? { expiresAt: now } : {}),
+        },
+      });
+      const pending = yield* projections.getRuntimeRequest(threadId, requestId);
+      const sequence = yield* orchestrator.getThreadEventSequence(threadId);
+      const invalidCommand = CommandId.make("invalid-one-time-decision");
+      const rejected = yield* orchestrator
+        .dispatch({
+          type: "runtime-request.respond",
+          commandId: invalidCommand,
+          threadId,
+          requestId,
+          ...(decision === undefined
+            ? {}
+            : { decision: decision === "expired" ? "accept" : decision }),
+        })
+        .pipe(Effect.result);
+      assert.isTrue(Result.isFailure(rejected));
+      assert.deepEqual(yield* projections.getRuntimeRequest(threadId, requestId), pending);
+      assert.equal(yield* orchestrator.getThreadEventSequence(threadId), sequence);
+      assert.deepEqual(yield* outbox.listByCommandId(invalidCommand), []);
+      if (decision === "expired") return;
+      const acceptedCommand = CommandId.make("valid-one-time-decision");
+      yield* orchestrator.dispatch({
+        type: "runtime-request.respond",
+        commandId: acceptedCommand,
+        threadId,
+        requestId,
+        decision: "accept",
+      });
+      assert.equal((yield* projections.getRuntimeRequest(threadId, requestId))?.status, "resolved");
+      const effects = yield* outbox.listByCommandId(acceptedCommand);
+      assert.deepEqual(
+        effects.map((effect) => effect.request),
+        [
+          {
+            type: "runtime-request.respond",
+            providerSessionId: sessionId,
+            requestId,
+            decision: "accept",
+          },
+        ],
+      );
+    }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("marks a never-visited thread's first completion unread", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;

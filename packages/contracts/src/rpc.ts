@@ -333,6 +333,9 @@ import {
   ServerSetProviderSkillEnabledInput,
   ServerSubmitProviderSkillToTritonAiCommonsInput,
   ServerSubmitProviderSkillToTritonAiCommonsResult,
+  ServerCommonsApprovalState,
+  ServerSubscribeCommonsApprovalInput,
+  ServerRespondCommonsApprovalInput,
   ServerTritonAiCommonsError,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
@@ -593,6 +596,8 @@ export const WS_METHODS = {
   serverRemoveProviderSkill: "server.removeProviderSkill",
   serverSetProviderSkillEnabled: "server.setProviderSkillEnabled",
   serverSubmitProviderSkillToTritonAiCommons: "server.submitProviderSkillToTritonAiCommons",
+  serverSubscribeCommonsApproval: "server.subscribeCommonsApproval",
+  serverRespondCommonsApproval: "server.respondCommonsApproval",
   serverListPlugins: "server.listPlugins",
   serverInstallPlugin: "server.installPlugin",
   serverUninstallPlugin: "server.uninstallPlugin",
@@ -1181,6 +1186,18 @@ const WsServerSubmitProviderSkillToTritonAiCommonsRpc = Rpc.make(
     error: Schema.Union([ServerTritonAiCommonsError, EnvironmentAuthorizationError]),
   },
 );
+
+const WsServerSubscribeCommonsApprovalRpc = Rpc.make(WS_METHODS.serverSubscribeCommonsApproval, {
+  payload: ServerSubscribeCommonsApprovalInput,
+  success: Schema.NullOr(ServerCommonsApprovalState),
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+const WsServerRespondCommonsApprovalRpc = Rpc.make(WS_METHODS.serverRespondCommonsApproval, {
+  payload: ServerRespondCommonsApprovalInput,
+  success: Schema.Void,
+  error: Schema.Union([ServerTritonAiCommonsError, EnvironmentAuthorizationError]),
+});
 
 const WsServerListPluginsRpc = Rpc.make(WS_METHODS.serverListPlugins, {
   payload: ServerPluginsListInput,
@@ -2360,6 +2377,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRemoveProviderSkillRpc,
   WsServerSetProviderSkillEnabledRpc,
   WsServerSubmitProviderSkillToTritonAiCommonsRpc,
+  WsServerSubscribeCommonsApprovalRpc,
+  WsServerRespondCommonsApprovalRpc,
   WsServerListPluginsRpc,
   WsServerInstallPluginRpc,
   WsServerUninstallPluginRpc,

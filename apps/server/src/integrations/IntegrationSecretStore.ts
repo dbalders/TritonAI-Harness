@@ -1,8 +1,9 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { isIntegrationId } from "./manifest.ts";
+import { beginIntegrationCredentialMutation } from "./IntegrationWriteApproval.ts";
 
 const SAFE_SECRET_SUFFIX = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
 const MAX_SECRET_NAME_LENGTH = 200;
@@ -63,13 +64,32 @@ export function scopeIntegrationSecretStore(
           ),
       ),
     );
+  const mutate = Effect.fn("IntegrationSecretStore.mutate")(
+    <A, E, R>(operation: () => Effect.Effect<A, E, R>) =>
+      Effect.acquireUseRelease(
+        Effect.try({
+          try: () => beginIntegrationCredentialMutation(integrationId),
+          catch: (cause) =>
+            new ServerSecretStore.SecretStorePersistError({
+              resource: `${integrationId} credentials`,
+              cause,
+            }),
+        }),
+        () => Effect.suspend(operation).pipe(Effect.uninterruptible),
+        (settle) => Effect.sync(settle),
+      ),
+  );
 
   return {
     get,
     set: (suffix, value) =>
-      scopedName(suffix).pipe(Effect.flatMap(({ canonical }) => store.set(canonical, value))),
+      scopedName(suffix).pipe(
+        Effect.flatMap(({ canonical }) => mutate(() => store.set(canonical, value))),
+      ),
     create: (suffix, value) =>
-      scopedName(suffix).pipe(Effect.flatMap(({ canonical }) => store.create(canonical, value))),
+      scopedName(suffix).pipe(
+        Effect.flatMap(({ canonical }) => mutate(() => store.create(canonical, value))),
+      ),
     getOrCreateRandom: (suffix, bytes) =>
       get(suffix).pipe(
         Effect.flatMap(
@@ -77,7 +97,9 @@ export function scopeIntegrationSecretStore(
             onSome: Effect.succeed,
             onNone: () =>
               scopedName(suffix).pipe(
-                Effect.flatMap(({ canonical }) => store.getOrCreateRandom(canonical, bytes)),
+                Effect.flatMap(({ canonical }) =>
+                  mutate(() => store.getOrCreateRandom(canonical, bytes)),
+                ),
               ),
           }),
         ),
@@ -85,9 +107,11 @@ export function scopeIntegrationSecretStore(
     remove: (suffix) =>
       scopedName(suffix).pipe(
         Effect.flatMap(({ canonical, legacy }) =>
-          store
-            .remove(canonical)
-            .pipe(Effect.andThen(legacy === null ? Effect.void : store.remove(legacy))),
+          mutate(() =>
+            store
+              .remove(canonical)
+              .pipe(Effect.andThen(legacy === null ? Effect.void : store.remove(legacy))),
+          ),
         ),
       ),
   };

@@ -1,4 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off cryptoRandomUUID:off
+import { beforeEach, onTestFinished } from "vite-plus/test";
+import {
+  installApprovedIntegrationWriteFixture,
+  integrationWriteTestOwner,
+} from "./IntegrationWriteApproval.testkit.ts";
+
+beforeEach(() => {
+  const presenter = installApprovedIntegrationWriteFixture();
+  onTestFinished(() => presenter[Symbol.dispose]());
+});
+
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 import * as NodeFSP from "node:fs/promises";
@@ -495,6 +506,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).rejects.toMatchObject({ code: "capability_required" });
@@ -512,6 +524,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).resolves.toMatchObject({ toolName: "fixture.records.write" });
@@ -589,6 +602,7 @@ describe("IntegrationRegistry lifecycle", () => {
         {
           signal: new AbortController().signal,
           writeApproved: true,
+          approvalOwner: integrationWriteTestOwner,
         },
       );
       await writeInvocationStarted;
@@ -605,6 +619,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).rejects.toMatchObject({ code: "capability_required" });
@@ -796,6 +811,7 @@ describe("IntegrationRegistry lifecycle", () => {
         {
           signal: controller.signal,
           writeApproved: true,
+          approvalOwner: integrationWriteTestOwner,
         },
       );
       await commitAdmitted;
@@ -882,6 +898,7 @@ describe("IntegrationRegistry lifecycle", () => {
     const invocationContext = {
       signal: new AbortController().signal,
       writeApproved: true,
+      approvalOwner: integrationWriteTestOwner,
     } as const;
     try {
       await registry.install(manifest.id);
@@ -997,6 +1014,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).rejects.toMatchObject({ code: "operation_failed" });
@@ -1012,6 +1030,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).rejects.toMatchObject({ code: "operation_failed" });
@@ -1032,6 +1051,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).rejects.toMatchObject({ code: "operation_failed" });
@@ -1045,6 +1065,87 @@ describe("IntegrationRegistry lifecycle", () => {
     } finally {
       await registry?.close();
       await restarted?.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("tells the agent to verify an admitted write whose provider then rejects", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-write-outcome-unknown-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "test-write-outcome-unknown",
+      name: "Test Write Outcome",
+      provider: "test-write-outcome-unknown-provider",
+      capabilities: [
+        {
+          id: "fixture.write",
+          displayName: "Write fixture",
+          description: "Write fixture records.",
+          access: "default",
+        },
+      ],
+      tools: [
+        {
+          name: "test.fixture.write",
+          displayName: "Write fixture",
+          description: "Write one fixture record.",
+          capabilities: ["fixture.write"],
+          effect: "write",
+        },
+      ],
+      skills: [],
+    };
+    const implementation: IntegrationProvider = {
+      id: "test-write-outcome-unknown-provider",
+      tools: [
+        {
+          name: "test.fixture.write",
+          description: "Write one fixture record.",
+          input: EmptyIntegrationToolInput,
+          readOnly: false,
+          openWorld: false,
+        },
+      ],
+      status: async () => ({
+        state: "connected",
+        accountLabel: "Fixture user",
+        grantedCapabilities: ["fixture.write"],
+        message: null,
+      }),
+      connect: async () => ({ kind: "connected", flowId: "fixture-flow", message: "Connected." }),
+      disconnect: async () => undefined,
+      invoke: async (_toolName, _input, context) => {
+        await context!.beginCommit!();
+        throw new IntegrationProviderPublicError(
+          "The fixture operation may have completed. Verify its result before retrying.",
+        );
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+    try {
+      await registry.install(manifest.id);
+      const failure = await registry
+        .invokeTool(
+          "test.fixture.write",
+          {},
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
+          },
+        )
+        .then(
+          () => expect.unreachable("an admitted rejected write must fail"),
+          (error: unknown) => error,
+        );
+      expect(failure).toMatchObject({ code: "operation_failed" });
+      expect(describeIntegrationToolFailure(failure).text).toBe(
+        "Integration tool call failed (operation_failed): Write fixture may have completed. Verify its result before retrying; Test Write Outcome is unavailable until its connection is reset.",
+      );
+    } finally {
+      await registry.close();
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
@@ -1121,7 +1222,11 @@ describe("IntegrationRegistry lifecycle", () => {
         .invokeTool(
           "test.fixture.write",
           {},
-          { signal: new AbortController().signal, writeApproved: true },
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
+          },
         )
         .then(
           () => expect.unreachable("a refused write must fail"),
@@ -1143,7 +1248,11 @@ describe("IntegrationRegistry lifecycle", () => {
         registry.invokeTool(
           "test.fixture.write",
           {},
-          { signal: new AbortController().signal, writeApproved: true },
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
+          },
         ),
       ).resolves.toEqual({ written: true });
       await registry.close();
@@ -1330,6 +1439,7 @@ describe("IntegrationRegistry lifecycle", () => {
           {
             signal: new AbortController().signal,
             writeApproved: true,
+            approvalOwner: integrationWriteTestOwner,
           },
         ),
       ).resolves.toMatchObject({ toolName: "test.records.list" });

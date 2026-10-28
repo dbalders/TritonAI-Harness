@@ -96,6 +96,24 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import packageJson from "../../../package.json" with { type: "json" };
 
+const pluginJournalGate = vi.hoisted(() => ({
+  path: "",
+  entered: () => {},
+  wait: Promise.resolve(),
+}));
+vi.mock("node:fs/promises", async (original) => {
+  const fs = await original<typeof import("node:fs/promises")>();
+  return {
+    ...fs,
+    rename: async (...args: Parameters<typeof fs.rename>) => {
+      await fs.rename(...args);
+      if (String(args[1]) === pluginJournalGate.path) {
+        pluginJournalGate.entered();
+        await pluginJournalGate.wait;
+      }
+    },
+  };
+});
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
@@ -1110,17 +1128,6 @@ describe("CodexAdapterV2 session initialize", () => {
 });
 
 describe("CodexAdapterV2 post-settle continuation", () => {
-  const awaitUntil = (predicate: () => boolean, label: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      for (let attempt = 0; attempt < 5000; attempt++) {
-        if (predicate()) {
-          return;
-        }
-        yield* Effect.yieldNow;
-      }
-      return yield* Effect.die(`Timed out waiting for ${label}.`);
-    });
-
   // The harness notifies after every recorded event or continuation, so a wait
   // re-checks exactly when the state it reads changes. Subscribing before the
   // first check means a change that lands in between is not lost.
@@ -1146,6 +1153,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       Pick<CodexAdapterV2.CodexAdapterV2Options, "allowedModels" | "settings">
     > = {},
     onToolResponse: (result: unknown) => Effect.Effect<void> = () => Effect.void,
+    replayHooks: {
+      readonly beforeEmitInbound?: NonNullable<
+        CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"]
+      >;
+      readonly afterNotification?: (method: string, payload: unknown) => Effect.Effect<void>;
+      readonly interceptRawRequests?: boolean;
+    } = {},
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1156,7 +1170,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         [];
       const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
         open: (openInput) =>
-          Layer.build(CodexReplay.layerReplay(transcript)).pipe(
+          CodexReplay.makeReplayDriver(transcript, replayHooks).pipe(
+            Effect.flatMap((driver) => Layer.build(CodexReplay.layerReplayWithDriver(driver))),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -1174,6 +1189,23 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   (client) =>
                     ({
                       ...client,
+                      raw: replayHooks.interceptRawRequests
+                        ? {
+                            ...client.raw,
+                            request: (method, params) =>
+                              onRequest(method, params).pipe(
+                                Effect.andThen(client.raw.request(method, params)),
+                              ),
+                          }
+                        : client.raw,
+                      handleServerNotification: (method, handler) =>
+                        client.handleServerNotification(method, (payload) =>
+                          handler(payload).pipe(
+                            Effect.andThen(
+                              () => replayHooks.afterNotification?.(method, payload) ?? Effect.void,
+                            ),
+                          ),
+                        ),
                       handleServerRequest: (method, handler) =>
                         client.handleServerRequest(method, (payload) =>
                           handler(payload).pipe(
@@ -1276,289 +1308,672 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       };
     });
 
-  it.live.each(["approved", "declined", "revoked", "expired", "replaced", "undisclosed"] as const)(
-    "enforces live V2 plugin dispatch at the %s boundary",
-    (scenario) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const root = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
-          const toolName = "fixture.records.write";
-          const dynamicName = IntegrationRegistry.codexDynamicIntegrationToolName(toolName);
-          const manifest: IntegrationManifest = {
-            apiVersion: "tritonai.harness/v2",
-            kind: "IntegrationPlugin",
-            manifestVersion: 2,
-            id: "v2-dispatch-fixture",
-            name: "V2 dispatch fixture",
-            description: "Local synthetic provider.",
-            version: "1.0.0",
-            provider: "v2-dispatch-fixture",
-            capabilities: [
-              {
-                id: "records.write",
-                displayName: "Write",
-                description: "Write fixture.",
-                access: "opt-in",
-              },
-            ],
-            tools: [
-              {
-                name: toolName,
-                displayName: "Write",
-                description: "Write fixture.",
-                capabilities: ["records.write"],
-                effect: "write",
-              },
-            ],
-            skills: [],
-          };
-          let invocations = 0;
-          const registry = yield* Effect.acquireRelease(
-            Effect.sync(
-              () =>
-                new IntegrationRegistry.RegistryRuntime(root, [
-                  {
-                    manifest,
-                    bundledFiles: { ".tritonai-plugin/plugin.json": JSON.stringify(manifest) },
-                    provider: {
-                      id: "v2-dispatch-fixture",
-                      tools: [
-                        {
-                          name: toolName,
-                          description: "Write fixture.",
-                          input: EmptyIntegrationToolInput,
-                          readOnly: false,
-                          openWorld: false,
-                        },
-                      ],
-                      status: async () => ({
-                        state: "connected",
-                        accountLabel: "Fixture",
-                        grantedCapabilities: ["records.write"],
-                        message: null,
-                      }),
-                      connect: async () => ({
-                        kind: "connected",
-                        flowId: "fixture",
-                        message: "Connected.",
-                      }),
-                      disconnect: async () => undefined,
-                      invoke: async (_name, _args, context) => {
-                        assert.isTrue(context?.writeApproved);
-                        await context?.beginCommit?.();
-                        invocations++;
-                        return { changed: true };
+  it.live.each([
+    "approved",
+    "approved-auto",
+    "approved-full-access",
+    "session-grant-rejected",
+    "declined",
+    "revoked",
+    "expired",
+    "replaced",
+    "undisclosed",
+    "invalid-depth",
+    "invalid-size",
+    "invalid-commons-depth",
+    "nested-cancelled",
+    "nested-journal-cancelled",
+    "nested-approved",
+    "nested-stop-pending",
+    "nested-stop-journal",
+    "goal-stop-pending",
+    "goal-stop-journal",
+  ] as const)("enforces live V2 plugin dispatch at the %s boundary", (scenario) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const approved = scenario.startsWith("approved") || scenario === "nested-approved";
+        const nested = scenario.startsWith("nested-");
+        const stopping = scenario.startsWith("nested-stop-");
+        const goalStopping = scenario.startsWith("goal-stop-");
+        const goalPauseEntered = yield* Deferred.make<void>();
+        const releaseGoalPause = yield* Deferred.make<void>();
+        const pausedJournal =
+          scenario === "nested-journal-cancelled" ||
+          scenario === "nested-stop-journal" ||
+          scenario === "goal-stop-journal";
+        const root = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+        const journalEntered = Promise.withResolvers<void>();
+        const stopEntered = yield* Deferred.make<void>();
+        const cleanupEntered = yield* Deferred.make<void>();
+        const releaseCleanup = yield* Deferred.make<void>();
+        const toolDone = yield* Deferred.make<void>();
+        const toolFlushed = yield* Deferred.make<void>();
+        let stopFiber: Fiber.Fiber<void> | undefined;
+        const releaseJournal = Promise.withResolvers<void>();
+        using _journal = {
+          [Symbol.dispose]() {
+            pluginJournalGate.path = "";
+            releaseJournal.resolve();
+          },
+        };
+        const toolName = "fixture.records.write";
+        const dynamicName = IntegrationRegistry.codexDynamicIntegrationToolName(toolName);
+        const manifest: IntegrationManifest = {
+          apiVersion: "tritonai.harness/v2",
+          kind: "IntegrationPlugin",
+          manifestVersion: 2,
+          id: "v2-dispatch-fixture",
+          name: "V2 dispatch fixture",
+          description: "Local synthetic provider.",
+          version: "1.0.0",
+          provider: "v2-dispatch-fixture",
+          capabilities: [
+            {
+              id: "records.write",
+              displayName: "Write",
+              description: "Write fixture.",
+              access: "opt-in",
+            },
+          ],
+          tools: [
+            {
+              name: toolName,
+              displayName: "Write",
+              description: "Write fixture.",
+              capabilities: ["records.write"],
+              effect: "write",
+            },
+          ],
+          skills: [],
+        };
+        if (pausedJournal) {
+          pluginJournalGate.path = (yield* Path.Path).join(
+            root,
+            "commit-journal",
+            `${manifest.id}.json`,
+          );
+          pluginJournalGate.entered = journalEntered.resolve;
+          pluginJournalGate.wait = releaseJournal.promise;
+        }
+        let invocations = 0;
+        const registry = yield* Effect.acquireRelease(
+          Effect.sync(
+            () =>
+              new IntegrationRegistry.RegistryRuntime(root, [
+                {
+                  manifest,
+                  bundledFiles: { ".tritonai-plugin/plugin.json": JSON.stringify(manifest) },
+                  provider: {
+                    id: "v2-dispatch-fixture",
+                    tools: [
+                      {
+                        name: toolName,
+                        description: "Write fixture.",
+                        input: EmptyIntegrationToolInput,
+                        readOnly: false,
+                        openWorld: false,
                       },
+                    ],
+                    status: async () => ({
+                      state: "connected",
+                      accountLabel: "Fixture",
+                      grantedCapabilities: ["records.write"],
+                      message: null,
+                    }),
+                    connect: async () => ({
+                      kind: "connected",
+                      flowId: "fixture",
+                      message: "Connected.",
+                    }),
+                    disconnect: async () => undefined,
+                    invoke: async (_name, _args, context) => {
+                      assert.isTrue(context?.writeApproved);
+                      await context?.beginCommit?.();
+                      invocations++;
+                      return { changed: true };
                     },
                   },
-                ]),
-            ),
-            (value) => Effect.promise(() => value.close()),
-          );
-          yield* Effect.promise(async () => {
-            await registry.install(manifest.id);
-            if (scenario !== "undisclosed")
-              await registry.setCapabilityEnabled(manifest.id, "records.write", true);
-          });
-          yield* Effect.acquireRelease(
-            Effect.sync(() =>
-              vi
-                .spyOn(IntegrationRegistry, "getIntegrationRegistryOptional")
-                .mockReturnValue(registry),
-            ),
-            (spy) => Effect.sync(() => spy.mockRestore()),
-          );
-          const name = `plugin-dispatch-${scenario}`;
-          const nativeThreadId = `native-${name}`;
-          const nativeTurnId = `turn-${name}`;
-          const threadId = ThreadId.make(`thread-${name}`);
-          const sessions = yield* McpProviderSessions.McpProviderSessions;
-          const credential = {
-            environmentId: EnvironmentId.make("fixture-environment"),
-            threadId,
-            providerSessionId: `provider-session-${name}`,
-            providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
-            endpoint: "http://127.0.0.1:1234/mcp",
-            authorizationHeader: "Bearer synthetic-fixture-token",
-            browserToolsAvailable: false,
-            // The production grant, so dropping plugin access from it fails this test.
-            capabilities: McpSessionRegistry.providerSessionCapabilities({ browser: false }),
-            expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
-          };
-          yield* sessions.set(credential);
-          const preamble = codexReplayPreamble({
-            nativeThreadId,
-            nativeTurnId,
-            prompt: "Use the fixture.",
-          }).map((entry) => {
-            if (entry.type !== "expect_outbound") return entry;
-            if (entry.label === "thread/start")
-              return {
-                ...entry,
-                frame: {
-                  id: 2,
-                  method: "thread/start",
-                  params: {
-                    config: CodexAdapterV2.CODEX_THREAD_CONFIG,
-                    dynamicTools: [
-                      tritonAiCommonsDynamicToolDefinition,
-                      ...(scenario === "undisclosed"
-                        ? []
-                        : [
-                            {
-                              name: dynamicName,
-                              description:
-                                "Write fixture. Integration plugin tool: fixture.records.write.",
-                              inputSchema: { type: "object", additionalProperties: false },
-                            },
-                          ]),
-                    ].map(({ name, description, inputSchema }) => ({
-                      name,
-                      description,
-                      inputSchema,
-                    })),
-                  },
                 },
-              };
-            if (entry.label !== "turn/start") return entry;
+              ]),
+          ),
+          (value) => Effect.promise(() => value.close()),
+        );
+        yield* Effect.promise(async () => {
+          await registry.install(manifest.id);
+          if (scenario !== "undisclosed")
+            await registry.setCapabilityEnabled(manifest.id, "records.write", true);
+        });
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            vi
+              .spyOn(IntegrationRegistry, "getIntegrationRegistryOptional")
+              .mockReturnValue(registry),
+          ),
+          (spy) => Effect.sync(() => spy.mockRestore()),
+        );
+        const name = `plugin-dispatch-${scenario}`;
+        const nativeThreadId = `native-${name}`;
+        const nativeTurnId = `turn-${name}`;
+        const threadId = ThreadId.make(`thread-${name}`);
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const credential = {
+          environmentId: EnvironmentId.make("fixture-environment"),
+          threadId,
+          providerSessionId: `provider-session-${name}`,
+          providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+          endpoint: "http://127.0.0.1:1234/mcp",
+          authorizationHeader: "Bearer synthetic-fixture-token",
+          browserToolsAvailable: false,
+          // The production grant, so dropping plugin access from it fails this test.
+          capabilities: McpSessionRegistry.providerSessionCapabilities({ browser: false }),
+          expiresAt: (yield* Clock.currentTimeMillis) + 28_800_000,
+        };
+        yield* sessions.set(credential);
+        const preamble = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId,
+          prompt: "Use the fixture.",
+        }).map((entry) => {
+          if (entry.type !== "expect_outbound") return entry;
+          if (entry.label === "thread/start")
             return {
               ...entry,
               frame: {
-                id: 3,
-                method: "turn/start",
+                id: 2,
+                method: "thread/start",
                 params: {
-                  threadId: nativeThreadId,
-                  input: [{ type: "text", text: "Use the fixture." }],
-                  cwd: "/workspace",
-                  model: "gpt-5.4",
-                  approvalPolicy: "untrusted",
-                  approvalsReviewer: "user",
-                  sandboxPolicy: { type: "readOnly" },
-                  summary: "detailed",
+                  config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+                  dynamicTools: [
+                    tritonAiCommonsDynamicToolDefinition,
+                    ...(scenario === "undisclosed"
+                      ? []
+                      : [
+                          {
+                            name: dynamicName,
+                            description:
+                              "Write fixture. Integration plugin tool: fixture.records.write.",
+                            inputSchema: { type: "object", additionalProperties: false },
+                          },
+                        ]),
+                  ].map(({ name, description, inputSchema }) => ({
+                    name,
+                    description,
+                    inputSchema,
+                  })),
                 },
               },
             };
-          });
-          const transcript = makeCodexReplayTranscript({
-            scenario: name,
-            entries: [
-              ...preamble,
-              {
-                type: "emit_inbound",
-                label: "fixture-tool",
-                frame: {
-                  id: 100,
-                  method: "item/tool/call",
-                  params: {
-                    threadId: nativeThreadId,
-                    turnId: nativeTurnId,
-                    callId: "fixture-call",
-                    tool: dynamicName,
-                    arguments: {},
+          if (entry.label !== "turn/start") return entry;
+          return {
+            ...entry,
+            frame: {
+              id: 3,
+              method: "turn/start",
+              params: {
+                threadId: nativeThreadId,
+                input: [{ type: "text", text: "Use the fixture." }],
+                cwd: "/workspace",
+                model: "gpt-5.4",
+                approvalPolicy: "untrusted",
+                approvalsReviewer: "user",
+                sandboxPolicy: { type: "readOnly" },
+                summary: "detailed",
+              },
+            },
+          };
+        });
+        let toolArguments: Schema.Json = {};
+        if (scenario === "invalid-depth" || scenario === "invalid-commons-depth") {
+          for (let depth = 0; depth < 65; depth += 1) toolArguments = { nested: toolArguments };
+        } else if (scenario === "invalid-size")
+          toolArguments = { code: "x".repeat(4 * 1024 * 1024) };
+        const goal = (status: "active" | "paused") => ({
+          threadId: nativeThreadId,
+          objective: "Synthetic goal",
+          status,
+          tokenBudget: null,
+          tokensUsed: 10,
+          timeUsedSeconds: 3,
+          createdAt: 1782622440,
+          updatedAt: 1782622450,
+        });
+        const transcript = makeCodexReplayTranscript({
+          scenario: name,
+          entries: [
+            ...preamble,
+            ...(goalStopping
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "goal-active-for-stop",
+                    frame: {
+                      method: "thread/goal/updated",
+                      params: {
+                        threadId: nativeThreadId,
+                        turnId: nativeTurnId,
+                        goal: goal("active"),
+                      },
+                    },
                   },
+                ]
+              : []),
+            ...(nested
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "child-start",
+                    frame: {
+                      method: "item/completed",
+                      params: {
+                        threadId: nativeThreadId,
+                        turnId: nativeTurnId,
+                        completedAtMs: 1782622441000,
+                        item: {
+                          type: "subAgentActivity",
+                          id: "plugin-child",
+                          kind: "started",
+                          agentThreadId: "plugin-child-thread",
+                          agentPath: "/root/plugin-child",
+                        },
+                      },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "child-turn",
+                    frame: {
+                      method: "turn/started",
+                      params: {
+                        threadId: "plugin-child-thread",
+                        turn: makeCodexReplayTurn({
+                          id: "plugin-child-turn",
+                          status: "inProgress",
+                        }),
+                      },
+                    },
+                  },
+                ]
+              : []),
+            ...(stopping
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "tracked-command",
+                    frame: {
+                      method: "item/started",
+                      params: {
+                        threadId: "plugin-child-thread",
+                        turnId: "plugin-child-turn",
+                        startedAtMs: 1782622440500,
+                        item: {
+                          type: "commandExecution",
+                          id: "stop-command",
+                          command: "synthetic inert command",
+                          cwd: "/workspace",
+                          processId: "4242",
+                          source: "unifiedExecStartup",
+                          status: "inProgress",
+                          commandActions: [],
+                          aggregatedOutput: null,
+                          exitCode: null,
+                          durationMs: null,
+                        },
+                      },
+                    },
+                  },
+                ]
+              : []),
+            {
+              type: "emit_inbound",
+              label: "fixture-tool",
+              frame: {
+                id: 100,
+                method: "item/tool/call",
+                params: {
+                  threadId: nested ? "plugin-child-thread" : nativeThreadId,
+                  turnId: nested ? "plugin-child-turn" : nativeTurnId,
+                  callId: "fixture-call",
+                  tool:
+                    scenario === "invalid-commons-depth"
+                      ? tritonAiCommonsDynamicToolDefinition.name
+                      : dynamicName,
+                  arguments: toolArguments,
                 },
               },
-              {
-                type: "expect_outbound",
-                label: "fixture-result",
-                frame: { id: 100, result: { success: scenario === "approved" } },
-              },
-              {
-                type: "emit_inbound",
-                label: "complete",
-                frame: {
-                  method: "turn/completed",
-                  params: {
-                    threadId: nativeThreadId,
-                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+            },
+            ...(scenario === "nested-cancelled" || (nested && pausedJournal) || stopping
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "child-cancelled",
+                    frame: {
+                      method: "turn/completed",
+                      params: {
+                        threadId: "plugin-child-thread",
+                        turn: makeCodexReplayTurn({
+                          id: "plugin-child-turn",
+                          status: "interrupted",
+                        }),
+                      },
+                    },
                   },
+                ]
+              : []),
+            {
+              type: "expect_outbound",
+              label: "fixture-result",
+              frame: { id: 100, result: { success: approved } },
+            },
+            ...(stopping
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "fixture-result-consumed",
+                    frame: { method: "fixture/result-consumed", params: {} },
+                  },
+                  {
+                    type: "expect_outbound" as const,
+                    label: "terminate-command",
+                    frame: {
+                      id: 4,
+                      method: "thread/backgroundTerminals/terminate",
+                      params: { threadId: "plugin-child-thread", processId: "4242" },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "terminate-command-result",
+                    frame: { id: 4, result: { terminated: true } },
+                  },
+                ]
+              : []),
+            ...(goalStopping
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "fixture-result-consumed",
+                    frame: { method: "fixture/result-consumed", params: {} },
+                  },
+                  {
+                    type: "expect_outbound" as const,
+                    label: "pause-goal",
+                    frame: {
+                      id: 4,
+                      method: "thread/goal/set",
+                      params: { threadId: nativeThreadId, status: "paused" },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "paused-goal-result",
+                    frame: { id: 4, result: { goal: goal("paused") } },
+                  },
+                  {
+                    type: "expect_outbound" as const,
+                    label: "interrupt-goal-turn",
+                    frame: {
+                      id: 5,
+                      method: "turn/interrupt",
+                      params: { threadId: nativeThreadId, turnId: nativeTurnId },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    label: "interrupted-goal-result",
+                    frame: { id: 5, result: {} },
+                  },
+                ]
+              : []),
+            ...(scenario === "nested-approved"
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    label: "child-finished",
+                    frame: {
+                      method: "turn/completed",
+                      params: {
+                        threadId: "plugin-child-thread",
+                        turn: makeCodexReplayTurn({ id: "plugin-child-turn", status: "completed" }),
+                      },
+                    },
+                  },
+                ]
+              : []),
+            {
+              type: "emit_inbound",
+              label: "complete",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({
+                    id: nativeTurnId,
+                    status: goalStopping ? "interrupted" : "completed",
+                  }),
                 },
               },
-            ],
-          });
-          const pending =
-            yield* Deferred.make<
-              Extract<
-                ProviderAdapter.ProviderAdapterV2Event,
-                { type: "runtime_request.updated" }
-              >["runtimeRequest"]
-            >();
-          let toolResult: unknown;
-          const harness = yield* makeCodexReplayHarness(
-            transcript,
-            (event) =>
-              event.type === "runtime_request.updated"
-                ? Deferred.succeed(pending, event.runtimeRequest)
-                : Effect.void,
-            (method, params) =>
-              Effect.sync(() => {
-                // This fixture exercises dispatch, not the orchestration instruction text.
-                if (method !== "turn/start") return;
-                const expected = preamble.find(
-                  (entry) => entry.type === "expect_outbound" && entry.label === "turn/start",
-                );
-                if (expected?.type === "expect_outbound" && Predicate.isObject(expected.frame))
-                  Object.assign(expected.frame, { params });
-              }),
-            undefined,
-            {},
-            (result) =>
-              Effect.sync(() => {
-                toolResult = result;
-                const response = transcript.entries.find(
-                  (entry) => entry.type === "expect_outbound" && entry.label === "fixture-result",
-                );
-                if (response?.type === "expect_outbound" && Predicate.isObject(response.frame))
-                  Object.assign(response.frame, { result });
-              }),
-          );
-          assert.equal(
-            harness.providerThread.dynamicToolNames?.includes(dynamicName),
-            scenario !== "undisclosed",
-          );
-          if (scenario === "undisclosed")
-            yield* Effect.promise(() =>
-              registry.setCapabilityEnabled(manifest.id, "records.write", true),
-            );
-          yield* harness.runtime.startTurn({
-            ...makeCodexTestTurnInput({
-              threadId,
-              providerThread: harness.providerThread,
-              now: yield* DateTime.now,
-              attemptId: RunAttemptId.make(`attempt-${name}`),
-              text: "Use the fixture.",
-            }),
-            runtimePolicy: { ...CODEX_TEST_RUNTIME_POLICY, runtimeMode: "approval-required" },
-          });
-          if (scenario !== "undisclosed") {
-            const request = yield* Deferred.await(pending);
-            assert.equal(invocations, 0, "a supervised write must wait for user consent");
-            if (scenario === "revoked")
-              yield* Effect.promise(() =>
-                registry.setCapabilityEnabled(manifest.id, "records.write", false),
+            },
+          ],
+        });
+        const pending =
+          yield* Deferred.make<
+            Extract<
+              ProviderAdapter.ProviderAdapterV2Event,
+              { type: "runtime_request.updated" }
+            >["runtimeRequest"]
+          >();
+        let toolResult: unknown;
+        const childCancelled = yield* Deferred.make<void>();
+        const reviewCancelled = yield* Deferred.make<void>();
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          (event) =>
+            event.type === "runtime_request.updated"
+              ? event.runtimeRequest.status === "cancelled"
+                ? Deferred.succeed(reviewCancelled, undefined)
+                : Deferred.succeed(pending, event.runtimeRequest)
+              : Effect.void,
+          (method, params) =>
+            goalStopping && method === "thread/goal/set"
+              ? Deferred.succeed(goalPauseEntered, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseGoalPause)),
+                )
+              : stopping && method === "turn/interrupt"
+                ? Deferred.succeed(stopEntered, undefined).pipe(Effect.andThen(Effect.never))
+                : stopping && method === "thread/backgroundTerminals/terminate"
+                  ? Deferred.succeed(cleanupEntered, undefined).pipe(
+                      Effect.andThen(Deferred.await(releaseCleanup)),
+                    )
+                  : Effect.sync(() => {
+                      // This fixture exercises dispatch, not the orchestration instruction text.
+                      if (method !== "turn/start") return;
+                      const expected = preamble.find(
+                        (entry) => entry.type === "expect_outbound" && entry.label === "turn/start",
+                      );
+                      if (
+                        expected?.type === "expect_outbound" &&
+                        Predicate.isObject(expected.frame)
+                      )
+                        Object.assign(expected.frame, { params });
+                    }),
+          undefined,
+          {},
+          (result) =>
+            Effect.sync(() => {
+              toolResult = result;
+              const response = transcript.entries.find(
+                (entry) => entry.type === "expect_outbound" && entry.label === "fixture-result",
               );
-            if (scenario === "expired")
-              yield* sessions.set({ ...credential, expiresAt: yield* Clock.currentTimeMillis });
-            if (scenario === "replaced")
-              yield* sessions.set({ ...credential, providerSessionId: "different-session" });
+              if (response?.type === "expect_outbound" && Predicate.isObject(response.frame))
+                Object.assign(response.frame, { result });
+            }).pipe(Effect.andThen(Deferred.succeed(toolDone, undefined))),
+          {
+            interceptRawRequests: stopping,
+            beforeEmitInbound: (entry) =>
+              entry.label === "fixture-result-consumed"
+                ? Deferred.succeed(toolFlushed, undefined).pipe(Effect.asVoid)
+                : entry.label === "child-cancelled"
+                  ? stopping
+                    ? Deferred.await(stopEntered)
+                    : pausedJournal
+                      ? Effect.promise(() => journalEntered.promise)
+                      : Deferred.await(pending).pipe(Effect.asVoid)
+                  : Effect.void,
+            afterNotification: (method, payload) =>
+              method === "turn/completed" &&
+              Predicate.isObject(payload) &&
+              Predicate.isObject(payload.turn) &&
+              payload.turn.id === "plugin-child-turn"
+                ? Deferred.succeed(childCancelled, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+          },
+        );
+        assert.equal(
+          harness.providerThread.dynamicToolNames?.includes(dynamicName),
+          scenario !== "undisclosed",
+        );
+        if (scenario === "undisclosed")
+          yield* Effect.promise(() =>
+            registry.setCapabilityEnabled(manifest.id, "records.write", true),
+          );
+        yield* harness.runtime.startTurn({
+          ...makeCodexTestTurnInput({
+            threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-${name}`),
+            text: "Use the fixture.",
+          }),
+          runtimePolicy: {
+            ...CODEX_TEST_RUNTIME_POLICY,
+            runtimeMode:
+              scenario === "approved-auto"
+                ? "auto"
+                : scenario === "approved-full-access"
+                  ? "full-access"
+                  : "approval-required",
+          },
+        });
+        const claimStop = Effect.gen(function* () {
+          const childProviderTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+            driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+            nativeTurnId: "plugin-child-turn",
+          });
+          stopFiber = yield* harness.runtime
+            .interruptTurn({
+              providerThread: harness.providerThread,
+              providerTurnId: childProviderTurnId,
+            })
+            .pipe(Effect.orDie, Effect.forkScoped);
+          yield* Effect.addFinalizer(() =>
+            Deferred.succeed(releaseCleanup, undefined).pipe(Effect.asVoid),
+          );
+          yield* Deferred.await(childCancelled);
+          yield* Deferred.await(cleanupEntered);
+        });
+        const claimGoalStop = Effect.gen(function* () {
+          const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
+            driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+            nativeTurnId,
+          });
+          stopFiber = yield* harness.runtime
+            .interruptTurn({ providerThread: harness.providerThread, providerTurnId })
+            .pipe(Effect.orDie, Effect.forkScoped);
+          yield* Effect.addFinalizer(() =>
+            Deferred.succeed(releaseGoalPause, undefined).pipe(Effect.asVoid),
+          );
+          yield* Deferred.await(goalPauseEntered);
+        });
+        if (scenario !== "undisclosed" && !scenario.startsWith("invalid")) {
+          const request = yield* Deferred.await(pending);
+          if (scenario === "goal-stop-pending") {
+            yield* claimGoalStop;
+            yield* Deferred.await(reviewCancelled);
+          }
+          if (scenario === "nested-stop-pending") {
+            yield* claimStop;
+            yield* Deferred.await(reviewCancelled);
+          }
+          if (scenario === "nested-cancelled") {
+            yield* Deferred.await(childCancelled);
+            yield* Deferred.await(reviewCancelled);
+          }
+          assert.equal(invocations, 0, "every plugin write must wait for user consent");
+          const displayed = harness.events
+            .flatMap((event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "approval_request"
+                ? [event.turnItem]
+                : [],
+            )
+            .find((item) => item.requestId === request.id);
+          assert.deepEqual(
+            displayed?.options?.map((option) => option.decision),
+            ["accept", "decline", "cancel"],
+          );
+          if (scenario === "session-grant-rejected") {
+            yield* harness.runtime
+              .respondToRuntimeRequest({ requestId: request.id, decision: "acceptForSession" })
+              .pipe(Effect.flip);
+          }
+          if (scenario === "revoked")
+            yield* Effect.promise(() =>
+              registry.setCapabilityEnabled(manifest.id, "records.write", false),
+            );
+          if (scenario === "expired")
+            yield* sessions.set({ ...credential, expiresAt: yield* Clock.currentTimeMillis });
+          if (scenario === "replaced")
+            yield* sessions.set({ ...credential, providerSessionId: "different-session" });
+          if (
+            scenario === "nested-cancelled" ||
+            scenario === "nested-stop-pending" ||
+            scenario === "goal-stop-pending"
+          )
+            yield* harness.runtime
+              .respondToRuntimeRequest({ requestId: request.id, decision: "accept" })
+              .pipe(Effect.flip);
+          else if (scenario !== "revoked")
             yield* harness.runtime.respondToRuntimeRequest({
               requestId: request.id,
-              decision: scenario === "declined" ? "decline" : "accept",
+              decision:
+                scenario === "declined" || scenario === "session-grant-rejected"
+                  ? "decline"
+                  : "accept",
             });
+          if (pausedJournal) {
+            if (goalStopping) {
+              yield* Effect.promise(() => journalEntered.promise);
+              yield* claimGoalStop;
+            } else if (stopping) {
+              yield* Effect.promise(() => journalEntered.promise);
+              yield* claimStop;
+            } else yield* Deferred.await(childCancelled);
+            releaseJournal.resolve();
           }
-          yield* harness.firstTerminal;
+        }
+        if (stopping || goalStopping) {
+          yield* Deferred.await(toolDone);
           assert.equal(
-            Predicate.isObject(toolResult) && toolResult.success,
-            scenario === "approved",
+            invocations,
+            0,
+            "Stop must revoke admission before command cleanup completes",
           );
-          assert.equal(invocations, scenario === "approved" ? 1 : 0);
-          assert.equal(harness.terminalEvents()[0]?.status, "completed");
-        }),
-      ).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
+          yield* Deferred.await(toolFlushed);
+          yield* Deferred.succeed(goalStopping ? releaseGoalPause : releaseCleanup, undefined);
+          if (stopFiber) yield* Fiber.join(stopFiber);
+        }
+        yield* harness.firstTerminal;
+        assert.equal(Predicate.isObject(toolResult) && toolResult.success, approved);
+        assert.equal(invocations, approved ? 1 : 0);
+        assert.equal(
+          harness.terminalEvents()[0]?.status,
+          goalStopping ? "interrupted" : "completed",
+        );
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
       ),
+    ),
   );
 
   // A long, email-style destination: the approval must show all of it, not a 120-character cut.
@@ -5113,16 +5528,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: INTERRUPT_PROMPT,
           }),
         );
-        yield* awaitUntil(
-          () =>
-            harness.events.some(
-              (event) =>
-                event.type === "turn_item.updated" &&
-                event.turnItem.type === "command_execution" &&
-                event.turnItem.nativeItemRef?.nativeId === INTERRUPT_CHILD_COMMAND_ITEM &&
-                event.turnItem.status === "running",
-            ),
-          "running child command item",
+        yield* harness.until(() =>
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.nativeItemRef?.nativeId === INTERRUPT_CHILD_COMMAND_ITEM &&
+              event.turnItem.status === "running",
+          ),
         );
         const providerTurnId = harness.events.find(
           (
@@ -5338,15 +5751,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: INTERRUPT_PROMPT,
           }),
         );
-        yield* awaitUntil(
-          () =>
-            harness.events.some(
-              (event) =>
-                event.type === "turn_item.updated" &&
-                event.turnItem.type === "command_execution" &&
-                event.turnItem.status === "running",
-            ),
-          "running command item",
+        yield* harness.until(() =>
+          harness.events.some(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "command_execution" &&
+              event.turnItem.status === "running",
+          ),
         );
         const providerTurnId = harness.events.find(
           (
@@ -5487,15 +5898,13 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               attemptId: RunAttemptId.make(`buffered-stop-failure-${route}`),
             }),
           );
-          yield* awaitUntil(
-            () =>
-              harness.events.some(
-                (event) =>
-                  event.type === "turn_item.updated" &&
-                  event.turnItem.nativeItemRef?.nativeId === INTERRUPT_COMMAND_ITEM &&
-                  event.turnItem.status === "running",
-              ),
-            "owned command running",
+          yield* harness.until(() =>
+            harness.events.some(
+              (event) =>
+                event.type === "turn_item.updated" &&
+                event.turnItem.nativeItemRef?.nativeId === INTERRUPT_COMMAND_ITEM &&
+                event.turnItem.status === "running",
+            ),
           );
           const providerTurnId = (yield* IdAllocator.IdAllocatorV2).derive.providerTurn({
             driver: CodexAdapterV2.CODEX_DRIVER_KIND,

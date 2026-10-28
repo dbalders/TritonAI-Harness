@@ -10,6 +10,7 @@ import {
   IntegrationToolUnavailableError,
 } from "../integrations/IntegrationToolFailure.ts";
 import { describeToolCallForApproval } from "../integrations/IntegrationToolPreview.ts";
+import type { IntegrationWriteInvocation } from "../integrations/IntegrationWriteApproval.ts";
 import {
   BROWSER_NAVIGATION_GRANT,
   browserNavigationRequest,
@@ -41,6 +42,7 @@ export interface CodexDynamicToolInvocation {
   readonly arguments: unknown;
   readonly signal: AbortSignal;
   readonly writeApproved?: boolean;
+  readonly approvalInvocation?: IntegrationWriteInvocation;
 }
 
 export function dynamicToolInvocationAllowed(
@@ -331,7 +333,10 @@ export function planDynamicToolApproval(input: {
   return {
     requiresApproval: input.requiresApproval === true,
     grantKey: input.payload.tool,
-    prompt: dynamicToolApprovalPrompt(input.payload),
+    prompt:
+      input.requiresApproval === true
+        ? dynamicToolApprovalPrompt(input.payload)
+        : input.payload.tool,
   };
 }
 

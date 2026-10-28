@@ -48,20 +48,22 @@ it.effect("returns a successful result as JSON", () =>
   }),
 );
 
-// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
-it("shows the change a plugin write will make in its approval prompt", () => {
-  assert.equal(
-    dynamicToolApprovalPrompt({
-      tool: "jira__issue_apply",
-      arguments: { summary: "Move ITS-12 to Done", planId: "p-1" },
-    }),
-    "jira__issue_apply\nMove ITS-12 to Done",
-  );
-  assert.equal(
-    dynamicToolApprovalPrompt({
-      tool: "microsoft365__mail_draft_reply",
-      arguments: { messageId: "m-1", apiToken: "secret-value" },
-    }),
-    'microsoft365__mail_draft_reply\nmessageId: "m-1"\napiToken: [hidden]',
+it("includes the complete arguments alongside the summary and refuses raw credentials", () => {
+  const prompt = dynamicToolApprovalPrompt({
+    tool: "jira__issue_apply",
+    arguments: { summary: "Move ITS-12 to Done", planId: "p-1" },
+  });
+  assert.isTrue(prompt.startsWith("jira__issue_apply\n"));
+  assert.deepEqual(JSON.parse(prompt.slice(prompt.indexOf("\n") + 1)), {
+    planId: "p-1",
+    summary: "Move ITS-12 to Done",
+  });
+  assert.throws(
+    () =>
+      dynamicToolApprovalPrompt({
+        tool: "microsoft365__mail_draft_reply",
+        arguments: { messageId: "m-1", apiToken: "secret-value" },
+      }),
+    /credential/iu,
   );
 });

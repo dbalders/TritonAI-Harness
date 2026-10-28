@@ -78,7 +78,8 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
               name: dynamicName,
               description: `${definition.description} Integration plugin tool: ${definition.name}.`,
               inputSchema: integrationToolJsonSchema(definition),
-              requiresApproval: registry.toolRequiresApprovalSync?.(definition.name) ?? false,
+              // The registry presents the effective payload and enforces a per-call decision.
+              requiresApproval: false,
             },
           ];
         })
@@ -145,7 +146,16 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
         ? { ...(await registry.awaitToolAvailability(canonicalName, { signal })), canonicalName }
         : availability(name);
     },
-    invokeDynamicTool: async ({ name, arguments: args, signal, writeApproved }) => {
+    invokeDynamicTool: async ({
+      name,
+      arguments: args,
+      signal: requestSignal,
+      writeApproved,
+      approvalInvocation,
+    }) => {
+      const signal = approvalInvocation
+        ? AbortSignal.any([requestSignal, approvalInvocation.signal])
+        : requestSignal;
       const current = await runPromise(activeSession, { signal });
       if (!current)
         throw new IntegrationToolUnavailableError(
@@ -159,6 +169,12 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
           providerInstanceId: input.instanceId,
           signal,
           writeApproved: writeApproved === true,
+          approvalOwner: {
+            threadId: input.threadId,
+            providerSessionId: current.providerSessionId,
+            providerInstanceId: input.instanceId,
+            ...(approvalInvocation ? { invocation: approvalInvocation } : {}),
+          },
         });
       }
       if (isCodexPreviewDynamicTool(name) && input.broker && session) {
@@ -186,7 +202,12 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
         });
       return registry.invokeTool(canonicalName, args, {
         signal,
-        ...(writeApproved ? { writeApproved: true } : {}),
+        approvalOwner: {
+          threadId: input.threadId,
+          providerSessionId: current.providerSessionId,
+          providerInstanceId: input.instanceId,
+          ...(approvalInvocation ? { invocation: approvalInvocation } : {}),
+        },
       });
     },
   };

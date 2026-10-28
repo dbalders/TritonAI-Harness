@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { integrationWriteTestOwner } from "../integrations/IntegrationWriteApproval.testkit.ts";
 import type { ServerProviderSkillBundle } from "@t3tools/contracts";
 
 import {
@@ -28,7 +29,7 @@ const TOOL_NAMES = [
 interface Invocation {
   readonly name: string;
   readonly input: unknown;
-  readonly writeApproved: boolean;
+  readonly hasApprovalOwner: boolean;
   readonly hasSignal: boolean;
 }
 
@@ -81,7 +82,9 @@ function registryFixture(options?: {
       calls.push({
         name,
         input,
-        writeApproved: context.writeApproved === true,
+        hasApprovalOwner:
+          context.approvalOwner?.kind !== "settings" &&
+          context.approvalOwner?.providerSessionId === integrationWriteTestOwner.providerSessionId,
         hasSignal: context.signal instanceof AbortSignal,
       });
       if (name === "github.identity.get") return { login, id: 1 };
@@ -322,6 +325,7 @@ describe("TritonAI Commons local skill submission", () => {
   it("submits every local skill file to Community and opens a ready pull request", async () => {
     const fixture = registryFixture();
     const result = await submitProviderSkillToTritonAiCommons({
+      approvalOwner: integrationWriteTestOwner,
       bundle: localSkill(),
       registry: fixture.registry,
       signal: new AbortController().signal,
@@ -340,11 +344,9 @@ describe("TritonAI Commons local skill submission", () => {
         "github.pulls.create",
       ].includes(call.name),
     );
-    expect(writes.every((call) => call.writeApproved && call.hasSignal)).toBe(true);
+    expect(writes.every((call) => call.hasApprovalOwner && call.hasSignal)).toBe(true);
     expect(
-      fixture.calls
-        .filter((call) => !writes.includes(call))
-        .every((call) => !call.writeApproved && call.hasSignal),
+      fixture.calls.filter((call) => !writes.includes(call)).every((call) => call.hasSignal),
     ).toBe(true);
     expect(
       fixture.calls

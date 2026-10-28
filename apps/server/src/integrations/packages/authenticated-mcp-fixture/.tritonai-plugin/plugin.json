@@ -4,7 +4,7 @@
   "manifestVersion": 2,
   "id": "api-key-mcp-fixture",
   "name": "API Key MCP Fixture",
-  "description": "A test-only API-key provider with secure server-side storage, one read-only MCP-compatible tool, and its own skill.",
+  "description": "A test-only API-key provider with secure server-side storage, read-only fixture data and an in-memory synthetic write for approval acceptance.",
   "version": "1.0.0",
   "provider": "api-key-mcp-fixture-provider",
   "capabilities": [
@@ -12,6 +12,12 @@
       "id": "fixture.read",
       "displayName": "Read fixture data",
       "description": "Use a submitted server-side API key to read deterministic, sanitized fixture data.",
+      "access": "default"
+    },
+    {
+      "id": "fixture.write",
+      "displayName": "Write synthetic draft",
+      "description": "Exercise a host approval without an external service or filesystem mutation.",
       "access": "default"
     }
   ],
@@ -22,6 +28,13 @@
       "description": "Return deterministic data through a secret-backed read-only tool.",
       "capabilities": ["fixture.read"],
       "effect": "read"
+    },
+    {
+      "name": "fixture.api-key.write",
+      "displayName": "Write synthetic draft",
+      "description": "Increment an in-memory synthetic draft receipt after host commit admission.",
+      "capabilities": ["fixture.write"],
+      "effect": "write"
     }
   ],
   "skills": [

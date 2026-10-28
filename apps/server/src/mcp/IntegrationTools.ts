@@ -34,14 +34,11 @@ const INTEGRATION_INVOCATION_CAPABILITY = "integrations.invoke" as const;
 function integrationToolInvocationContext(
   definition: IntegrationProviderTool,
   signal: AbortSignal,
+  owner?: McpInvocationContext.McpThreadCaller,
 ): Integrations.IntegrationInvocationContext {
   return {
     signal,
-    // Harness gives this bearer only to its managed provider runtime, which enforces
-    // the selected task mode before issuing an MCP write call. Mark that trusted
-    // adapter boundary explicitly so Registry retains its write gate without adding
-    // a second, contradictory approval layer.
-    ...(definition.readOnly ? {} : { writeApproved: true }),
+    ...(definition.readOnly || owner === undefined ? {} : { approvalOwner: owner }),
   };
 }
 
@@ -91,7 +88,7 @@ export function toolRegistration(
                 Integrations.getIntegrationRegistry().invokeTool(
                   definition.name,
                   payload,
-                  integrationToolInvocationContext(definition, signal),
+                  integrationToolInvocationContext(definition, signal, invocation.thread),
                 ),
               catch: (cause) => new IntegrationToolInvocationError({ cause }),
             })
@@ -134,13 +131,13 @@ export function toolRegistration(
       : McpToolAccess.writesWithCapability((payload: unknown) =>
           McpInvocationContext.McpInvocationContext.pipe(
             Effect.flatMap((scope) =>
-              scope.thread !== undefined || scope.client?.access === "full-access"
+              scope.thread !== undefined
                 ? registration.handle(payload)
                 : Effect.fail(
                     new OrchestratorMcpFailure({
                       code: "capability_denied",
                       message:
-                        "Plugin writes require a full-access outside MCP client or approval through a T3-launched provider.",
+                        "Plugin writes require per-call approval in a managed thread. Outside MCP clients can use read tools.",
                     }),
                   ),
             ),

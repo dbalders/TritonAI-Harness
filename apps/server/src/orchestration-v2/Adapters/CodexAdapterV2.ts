@@ -22,6 +22,7 @@ import {
   resolveManagedCodexLaunchPath,
 } from "../../provider/managedCodexRuntime.ts";
 import { registerBrowserNavigationGate } from "../../preview/BrowserNavigationGate.ts";
+import { registerIntegrationWriteGate } from "../../integrations/IntegrationWriteApproval.ts";
 import {
   UCSD_AI_BASE_URL_ENV,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -1340,6 +1341,7 @@ type PendingCodexRuntimeRequest =
       readonly requestId: RuntimeRequestId;
       readonly requestKind: ProviderRequestKind;
       readonly decision: Deferred.Deferred<ProviderApprovalDecision, never>;
+      readonly onceOnly?: boolean;
     }
   | {
       readonly type: "user_input";
@@ -2127,6 +2129,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const pendingRuntimeRequests = yield* Ref.make(
           new Map<string, PendingCodexRuntimeRequest>(),
         );
+        const dynamicToolInvocations = new Map<string, Set<AbortController>>();
+        const dynamicToolStopClaims = new Set<{
+          readonly roots: ReadonlySet<ActiveCodexTurnContext>;
+          readonly nativeGoalThreadId: string | undefined;
+        }>();
+        const cancelDynamicToolInvocations = (nativeTurnId: string) => {
+          for (const invocation of dynamicToolInvocations.get(nativeTurnId) ?? [])
+            invocation.abort();
+        };
         /**
          * Codex's own acceptForSession only skips the exact command or patch it
          * answered, so every new command would ask again.
@@ -2180,6 +2191,31 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           new Map<string, CodexSchema.V2TurnCompletedNotification>(),
         );
         const terminalizedNonCompletedNativeTurns = yield* Ref.make(new Set<string>());
+        const nativeCallMayRun = (context: ActiveCodexTurnContext) => {
+          if (Effect.runSync(Ref.get(activeTurns)).get(context.nativeTurnId) !== context)
+            return false;
+          const interrupting = Effect.runSync(Ref.get(interruptingNativeTurns));
+          const completions = Effect.runSync(Ref.get(nativeInterruptCompletions));
+          const stopped = Effect.runSync(Ref.get(terminalizedNonCompletedNativeTurns));
+          let caller: ActiveCodexTurnContext | undefined = context;
+          while (caller !== undefined) {
+            for (const claim of dynamicToolStopClaims)
+              if (
+                claim.roots.has(caller) ||
+                (claim.nativeGoalThreadId !== undefined &&
+                  caller.providerThread.nativeThreadRef?.nativeId === claim.nativeGoalThreadId)
+              )
+                return false;
+            if (
+              interrupting.has(caller.nativeTurnId) ||
+              completions.has(caller.nativeTurnId) ||
+              stopped.has(caller.nativeTurnId)
+            )
+              return false;
+            caller = caller.subagent?.parentContext;
+          }
+          return true;
+        };
         // Keep the run event stream open until descendant provider state is
         // terminal, otherwise the root terminal can strand child projections.
         const deferredRootTerminals = yield* Ref.make(new Map<string, DeferredCodexRootTerminal>());
@@ -4449,6 +4485,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly prompt?: string | null;
           readonly appName?: string;
           readonly options?: ReadonlyArray<ProviderApprovalOption>;
+          readonly expiresAt?: number;
         }) {
           const createdAt = yield* DateTime.now;
           const { owner, subagent } = approvalOwnerCodexTurn(input.context);
@@ -4508,6 +4545,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             },
             createdAt,
             resolvedAt: null,
+            ...(input.expiresAt === undefined
+              ? {}
+              : { expiresAt: DateTime.makeUnsafe(input.expiresAt) }),
+            ...(input.options === undefined
+              ? {}
+              : { allowedDecisions: input.options.map((option) => option.decision) }),
           };
           const turnItem: OrchestrationV2TurnItem = {
             id: idAllocator.derive.approvalTurnItem({ requestId }),
@@ -5526,6 +5569,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             readonly runtimeMode: RuntimeMode;
             readonly approval: DynamicToolApprovalPlan;
             readonly nativeItemId: string;
+            readonly onceOnly?: boolean;
+            readonly expiresAt?: number;
           }) {
             const { approval, runtimeMode } = input;
             let approvals = flatToolApprovals.get(input.grantThreadId);
@@ -5534,7 +5579,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               flatToolApprovals.set(input.grantThreadId, approvals);
             }
             const granted = approvals.names.has(approval.grantKey);
-            if (!dynamicToolApprovalRequired(approval.requiresApproval, granted, runtimeMode))
+            if (
+              !input.onceOnly &&
+              !dynamicToolApprovalRequired(approval.requiresApproval, granted, runtimeMode)
+            )
               return runtimeMode === "full-access" || granted ? ("accept" as const) : undefined;
             const artifacts = yield* buildApprovalRequestArtifacts({
               context: input.context,
@@ -5542,6 +5590,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               nativeRequestId: input.nativeItemId,
               requestKind: "permission",
               prompt: approval.prompt,
+              ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+              ...(input.onceOnly
+                ? {
+                    options: [
+                      { decision: "accept" as const, label: "Approve once" },
+                      { decision: "decline" as const, label: "Decline" },
+                      { decision: "cancel" as const, label: "Cancel" },
+                    ],
+                  }
+                : {}),
             });
             const deferred = yield* Deferred.make<ProviderApprovalDecision>();
             yield* Ref.update(pendingRuntimeRequests, (current) =>
@@ -5550,6 +5608,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 requestId: artifacts.request.id,
                 requestKind: "permission",
                 decision: deferred,
+                ...(input.onceOnly ? { onceOnly: true } : {}),
               }),
             );
             yield* emitProviderEvent({
@@ -5568,19 +5627,140 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               threadId: artifacts.node.threadId,
               runtimeRequest: artifacts.request,
             });
-            const decision = yield* Deferred.await(deferred).pipe(
+            const clock = yield* Clock.Clock;
+            const awaited = Deferred.await(deferred);
+            const decision = yield* (
+              input.expiresAt === undefined
+                ? awaited
+                : awaited.pipe(
+                    Effect.timeoutOption(
+                      Math.max(0, input.expiresAt - clock.currentTimeMillisUnsafe()),
+                    ),
+                    Effect.map(Option.getOrUndefined),
+                  )
+            ).pipe(
               Effect.ensuring(
-                Ref.update(pendingRuntimeRequests, (current) => {
-                  const next = new Map(current);
-                  next.delete(String(artifacts.request.id));
-                  return next;
+                Effect.gen(function* () {
+                  yield* Ref.update(pendingRuntimeRequests, (current) => {
+                    const next = new Map(current);
+                    next.delete(String(artifacts.request.id));
+                    return next;
+                  });
+                  if (input.expiresAt === undefined || (yield* Deferred.isDone(deferred))) return;
+                  const resolvedAt = yield* DateTime.now;
+                  const expired = clock.currentTimeMillisUnsafe() >= input.expiresAt;
+                  yield* emitProviderEvent({
+                    type: "runtime_request.updated",
+                    driver: CODEX_PROVIDER,
+                    threadId: artifacts.node.threadId,
+                    runtimeRequest: {
+                      ...artifacts.request,
+                      status: expired ? "expired" : "cancelled",
+                      responseCapability: {
+                        type: "not_resumable",
+                        reason: expired
+                          ? "The write approval expired."
+                          : "The write was cancelled.",
+                      },
+                      resolvedAt,
+                    },
+                  });
+                  yield* emitProviderEvent({
+                    type: "node.updated",
+                    driver: CODEX_PROVIDER,
+                    node: { ...artifacts.node, status: "cancelled", completedAt: resolvedAt },
+                  });
+                  yield* emitProviderEvent({
+                    type: "turn_item.updated",
+                    driver: CODEX_PROVIDER,
+                    turnItem: {
+                      ...artifacts.turnItem,
+                      status: "cancelled",
+                      completedAt: resolvedAt,
+                      updatedAt: resolvedAt,
+                    },
+                  });
                 }),
               ),
             );
-            if (decision === "acceptForSession") approvals.names.add(approval.grantKey);
+            if (!input.onceOnly && decision === "acceptForSession")
+              approvals.names.add(approval.grantKey);
             return decision;
           },
         );
+
+        yield* registerIntegrationWriteGate(adapterOptions.instanceId, (review) =>
+          Effect.gen(function* () {
+            const caller = review.owner;
+            if (caller.kind === "settings") return undefined;
+            const invocation = caller.invocation;
+            // MCP credentials identify a thread, but cannot identify a cancelled native child call.
+            // Plugin writes use the native dynamic-tool path with its host-owned invocation.
+            if (invocation === undefined) return { approved: false } as const;
+            let owner: ActiveCodexTurnContext | undefined;
+            for (const context of (yield* Ref.get(activeTurns)).values()) {
+              const candidate = approvalOwnerCodexTurn(context).owner;
+              if (candidate.projectionThreadId === caller.threadId) owner = candidate;
+            }
+            if (owner === undefined) return undefined;
+            const expectedTurn = owner.providerTurnId;
+            const approvalClock = yield* Clock.Clock;
+            // These stores are Ref-backed; a synchronous check closes the journal-I/O race.
+            const isCurrent = () => {
+              try {
+                const credential = Effect.runSync(mcpSessions.read(caller.threadId));
+                return (
+                  !invocation.signal.aborted &&
+                  invocation.isCurrent() &&
+                  credential?.providerSessionId === caller.providerSessionId &&
+                  (credential.expiresAt === undefined ||
+                    approvalClock.currentTimeMillisUnsafe() < credential.expiresAt) &&
+                  [...Effect.runSync(Ref.get(activeTurns)).values()].some((context) => {
+                    const candidate = approvalOwnerCodexTurn(context).owner;
+                    return (
+                      candidate.projectionThreadId === caller.threadId &&
+                      candidate.providerTurnId === expectedTurn
+                    );
+                  })
+                );
+              } catch {
+                return false;
+              }
+            };
+            if (!isCurrent()) return { approved: false } as const;
+            const ended = Effect.callback<"cancel">((resume) => {
+              const abort = () => resume(Effect.succeed("cancel" as const));
+              if (invocation.signal.aborted) abort();
+              else invocation.signal.addEventListener("abort", abort, { once: true });
+              return Effect.sync(() => invocation.signal.removeEventListener("abort", abort));
+            });
+            const decision = yield* decideToolApproval({
+              context: owner,
+              grantThreadId: caller.threadId,
+              runtimeMode: owner.input.runtimePolicy.runtimeMode,
+              onceOnly: true,
+              expiresAt: review.expiresAt,
+              nativeItemId: `plugin-write:${review.requestId}`,
+              approval: {
+                requiresApproval: true,
+                grantKey: review.requestId,
+                prompt: [
+                  `Plugin write: ${review.integrationName} / ${review.toolName}`,
+                  // @effect-diagnostics-next-line preferSchemaOverJson:off -- Escape an untrusted display label so it cannot forge prompt lines.
+                  `Reported connected account: ${JSON.stringify(review.accountLabel)}`,
+                  `Connection: ${review.connection}`,
+                  `Submitted SHA-256: ${review.submittedDigest}`,
+                  `Effective SHA-256: ${review.effectiveDigest}`,
+                  "Approve only this complete effective JSON payload. No fields are hidden.",
+                  review.payload,
+                ].join("\n"),
+              },
+            }).pipe(Effect.raceFirst(ended));
+            return decision === "accept" && isCurrent()
+              ? ({ approved: true, isCurrent } as const)
+              : ({ approved: false } as const);
+          }).pipe(Effect.catch(() => Effect.succeed({ approved: false } as const))),
+        ).pipe(Effect.provideService(Scope.Scope, scope));
 
         // Codex also reaches the browser through the Harness MCP server, where Codex approves the
         // call itself (in Auto, with its automatic reviewer) and standard models have no direct
@@ -5604,11 +5784,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 admitted: false,
                 reason: "This thread's browser credential is no longer active.",
               } as const;
-            const approval = planDynamicToolApproval({
-              requiresApproval: false,
-              // MCP tool input is decoded JSON.
-              payload: { tool: request.toolName, arguments: request.arguments as Schema.Json },
-            });
+            const approval = yield* Effect.try(() =>
+              planDynamicToolApproval({
+                requiresApproval: false,
+                // MCP tool input is decoded JSON.
+                payload: { tool: request.toolName, arguments: request.arguments as Schema.Json },
+              }),
+            );
             const decision = yield* decideToolApproval({
               context: owner,
               grantThreadId:
@@ -5633,44 +5815,77 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerRequest("item/tool/call", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
-            if (!context)
+            if (!context || !nativeCallMayRun(context))
               return dynamicToolResponse(
                 false,
                 "This tool call no longer belongs to an active turn.",
               );
-            const { owner } = approvalOwnerCodexTurn(context);
-            const ownerNativeId = owner.providerThread.nativeThreadRef?.nativeId;
-            const catalog =
-              flatCatalogs.get(payload.threadId) ??
-              (ownerNativeId ? flatCatalogs.get(ownerNativeId) : undefined);
-            if (!catalog || !(yield* catalog.activeSession))
-              return dynamicToolResponse(
-                false,
-                "This thread's tool credential is no longer active.",
-              );
-            const gate = yield* gateDynamicToolCall({ options: catalog.options, payload });
-            if (!gate.allowed) return gate.response;
-            const approval = planDynamicToolApproval({
-              requiresApproval: gate.definition.requiresApproval,
-              payload,
-            });
-            const decision = yield* decideToolApproval({
-              context,
-              grantThreadId: payload.threadId,
-              runtimeMode: owner.input.runtimePolicy.runtimeMode,
-              approval,
-              nativeItemId: payload.callId,
-            });
-            if (!dynamicToolInvocationAllowed(approval.requiresApproval, decision))
-              return dynamicToolResponse(false, "The user declined this tool call.");
-            return yield* invokeAdmittedDynamicTool({
-              options: catalog.options,
-              invocation: {
-                name: payload.tool,
-                arguments: payload.arguments,
-                ...(gate.definition.requiresApproval ? { writeApproved: true } : {}),
-              },
-            });
+            return yield* Effect.acquireUseRelease(
+              Effect.sync(() => {
+                const controller = new AbortController();
+                if (!nativeCallMayRun(context)) controller.abort();
+                const controllers = dynamicToolInvocations.get(context.nativeTurnId) ?? new Set();
+                controllers.add(controller);
+                dynamicToolInvocations.set(context.nativeTurnId, controllers);
+                return controller;
+              }),
+              (controller) =>
+                Effect.gen(function* () {
+                  const { owner } = approvalOwnerCodexTurn(context);
+                  const ownerNativeId = owner.providerThread.nativeThreadRef?.nativeId;
+                  const catalog =
+                    flatCatalogs.get(payload.threadId) ??
+                    (ownerNativeId ? flatCatalogs.get(ownerNativeId) : undefined);
+                  if (!catalog || !(yield* catalog.activeSession))
+                    return dynamicToolResponse(
+                      false,
+                      "This thread's tool credential is no longer active.",
+                    );
+                  const gate = yield* gateDynamicToolCall({ options: catalog.options, payload });
+                  if (!gate.allowed) return gate.response;
+                  const planned = yield* Effect.try(() =>
+                    planDynamicToolApproval({
+                      requiresApproval: gate.definition.requiresApproval,
+                      payload,
+                    }),
+                  ).pipe(Effect.option);
+                  if (Option.isNone(planned))
+                    return dynamicToolResponse(
+                      false,
+                      "The tool arguments exceed the review limits or are not finite JSON.",
+                    );
+                  const approval = planned.value;
+                  const decision = yield* decideToolApproval({
+                    context,
+                    grantThreadId: payload.threadId,
+                    runtimeMode: owner.input.runtimePolicy.runtimeMode,
+                    approval,
+                    nativeItemId: payload.callId,
+                  });
+                  if (!dynamicToolInvocationAllowed(approval.requiresApproval, decision))
+                    return dynamicToolResponse(false, "The user declined this tool call.");
+                  return yield* invokeAdmittedDynamicTool({
+                    options: catalog.options,
+                    invocation: {
+                      name: payload.tool,
+                      arguments: payload.arguments,
+                      approvalInvocation: {
+                        id: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+                        signal: controller.signal,
+                        isCurrent: () => !controller.signal.aborted && nativeCallMayRun(context),
+                      },
+                      ...(gate.definition.requiresApproval ? { writeApproved: true } : {}),
+                    },
+                  });
+                }),
+              (controller) =>
+                Effect.sync(() => {
+                  controller.abort();
+                  const controllers = dynamicToolInvocations.get(context.nativeTurnId);
+                  controllers?.delete(controller);
+                  if (controllers?.size === 0) dynamicToolInvocations.delete(context.nativeTurnId);
+                }),
+            );
           }).pipe(Effect.orDie),
         );
 
@@ -6405,6 +6620,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           if (current !== input.context) {
             return false;
           }
+          cancelDynamicToolInvocations(input.nativeTurnId);
           yield* Ref.update(undeliveredStopNativeTurns, (current) => {
             const updated = new Set(current);
             updated.delete(input.nativeTurnId);
@@ -7231,6 +7447,31 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ),
         };
 
+        const claimDynamicToolStop = (input: ProviderAdapter.ProviderAdapterV2InterruptInput) => {
+          const turnId = latestGoalTurnId(input.providerTurnId);
+          const nativeThreadId = input.providerThread.nativeThreadRef?.nativeId;
+          const contexts = Array.from(Effect.runSync(Ref.get(activeTurns)).values());
+          const claim = {
+            roots: new Set([
+              ...contexts.filter(
+                (context) =>
+                  context.providerTurnId === turnId ||
+                  (input.requestRuntimeRestart === true &&
+                    context.providerThread.id === input.providerThread.id),
+              ),
+              ...(goalRuns.get(turnId) ?? []),
+            ]),
+            nativeGoalThreadId:
+              nativeThreadId != null && goalsByNativeThread.get(nativeThreadId)?.status === "active"
+                ? nativeThreadId
+                : undefined,
+          };
+          dynamicToolStopClaims.add(claim);
+          for (const context of contexts)
+            if (!nativeCallMayRun(context)) cancelDynamicToolInvocations(context.nativeTurnId);
+          return claim;
+        };
+
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,
           driver: CODEX_PROVIDER,
@@ -7638,6 +7879,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     yield* Ref.update(interruptingNativeTurns, (current) => {
                       const updated = new Set(current);
                       for (const target of interruptTargets) {
+                        cancelDynamicToolInvocations(target.context.nativeTurnId);
                         updated.add(target.context.nativeTurnId);
                       }
                       return updated;
@@ -7855,6 +8097,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         });
                         yield* Ref.update(interruptingNativeTurns, (current) => {
                           const updated = new Set(current);
+                          cancelDynamicToolInvocations(context.nativeTurnId);
                           updated.add(context.nativeTurnId);
                           return updated;
                         });
@@ -7978,6 +8221,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       });
                       yield* Ref.update(interruptingNativeTurns, (current) => {
                         const updated = new Set(current);
+                        cancelDynamicToolInvocations(context.nativeTurnId);
                         updated.add(context.nativeTurnId);
                         return updated;
                       });
@@ -8147,7 +8391,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }).pipe(Effect.ensuring(cleanupInterruptState));
             },
             (effect, requestedInput) =>
-              effect.pipe(
+              // Revoke before goal pause can await the provider, through final Stop cleanup.
+              Effect.acquireUseRelease(
+                Effect.sync(() => claimDynamicToolStop(requestedInput)),
+                () => effect,
+                (claim) => Effect.sync(() => dynamicToolStopClaims.delete(claim)),
+              ).pipe(
                 Effect.mapError(
                   (cause) =>
                     new ProviderAdapter.ProviderAdapterInterruptError({
@@ -8192,6 +8441,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   requestId: requestInput.requestId,
                   cause: toProtocolError(
                     `Codex ${pending.requestKind} request ${requestInput.requestId} requires an approval decision.`,
+                  ),
+                });
+              }
+              if (
+                pending.onceOnly &&
+                requestInput.decision !== "accept" &&
+                requestInput.decision !== "decline" &&
+                requestInput.decision !== "cancel"
+              ) {
+                return yield* new ProviderAdapter.ProviderAdapterRuntimeRequestResponseError({
+                  driver: CODEX_PROVIDER,
+                  requestId: requestInput.requestId,
+                  cause: toProtocolError(
+                    "Plugin writes accept only a one-time approval, decline or cancel.",
                   ),
                 });
               }

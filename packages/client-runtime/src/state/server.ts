@@ -1454,6 +1454,16 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    commonsApproval: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:commons-approval",
+      tag: WS_METHODS.serverSubscribeCommonsApproval,
+      idleTtlMs: 0,
+    }),
+    // Approval responses must not queue behind the submission waiting for them.
+    respondCommonsApproval: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:respond-commons-approval",
+      tag: WS_METHODS.serverRespondCommonsApproval,
+    }),
     submitProviderSkillToTritonAiCommons: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:submit-provider-skill-to-tritonai-commons",
       tag: WS_METHODS.serverSubmitProviderSkillToTritonAiCommons,

@@ -7657,11 +7657,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Runtime request ${command.requestId} is ${runtimeRequest.status}.`,
         });
       }
+      const now = yield* DateTime.now;
+      if (
+        runtimeRequest.expiresAt !== undefined &&
+        DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(runtimeRequest.expiresAt)
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "This approval request has expired.",
+        });
+      }
       if (runtimeRequest.responseCapability.type === "not_resumable") {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
           cause: runtimeRequest.responseCapability.reason,
+        });
+      }
+      if (
+        runtimeRequest.allowedDecisions !== undefined &&
+        (command.decision === undefined ||
+          !runtimeRequest.allowedDecisions.includes(command.decision))
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The approval decision is not allowed for this request.",
         });
       }
       const providerSessionId =
@@ -7687,7 +7709,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
       }
 
-      const now = yield* DateTime.now;
       const resolvedRequest = {
         ...runtimeRequest,
         status: "resolved" as const,

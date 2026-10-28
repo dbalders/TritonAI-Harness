@@ -2,6 +2,7 @@
 import type { IntegrationConnectionSubmission, IntegrationConnectResult } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import type {
@@ -14,6 +15,11 @@ import type {
 import { EmptyIntegrationToolInput } from "./IntegrationTool.ts";
 
 const API_KEY_FIXTURE_SECRET_NAME = "api-key";
+const fixtureWriteInput = Schema.Struct({
+  destination: Schema.Literal("synthetic-draft"),
+  content: Schema.String,
+});
+const decodeFixtureWrite = Schema.decodeUnknownSync(fixtureWriteInput);
 
 export const API_KEY_FIXTURE_TOOLS = [
   {
@@ -24,6 +30,14 @@ export const API_KEY_FIXTURE_TOOLS = [
     readOnly: true,
     openWorld: false,
   },
+  {
+    name: "fixture.api-key.write",
+    description:
+      "Test an approval by updating only an in-memory synthetic draft. Never contacts an external service or writes a file.",
+    input: fixtureWriteInput,
+    readOnly: false,
+    openWorld: false,
+  },
 ] as const satisfies ReadonlyArray<IntegrationProviderTool>;
 
 export class ApiKeyMcpFixtureProvider implements IntegrationProvider {
@@ -31,6 +45,7 @@ export class ApiKeyMcpFixtureProvider implements IntegrationProvider {
   readonly tools = API_KEY_FIXTURE_TOOLS;
   readonly #secrets: ServerSecretStore.ServerSecretStore["Service"];
   readonly #pending = new Set<string>();
+  #approvedWrites = 0;
 
   constructor(secrets: ServerSecretStore.ServerSecretStore["Service"]) {
     this.#secrets = secrets;
@@ -47,9 +62,11 @@ export class ApiKeyMcpFixtureProvider implements IntegrationProvider {
     return {
       state: connected ? "connected" : this.#pending.size ? "connecting" : "not_connected",
       accountLabel: connected ? "Sanitized fixture account" : null,
-      grantedCapabilities: connected ? ["fixture.read"] : [],
+      grantedCapabilities: connected ? ["fixture.read", "fixture.write"] : [],
       message: connected
-        ? "The submitted API key is stored server-side; the value is never exposed."
+        ? this.#approvedWrites > 0
+          ? `Synthetic approved writes: ${this.#approvedWrites}. No external service or file was changed.`
+          : "The submitted API key is stored server-side; the value is never exposed."
         : "Test-only provider for the generic API-key plugin shape.",
     };
   }
@@ -102,12 +119,26 @@ export class ApiKeyMcpFixtureProvider implements IntegrationProvider {
 
   async invoke(
     toolName: string,
-    _input: unknown,
+    input: unknown,
     context?: IntegrationInvocationContext,
   ): Promise<unknown> {
-    if (toolName !== "fixture.api-key.read") throw new Error("Unsupported fixture tool.");
+    if (toolName !== "fixture.api-key.read" && toolName !== "fixture.api-key.write")
+      throw new Error("Unsupported fixture tool.");
     if (!(await this.#hasCredential(context?.signal))) {
       throw new Error("The API-key fixture is not connected.");
+    }
+    if (toolName === "fixture.api-key.write") {
+      decodeFixtureWrite(input);
+      if (!context?.writeApproved || !context.beginCommit)
+        throw new Error("Synthetic writes require host approval and commit admission.");
+      const signal = await context.beginCommit();
+      if (signal.aborted) throw new Error("Synthetic write cancelled before commit.");
+      this.#approvedWrites += 1;
+      return {
+        source: "api-key-mcp-fixture",
+        value: "fixture-write-ok",
+        approvedWrites: this.#approvedWrites,
+      };
     }
     return {
       source: "api-key-mcp-fixture",

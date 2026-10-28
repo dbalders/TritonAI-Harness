@@ -89,6 +89,7 @@ import * as Account from "./auth/AccountService.ts";
 import * as Integrations from "./integrations/IntegrationRegistry.ts";
 import * as CodexManagement from "./provider/CodexManagement.ts";
 import { submitInstalledProviderSkillToTritonAiCommons } from "./provider/TritonAiCommonsAction.ts";
+import { makeCommonsApproval } from "./provider/CommonsApproval.ts";
 import { getManagedPolicyDiagnostics, managedPolicyDiagnosticsChanges } from "./managedPolicy.ts";
 import { transcribeVoice } from "./voiceTranscription.ts";
 import { fetchTritonAiUsage } from "./tritonAiUsage.ts";
@@ -1553,6 +1554,8 @@ const wsRpcSecondHalfTags = [
   WS_METHODS.serverRemoveProviderSkill,
   WS_METHODS.serverSetProviderSkillEnabled,
   WS_METHODS.serverSubmitProviderSkillToTritonAiCommons,
+  WS_METHODS.serverSubscribeCommonsApproval,
+  WS_METHODS.serverRespondCommonsApproval,
   WS_METHODS.serverListPlugins,
   WS_METHODS.serverInstallPlugin,
   WS_METHODS.serverUninstallPlugin,
@@ -1581,6 +1584,13 @@ export const layerWsRpc = (
     Effect.gen(function* () {
       const requestServices = yield* Effect.context<WsRpcServices>();
       const currentSessionId = currentSession.sessionId;
+      const commonsApproval = yield* makeCommonsApproval({
+        sessionId: currentSessionId,
+        ...(currentSession.expiresAt
+          ? { expiresAt: DateTime.toEpochMillis(currentSession.expiresAt) }
+          : {}),
+      });
+      yield* Effect.addFinalizer(() => commonsApproval.close());
       const sql = Context.get(requestServices, SqlClient.SqlClient);
       const threadManagement = Context.get(
         requestServices,
@@ -3670,7 +3680,12 @@ export const layerWsRpc = (
         [WS_METHODS.serverSetProviderSkillEnabled]: (input) =>
           CodexManagement.setCodexSkillEnabled(input),
         [WS_METHODS.serverSubmitProviderSkillToTritonAiCommons]: (input) =>
-          submitInstalledProviderSkillToTritonAiCommons(input),
+          commonsApproval.run(input.reviewId, (approvalOwner) =>
+            submitInstalledProviderSkillToTritonAiCommons({ ...input, approvalOwner }),
+          ),
+        [WS_METHODS.serverSubscribeCommonsApproval]: (input) =>
+          commonsApproval.changes(input.reviewId),
+        [WS_METHODS.serverRespondCommonsApproval]: (input) => commonsApproval.respond(input),
         [WS_METHODS.serverListPlugins]: (input) => CodexManagement.listCodexPlugins(input),
         [WS_METHODS.serverInstallPlugin]: (input) => CodexManagement.installCodexPlugin(input),
         [WS_METHODS.serverUninstallPlugin]: (input) => CodexManagement.uninstallCodexPlugin(input),
@@ -3991,6 +4006,10 @@ export const layerWsRpc = (
             handlers[WS_METHODS.serverSetProviderSkillEnabled],
           [WS_METHODS.serverSubmitProviderSkillToTritonAiCommons]:
             handlers[WS_METHODS.serverSubmitProviderSkillToTritonAiCommons],
+          [WS_METHODS.serverSubscribeCommonsApproval]:
+            handlers[WS_METHODS.serverSubscribeCommonsApproval],
+          [WS_METHODS.serverRespondCommonsApproval]:
+            handlers[WS_METHODS.serverRespondCommonsApproval],
           [WS_METHODS.serverListPlugins]: handlers[WS_METHODS.serverListPlugins],
           [WS_METHODS.serverInstallPlugin]: handlers[WS_METHODS.serverInstallPlugin],
           [WS_METHODS.serverUninstallPlugin]: handlers[WS_METHODS.serverUninstallPlugin],

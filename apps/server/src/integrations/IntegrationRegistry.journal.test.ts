@@ -1,4 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off - Exercises the real journal filesystem boundary.
+import { beforeEach, onTestFinished } from "vite-plus/test";
+import {
+  installApprovedIntegrationWriteFixture,
+  integrationWriteTestOwner,
+} from "./IntegrationWriteApproval.testkit.ts";
+
+beforeEach(() => {
+  const presenter = installApprovedIntegrationWriteFixture();
+  onTestFinished(() => presenter[Symbol.dispose]());
+});
+
 import { expect, it, vi } from "vite-plus/test";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -100,7 +111,11 @@ it("holds write admission until the previous journal cleanup finishes", async ()
     gate.wait = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const context = { signal: new AbortController().signal, writeApproved: true };
+    const context = {
+      signal: new AbortController().signal,
+      writeApproved: true,
+      approvalOwner: integrationWriteTestOwner,
+    };
     first = registry.invokeTool("journal.fixture.write", {}, context);
     await started;
     await expect(registry.invokeTool("journal.fixture.write", {}, context)).rejects.toMatchObject({

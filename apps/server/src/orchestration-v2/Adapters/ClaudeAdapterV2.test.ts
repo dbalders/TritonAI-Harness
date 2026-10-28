@@ -523,7 +523,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     ]);
   });
 
-  // regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
   it("pre-approves plugin reads but never plugin writes", () => {
     const threadId = ThreadId.make("thread-claude-mcp-plugin-tools");
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
@@ -541,7 +540,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     );
   });
 
-  // regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
   it("pre-approves exactly the tools the Harness MCP server registers itself", () => {
     assert.deepEqual(
       [...ClaudeAdapterV2.claudeT3McpHostAllowedTools()].sort(),
@@ -920,8 +918,7 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
 });
 
 describe("ClaudeAdapterV2 plugin tool approvals", () => {
-  // regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
-  it.effect("asks before a plugin write with its change, and runs plugin reads directly", () =>
+  it.effect("allows reads and refuses unsupported plugin writes", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* Effect.acquireRelease(
@@ -1017,42 +1014,35 @@ describe("ClaudeAdapterV2 plugin tool approvals", () => {
         );
         assert.equal(read?.behavior, "allow");
 
-        // One subscription: the approval's events arrive on a single stream.
-        const approvalEvents = yield* runtime.events.pipe(
-          Stream.takeUntil(
-            (event) =>
-              event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
+        const controller = new AbortController();
+        let approvalCount = 0;
+        yield* runtime.events.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              if (event.type === "runtime_request.updated") {
+                approvalCount++;
+                controller.abort();
+              }
+            }),
           ),
-          Stream.runCollect,
           Effect.forkScoped,
         );
-        const decision = yield* Effect.promise(() =>
-          canUseTool!(
-            "mcp__t3-code__fixture_records_write",
-            { summary: "Rename record 7 to Archive", recordId: "7" },
-            {
-              signal: new AbortController().signal,
-              toolUseID: "tool-plugin-write",
-              requestId: "request-plugin-write",
-              title: "Claude wants to use fixture_records_write",
-            },
-          ),
-        ).pipe(Effect.forkScoped);
-
-        const events = [...(yield* Fiber.join(approvalEvents))];
-        const item = events.at(-1);
-        assert.isTrue(
-          item?.type === "turn_item.updated" && item.turnItem.type === "approval_request",
-        );
-        if (item?.type !== "turn_item.updated" || item.turnItem.type !== "approval_request") return;
-        assert.equal(item.turnItem.prompt, "fixture.records.write\nRename record 7 to Archive");
-        const request = events.find((event) => event.type === "runtime_request.updated");
-        if (request?.type !== "runtime_request.updated") return assert.fail("no approval request");
-        yield* runtime.respondToRuntimeRequest({
-          requestId: request.runtimeRequest.id,
-          decision: "decline",
-        });
-        assert.equal((yield* Fiber.join(decision))?.behavior, "deny");
+        for (const tool of [
+          "mcp__t3-code__fixture_records_write",
+          "mcp__t3-code__tritonai_commons_submit_skill",
+        ]) {
+          const decision = yield* Effect.promise(() =>
+            canUseTool!(
+              tool,
+              { summary: "Rename record 7 to Archive", recordId: "7" },
+              { signal: controller.signal, toolUseID: tool, requestId: tool },
+            ),
+          );
+          if (decision === null || decision.behavior !== "deny")
+            return assert.fail("Unsupported write was not refused.");
+          assert.include(decision.message, "host approval presenter");
+        }
+        assert.equal(approvalCount, 0);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
