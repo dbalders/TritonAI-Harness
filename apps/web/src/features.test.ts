@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
+vi.mock("@t3tools/contracts", () => ({ TRITONAI_APP_BASE_NAME: "TritonAI Harness" }));
+
 const originalWindow = globalThis.window;
 
 afterEach(() => {
