@@ -50,6 +50,13 @@ connections and project membership. An unavailable target must not fall back to 
 default or a promise to synchronize offline or future environments. Project-group targets similarly
 select known environment-local checkouts; the group itself does not store inherited defaults.
 
+Release experiments use the [shared feature policy](../../packages/shared/src/features.ts).
+Availability follows the running build's release environment, never its display name or selected
+update feed. Opt-in and defaults stay in existing settings; availability can veto an opt-in.
+The web adapter gates client features. A server feature must check the same policy against its
+own build before doing work; a Nightly client cannot enable an experiment on a stable server.
+These gates control behavior, not authorization or exclusion of code from release packages.
+
 ## Durable intent and side effects
 
 The event log is the source of truth for orchestration state. The

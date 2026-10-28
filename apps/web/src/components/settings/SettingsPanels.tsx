@@ -29,14 +29,10 @@ import {
   SidebarProjectSortOrder,
 } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
+import { isFeatureAvailable } from "~/features";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
-import {
-  APP_VERSION,
-  GUIDED_TOUR_AVAILABLE,
-  HOSTED_APP_CHANNEL,
-  HOSTED_APP_CHANNEL_LABEL,
-} from "../../branding";
+import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
 import {
@@ -2012,7 +2008,7 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
 
-      {GUIDED_TOUR_AVAILABLE ? <ExperimentalFeaturesSection /> : null}
+      {isFeatureAvailable("guidedTour") ? <ExperimentalFeaturesSection /> : null}
 
       <LegacyFeaturesSection />
     </SettingsPageContainer>

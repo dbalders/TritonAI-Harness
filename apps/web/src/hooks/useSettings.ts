@@ -52,7 +52,7 @@ import {
 } from "~/state/session";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { GUIDED_TOUR_AVAILABLE } from "~/branding";
+import { isFeatureAvailable } from "~/features";
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
 
@@ -84,11 +84,14 @@ function getClientSettingsSnapshot(): ClientSettings {
   return clientSettingsSnapshot;
 }
 
+function applyFeatureAvailability(settings: ClientSettings): ClientSettings {
+  return !isFeatureAvailable("guidedTour") && settings.experimentalGuidedTourEnabled
+    ? { ...settings, experimentalGuidedTourEnabled: false }
+    : settings;
+}
+
 function replaceClientSettingsSnapshot(settings: ClientSettings): void {
-  clientSettingsSnapshot =
-    !GUIDED_TOUR_AVAILABLE && settings.experimentalGuidedTourEnabled
-      ? { ...settings, experimentalGuidedTourEnabled: false }
-      : settings;
+  clientSettingsSnapshot = applyFeatureAvailability(settings);
   emitClientSettingsChange();
 }
 
@@ -229,7 +232,7 @@ export async function persistClientSettingsUpdate(
     }
     for (;;) {
       const current = getClientSettingsSnapshot();
-      const next = update(current);
+      const next = applyFeatureAvailability(update(current));
       await persist(next);
       if (getClientSettingsSnapshot() === current) {
         replaceClientSettingsSnapshot(next);

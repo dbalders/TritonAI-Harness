@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId } from "@t3tools/contracts";
+import {
+  isFeatureAvailable,
+  type FeatureEnvironment,
+  type FeatureId,
+} from "@t3tools/shared/features";
 import {
   filterAvailableSettingsSearchItems,
   getSettingsSearchTargetScope,
@@ -9,6 +14,14 @@ import {
   SETTINGS_SEARCH_ITEMS,
   type SettingsSearchItem,
 } from "./settingsSearch";
+
+const featureState = vi.hoisted(() => ({ environment: "nightly" as FeatureEnvironment }));
+vi.mock("~/features", () => ({
+  isFeatureAvailable: (feature: FeatureId) => isFeatureAvailable(feature, featureState.environment),
+}));
+beforeEach(() => {
+  featureState.environment = "nightly";
+});
 
 const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
@@ -42,6 +55,31 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
 ];
 
 describe("searchSettings", () => {
+  it.each(["development", "nightly", "preview", "stable"] as const)(
+    "respects feature availability in %s across both search entry points",
+    (environment) => {
+      featureState.environment = environment;
+      const availability = {
+        hasCloudPublicConfig: true,
+        hasEnvironment: true,
+        hasProviderSettingsEnvironment: true,
+        hasMacProviderSettingsEnvironment: true,
+        canManageLocalBackend: true,
+        isWslSettingsRowVisible: true,
+        hasThreadAutoSettlement: true,
+      };
+      for (const items of [
+        searchSettings("guided tour"),
+        filterAvailableSettingsSearchItems(availability),
+      ]) {
+        expect(items.some((item) => item.id === "experimental-guided-tour")).toBe(
+          environment !== "stable",
+        );
+      }
+      expect(searchSettings("word wrap").map((item) => item.id)).toContain("word-wrap");
+    },
+  );
+
   it("matches titles, sections, and remembered setting details", () => {
     expect(searchSettings("word", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     expect(searchSettings("network", ITEMS).map((item) => item.id)).toEqual(["network-access"]);
