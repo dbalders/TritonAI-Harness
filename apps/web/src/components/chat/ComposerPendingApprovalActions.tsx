@@ -1,7 +1,7 @@
-import type {
-  ProviderApprovalDecision,
-  ProviderApprovalOption,
-  RuntimeRequestId,
+import {
+  type ProviderApprovalDecision,
+  type ProviderApprovalOption,
+  type RuntimeRequestId,
 } from "@t3tools/contracts";
 import { memo } from "react";
 import { EllipsisIcon, TriangleAlertIcon } from "lucide-react";

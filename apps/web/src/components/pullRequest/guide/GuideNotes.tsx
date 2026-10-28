@@ -1,5 +1,7 @@
 import type { PullRequestReviewGuideNote } from "@t3tools/contracts";
+
 import { cn } from "~/lib/utils";
+
 import { GuideProse } from "./GuideProse";
 
 export function GuideNoteMarker({ marker }: { marker: string }) {

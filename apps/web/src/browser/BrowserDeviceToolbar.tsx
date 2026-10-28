@@ -7,6 +7,7 @@ import {
 import { PREVIEW_VIEWPORT_PRESETS, resolvePreviewViewport } from "@t3tools/shared/previewViewport";
 import { Link2, Unlink2, X } from "lucide-react";
 import { useState } from "react";
+
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -20,6 +21,7 @@ import {
   SelectValue,
 } from "~/components/ui/select";
 import { cn } from "~/lib/utils";
+
 import { BROWSER_DEVICE_TOOLBAR_HEIGHT, resizeFreeformViewport } from "./browserViewportLayout";
 import { commitViewportAndAspectRatio } from "./browserDeviceToolbarState";
 import { ScreenRotationIcon } from "./ScreenRotationIcon";
@@ -304,7 +306,6 @@ export function BrowserDeviceToolbar({
       >
         <ScreenRotationIcon />
       </Button>
-      {/* Sticky backing so scrolled controls do not show through the close action. */}
       <span className="sticky right-0 ml-auto flex bg-background/95">
         <Button
           variant="ghost"

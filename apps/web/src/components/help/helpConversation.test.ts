@@ -157,7 +157,7 @@ describe("Help input and output boundaries", () => {
     });
     expect(resolveHelpLink("/settings/general#computer-use")).toEqual({
       kind: "internal",
-      to: "/settings/general",
+      to: "/settings/maintenance",
       hash: "computer-use",
     });
     expect(resolveHelpLink("/settings/appearance")).toEqual({
@@ -170,7 +170,7 @@ describe("Help input and output boundaries", () => {
     }
     expect(resolveHelpLink("/settings/storage#storage-worktrees")).toEqual({
       kind: "internal",
-      to: "/settings/storage",
+      to: "/settings/worktrees",
       hash: "storage-worktrees",
     });
     expect(resolveHelpLink("/settings/keybindings#keybinding-sidebar.toggle")).toEqual({

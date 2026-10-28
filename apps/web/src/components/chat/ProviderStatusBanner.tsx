@@ -1,4 +1,4 @@
-import type { ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
+import { type ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { memo } from "react";
 import { InfoIcon, XIcon } from "lucide-react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
@@ -27,8 +27,7 @@ export function getProviderStatusBannerKey(status: ServerProvider | null): strin
     ].join("\u0000");
   }
   if (status.status === "ready") return null;
-  // Antigravity checks saved credentials when a session starts. Its local
-  // health check leaves auth unknown after a restart, which is not a failure.
+  // Antigravity validates credentials at session start; unknown restart auth is not failure.
   if (
     status.driver === "antigravity" &&
     status.installed &&

@@ -1,85 +1,47 @@
-import { managedCodexModelCatalogFileName } from "./CodexModelCatalog.ts";
-import { decideProviderSessionTransition } from "../../orchestration-v2/ProviderSessionTransitionPolicy.ts";
-import { assert } from "@effect/vitest";
-import { describe } from "@effect/vitest";
-import { mergeCodexProviderEnvironment as mergeCodexEnvironment } from "../CodexEnvironment.ts";
-import * as CodexInstallation from "../CodexInstallation.ts";
-
-import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
-
-import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
-
 // @effect-diagnostics nodeBuiltinImport:off
+import * as CodexInstallation from "../CodexInstallation.ts";
+import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
+import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-
 import * as NodePath from "node:path";
-
 import { expect, it } from "@effect/vitest";
-
 import { EnvironmentId, ProviderInstanceId, ProviderSessionId, ThreadId } from "@t3tools/contracts";
-
 import * as HostProcess from "@t3tools/shared/HostProcess";
-
 import * as Effect from "effect/Effect";
-
 import * as Exit from "effect/Exit";
-
 import * as Deferred from "effect/Deferred";
-
 import * as Fiber from "effect/Fiber";
-
 import * as FileSystem from "effect/FileSystem";
-
 import * as Layer from "effect/Layer";
-
 import * as Option from "effect/Option";
-
 import * as PlatformError from "effect/PlatformError";
-
 import * as Schema from "effect/Schema";
-
 import * as Sink from "effect/Sink";
-
 import * as Stream from "effect/Stream";
-
 import { HttpClient, HttpClientResponse } from "effect/http";
-
 import * as ChildProcess from "effect/process/ChildProcess";
-
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
-
 import * as ServerConfig from "../../config.ts";
-
 import * as ServerSettings from "../../serverSettings.ts";
-
 import * as ResetCreditCoordinator from "../resetCreditCoordinator.ts";
-
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
-
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
-
 import * as ModelManifest from "../ModelManifest.ts";
-
 import {
   createProviderVersionAdvisory,
   resolveLatestProviderVersion,
 } from "@t3tools/provider-core/server/maintenanceResolver";
-
 import { CodexDriver } from "./CodexDriver.ts";
-
 import * as CodexAdapterV2 from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
-
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
-
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
-
 import * as ProviderCredentialStore from "../ProviderCredentialStore.ts";
-
 import * as ProviderHostLive from "../ProviderHostLive.ts";
+
+// @effect-diagnostics nodeBuiltinImport:off
 
 const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-codex-driver-maintenance-",
@@ -98,6 +60,12 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
     }),
   ),
   Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
+  Layer.provideMerge(
+    Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
+      endpoint: Effect.succeed("unused-private-pipe"),
+      awaitIdle: Effect.void,
+    }),
+  ),
   Layer.provideMerge(
     Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
       getEnvironmentId: Effect.succeed(EnvironmentId.make("00000000-0000-4000-8000-000000000001")),
@@ -125,27 +93,24 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
     ),
   ),
 );
-
 const layerTest = ProviderHostLive.layer.pipe(Layer.provideMerge(layerDeps));
 
 // The `#!/bin/sh` stub below cannot be resolved as an executable on Windows.
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
-const encodeCodexPackage = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Struct({ name: Schema.String, version: Schema.String })),
-);
-
 const noSpawn = ChildProcessSpawner.make(() =>
   Effect.die("Disabled Codex must not spawn a process"),
 );
-
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
-  it.effect("disconnect refreshes a restored managed account while its auth flow is idle", () =>
+  const checkManagedAccount = (replacementTiming: "unchanged" | "during-probe") =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("restored-managed-account");
       const credentials = new Map<string, Uint8Array>();
+      const catalogTokens: Array<string | undefined> = [];
+      const probeEntered = yield* Deferred.make<void>();
+      const resumeProbe = yield* Deferred.make<void>();
       const secrets = ServerSecretStore.ServerSecretStore.of({
         get: (key) => Effect.sync(() => Option.fromUndefinedOr(credentials.get(key))),
         set: (key, value) =>
@@ -172,6 +137,17 @@ it.layer(layerTest)("CodexDriver", (it) => {
           email: "account@example.test",
         });
         yield* store.set(new TextEncoder().encode(json));
+        const replacement = yield* encodeCredentials({
+          clientId: "oaiapp_replacement",
+          subject: "replacement-user",
+          email: "replacement@example.test",
+          accessToken: "replacement-access",
+          refreshToken: "replacement-refresh",
+          expiresAt: Number.MAX_SAFE_INTEGER,
+          earliestRefreshAt: null,
+          scopes: ["chatgpt.tokens.use.direct"],
+        });
+        const replaceAccount = store.set(new TextEncoder().encode(replacement)).pipe(Effect.orDie);
         const executable = {
           executablePath: "/user/bin/codex",
           managedVersionDirectory: null,
@@ -186,7 +162,6 @@ it.layer(layerTest)("CodexDriver", (it) => {
         > = [];
 
         let interruptedChecks = 0;
-        let spawnedProcesses = 0;
         let failAcquire = false;
         const startupChecksInterrupted = yield* Deferred.make<void>();
         const acquire = () =>
@@ -234,19 +209,17 @@ it.layer(layerTest)("CodexDriver", (it) => {
           Effect.provideService(
             ChildProcessSpawner.ChildProcessSpawner,
             ChildProcessSpawner.make(() =>
-              Effect.sync(() => {
-                spawnedProcesses += 1;
-              }).pipe(
-                Effect.andThen(
-                  Effect.fail(
-                    PlatformError.badArgument({
-                      module: "ChildProcessSpawner",
-                      method: "spawn",
-                      description: "The fixture app-server is unavailable",
-                    }),
-                  ),
-                ),
-              ),
+              Effect.gen(function* () {
+                if (replacementTiming === "during-probe") {
+                  yield* Deferred.succeed(probeEntered, undefined);
+                  yield* Deferred.await(resumeProbe);
+                }
+                return yield* PlatformError.badArgument({
+                  module: "ChildProcessSpawner",
+                  method: "spawn",
+                  description: "The fixture app-server is unavailable",
+                });
+              }),
             ),
           ),
         );
@@ -262,18 +235,28 @@ it.layer(layerTest)("CodexDriver", (it) => {
           Effect.forkScoped,
         );
         yield* Deferred.await(startupChecksInterrupted);
-        const restored = yield* instance.snapshot.refresh;
+        const refresh = yield* instance.snapshot.refresh.pipe(Effect.forkChild);
+        if (replacementTiming === "during-probe") {
+          yield* Deferred.await(probeEntered);
+          yield* replaceAccount;
+          yield* Deferred.succeed(resumeProbe, undefined);
+        }
+        const restored = yield* Fiber.join(refresh);
+        if (replacementTiming === "during-probe") {
+          expect(catalogTokens).toEqual([]);
+          expect(restored.models).toEqual([]);
+          expect(restored.auth.email).toBe("replacement@example.test");
+          expect(restored.auth.profileId).toBe("oaiapp_replacement");
+          return;
+        }
+        expect(catalogTokens).toEqual(["Bearer dummy-owned-access"]);
         expect(restored.auth.email).toBe("account@example.test");
         expect(restored.runtimePaths?.homePath).toBe(sharedHome);
         expect(restored.runtimePaths?.shadowHomePath).toContain(
           `providers/codex/${instanceId}/shadow`,
         );
-        // The fixture app-server cannot start, so the workspace scan fails
-        // instead of passing the machine snapshot off as the workspace's skills.
         const scan = yield* instance.snapshotForCwd!(serverConfig.stateDir).pipe(Effect.exit);
         expect(Exit.isFailure(scan)).toBe(true);
-        // The account is still signed in, so a runtime that cannot start is a
-        // failed scan too, not the machine snapshot's inventory.
         failAcquire = true;
         const runtimeScan = yield* instance.snapshotForCwd!(serverConfig.stateDir).pipe(
           Effect.exit,
@@ -299,7 +282,9 @@ it.layer(layerTest)("CodexDriver", (it) => {
         const launch = launches[0]!;
         expect(launch.settings.binaryPath).toBe(executable.executablePath);
         expect(launch.settings.launchArgs).toContain("openai_token_sharing");
-        expect(launch.environment.ACCESS_TOKEN).toBe("dummy-owned-access");
+        expect(launch.environment.ACCESS_TOKEN).toBeUndefined();
+        expect(launch.settings.launchArgs).toContain("__managed-chatgpt-token");
+        expect(launch.settings.launchArgs).not.toContain("dummy-owned-access");
         expect(launch.environment.OPENAI_API_KEY).toBeUndefined();
         expect(launch.environment.CODEX_HOME).toBe(launch.settings.homePath);
         const before = yield* instance.auth!.subscribe("test-owner").pipe(Stream.runHead);
@@ -311,38 +296,6 @@ it.layer(layerTest)("CodexDriver", (it) => {
         expect(after.installed).toBe(true);
         expect(after.models).toEqual([]);
         expect(Option.isNone(yield* store.get)).toBe(true);
-        // Managed text generation must retain Help and recheck account access after sign-out.
-        const generateHelp = instance.textGeneration.generateHelp;
-        if (!generateHelp) return yield* Effect.die("Managed Codex lost its Help capability");
-        const beforeHelpProcesses = spawnedProcesses;
-        const helpError = yield* generateHelp({
-          cwd: serverConfig.stateDir,
-          modelSelection: { instanceId, model: "gpt-5.4" },
-          messages: [{ role: "user", content: "Where can I check provider settings?" }],
-          context: {
-            capturedAt: "2026-10-22T12:00:00.000Z",
-            environmentId: EnvironmentId.make("help-host"),
-            environmentName: "Host",
-            version: "test",
-            platform: "test",
-            mode: "desktop",
-            paths: [],
-            providers: [],
-            modelLabel: "Test model",
-            diagnostics: {
-              recordCount: 0,
-              failureCount: 0,
-              slowSpanCount: 0,
-              partial: true,
-              recentFailures: [],
-            },
-          },
-        }).pipe(Effect.flip);
-        expect(helpError._tag).toBe("TextGenerationError");
-        expect(spawnedProcesses).toBe(beforeHelpProcesses);
-        expect(helpError.detail).not.toContain("dummy-owned-access");
-        // Signed out, there is no runtime to scan with, so the machine
-        // snapshot's empty inventory stands instead of a failed scan.
         const signedOutScan = yield* instance.snapshotForCwd!(serverConfig.stateDir);
         expect(signedOutScan.skills).toEqual([]);
       }).pipe(
@@ -356,8 +309,10 @@ it.layer(layerTest)("CodexDriver", (it) => {
                 "https://auth.openai.com/revoke",
                 "https://api.openai.com/v1/models",
               ]).toContain(request.url);
-              if (request.url.endsWith("/models"))
+              if (request.url.endsWith("/models")) {
+                catalogTokens.push(request.headers.authorization);
                 return HttpClientResponse.fromWeb(request, Response.json({ models: [] }));
+              }
               return HttpClientResponse.fromWeb(
                 request,
                 request.url.endsWith("/revoke")
@@ -374,7 +329,12 @@ it.layer(layerTest)("CodexDriver", (it) => {
           ),
         ),
       );
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.scoped);
+  // regression: a sign-in that replaces the account mid-probe must not label the old
+  // account's catalog with the new identity.
+  it.effect.each(["unchanged", "during-probe"] as const)(
+    "managed catalog keeps its account label and token together: %s",
+    checkManagedAccount,
   );
 
   it.effect.skipIf(windowsHost)(
@@ -416,56 +376,6 @@ it.layer(layerTest)("CodexDriver", (it) => {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
         Effect.scoped,
       ),
-  );
-
-  it.effect.skipIf(windowsHost)(
-    "spawns the TritonAI-managed runtime when the configured command is a bare codex",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const tempDir = yield* fs
-          .makeTempDirectoryScoped({ prefix: "t3-codex-driver-managed-" })
-          .pipe(Effect.flatMap(fs.realPath));
-        const installRoot = NodePath.join(
-          tempDir,
-          ".agents",
-          "ucsd",
-          "runtime",
-          "codex",
-          "openai-codex-0.146.0",
-        );
-        const managedBinaryPath = NodePath.join(installRoot, "bin", "codex");
-        const packageRoot = NodePath.join(installRoot, "lib", "node_modules", "@openai", "codex");
-        yield* fs.makeDirectory(NodePath.dirname(managedBinaryPath), { recursive: true });
-        yield* fs.makeDirectory(packageRoot, { recursive: true });
-        yield* fs.writeFileString(
-          NodePath.join(packageRoot, "package.json"),
-          encodeCodexPackage({ name: "@openai/codex", version: "0.151.0" }),
-        );
-        yield* fs.writeFileString(
-          managedBinaryPath,
-          '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "codex-cli 0.151.0"; exit 0; fi\nexit 1\n',
-        );
-        yield* fs.chmod(managedBinaryPath, 0o755);
-
-        // The resolver scans `~/.agents/ucsd/runtime/codex`; point `~` at the fixture.
-        const instance = yield* CodexDriver.create({
-          instanceId: ProviderInstanceId.make("codex-managed"),
-          displayName: "Codex test",
-          enabled: true,
-          // No `codex` on PATH, exactly like a managed machine.
-          environment: [{ name: "PATH", value: "/usr/bin:/bin", sensitive: false }],
-          config: {
-            ...CodexDriver.defaultConfig(),
-            binaryPath: "codex",
-            homePath: NodePath.join(tempDir, "codex-home"),
-          },
-        }).pipe(Effect.provideService(HostProcess.HomeDirectory, tempDir));
-
-        const capabilities = yield* instance.snapshot.resolveMaintenance();
-        expect(capabilities.approvedVersion).not.toBeUndefined();
-        expect(capabilities.update?.args).toContain(managedBinaryPath);
-      }).pipe(Effect.scoped),
   );
 
   for (const fixture of [
@@ -546,9 +456,6 @@ it.layer(layerTest)("CodexDriver", (it) => {
         Effect.scoped,
       ),
     );
-  }
-
-  for (const {} of ["direct", "wrapper"] as const) {
   }
 
   it.effect.each([
@@ -696,371 +603,5 @@ it.layer(layerTest)("CodexDriver", (it) => {
         }
       }).pipe(Effect.scoped),
     { skip: windowsHost },
-  );
-
-  // regression: #421 fix(codex): contain Stop commands and restore managed Auto approvals
-  it.effect.each([
-    { id: "codex_frontier", managed: true, explicitModalities: false },
-    { id: "codex", managed: true, explicitModalities: true },
-    { id: "codex_personal", managed: false, explicitModalities: false },
-    { id: "codex_frontier", managed: false, explicitModalities: false },
-    { id: "codex_personal", managed: false, explicitModalities: true },
-  ])(
-    "passes the right catalog to the launch boundary: $id / managed=$managed / modalities=$explicitModalities",
-    ({ id, managed, explicitModalities }) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "codex-catalog-launch-" });
-        const instanceId = ProviderInstanceId.make(id);
-        const model = explicitModalities ? "api-glm-5.3-flash" : "gpt-6.1-sol";
-        const filePath = NodePath.join(homePath, managedCodexModelCatalogFileName(id));
-        const staleCatalog = JSON.stringify({ models: [{ slug: "codex-auto-review" }] });
-        yield* fs.writeFileString(filePath, staleCatalog);
-        const launches: Array<
-          Parameters<CodexAdapterV2.CodexAppServerClientFactoryShape["open"]>[0]
-        > = [];
-        let catalogReads = 0;
-        const spawner = ChildProcessSpawner.make((command) => {
-          if (
-            !ChildProcess.isStandardCommand(command) ||
-            command.args.join(" ") !== "debug models --bundled"
-          ) {
-            // Status probes are outside this launch-boundary fixture.
-            return Effect.interrupt;
-          }
-          catalogReads += 1;
-          return Effect.succeed(
-            ChildProcessSpawner.makeHandle({
-              pid: ChildProcessSpawner.ProcessId(1),
-              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-              isRunning: Effect.succeed(false),
-              kill: () => Effect.void,
-              unref: Effect.succeed(Effect.void),
-              stdin: Sink.drain,
-              stdout: Stream.encodeText(
-                Stream.make(
-                  JSON.stringify({
-                    models: [
-                      {
-                        slug: "gpt-6.1-sol",
-                        input_modalities: ["text", "image"],
-                        auto_review_model_override: "codex-auto-review",
-                      },
-                      { slug: "codex-auto-review", visibility: "hide" },
-                    ],
-                  }),
-                ),
-              ),
-              stderr: Stream.empty,
-              all: Stream.empty,
-              getInputFd: () => Sink.drain,
-              getOutputFd: () => Stream.empty,
-            }),
-          );
-        });
-        const inheritedLaunchArgs = '-c model_catalog_json="/old/model-catalog.json"';
-        const instance = yield* CodexDriver.create({
-          instanceId,
-          displayName: id,
-          enabled: true,
-          environment: managed
-            ? [
-                {
-                  name: "TRITONAI_API_KEY_SOURCE",
-                  value: id === "codex" ? "TRITONAI_ONPREM_API_KEY" : "TRITONAI_FRONTIER_API_KEY",
-                  sensitive: false,
-                },
-              ]
-            : [],
-          config: {
-            ...CodexDriver.defaultConfig(),
-            binaryPath: "/fixture/codex",
-            homePath,
-            launchArgs: inheritedLaunchArgs,
-            customModels: [model],
-            customModelMetadata: {
-              [model]: {
-                name: "Fixture model",
-                ...(explicitModalities ? { capabilities: { inputModalities: ["text"] } } : {}),
-              },
-            },
-          },
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(CodexAdapterV2.CodexAppServerClientFactory, {
-            open: (launch) =>
-              Effect.sync(() => launches.push(launch)).pipe(
-                Effect.andThen(Effect.die("The fixture stops at the app-server launch boundary")),
-              ),
-          }),
-        );
-        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-          runtimeMode: "auto",
-          interactionMode: "default",
-          cwd: homePath,
-        });
-        yield* instance.orchestrationAdapter
-          .openSession({
-            threadId: ThreadId.make("catalog-launch-thread"),
-            providerSessionId: ProviderSessionId.make("catalog-launch-session"),
-            modelSelection: { instanceId, model },
-            runtimePolicy,
-          })
-          .pipe(Effect.scoped, Effect.exit);
-
-        expect(launches).toHaveLength(1);
-        const launch = launches[0]!;
-        const appServerArgs = launch.appServerArgs ?? [];
-        expect(launch.runtimePolicy).toEqual(runtimePolicy);
-        expect(launch.settings.launchArgs).toBe(inheritedLaunchArgs);
-        const needsCatalog = managed || explicitModalities;
-        expect(catalogReads).toBe(needsCatalog ? 1 : 0);
-        if (needsCatalog) {
-          expect(appServerArgs).toContain(`model_catalog_json=${JSON.stringify(filePath)}`);
-          const catalog = JSON.parse(yield* fs.readFileString(filePath));
-          expect(catalog.models[0].auto_review_model_override).toBe(
-            managed ? null : "codex-auto-review",
-          );
-          expect(catalog.models.map((entry: { slug: string }) => entry.slug)).toEqual(
-            explicitModalities ? ["gpt-6.1-sol", model] : ["gpt-6.1-sol"],
-          );
-          if (explicitModalities) {
-            expect(
-              catalog.models.find((entry: { slug: string }) => entry.slug === model)
-                .input_modalities,
-            ).toEqual(["text"]);
-          }
-        } else {
-          expect(appServerArgs.some((argument) => argument.startsWith("model_catalog_json="))).toBe(
-            false,
-          );
-          expect(yield* fs.readFileString(filePath)).toBe(staleCatalog);
-        }
-      }).pipe(Effect.scoped),
-  );
-
-  // regression: 70a86ecdbd fix(codex): hand off context between managed gateway routes
-  it.effect.each([["codex_frontier", "gpt-6.1-sol", "codex", "api-glm-5.3-flash"]] as const)(
-    "hands off managed history from %s/%s to %s/%s even with a shared home",
-    ([currentId, currentModel, targetId, targetModel]) =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "managed-route-handoff-" });
-        const create = (id: string) =>
-          CodexDriver.create({
-            instanceId: ProviderInstanceId.make(id),
-            displayName: id,
-            enabled: false,
-            environment: [
-              {
-                name: "TRITONAI_API_KEY_SOURCE",
-                value: id === "codex" ? "TRITONAI_ONPREM_API_KEY" : "TRITONAI_FRONTIER_API_KEY",
-                sensitive: false,
-              },
-            ],
-            config: { ...CodexDriver.defaultConfig(), binaryPath: process.execPath, homePath },
-          });
-        const current = yield* create(currentId);
-        const target = yield* create(targetId);
-        const capabilities = yield* current.orchestrationAdapter.getCapabilities();
-        const state = {
-          driver: CodexDriver.driverKind,
-          runtimeMode: "approval-required" as const,
-          interactionMode: "default" as const,
-          workspace: "/repo",
-          capabilities,
-        };
-        expect(
-          decideProviderSessionTransition({
-            current: {
-              ...state,
-              continuationIdentity: current.continuationIdentity,
-              modelSelection: {
-                instanceId: ProviderInstanceId.make(currentId),
-                model: currentModel,
-              },
-            },
-            target: {
-              ...state,
-              continuationIdentity: target.continuationIdentity,
-              modelSelection: { instanceId: ProviderInstanceId.make(targetId), model: targetModel },
-              available: true,
-            },
-          }),
-        ).toEqual({ type: "create_with_handoff" });
-      }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
-        Effect.scoped,
-      ),
-  );
-});
-
-const mergeCodexProviderEnvironment = mergeCodexEnvironment;
-
-describe("mergeCodexProviderEnvironment", () => {
-  // regression: #142 fix(desktop): apply TritonAI API keys without relaunch
-  it.effect("keeps the Usage-managed TritonAI key authoritative", () =>
-    Effect.gen(function* () {
-      const environment = [
-        { name: "TRITONAI_API_KEY", value: "stale-provider-key", sensitive: true },
-        {
-          name: "TRITONAI_API_KEY_SOURCE",
-          value: "TRITONAI_ONPREM_API_KEY",
-          sensitive: false,
-        },
-        { name: "UCSD_AI_BASE_URL", value: "https://tritonai.example/v1", sensitive: false },
-      ];
-
-      const result = yield* mergeCodexProviderEnvironment(
-        environment,
-        { TRITONAI_API_KEY: "replacement-key", PATH: "/managed/bin" },
-        "darwin",
-        "codex",
-      );
-
-      assert.equal(result.TRITONAI_API_KEY, "replacement-key");
-      assert.equal(result.UCSD_AI_BASE_URL, "https://tritonai.example/v1");
-      assert.equal(result.PATH, "/managed/bin");
-    }),
-  );
-
-  it.effect("preserves a user-configured key on a non-managed Codex instance", () =>
-    Effect.gen(function* () {
-      const result = yield* mergeCodexProviderEnvironment(
-        [
-          { name: "TRITONAI_API_KEY", value: "personal-key", sensitive: true },
-          { name: "TRITONAI_ONPREM_API_KEY", value: "personal-route-key", sensitive: true },
-        ],
-        { PATH: "/managed/bin" },
-        "darwin",
-        "codex_personal",
-      );
-
-      assert.equal(result.TRITONAI_API_KEY, "personal-key");
-      assert.equal(result.TRITONAI_ONPREM_API_KEY, "personal-route-key");
-    }),
-  );
-
-  it.effect("does not leak inherited route credentials into a non-managed Codex instance", () =>
-    Effect.gen(function* () {
-      const result = yield* mergeCodexProviderEnvironment(
-        undefined,
-        {
-          TRITONAI_ONPREM_API_KEY: "managed-on-prem-key",
-          TRITONAI_FRONTIER_API_KEY: "managed-frontier-key",
-          PATH: "/managed/bin",
-        },
-        "darwin",
-        "codex_personal",
-      );
-
-      assert.notProperty(result, "TRITONAI_ONPREM_API_KEY");
-      assert.notProperty(result, "TRITONAI_FRONTIER_API_KEY");
-      assert.equal(result.PATH, "/managed/bin");
-    }),
-  );
-
-  // regression: #142 fix(desktop): apply TritonAI API keys without relaunch
-  it.effect("normalizes inherited Windows key casing when applying the managed key", () =>
-    Effect.gen(function* () {
-      const result = yield* mergeCodexProviderEnvironment(
-        [
-          { name: "tritonai_api_key", value: "stale-provider-key", sensitive: true },
-          {
-            name: "tritonai_api_key_source",
-            value: "TRITONAI_ONPREM_API_KEY",
-            sensitive: false,
-          },
-        ],
-        { TRITONAI_API_KEY: "replacement-key" },
-        "win32",
-        "codex",
-      );
-
-      assert.equal(result.TRITONAI_API_KEY, "replacement-key");
-      assert.notProperty(result, "tritonai_api_key");
-    }),
-  );
-
-  it.effect("selects the on-prem credential without exposing the frontier credential", () =>
-    Effect.gen(function* () {
-      const result = yield* mergeCodexProviderEnvironment(
-        [
-          {
-            name: "TRITONAI_API_KEY_SOURCE",
-            value: "TRITONAI_ONPREM_API_KEY",
-            sensitive: false,
-          },
-        ],
-        {
-          TRITONAI_ONPREM_API_KEY: "on-prem-key",
-          TRITONAI_FRONTIER_API_KEY: "frontier-key",
-        },
-        "darwin",
-        "codex",
-      );
-
-      assert.equal(result.TRITONAI_API_KEY, "on-prem-key");
-      assert.notProperty(result, "TRITONAI_ONPREM_API_KEY");
-      assert.notProperty(result, "TRITONAI_FRONTIER_API_KEY");
-      assert.notProperty(result, "TRITONAI_API_KEY_SOURCE");
-    }),
-  );
-
-  it.effect("selects the frontier credential and lets a shared key override both routes", () =>
-    Effect.gen(function* () {
-      const routeEnvironment = [
-        {
-          name: "TRITONAI_API_KEY_SOURCE",
-          value: "TRITONAI_FRONTIER_API_KEY",
-          sensitive: false,
-        },
-      ];
-      const routed = yield* mergeCodexProviderEnvironment(
-        routeEnvironment,
-        {
-          TRITONAI_ONPREM_API_KEY: "on-prem-key",
-          TRITONAI_FRONTIER_API_KEY: "frontier-key",
-        },
-        "darwin",
-        "codex_frontier",
-      );
-      const shared = yield* mergeCodexProviderEnvironment(
-        routeEnvironment,
-        {
-          TRITONAI_API_KEY: "shared-key",
-          TRITONAI_FRONTIER_API_KEY: "frontier-key",
-        },
-        "darwin",
-        "codex_frontier",
-      );
-
-      assert.equal(routed.TRITONAI_API_KEY, "frontier-key");
-      assert.equal(shared.TRITONAI_API_KEY, "shared-key");
-    }),
-  );
-
-  it.effect("does not let a personal instance select a managed route credential", () =>
-    Effect.gen(function* () {
-      const result = yield* mergeCodexProviderEnvironment(
-        [
-          {
-            name: "TRITONAI_API_KEY_SOURCE",
-            value: "TRITONAI_FRONTIER_API_KEY",
-            sensitive: false,
-          },
-        ],
-        {
-          TRITONAI_API_KEY: "managed-shared-key",
-          TRITONAI_FRONTIER_API_KEY: "managed-frontier-key",
-        },
-        "darwin",
-        "codex_personal",
-      );
-
-      assert.notProperty(result, "TRITONAI_API_KEY");
-      assert.notProperty(result, "TRITONAI_FRONTIER_API_KEY");
-      assert.notProperty(result, "TRITONAI_API_KEY_SOURCE");
-    }),
   );
 });

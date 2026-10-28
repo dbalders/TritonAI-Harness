@@ -1,8 +1,8 @@
-import type {
-  DesktopElectronProcessMetric,
-  DesktopHostTelemetrySnapshot,
-  ResourceMonitorProcessSample,
-  ResourceMonitorSnapshotEvent,
+import {
+  type DesktopElectronProcessMetric,
+  type DesktopHostTelemetrySnapshot,
+  type ResourceMonitorProcessSample,
+  type ResourceMonitorSnapshotEvent,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";

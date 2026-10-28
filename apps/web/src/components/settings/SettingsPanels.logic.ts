@@ -1,12 +1,12 @@
-import {
-  type BackgroundActivityProfile,
-  type BackgroundActivitySettings,
-  type ProviderInstanceConfig,
-  type PreviewViewportSetting,
-  type ProviderInstanceId,
-  type ServerSettings,
-  type SidebarProjectGroupingMode,
-  type UnifiedSettings,
+import type {
+  BackgroundActivityProfile,
+  BackgroundActivitySettings,
+  ProviderInstanceConfig,
+  PreviewViewportSetting,
+  ProviderInstanceId,
+  ServerSettings,
+  SidebarProjectGroupingMode,
+  UnifiedSettings,
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import {

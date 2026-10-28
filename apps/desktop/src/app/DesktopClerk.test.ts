@@ -1,21 +1,22 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetchInEffect:off - Hosted handoff test uses a real localhost listener without an OpenAI account.
 import * as NodeHttp from "node:http";
-
 import * as NodePath from "@effect/platform-node/NodePath";
-
 import { codexAuthHandoffUrl, readCodexAuthDelivery } from "@t3tools/shared/codexAuthHandoff";
-
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
-
 import * as HostProcess from "@t3tools/shared/HostProcess";
-
 import { assert, describe, it } from "@effect/vitest";
-
 import * as Effect from "effect/Effect";
-
 import * as Layer from "effect/Layer";
-
 import { beforeEach, vi } from "vite-plus/test";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
+import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as ElectronShell from "../electron/ElectronShell.ts";
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
+import * as DesktopClerk from "./DesktopClerk.ts";
+import * as DesktopWebLinks from "./DesktopWebLinks.ts";
+import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopPreReadyFileSystem from "./DesktopPreReadyFileSystem.ts";
 
 const { createClerkBridgeMock, requestSingleInstanceLockMock, storageAdapter, storageMock } =
   vi.hoisted(() => ({
@@ -36,26 +37,6 @@ vi.mock("@clerk/electron", () => ({
 vi.mock("@clerk/electron/storage", () => ({
   storage: storageMock,
 }));
-
-import * as Option from "effect/Option";
-
-import * as Exit from "effect/Exit";
-
-import * as FileSystem from "effect/FileSystem";
-
-import * as ElectronApp from "../electron/ElectronApp.ts";
-
-import * as ElectronShell from "../electron/ElectronShell.ts";
-
-import * as ElectronWindow from "../electron/ElectronWindow.ts";
-
-import * as DesktopClerk from "./DesktopClerk.ts";
-
-import * as DesktopWebLinks from "./DesktopWebLinks.ts";
-
-import * as DesktopEnvironment from "./DesktopEnvironment.ts";
-
-import * as DesktopPreReadyFileSystem from "./DesktopPreReadyFileSystem.ts";
 
 const ignoreWebLinks = DesktopWebLinks.DesktopWebLinks.of({
   receive: () => Effect.void,
@@ -268,6 +249,34 @@ describe("DesktopClerk", () => {
     );
   });
 
+  it.effect.each(["darwin", "win32", "linux"] as const)(
+    "quits a second launch before initializing Clerk or the application runtime on %s",
+    (platform) =>
+      Effect.gen(function* () {
+        requestSingleInstanceLockMock.mockReturnValueOnce(false);
+        createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
+        const events: string[] = [];
+        const runtime = layerDesktopClerk(false, events, platform).pipe(
+          Layer.flatMap(() =>
+            Layer.effectDiscard(
+              Effect.sync(() => {
+                events.push("initializeApplicationRuntime");
+              }),
+            ),
+          ),
+        );
+        const exit = yield* Effect.exit(Effect.scoped(Layer.build(runtime)));
+
+        assert.isTrue(Exit.hasInterrupts(exit));
+        assert.deepEqual(events, [
+          "setPath:userData:/tmp/app-data/tritonai-harness-v2",
+          "requestSingleInstanceLock",
+          "quit",
+        ]);
+        assert.equal(createClerkBridgeMock.mock.calls.length, 0);
+        assert.equal(storageMock.mock.calls.length, 0);
+      }),
+  );
   it.each([
     { isDevelopment: true, scheme: "t3code-dev", appVersion: "0.3.4-nightly.20260912.12" },
     { isDevelopment: false, scheme: "t3code", appVersion: "0.3.3" },
@@ -302,35 +311,6 @@ describe("DesktopClerk", () => {
       createClerkBridgeMock.mockClear();
     },
   );
-
-  it.effect.each(["darwin", "win32", "linux"] as const)(
-    "quits a second launch before initializing Clerk or the application runtime on %s",
-    (platform) =>
-      Effect.gen(function* () {
-        requestSingleInstanceLockMock.mockReturnValueOnce(false);
-        createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: true });
-        const events: string[] = [];
-        const runtime = layerDesktopClerk(false, events, platform).pipe(
-          Layer.flatMap(() =>
-            Layer.effectDiscard(
-              Effect.sync(() => {
-                events.push("initializeApplicationRuntime");
-              }),
-            ),
-          ),
-        );
-        const exit = yield* Effect.exit(Effect.scoped(Layer.build(runtime)));
-
-        assert.isTrue(Exit.hasInterrupts(exit));
-        assert.deepEqual(events, [
-          "setPath:userData:/tmp/app-data/tritonai-harness-v2",
-          "requestSingleInstanceLock",
-          "quit",
-        ]);
-        assert.equal(createClerkBridgeMock.mock.calls.length, 0);
-        assert.equal(storageMock.mock.calls.length, 0);
-      }),
-  );
 });
 
 it.effect(
@@ -349,7 +329,7 @@ it.effect(
         }),
     } as unknown as ElectronApp.ElectronApp["Service"];
     const electronWindow = {
-      currentMainOrFirst: Effect.succeed(Option.some(window)),
+      currentMainOrFirst: Effect.succeedSome(window),
       reveal: () => Effect.sync(() => revealed.resolve()),
     } as unknown as ElectronWindow.ElectronWindow["Service"];
     return Effect.gen(function* () {

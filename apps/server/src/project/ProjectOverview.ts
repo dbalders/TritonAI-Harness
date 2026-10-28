@@ -145,11 +145,9 @@ export const make = Effect.gen(function* () {
               AND t.project_id=${projectId} AND t.deleted_at IS NULL AND t.archived_at IS NULL
           )
         )
-      `.pipe(Effect.mapError(unavailable));
-    return rows[0]
-      ? yield* decodeStored(rows[0].overview).pipe(Effect.mapError(unavailable))
-      : null;
-  });
+      `;
+    return rows[0] ? yield* decodeStored(rows[0].overview) : null;
+  }, Effect.mapError(unavailable));
 
   const dismissals = (projectId: ProjectId) =>
     sql<{ stepId: string; title: string; kind: string }>`
@@ -505,11 +503,12 @@ export const make = Effect.gen(function* () {
           );
         }),
       ),
-    awaitIdle: (projectId) =>
+    awaitIdle: Effect.fn("ProjectOverview.awaitIdle")((projectId) =>
       Effect.suspend(() => {
         const fiber = runs.get(projectId)?.fiber;
         return fiber ? Fiber.join(fiber) : Effect.void;
       }),
+    ),
   });
 });
 

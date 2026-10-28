@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+
 import { faviconUrlForOrigin, toolActivityFaviconUrl } from "./favicon.ts";
 
 describe("faviconUrlForOrigin", () => {

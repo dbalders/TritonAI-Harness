@@ -10,9 +10,9 @@ import {
   EnvironmentHttpInternalServerError,
   EnvironmentHttpUnauthorizedError,
 } from "@t3tools/contracts";
-import type {
-  RelayEnvironmentLinkResponse as RelayEnvironmentLinkResponseType,
-  RelayManagedEndpointProviderKind,
+import {
+  type RelayEnvironmentLinkResponse as RelayEnvironmentLinkResponseType,
+  type RelayManagedEndpointProviderKind,
 } from "@t3tools/contracts/relay";
 import { findErrorTraceId } from "@t3tools/client-runtime/errors";
 import { ManagedRelay, relayRequestFailureDetail } from "@t3tools/client-runtime/relay";

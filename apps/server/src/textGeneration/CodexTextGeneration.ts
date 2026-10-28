@@ -77,10 +77,7 @@ const decodeCodexModelCatalog = Schema.decodeEffect(
   ),
 );
 
-/**
- * `mcp_servers={}` merges into the user's servers rather than replacing them,
- * so each is named; quoting the name keeps one with a dot a single key.
- */
+// mcp_servers={} merges instead of replacing; disable named entries and quote dotted names.
 const codexMcpServersOff = (names: ReadonlyArray<string>): string | null =>
   names.length === 0
     ? null
@@ -120,13 +117,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     );
 
   const removeTempFileDir = (filePath: string): Effect.Effect<void, never> =>
-    fileSystem
-      .remove(path.dirname(filePath), { recursive: true })
-      .pipe(Effect.catch(() => Effect.void));
+    fileSystem.remove(path.dirname(filePath), { recursive: true }).pipe(Effect.ignore);
 
-  // Deliberately unscoped: text generation runs from background fibers whose
-  // ambient scope may already be closed (a closed scope reaps the temp
-  // directory the moment it is created).
+  // Background fibers may inherit closed scopes that immediately reap temp files; write unscoped.
   const writeTempFile = (
     operation: string,
     prefix: string,

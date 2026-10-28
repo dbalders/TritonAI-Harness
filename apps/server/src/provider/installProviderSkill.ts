@@ -834,9 +834,7 @@ const cloneGitHubSkillBundle = Effect.fn("installProviderSkill.cloneGitHubSkillB
       checkoutPath === "." ? undefined : checkoutPath,
     );
     return yield* readProviderSkillDirectoryBundle(skillDirectory);
-  }).pipe(
-    Effect.ensuring(fs.remove(tempRoot, { recursive: true }).pipe(Effect.catch(() => Effect.void))),
-  );
+  }).pipe(Effect.ensuring(fs.remove(tempRoot, { recursive: true }).pipe(Effect.ignore)));
 });
 
 const loadBundleForUrl = Effect.fn("installProviderSkill.loadBundleForUrl")(function* (
@@ -989,7 +987,7 @@ export const installSkillBundle = Effect.fn("installProviderSkill.installSkillBu
                   ? fs.remove(skillDirectory, { recursive: true, force: true })
                   : Effect.void,
               ),
-              Effect.catch(() => Effect.void),
+              Effect.ignore,
               Effect.andThen(Effect.fail(error)),
             ),
       ),

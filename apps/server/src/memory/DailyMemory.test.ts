@@ -289,9 +289,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
             const config = yield* ServerConfig.ServerConfig;
             const settings = yield* ServerSettings.ServerSettingsService;
             const sql = yield* SqlClient.SqlClient;
-            const legacySettings = yield* Schema.encodeUnknownEffect(
-              Schema.fromJsonString(Schema.Unknown),
-            )({
+            const legacySettings = yield* compiledEncodeUnknownEffect1({
               providerInstances: {
                 [ProviderInstanceId.make("codex")]: {
                   driver: ProviderDriverKind.make("codex"),
@@ -774,3 +772,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 });
+
+const compiledEncodeUnknownEffect1 = Schema.encodeUnknownEffect(
+  Schema.fromJsonString(Schema.Unknown),
+);

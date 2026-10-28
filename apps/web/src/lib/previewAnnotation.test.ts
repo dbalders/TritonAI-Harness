@@ -1,5 +1,6 @@
 import type { PreviewAnnotationPayload } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
 import { capturePreviewAnnotationScreenshot } from "./previewAnnotation";
 
 const annotation: PreviewAnnotationPayload = {

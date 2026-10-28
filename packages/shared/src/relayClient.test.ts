@@ -14,10 +14,10 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "./HostProcess.ts";
+
 import * as RelayClient from "./relayClient.ts";
 
-// The suite runs the linux code path against the real filesystem, checking
-// POSIX exec bits that NTFS never reports; the win32 branch skips that check.
+// POSIX exec-bit checks do not apply on NTFS.
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
 const layerHostRuntime = (env: Record<string, string> = {}, platform: NodeJS.Platform = "linux") =>

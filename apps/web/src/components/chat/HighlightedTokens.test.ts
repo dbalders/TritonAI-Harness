@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import { embeddedScripts } from "../../lib/embeddedScripts";
 import { keyedLines, withEmbeddedScripts, wordsOf } from "./HighlightedTokens";
 
@@ -26,7 +27,6 @@ describe("keyedLines", () => {
     "Get-ChildItem\r\nWrite-Output done\r\n",
     "mixed\r\nendings\n\nlone \r stays",
   ])("renders the same text as the source: %j", (code) => {
-    // Shiki splits lines on \r?\n and drops the ending from the tokens.
     const lines = code.split(/\r?\n/u).map((line) => tokensOf(line));
     const rendered = keyedLines(code, lines)
       .map(({ tokens, ending }) => tokens.map((token) => token.content).join("") + ending)

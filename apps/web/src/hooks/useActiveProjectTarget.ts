@@ -1,6 +1,8 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+
 import { useProjects } from "~/state/entities";
+
 import { useHandleNewThread } from "./useHandleNewThread";
 
 export interface ActiveProjectTarget {

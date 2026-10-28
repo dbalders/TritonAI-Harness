@@ -434,8 +434,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const instanceId = ProviderInstanceId.make("acpRegistry_shared");
-      const results = yield* Effect.all(
-        ["First", "Second"].map((displayName) =>
+      const results = yield* Effect.forEach(
+        ["First", "Second"],
+        (displayName) =>
           serverSettings
             .updateProviderInstance({
               operation: "create",
@@ -447,7 +448,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
               },
             })
             .pipe(Effect.result),
-        ),
         { concurrency: "unbounded" },
       );
 
@@ -724,7 +724,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
-  // A backend behind a custom model may refuse the built-in default (#12651).
+  // A backend behind a custom model may refuse the built-in default.
   it.effect("falls back to the thread default when it is a custom model on that instance", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
@@ -1349,7 +1349,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         assert.notInclude(yield* fs.readFileString(config.settingsPath), value);
         assert.notInclude(JSON.stringify(client), value);
       }
-      // Editing another field from the client's copy keeps the saved password.
       const clientConfig = client.providerInstances[opencode]?.config as Record<string, unknown>;
       const edited = yield* service.updateProviderInstance({
         operation: "upsert",
@@ -1764,10 +1763,14 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         runOnWorktreeCreate: false,
       };
       const model = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5");
-      const modelJson = yield* Schema.encodeEffect(Schema.fromJsonString(ModelSelection))(model);
-      const scriptsJson = yield* Schema.encodeEffect(
+      const encodeModelSelection = Schema.encodeEffect(Schema.fromJsonString(ModelSelection));
+
+      const modelJson = yield* encodeModelSelection(model);
+      const encodeProjectScripts = Schema.encodeEffect(
         Schema.fromJsonString(Schema.Array(ProjectScript)),
-      )([script]);
+      );
+
+      const scriptsJson = yield* encodeProjectScripts([script]);
       for (const [projectId, modelColumn, envMode, autoPull, scripts] of [
         [legacyProject, modelJson, "worktree", 1, scriptsJson],
         [scriptedProject, null, null, 0, scriptsJson],

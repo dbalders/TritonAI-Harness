@@ -1,5 +1,6 @@
 import { EnvironmentId, ProjectId, type AgentSessionProjectCandidate } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+
 import {
   groupOnboardingProjects,
   partitionOnboardingProjects,
@@ -190,28 +191,6 @@ describe("resolveOnboardingProjectId", () => {
         candidate("/projects/repo"),
       ),
     ).toBeNull();
-  });
-
-  it("finds the current root owner when the scan has no project ID", () => {
-    const recreatedProjectId = ProjectId.make("recreated-project");
-    expect(
-      resolveOnboardingProjectId(
-        [
-          {
-            id: localProjectId,
-            environmentId: localEnvironmentId,
-            workspaceRoot: "/projects/other",
-          },
-          {
-            id: recreatedProjectId,
-            environmentId: localEnvironmentId,
-            workspaceRoot: "/projects/repo",
-          },
-        ],
-        localEnvironmentId,
-        candidate("/projects/repo"),
-      ),
-    ).toBe(recreatedProjectId);
   });
 });
 

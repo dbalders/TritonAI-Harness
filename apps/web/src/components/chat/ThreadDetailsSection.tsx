@@ -1,4 +1,5 @@
 import type { ComponentProps, ReactNode } from "react";
+
 import { cn } from "../../lib/utils";
 
 export function ThreadDetailsSection({
@@ -25,7 +26,7 @@ export function ThreadDetailsSection({
     >
       <div
         className={cn(
-          "mb-1 flex min-h-8 min-w-0 items-center justify-between gap-2 px-1.5",
+          "mb-1 flex min-h-8 min-w-0 items-center justify-between gap-2 px-2.5",
           !showHeading && "hidden",
         )}
       >

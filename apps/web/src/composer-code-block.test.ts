@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { Editor, Node } from "@tiptap/core";
 import { newlineInCode } from "@tiptap/pm/commands";
 import { TextSelection } from "@tiptap/pm/state";
+
 import {
   indentCodeBlock,
   convertCodeFenceOnEnter,
@@ -10,6 +11,7 @@ import {
   indentedNewlineInCodeBlock,
 } from "./composer-code-block";
 import StarterKit from "@tiptap/starter-kit";
+
 import {
   ComposerCodeBlockExtension,
   ComposerListExtensions,

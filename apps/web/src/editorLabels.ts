@@ -1,4 +1,5 @@
 import { EDITORS, type EditorId } from "@t3tools/contracts";
+
 import { getLocalFileManagerName } from "~/lib/utils";
 
 const editorLabels = new Map<EditorId, string>(EDITORS.map((editor) => [editor.id, editor.label]));

@@ -207,7 +207,13 @@ $null = [Threading.ManualResetEvent]::new($false).WaitOne()`;
           child.kill("SIGKILL");
           await exited;
         }
-      await NodeFSP.rm(home, { recursive: true, force: true });
+      // Windows can retain the copied executable's handle briefly after process exit.
+      await NodeFSP.rm(home, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 100,
+      });
       await NodeFSP.rm(`${runtimeRoot}.lock`, { recursive: true, force: true });
     },
   };

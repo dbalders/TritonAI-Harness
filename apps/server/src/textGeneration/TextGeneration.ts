@@ -37,9 +37,9 @@ type TextGenerationOp =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
+  | "generateReviewGuide"
   | "generateDailyMemory"
   | "generateIdeas"
-  | "generateReviewGuide"
   | "generateHelp";
 
 const resolveInstance = (
@@ -60,12 +60,12 @@ const resolveInstance = (
     ),
   );
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   return TextGeneration.of({
-    generateHelp: (input) =>
+    generateHelp: Effect.fn("TextGeneration.generateHelp")((input) =>
       resolveInstance(registry, "generateHelp", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
           textGeneration.generateHelp
@@ -78,24 +78,31 @@ export const make = Effect.gen(function* () {
               ),
         ),
       ),
-    generateCommitMessage: (input) =>
-      resolveInstance(registry, "generateCommitMessage", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)),
-      ),
-    generatePrContent: (input) =>
-      resolveInstance(registry, "generatePrContent", input.modelSelection.instanceId).pipe(
+    ),
+    generateCommitMessage: Effect.fn("TextGeneration.generateCommitMessage")(function (input) {
+      return resolveInstance(
+        registry,
+        "generateCommitMessage",
+        input.modelSelection.instanceId,
+      ).pipe(Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)));
+    }),
+    generatePrContent: Effect.fn("TextGeneration.generatePrContent")(function (input) {
+      return resolveInstance(registry, "generatePrContent", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generatePrContent(input)),
-      ),
-    generateBranchName: (input) =>
-      resolveInstance(registry, "generateBranchName", input.modelSelection.instanceId).pipe(
+      );
+    }),
+    generateBranchName: Effect.fn("TextGeneration.generateBranchName")(function (input) {
+      return resolveInstance(registry, "generateBranchName", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
-      ),
-    generateReviewGuide: (input) =>
-      resolveInstance(registry, "generateReviewGuide", input.modelSelection.instanceId).pipe(
+      );
+    }),
+    generateReviewGuide: Effect.fn("TextGeneration.generateReviewGuide")(function (input) {
+      return resolveInstance(registry, "generateReviewGuide", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input)),
-      ),
-    generateThreadTitle: (input) =>
-      resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
+      );
+    }),
+    generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function (input) {
+      return resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
           Effect.gen(function* () {
             const linkedContext =
@@ -109,8 +116,9 @@ export const make = Effect.gen(function* () {
             return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
           }),
         ),
-      ),
-    generateDailyMemory: (input) =>
+      );
+    }),
+    generateDailyMemory: Effect.fn("TextGeneration.generateDailyMemory")((input) =>
       resolveInstance(registry, "generateDailyMemory", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
           textGeneration.generateDailyMemory
@@ -124,7 +132,8 @@ export const make = Effect.gen(function* () {
               ),
         ),
       ),
-    generateIdeas: (input) =>
+    ),
+    generateIdeas: Effect.fn("TextGeneration.generateIdeas")((input) =>
       resolveInstance(registry, "generateIdeas", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
           textGeneration.generateIdeas
@@ -138,6 +147,7 @@ export const make = Effect.gen(function* () {
               ),
         ),
       ),
+    ),
   });
 });
 

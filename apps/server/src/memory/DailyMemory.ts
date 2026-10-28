@@ -1,17 +1,8 @@
 import { getManagedCodexSettings } from "../managedPolicy.ts";
 /**
- * DailyMemory - writes this device's daily notes into the general memory
- * vault, and keeps the Codex memory skill in step with the Memory setting.
- *
- * The summarizer remembers the last day it finished. On startup, every hour,
- * and when Memory is turned on, it summarizes each finished day after that
- * one, oldest first, and records each day only after its note is written. A
- * run that stops halfway resumes at the first unfinished day. Days without
- * thread activity or inbox notes are recorded without calling the model.
- *
- * Once every finished day is done, today's note is written too, and rewritten
- * at most every four hours while there is new activity. It stays partial until
- * the day ends and the final pass replaces it.
+ * Summarize finished days oldest first and checkpoint only after writing; retry unfinished work.
+ * Skip the model for empty days. Update today at most every four hours with new activity,
+ * then replace its partial note after the day ends. Keep the Codex memory skill in sync.
  */
 import {
   type ServerMemoryStatus,
@@ -477,7 +468,9 @@ const resolveProjectNoteNames = Effect.fn("memory.resolveProjectNoteNames")(func
   return names;
 });
 
-/** @public Service construction is part of the canonical Effect module API. */
+/**
+ * @public
+ */
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* ServerSettingsService;

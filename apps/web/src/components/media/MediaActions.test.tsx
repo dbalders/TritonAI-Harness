@@ -7,7 +7,6 @@ import {
 import { AsyncResult } from "effect/reactivity";
 import { createElement, isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import { MediaActions, useMediaActions, type MediaActionSource } from "./MediaActions";
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -75,6 +74,8 @@ vi.mock("../ui/toast", () => ({
     update: () => state.menuFinished?.(),
   },
 }));
+
+import { MediaActions, useMediaActions, type MediaActionSource } from "./MediaActions";
 
 const environmentId = EnvironmentId.make("media-environment");
 const threadId = ThreadId.make("media-thread");

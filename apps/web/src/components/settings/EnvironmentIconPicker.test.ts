@@ -1,5 +1,6 @@
 import type { ServerConfig } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+
 import { resolveEnvironmentIconPickerLock } from "./EnvironmentIconPicker";
 
 const config = (environmentIcon: boolean | undefined) =>

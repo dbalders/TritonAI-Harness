@@ -1,15 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
-
 import { ThreadId } from "@t3tools/contracts";
-
 import * as Deferred from "effect/Deferred";
-
 import * as Effect from "effect/Effect";
-
 import * as Exit from "effect/Exit";
-
 import * as Fiber from "effect/Fiber";
-
 import * as Stream from "effect/Stream";
 
 import * as WorktreeSetupTracker from "./WorktreeSetupTracker.ts";

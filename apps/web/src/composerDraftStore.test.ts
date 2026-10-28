@@ -1,68 +1,71 @@
-import {
-  scopedProjectKey,
-  scopedThreadKey,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
-
-import {
-  defaultInstanceIdForDriver,
-  EnvironmentId,
-  ProjectId,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
-  ThreadId,
-  type ModelSelection,
-  type PreviewAnnotationPayload,
-  type ProviderOptionSelection,
-  DEFAULT_MODEL,
-  DEFAULT_MODEL_BY_PROVIDER,
-  type OrchestrationV2ThreadShell,
-  type OrchestrationV2ShellSnapshot,
-} from "@t3tools/contracts";
-import { createModelSelection } from "@t3tools/shared/model";
-
-import { afterEach, beforeEach, describe, expect, it, vi, onTestFinished } from "vite-plus/test";
-import {
-  COMPOSER_DRAFT_STORAGE_KEY,
-  clearComposerDraftsEnvironment,
-  beginBackgroundDraftSubmissionByRef,
-  clearBackgroundDraftSubmissionByRef,
-  finalizePromotedDraftThreadByRef,
-  markPromotedDraftThreadByRef,
-  type ComposerFileAttachment,
-  type ComposerImageAttachment,
-  composerFileNeedsReattach,
-  partializeComposerDraftStoreState,
-  useComposerDraftStore,
-  DraftId,
-  subscribeComposerDraftModelReconciliation,
-  deriveEffectiveComposerModelState,
-  restoreFailedDraftThread,
-} from "./composerDraftStore";
-
-import { insertInlineContextReference } from "./lib/composerContextReferences";
-import { terminalContextReference, threadContextRecord } from "./lib/composerContextRecords";
-import { formatTerminalContextReference, type TerminalContextDraft } from "./lib/terminalContext";
-import { createDeferredStorage } from "./lib/storage";
-import { applyPreviewServerSnapshot, resetPreviewStateForTests } from "./previewStateStore";
 import { PrimaryConnectionTarget } from "@t3tools/client-runtime/connection";
 import { createEnvironmentThreadShellAtoms } from "@t3tools/client-runtime/state/threads";
 import {
   applyShellStreamEvent,
   createEnvironmentSnapshotAtom,
+  EMPTY_SHELL_STATE,
   type EnvironmentShellState,
   type EnvironmentShellStatus,
 } from "@t3tools/client-runtime/state/shell";
 import { makeThreadProjectionFixture } from "./test-fixtures";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
+import {
+  scopedProjectKey,
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+import {
+  defaultInstanceIdForDriver,
+  DEFAULT_MODEL,
+  DEFAULT_MODEL_BY_PROVIDER,
+  EnvironmentId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  RunId,
+  ThreadId,
+  type OrchestrationV2ThreadShell,
+  type OrchestrationV2ShellSnapshot,
+  type ModelSelection,
+  type PreviewAnnotationPayload,
+  type ProviderOptionSelection,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
+import { createModelSelection } from "@t3tools/shared/model";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vite-plus/test";
+import {
+  COMPOSER_DRAFT_STORAGE_KEY,
+  subscribeComposerDraftModelReconciliation,
+  deriveEffectiveComposerModelState,
+  clearComposerDraftsEnvironment,
+  beginBackgroundDraftSubmissionByRef,
+  clearBackgroundDraftSubmissionByRef,
+  finalizePromotedDraftThreadByRef,
+  markPromotedDraftThreadByRef,
+  resolveDraftPromotionNavigationTarget,
+  restoreFailedDraftThread,
+  subscribeDraftThreadPromotion,
+  type ComposerFileAttachment,
+  type ComposerImageAttachment,
+  composerFileNeedsReattach,
+  partializeComposerDraftStoreState,
+  useComposerDraftStore,
+  DraftId,
+} from "./composerDraftStore";
+import { waitForDraftHeroTransition } from "./components/chat/draftHeroTransition";
+import { insertInlineContextReference } from "./lib/composerContextReferences";
+import { terminalContextReference, threadContextRecord } from "./lib/composerContextRecords";
 import {
   copiedComposerAttachmentFile,
   rememberCopiedComposerAttachments,
 } from "./lib/copiedComposerAttachments";
+import { formatTerminalContextReference, type TerminalContextDraft } from "./lib/terminalContext";
+import { createDeferredStorage } from "./lib/storage";
+import { applyPreviewServerSnapshot, resetPreviewStateForTests } from "./previewStateStore";
 
 const CODEX_INSTANCE = ProviderInstanceId.make("codex");
 const CODEX_SECONDARY_INSTANCE = ProviderInstanceId.make("codex_secondary");
@@ -524,6 +527,42 @@ describe("composerDraftStore file attachments", () => {
     expect(draft?.files.map((file) => file.id)).toEqual(["file-accepted"]);
   });
 
+  it("reattaches a DNG with an older generic-MIME marker at attachment capacity", () => {
+    const store = useComposerDraftStore.getState();
+    const file = new File(["raw"], "photo.DNG", { type: "image/x-adobe-dng" });
+    const marker: ComposerFileAttachment = {
+      type: "file",
+      id: "dng-marker",
+      name: file.name,
+      mimeType: "application/octet-stream",
+      sizeBytes: file.size,
+      file: null,
+    };
+    store.addFiles(threadRef, [marker]);
+    store.addImages(
+      threadRef,
+      Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1 }, (_, index) =>
+        makeImage({
+          id: `image-${index}`,
+          name: `image-${index}.png`,
+          previewUrl: `blob:image-${index}`,
+        }),
+      ),
+    );
+
+    const repicked: ComposerFileAttachment = {
+      ...marker,
+      id: "dng-repicked",
+      mimeType: file.type,
+      file,
+    };
+    store.addFiles(threadRef, [repicked]);
+
+    const files = store.getComposerDraft(threadRef)?.files;
+    expect(files).toEqual([repicked]);
+    expect(files?.some(composerFileNeedsReattach)).toBe(false);
+  });
+
   it("replaces a needs-reattach marker when the same file is picked again", () => {
     const store = useComposerDraftStore.getState();
     const marker: ComposerFileAttachment = { ...makeFile("file-marker"), file: null };
@@ -551,7 +590,6 @@ describe("composerDraftStore terminal contexts", () => {
       logicalProjectDraftThreadKeyByLogicalProjectKey: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
-      stickyRuntimeMode: null,
     });
   });
 
@@ -1206,9 +1244,9 @@ function modelReconciliationHarness(
     ],
   };
   const shellStateAtom = Atom.make<EnvironmentShellState>({
+    ...EMPTY_SHELL_STATE,
     snapshot: Option.some(initialSnapshot),
     status: initialStatus,
-    error: Option.none(),
   });
   const shellResultAtom = Atom.map(shellStateAtom, AsyncResult.success);
   const snapshotAtom = createEnvironmentSnapshotAtom(() => shellResultAtom)(environmentId);
@@ -1272,6 +1310,162 @@ function modelReconciliationHarness(
     model: () => registry.get(shells.threadShellAtom({ environmentId, threadId }))!.modelSelection,
   };
 }
+
+type PromotionShell = NonNullable<
+  Parameters<typeof resolveDraftPromotionNavigationTarget>[0]["serverThread"]
+>;
+
+function draftPromotionHarness() {
+  const tasks: Array<() => void> = [];
+  const registry = AtomRegistry.make({
+    scheduleTask: (task) => {
+      tasks.push(task);
+      return () => {};
+    },
+  });
+  onTestFinished(() => registry.dispose());
+  const flush = () => {
+    for (let task = tasks.shift(); task !== undefined; task = tasks.shift()) task();
+  };
+  const threadRefsAtom = Atom.make<ReadonlyArray<ScopedThreadRef>>([]);
+  const shellAtoms = new Map<string, Atom.Writable<PromotionShell | null>>();
+  const shellAtom = (ref: ScopedThreadRef) => {
+    const key = scopedThreadKey(ref);
+    let atom = shellAtoms.get(key);
+    if (!atom) {
+      atom = Atom.make<PromotionShell | null>(null);
+      shellAtoms.set(key, atom);
+    }
+    return atom;
+  };
+  onTestFinished(
+    subscribeDraftThreadPromotion({ registry, threadRefsAtom, threadShellAtom: shellAtom }),
+  );
+  flush();
+  return {
+    flush,
+    arrive(ref: ScopedThreadRef, shell: PromotionShell | null = null) {
+      registry.set(shellAtom(ref), shell);
+      registry.set(threadRefsAtom, [...registry.get(threadRefsAtom), ref]);
+      flush();
+    },
+    updateShell(ref: ScopedThreadRef, shell: PromotionShell) {
+      registry.set(shellAtom(ref), shell);
+      flush();
+    },
+  };
+}
+
+describe("composerDraftStore draft promotion", () => {
+  const projectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-promotion"));
+  const draftId = DraftId.make("draft-promotion");
+  const threadId = ThreadId.make("thread-promotion");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+  const preparingRun = {
+    runId: RunId.make("run-promotion"),
+    status: "preparing" as const,
+    requestedAt: "2026-03-29T00:00:00.000Z",
+    startedAt: null,
+    completedAt: null,
+    assistantMessageId: null,
+  };
+
+  beforeEach(resetComposerDraftStore);
+
+  it("stays on the draft until the server owns the send", () => {
+    expect(
+      resolveDraftPromotionNavigationTarget({
+        serverThreadRef: threadRef,
+        serverThread: { latestRun: preparingRun, latestUserMessageAt: null },
+        backgroundSubmissionPending: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveDraftPromotionNavigationTarget({
+        serverThreadRef: threadRef,
+        serverThread: { latestRun: null, latestUserMessageAt: null },
+        backgroundSubmissionPending: false,
+      }),
+    ).toBeNull();
+    const persisted = { latestRun: preparingRun, latestUserMessageAt: "2026-03-29T00:00:00.000Z" };
+    expect(
+      resolveDraftPromotionNavigationTarget({
+        serverThreadRef: threadRef,
+        serverThread: persisted,
+        backgroundSubmissionPending: false,
+      }),
+    ).toBe(threadRef);
+    expect(
+      resolveDraftPromotionNavigationTarget({
+        serverThreadRef: threadRef,
+        serverThread: persisted,
+        backgroundSubmissionPending: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("marks a draft promoting when its reserved thread arrives, then finalizes into it", async () => {
+    const h = draftPromotionHarness();
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "typed during setup");
+    h.flush();
+    expect(store.getDraftSession(draftId)?.promotedTo).toBeNull();
+
+    h.arrive(threadRef, { latestRun: preparingRun, latestUserMessageAt: null });
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.promotedTo).toEqual(
+      threadRef,
+    );
+
+    h.updateShell(threadRef, {
+      latestRun: preparingRun,
+      latestUserMessageAt: "2026-03-29T00:00:00.000Z",
+    });
+    await waitForDraftHeroTransition();
+
+    const state = useComposerDraftStore.getState();
+    expect(state.getDraftSession(draftId)).toBeNull();
+    expect(state.getPromotedDraftRedirect(draftId)).toEqual(threadRef);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.prompt).toBe("typed during setup");
+  });
+
+  it("holds a background submission on its draft until the send settles", async () => {
+    const h = draftPromotionHarness();
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    beginBackgroundDraftSubmissionByRef(threadRef);
+    h.arrive(threadRef, {
+      latestRun: preparingRun,
+      latestUserMessageAt: "2026-03-29T00:00:00.000Z",
+    });
+    await waitForDraftHeroTransition();
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.promotedTo).toEqual(
+      threadRef,
+    );
+
+    clearBackgroundDraftSubmissionByRef(threadRef);
+    h.flush();
+    await waitForDraftHeroTransition();
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toBeNull();
+  });
+
+  it("does not finalize a draft whose send failed and was restored", async () => {
+    const h = draftPromotionHarness();
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    const sent = useComposerDraftStore.getState().getDraftSession(draftId)!;
+    h.arrive(threadRef, {
+      latestRun: { ...preparingRun, status: "failed" as const },
+      latestUserMessageAt: null,
+    });
+    restoreFailedDraftThread(draftId, sent, ThreadId.make("retry-thread"));
+    h.flush();
+    await waitForDraftHeroTransition();
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.threadId).toBe(
+      "retry-thread",
+    );
+  });
+});
 
 describe("composerDraftStore modelSelection", () => {
   const threadId = ThreadId.make("thread-model-options");
@@ -1609,31 +1803,6 @@ describe("composerDraftStore sticky composer settings", () => {
     resetComposerDraftStore();
   });
 
-  // regression: #246 fix(models): remember explicit model choices for new tasks
-  it("keeps the manual choice when opening an old thread or seeding a project override", () => {
-    const store = useComposerDraftStore.getState();
-    const remembered = modelSelection(CODEX_DRIVER, "flash", { reasoningEffort: "high" });
-    const oldThread = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("old-glm-thread"));
-    const pinnedDraft = DraftId.make("pinned-glm-project");
-    const freshDraft = DraftId.make("fresh-flash-draft");
-
-    store.setStickyModelSelection(remembered);
-    store.setModelSelection(oldThread, modelSelection(CODEX_DRIVER, "glm"));
-    store.getComposerDraft(oldThread);
-    store.applyStickyState(pinnedDraft);
-    store.setModelSelection(pinnedDraft, modelSelection(CODEX_DRIVER, "glm"), {
-      replaceOptions: true,
-    });
-    store.applyStickyState(freshDraft);
-
-    expect(store.getComposerDraft(freshDraft)?.modelSelectionByProvider[CODEX_INSTANCE]).toEqual(
-      remembered,
-    );
-    expect(useComposerDraftStore.getState().stickyModelSelectionByProvider[CODEX_INSTANCE]).toEqual(
-      remembered,
-    );
-  });
-
   it("preserves sticky provider options when model selection omits options", () => {
     const store = useComposerDraftStore.getState();
 
@@ -1701,6 +1870,29 @@ describe("composerDraftStore sticky composer settings", () => {
     store.applyStickyState(draftId);
 
     expect(draftByKey(draftId)).toBeUndefined();
+  });
+  it("keeps the manual choice when opening an old thread or seeding a project override", () => {
+    const store = useComposerDraftStore.getState();
+    const remembered = modelSelection(CODEX_DRIVER, "flash", { reasoningEffort: "high" });
+    const oldThread = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("old-glm-thread"));
+    const pinnedDraft = DraftId.make("pinned-glm-project");
+    const freshDraft = DraftId.make("fresh-flash-draft");
+
+    store.setStickyModelSelection(remembered);
+    store.setModelSelection(oldThread, modelSelection(CODEX_DRIVER, "glm"));
+    store.getComposerDraft(oldThread);
+    store.applyStickyState(pinnedDraft);
+    store.setModelSelection(pinnedDraft, modelSelection(CODEX_DRIVER, "glm"), {
+      replaceOptions: true,
+    });
+    store.applyStickyState(freshDraft);
+
+    expect(store.getComposerDraft(freshDraft)?.modelSelectionByProvider[CODEX_INSTANCE]).toEqual(
+      remembered,
+    );
+    expect(useComposerDraftStore.getState().stickyModelSelectionByProvider[CODEX_INSTANCE]).toEqual(
+      remembered,
+    );
   });
 });
 
@@ -1952,52 +2144,6 @@ describe("composerDraftStore model seed migration", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("composerDraftStore runtime and interaction settings", () => {
-  const threadId = ThreadId.make("thread-settings");
-  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
-
-  beforeEach(() => {
-    resetComposerDraftStore();
-  });
-
-  it("uses the sticky runtime mode only for future drafts", () => {
-    const store = useComposerDraftStore.getState();
-    const projectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-settings"));
-    const existingDraftId = DraftId.make("draft-existing-runtime-mode");
-    const newDraftId = DraftId.make("draft-new-runtime-mode");
-
-    store.setLogicalProjectDraftThreadId("existing-project", projectRef, existingDraftId);
-    store.setRuntimeMode(threadRef, "full-access");
-    store.setLogicalProjectDraftThreadId("new-project", projectRef, newDraftId);
-
-    expect(store.getDraftSession(existingDraftId)?.runtimeMode).toBe("auto-accept-edits");
-    expect(useComposerDraftStore.getState().getDraftSession(newDraftId)?.runtimeMode).toBe(
-      "full-access",
-    );
-  });
-
-  it("persists and hydrates the sticky runtime mode", () => {
-    const store = useComposerDraftStore.getState();
-    store.setRuntimeMode(threadRef, "full-access");
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
-        merge: (
-          persistedState: unknown,
-          currentState: ReturnType<typeof useComposerDraftStore.getState>,
-        ) => ReturnType<typeof useComposerDraftStore.getState>;
-      };
-    };
-
-    const persistedState = partializeComposerDraftStoreState(useComposerDraftStore.getState());
-    const mergedState = persistApi
-      .getOptions()
-      .merge(persistedState, useComposerDraftStore.getInitialState());
-
-    expect(mergedState.stickyRuntimeMode).toBe("full-access");
   });
 });
 
@@ -2351,5 +2497,44 @@ describe("composerDraftStore attachment references", () => {
     expect(merged.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.prompt).toBe(
       prompt,
     );
+  });
+});
+describe("composerDraftStore runtime and interaction settings", () => {
+  const threadId = ThreadId.make("thread-settings");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+  it("uses the sticky runtime mode only for future drafts", () => {
+    const store = useComposerDraftStore.getState();
+    const projectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-settings"));
+    const existingDraftId = DraftId.make("draft-existing-runtime-mode");
+    const newDraftId = DraftId.make("draft-new-runtime-mode");
+
+    store.setLogicalProjectDraftThreadId("existing-project", projectRef, existingDraftId);
+    store.setRuntimeMode(threadRef, "full-access");
+    store.setLogicalProjectDraftThreadId("new-project", projectRef, newDraftId);
+
+    expect(store.getDraftSession(existingDraftId)?.runtimeMode).toBe("auto-accept-edits");
+    expect(useComposerDraftStore.getState().getDraftSession(newDraftId)?.runtimeMode).toBe(
+      "full-access",
+    );
+  });
+  it("persists and hydrates the sticky runtime mode", () => {
+    const store = useComposerDraftStore.getState();
+    store.setRuntimeMode(threadRef, "full-access");
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+
+    const persistedState = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.stickyRuntimeMode).toBe("full-access");
   });
 });

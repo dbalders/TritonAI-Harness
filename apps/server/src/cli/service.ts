@@ -1,3 +1,4 @@
+import { resolveEntryPath } from "./invocation.ts";
 import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Console from "effect/Console";
@@ -105,9 +106,9 @@ function formatServiceStatus(status: BootService.BootServiceStatus, cliVersion: 
   ].join("\n");
 }
 
-const runServiceCommand = Effect.fn("cli.service.run")(function* <A, E>(
+const runServiceCommand = Effect.fn("cli.service.run")(function* <A, E, R>(
   flags: { readonly baseDir: Parameters<typeof resolveCliAuthConfig>[0]["baseDir"] },
-  run: Effect.Effect<A, E, BootService.BootService>,
+  run: Effect.Effect<A, E, R>,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveCliAuthConfig(flags, logLevel);
@@ -131,7 +132,7 @@ const serviceInstallCommand = Command.make("install", serviceReconcileFlags).pip
         const result = yield* reconcileService({ allowDowngrade: flags.allowDowngrade });
         if (!result.changed) {
           yield* Console.log(
-            `TritonAI Harness service is already installed with t3@${packageJson.version}.`,
+            `TritonAI Harness service is already installed with t3@${packageJson.version} (${yield* resolveEntryPath}).`,
           );
           return;
         }
@@ -154,7 +155,7 @@ const serviceUpdateCommand = Command.make("update", serviceReconcileFlags).pipe(
         const result = yield* reconcileService({ allowDowngrade: flags.allowDowngrade });
         if (!result.changed) {
           yield* Console.log(
-            `TritonAI Harness service is already using t3@${packageJson.version}.`,
+            `TritonAI Harness service is already using t3@${packageJson.version} (${yield* resolveEntryPath}).`,
           );
           return;
         }

@@ -9,7 +9,6 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { useThreadActions } from "./useThreadActions";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -164,6 +163,8 @@ vi.mock("./useSettings", () => ({
       confirmThreadUnpin: true,
     }),
 }));
+
+import { useThreadActions } from "./useThreadActions";
 
 const primary = EnvironmentId.make("primary");
 const secondary = EnvironmentId.make("secondary");

@@ -5,6 +5,7 @@ export const providerClients = makeProviderClientRegistry([
   {
     driverKind: ProviderDriverKind.make("codex"),
     label: "TritonAI",
+    acpRegistryAgentIds: ["codex-acp"],
     settingsSchema: CodexSettings,
   },
 ]);
