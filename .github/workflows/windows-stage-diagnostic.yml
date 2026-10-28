@@ -57,7 +57,7 @@ jobs:
           import * as FileSystem from 'effect/FileSystem';
           import * as Layer from 'effect/Layer';
           import * as Path from 'effect/Path';
-          import { FetchHttpClient } from 'effect/unstable/http';
+          import { FetchHttpClient } from 'effect/http';
           import { stageCuaDriver } from './build-desktop-artifact.ts';
           console.log({node:process.version,platform:process.platform,arch:process.arch});
           setTimeout(()=>{console.error('PROBE exceeded 180 seconds');process.exit(124)},180000).unref();
