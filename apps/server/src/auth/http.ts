@@ -3,6 +3,7 @@ import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthStandardClientScopes,
+  missingRequiredScope,
   AuthGrantScope,
   EnvironmentAuthInvalidError,
   type EnvironmentAuthInvalidReason,
@@ -178,8 +179,10 @@ export const authenticateMediaRequest =
         }),
       ),
     );
-    if (!session.scopes.includes(requiredScope)) {
-      return yield* failEnvironmentScopeRequired(requiredScope);
+    // Device input and stream control obey the same authority rule as RPC.
+    const missing = missingRequiredScope(session.scopes, [requiredScope]);
+    if (missing !== undefined) {
+      return yield* failEnvironmentScopeRequired(missing);
     }
     return session;
   });

@@ -287,7 +287,8 @@ The pairing form starts with view-only access. Choose **Full control** and confi
 that you trust the device to run commands, read credentials, change files, and
 grant access before pairing a device that will run agents. Agent control requires
 every permission, including when the agent asks for approvals; removing any one
-blocks launching, continuing, and approving tasks. Runtime modes control how an
+blocks launching, continuing, and approving tasks, controlling or updating
+devices, and seeing scheduled-task webhook links. Runtime modes control how an
 agent asks for permission, rather than limiting what a paired device can access.
 New sessions that can operate tasks or terminals expire within eight hours, even
 when a longer lifetime is requested. This includes full-control MCP and local

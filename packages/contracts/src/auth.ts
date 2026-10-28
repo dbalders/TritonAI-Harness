@@ -177,6 +177,14 @@ export function requiredScopesForAgentControl(
     : scopes;
 }
 
+/** The first scope a grant lacks for a request, applying the agent-control expansion. */
+export function missingRequiredScope(
+  granted: ReadonlyArray<AuthEnvironmentScope>,
+  requested: ReadonlyArray<AuthEnvironmentScope>,
+): AuthEnvironmentScope | undefined {
+  return requiredScopesForAgentControl(requested).find((scope) => !granted.includes(scope));
+}
+
 export const AuthTokenExchangeGrantType =
   "urn:ietf:params:oauth:grant-type:token-exchange" as const;
 export const AuthAccessTokenType = "urn:ietf:params:oauth:token-type:access_token" as const;

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   AuthOrchestrationReadScope,
-  AuthOrchestrationOperateScope,
   AuthSessionId,
+  AuthStandardClientScopes,
   LOCAL_DEVICE_HOST_ID,
   type AuthEnvironmentScope,
 } from "@t3tools/contracts";
@@ -99,17 +99,39 @@ describe("device hub proxy", () => {
     },
   );
 
-  it("requires operate scope for stream tuning", async () => {
+  it.each(AuthStandardClientScopes)(
+    "refuses device input and stream changes before forwarding when %s is missing",
+    async (missing) => {
+      const { handler, requests } = fixture(
+        AuthStandardClientScopes.filter((scope) => scope !== missing),
+      );
+      const hub = "http://t3.test/api/device-hub";
+      for (const request of [
+        new Request(`${hub}/vendor/serve-sim/helper/ws`, { headers: { upgrade: "websocket" } }),
+        new Request(`${hub}/vendor/serve-emu/ws`, { headers: { upgrade: "websocket" } }),
+        new Request(`${hub}/vendor/serve-emu/api/stream-settings`, { method: "POST" }),
+        new Request(`${hub}/vendor/serve-emu/api/fold?device=emulator-5554`, {
+          method: "POST",
+          body: '{"posture":"closed"}',
+        }),
+      ]) {
+        expect((await handler(request)).status).toBe(403);
+      }
+      expect(requests).toEqual([]);
+    },
+  );
+
+  it("requires full device authority for stream tuning", async () => {
     const readOnly = fixture([AuthOrchestrationReadScope]);
     const path = "http://t3.test/api/device-hub/vendor/serve-emu/api/stream-settings";
     expect((await readOnly.handler(new Request(path, { method: "POST" }))).status).toBe(403);
-    const operator = fixture([AuthOrchestrationOperateScope]);
+    const operator = fixture(AuthStandardClientScopes);
     const response = await operator.handler(new Request(path, { method: "POST" }));
     expect(response.status).toBe(200);
     await response.text();
   });
 
-  it("reads Android fold state but requires operate scope to change it", async () => {
+  it("reads Android fold state but requires full device authority to change it", async () => {
     const path = "http://t3.test/api/device-hub/vendor/serve-emu/api/fold?device=emulator-5554";
     const reader = fixture([AuthOrchestrationReadScope]);
     const read = await reader.handler(new Request(path));
@@ -124,7 +146,7 @@ describe("device hub proxy", () => {
     expect(denied.status).toBe(403);
     expect(reader.requests).toHaveLength(1);
 
-    const operator = fixture([AuthOrchestrationOperateScope]);
+    const operator = fixture(AuthStandardClientScopes);
     const changed = await operator.handler(
       new Request(path, { method: "POST", body: '{"posture":"closed"}' }),
     );
@@ -136,7 +158,7 @@ describe("device hub proxy", () => {
   });
 
   it("presents fold changes from an HTTPS client as same-origin hub requests", async () => {
-    const { handler, headers } = fixture([AuthOrchestrationOperateScope]);
+    const { handler, headers } = fixture(AuthStandardClientScopes);
     const response = await handler(
       new Request(
         "https://relay.test/api/device-hub/vendor/serve-emu/api/fold?device=emulator-5554",
@@ -203,7 +225,7 @@ describe("device hub proxy", () => {
   });
 
   it("never forwards the vendor shell endpoint", async () => {
-    const { handler, requests } = fixture([AuthOrchestrationOperateScope]);
+    const { handler, requests } = fixture(AuthStandardClientScopes);
     expect(
       (
         await handler(

@@ -1,7 +1,7 @@
 import {
   CLIENT_GUARDED_RPC_SCOPES,
-  requiredScopesForAgentControl,
-  type DeviceListInput,
+  missingRequiredScope,
+  DeviceListInput,
   clientRpcRequiredScopes,
   authScopeRequiredResponse,
   AssetCreateUrlInput,
@@ -26,6 +26,7 @@ import {
   ORCHESTRATION_V2_WS_METHODS,
   AuthTerminalReadScope,
   type AuthEnvironmentScope,
+  type ScheduledTaskListResult,
   EnvironmentAuthorizationError,
   RpcScopeAuthorization,
   WS_METHODS,
@@ -262,7 +263,7 @@ export function requiredScopeForRpcMethod(method: string): AuthEnvironmentScope 
   return requiredScope;
 }
 
-export const rpcAuthorizationError = (requiredScope: AuthEnvironmentScope) =>
+const rpcAuthorizationError = (requiredScope: AuthEnvironmentScope) =>
   new EnvironmentAuthorizationError({
     message: `The authenticated token is missing required scope: ${requiredScope}.`,
     ...authScopeRequiredResponse(requiredScope),
@@ -284,6 +285,7 @@ const requiredScopesForSettingsUpdate = (payload: unknown) => {
 };
 
 const decodeProjectMutation = Schema.decodeUnknownSync(ProjectMutation);
+const decodeDeviceListInput = Schema.decodeUnknownSync(DeviceListInput);
 
 const requiredScopesForRpcCall = (
   method: string,
@@ -312,6 +314,9 @@ const requiredScopesForRpcCall = (
         : AuthOrchestrationReadScope,
     ];
   }
+  if (method === WS_METHODS.deviceList) {
+    return [requiredScopeForDeviceList(decodeDeviceListInput(payload))];
+  }
   if (method === WS_METHODS.serverUpdateSettings) return requiredScopesForSettingsUpdate(payload);
   if (method === WS_METHODS.projectsMutate) {
     return requiredScopesForProjectMutation(decodeProjectMutation(payload));
@@ -333,11 +338,10 @@ export const layer = (
   Layer.succeed(RpcScopeAuthorization)((effect, { rpc, payload }) => {
     const requestedScopes = requiredScopesForRpcCall(rpc._tag, payload);
     // Help uses its own host-isolated text generation and cannot steer a task.
-    const requiredScopes =
+    const requiredScope =
       rpc._tag === WS_METHODS.helpAsk
-        ? requestedScopes
-        : requiredScopesForAgentControl(requestedScopes);
-    const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
+        ? requestedScopes.find((scope) => !scopes.includes(scope))
+        : missingRequiredScope(scopes, requestedScopes);
     if (requiredScope !== undefined) return Effect.fail(rpcAuthorizationError(requiredScope));
     return onAuthorized === undefined
       ? effect
@@ -345,7 +349,17 @@ export const layer = (
   });
 
 /** Retrying can install or restart tools even though ordinary listing is readable. */
-export const requiredScopeForDeviceList = (input: DeviceListInput): AuthEnvironmentScope =>
+const requiredScopeForDeviceList = (input: DeviceListInput): AuthEnvironmentScope =>
   input.retryHostId || input.updateTool
     ? AuthOrchestrationOperateScope
     : AuthOrchestrationReadScope;
+
+// A webhook path or URL carries the bearer token that starts agent runs, so only
+// sessions that may start one see it; read-only sessions still see the task itself.
+export const withVisibleWebhooks = (
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  result: ScheduledTaskListResult,
+): ScheduledTaskListResult =>
+  missingRequiredScope(scopes, [AuthOrchestrationOperateScope]) === undefined
+    ? result
+    : { tasks: result.tasks.map(({ webhook: _webhook, ...task }) => task) };

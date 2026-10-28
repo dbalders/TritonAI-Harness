@@ -27,6 +27,11 @@ import {
   AuthSourceControlWriteScope,
   AuthTerminalReadScope,
   AuthTerminalOperateScope,
+  DeviceHostId,
+  type DeviceListInput,
+  type DeviceServiceState,
+  type ScheduledTask,
+  ScheduledTaskId,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -41,11 +46,7 @@ import * as Stream from "effect/Stream";
 
 import * as RpcTest from "effect/rpc/RpcTest";
 
-import {
-  RPC_REQUIRED_SCOPES,
-  requiredScopeForRpcMethod,
-  requiredScopeForDeviceList,
-} from "./RpcAuthorization.ts";
+import { RPC_REQUIRED_SCOPES, requiredScopeForRpcMethod } from "./RpcAuthorization.ts";
 
 import * as RpcAuthorization from "./RpcAuthorization.ts";
 
@@ -94,18 +95,129 @@ describe("RPC authorization scopes", () => {
   });
 });
 
-it("requires operate permission for host retry while preserving read-only listing", () => {
-  expect(requiredScopeForDeviceList({})).toBe(AuthOrchestrationReadScope);
-  expect(requiredScopeForDeviceList({ retryHostId: "remote-host" })).toBe(
-    AuthOrchestrationOperateScope,
+describe("device tooling authority", () => {
+  const method = WS_METHODS.deviceList;
+  const group = WsRpcGroup.omit(
+    ...[...WsRpcGroup.requests.keys()].filter(
+      (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof method> => tag !== method,
+    ),
+  );
+  const state: DeviceServiceState = {
+    hosts: [],
+    hostStatus: "ready",
+    hostStatuses: {},
+    devices: [],
+    sessions: [],
+    onboardingCompleted: true,
+    agentAccessEnabled: true,
+    hubBasePath: "/api/device-hub",
+    revision: 1,
+  };
+  // Each of these installs, updates, or restarts host tooling.
+  const controlInputs: ReadonlyArray<DeviceListInput> = [
+    { updateTool: "hub" },
+    { updateTool: "agent", inspectOnly: true },
+    { retryHostId: DeviceHostId.make("remote-host") },
+  ];
+  const deviceClient = (scopes: ReadonlyArray<AuthEnvironmentScope>, handled: unknown[]) =>
+    RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(method, (input) =>
+            Effect.sync(() => {
+              handled.push(input);
+              return state;
+            }),
+          ),
+          RpcAuthorization.layer(scopes),
+        ),
+      ),
+    );
+
+  it.effect.each(AuthStandardClientScopes)(
+    "refuses tool installs and host restarts when %s is missing",
+    (missing) =>
+      Effect.gen(function* () {
+        const handled: unknown[] = [];
+        const client = yield* deviceClient(
+          AuthStandardClientScopes.filter((scope) => scope !== missing),
+          handled,
+        );
+        for (const input of controlInputs) {
+          expect(yield* client[method](input).pipe(Effect.flip)).toMatchObject({
+            _tag: "EnvironmentAuthorizationError",
+            requiredPermission: missing,
+          });
+        }
+        expect(handled).toEqual([]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("lets full device authority manage tooling and read-only sessions list devices", () =>
+    Effect.gen(function* () {
+      const handled: unknown[] = [];
+      const full = yield* deviceClient(AuthStandardClientScopes, handled);
+      for (const input of controlInputs) expect(yield* full[method](input)).toEqual(state);
+      expect(handled).toEqual(controlInputs);
+
+      const readHandled: unknown[] = [];
+      const reader = yield* deviceClient([AuthOrchestrationReadScope], readHandled);
+      expect(yield* reader[method]({})).toEqual(state);
+      expect(yield* reader[method]({ inspectOnly: true })).toEqual(state);
+      expect(readHandled).toEqual([{}, { inspectOnly: true }]);
+    }).pipe(Effect.scoped),
   );
 });
 
-it("requires operate permission for tool updates even alongside a read-only check", () => {
-  expect(requiredScopeForDeviceList({ updateTool: "agent", inspectOnly: true })).toBe(
-    AuthOrchestrationOperateScope,
-  );
-  expect(requiredScopeForDeviceList({ updateTool: "hub" })).toBe(AuthOrchestrationOperateScope);
+describe("scheduled task webhook disclosure", () => {
+  const webhookTask = (url: string | null): ScheduledTask => ({
+    id: ScheduledTaskId.make(`scheduled-task:${url === null ? "local" : "relay"}`),
+    title: "On push",
+    prompt: "Summarize {{body.ref}}",
+    enabled: true,
+    schedule: { type: "webhook", signature: null },
+    projectId: ProjectId.make("project:webhook"),
+    threadId: null,
+    workspaceStrategy: { type: "root" },
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    createdBy: "agent",
+    creationSource: "mcp",
+    createdAt: "2026-10-27T00:00:00.000Z",
+    updatedAt: "2026-10-27T00:00:00.000Z",
+    nextRunAt: null,
+    lastRunAt: null,
+    lastRunStatus: "never",
+    lastRunError: null,
+    runCount: 0,
+    // The path alone carries the bearer token, even with no public URL.
+    webhook: {
+      path: "/api/hooks/scheduled-task/synthetic-bearer-token",
+      url,
+      hasSecret: false,
+    },
+  });
+  const listed = { tasks: [webhookTask(null), webhookTask("https://relay.test/h/synthetic")] };
+
+  it.each(AuthStandardClientScopes)("withholds webhook paths and URLs when %s is missing", (m) => {
+    const visible = RpcAuthorization.withVisibleWebhooks(
+      AuthStandardClientScopes.filter((scope) => scope !== m),
+      listed,
+    );
+    expect(visible.tasks.map((task) => task.id)).toEqual(listed.tasks.map((task) => task.id));
+    expect(JSON.stringify(visible)).not.toContain("synthetic-bearer-token");
+    expect(JSON.stringify(visible)).not.toContain("relay.test");
+  });
+
+  it("shows webhooks only to full device authority and tasks to read-only sessions", () => {
+    expect(RpcAuthorization.withVisibleWebhooks(AuthStandardClientScopes, listed)).toEqual(listed);
+    const readOnly = RpcAuthorization.withVisibleWebhooks([AuthOrchestrationReadScope], listed);
+    expect(readOnly.tasks.map((task) => [task.title, task.webhook])).toEqual([
+      ["On push", undefined],
+      ["On push", undefined],
+    ]);
+  });
 });
 
 describe("RPC scope middleware", () => {
