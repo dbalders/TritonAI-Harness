@@ -81,25 +81,27 @@ export interface GettingStartedSkillRecipe {
 }
 
 /**
- * Everyday starter recipes, best first. Each one lists the skill sets that can
- * run it; plugin skills only appear once their account is connected, so the
- * list follows what the person has set up. `skill-creator` ships with Codex,
- * so there is always at least one card.
+ * Everyday starter recipes, best first. Each option lists the skills that run it
+ * and, for account work, the plugin that must provide them. `skill-creator`
+ * ships with Codex, so there is always at least one card.
  */
 const STARTER_SKILL_RECIPES: ReadonlyArray<{
   readonly id: string;
   readonly title: string;
   readonly description: string;
-  readonly skillSets: ReadonlyArray<ReadonlyArray<string>>;
+  readonly options: ReadonlyArray<{
+    readonly plugin?: string;
+    readonly skills: ReadonlyArray<string>;
+  }>;
   readonly request: string;
 }> = [
   {
     id: "morning-brief",
     title: "Morning brief",
     description: "Today's meetings and the emails waiting on you.",
-    skillSets: [
-      ["outlook-calendar", "outlook-mail"],
-      ["google-calendar", "gmail"],
+    options: [
+      { plugin: "microsoft-365", skills: ["outlook-calendar", "outlook-mail"] },
+      { plugin: "google-workspace", skills: ["google-calendar", "gmail"] },
     ],
     request:
       "Give me a short morning brief: today's meetings with their times, then up to five emails from the last day that need my reply. Only read; don't draft, change, move, or send anything.",
@@ -108,7 +110,10 @@ const STARTER_SKILL_RECIPES: ReadonlyArray<{
     id: "recent-files",
     title: "Find a recent file",
     description: "See what you've been working on lately.",
-    skillSets: [["onedrive-files"], ["google-drive"]],
+    options: [
+      { plugin: "microsoft-365", skills: ["onedrive-files"] },
+      { plugin: "google-workspace", skills: ["google-drive"] },
+    ],
     request:
       "List the five files I changed most recently, with one line on what each seems to be. Only read; don't change anything.",
   },
@@ -116,7 +121,7 @@ const STARTER_SKILL_RECIPES: ReadonlyArray<{
     id: "campus-answer",
     title: "Look up a campus answer",
     description: "Find official UC San Diego guidance, with links.",
-    skillSets: [["ucsd-campus-search"]],
+    options: [{ plugin: "ucsd-assistant", skills: ["ucsd-campus-search"] }],
     request:
       "Find the official UC San Diego guidance on getting a campus parking permit and summarize it in three short bullets, with links to the original pages.",
   },
@@ -124,7 +129,7 @@ const STARTER_SKILL_RECIPES: ReadonlyArray<{
     id: "jira-plate",
     title: "What's on my plate in Jira",
     description: "Your open issues, newest first.",
-    skillSets: [["ucsd-jira"]],
+    options: [{ plugin: "jira-data-center", skills: ["ucsd-jira"] }],
     request:
       "List my open Jira issues, newest first, with each one's status. Only read; don't change anything.",
   },
@@ -132,20 +137,31 @@ const STARTER_SKILL_RECIPES: ReadonlyArray<{
     id: "make-a-skill",
     title: "Make your own skill",
     description: "Turn work you repeat into a saved recipe.",
-    skillSets: [["skill-creator"]],
+    options: [{ skills: ["skill-creator"] }],
     request:
       "Help me plan a skill for a task I repeat every week. Ask me what the task is first, and don't create any files yet.",
   },
 ];
 
-/** Up to three starter recipes the person can run with the skills they have now. */
+/**
+ * Up to three starter recipes the person can run now: the assistant has the
+ * skills, and account skills come from a plugin that is connected. A personal
+ * copy of a plugin's skill doesn't count; it would have no account to use.
+ */
 export function gettingStartedSkillRecipes(
-  available: ReadonlySet<string>,
+  assistantSkills: ReadonlySet<string>,
+  pluginSkills: ReadonlyMap<string, ReadonlySet<string>>,
 ): ReadonlyArray<GettingStartedSkillRecipe> {
-  return STARTER_SKILL_RECIPES.flatMap(({ skillSets, request, ...recipe }) => {
-    const skills = skillSets.find((set) => set.every((name) => available.has(name)));
-    return skills
-      ? [{ ...recipe, prompt: `${skills.map((name) => `$${name}`).join(" ")} ${request}` }]
+  return STARTER_SKILL_RECIPES.flatMap(({ options, request, ...recipe }) => {
+    const option = options.find(({ plugin, skills }) =>
+      skills.every(
+        (name) =>
+          assistantSkills.has(name) &&
+          (plugin === undefined || pluginSkills.get(plugin)?.has(name) === true),
+      ),
+    );
+    return option
+      ? [{ ...recipe, prompt: `${option.skills.map((name) => `$${name}`).join(" ")} ${request}` }]
       : [];
   }).slice(0, 3);
 }

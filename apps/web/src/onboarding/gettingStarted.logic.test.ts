@@ -506,16 +506,18 @@ describe("usage events", () => {
 });
 
 describe("starter skill recipes", () => {
-  it("offers everyday recipes for the skills the person has, best first", () => {
+  it("offers everyday recipes the person can run now, best first", () => {
     const recipes = gettingStartedSkillRecipes(
-      new Set(["skill-creator", "gmail", "google-calendar", "ucsd-campus-search", "agent-tools"]),
+      new Set(["skill-creator", "gmail", "google-calendar", "outlook-mail", "outlook-calendar"]),
+      new Map([
+        ["google-workspace", new Set(["gmail", "google-calendar"])],
+        ["microsoft-365", new Set<string>()],
+      ]),
     );
 
-    expect(recipes.map((recipe) => recipe.id)).toEqual([
-      "morning-brief",
-      "campus-answer",
-      "make-a-skill",
+    expect(recipes.map(({ id, prompt }) => [id, prompt.split(" Give")[0]])).toEqual([
+      ["morning-brief", "$google-calendar $gmail"],
+      ["make-a-skill", expect.stringMatching(/^\$skill-creator /)],
     ]);
-    expect(recipes[0]?.prompt).toMatch(/^\$google-calendar \$gmail Give me a short morning brief/);
   });
 });

@@ -6,7 +6,8 @@ import { useEffect, useState } from "react";
 import { APP_BASE_NAME } from "../../branding";
 import { resolveDefaultProviderModelSelection } from "../../providerInstances";
 import { usePrimaryEnvironmentId } from "../../state/environments";
-import { environmentServerConfigsAtom } from "../../state/server";
+import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import {
   GETTING_STARTED_APPROVAL_PRACTICE,
   GETTING_STARTED_CHAPTERS,
@@ -63,13 +64,44 @@ function usableMail(integration: IntegrationSummary | null): boolean {
   );
 }
 
-/** Starter recipes that use skills the person can run from their default assistant. */
+/** Starter recipes for the skills chapter, checked against connected plugins when it opens. */
 function useStarterRecipes(
   environmentId: ReturnType<typeof usePrimaryEnvironmentId>,
+  active: boolean,
 ): ReadonlyArray<GettingStartedSkillRecipe> {
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const listIntegrations = useAtomCommand(serverEnvironment.listIntegrations, {
+    reportFailure: false,
+  });
+  const [plugins, setPlugins] = useState<{
+    readonly environmentId: string;
+    readonly skills: ReadonlyMap<string, ReadonlySet<string>>;
+  } | null>(null);
+  useEffect(() => {
+    if (!active || !environmentId) return;
+    let current = true;
+    void listIntegrations({ environmentId, input: {} }).then((result) => {
+      if (!current) return;
+      const integrations = result._tag === "Success" ? result.value.integrations : [];
+      setPlugins({
+        environmentId,
+        skills: new Map(
+          integrations.map((integration) => [
+            integration.id,
+            new Set(
+              integration.skills.filter((skill) => skill.available).map((skill) => skill.name),
+            ),
+          ]),
+        ),
+      });
+    });
+    return () => {
+      current = false;
+    };
+  }, [active, environmentId, listIntegrations]);
+
   const config = environmentId ? serverConfigs.get(environmentId) : undefined;
-  if (!config) return [];
+  if (!config || plugins?.environmentId !== environmentId) return [];
   const selection = resolveDefaultProviderModelSelection(
     config.providers,
     config.settings.defaultModelSelection,
@@ -81,6 +113,7 @@ function useStarterRecipes(
         .filter((skill) => skill.enabled && skill.userInvocable !== false)
         .map((skill) => skill.name),
     ),
+    plugins.skills,
   );
 }
 
@@ -92,7 +125,6 @@ export function GettingStartedHost() {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { prepare, pending, error } = useGettingStartedActions(environmentId);
-  const starterRecipes = useStarterRecipes(environmentId);
   const [connectionRevision, setConnectionRevision] = useState(0);
   const [computerHelpGeneration, setComputerHelpGeneration] = useState<number | null>(null);
   const computerHelpSeen = computerHelpGeneration === state.generation;
@@ -102,6 +134,14 @@ export function GettingStartedHost() {
     !state.paused &&
     state.environmentId === environmentId &&
     ["connect", "connected-work"].includes(state.activeChapter);
+  const starterRecipes = useStarterRecipes(
+    environmentId,
+    enabled &&
+      state.startedAt !== null &&
+      !state.paused &&
+      state.environmentId === environmentId &&
+      state.activeChapter === "skills",
+  );
   const connectionEnvironment = relevantConnection ? environmentId : null;
   const refreshKey = `${pathname}:${connectionRevision}`;
   const microsoft = useIntegrationConnection("microsoft-365", connectionEnvironment, refreshKey);
