@@ -60,12 +60,12 @@ for new context automatically. Saved suggestions stay visible while an update ru
 unchanged context reuses the saved result. Suggestions need a Codex text generation
 model configured on the project's environment.
 
-Choose **Open in new thread** on a suggestion to prepare a short request in that
+Choose **Open draft** on a suggestion to prepare a short request in that
 project. Its source conversations are attached as thread references so the agent can
 read their history when needed. Review or edit the draft, then send it when ready.
 
 Suggestions skip work in threads you have settled, and they take into account the plugins you
-have turned on. If a suggestion is stale anyway, choose **Already done** or **Not relevant**.
+have turned on. If a suggestion is stale anyway, open **Dismiss** and choose **Already done** or **Not relevant**.
 It disappears, and the project stops suggesting it. **Restore** below the list brings back
 hidden suggestions.
 
