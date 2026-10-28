@@ -15,6 +15,7 @@ import {
   makeTritonAiGatewayProxy,
   MAX_REPLAYED_MODEL_TEXT_CHARS,
   rewriteResponseEvents,
+  TRITONAI_MAX_OUTPUT_TOKENS,
   trimTritonAiRequestHistory,
   type TritonAiGatewayProxyOptions,
 } from "./TritonAiGatewayProxy.ts";
@@ -287,11 +288,12 @@ const scriptedGateway = Effect.fn(function* (
   return { received, ...(yield* startProxy(`http://127.0.0.1:${address.port}/v1`, {}, options)) };
 });
 
-// The gateway's actual reply when a request exceeds a vLLM model's context window (2026-10-27).
+// The gateway's HTTP 400 body when a request exceeds GLM 5.3 Flash's window, captured on
+// 2026-10-27. Only the gateway's internal fallback routing list is left out.
 const litellmOverflow = JSON.stringify({
   error: {
     message:
-      'litellm.ContextWindowExceededError: litellm.BadRequestError: ContextWindowExceededError: Hosted_vllmException - {"error":{"message":"This model\'s maximum context length is 524288 tokens. However, your prompt contains at least 524289 input tokens"}}',
+      'litellm.ContextWindowExceededError: litellm.BadRequestError: ContextWindowExceededError: Hosted_vllmException - {"error":{"message":"This model\'s maximum context length is 524288 tokens. However, your prompt contains at least 524289 input tokens, which exceeds this limit even without any output tokens. Please reduce the length of the input prompt. (parameter=input_tokens, value=524289)","type":"BadRequestError","param":"input_tokens","code":400}}\nmodel=api-glm-5.3-flash. context_window_fallbacks=None. fallbacks=[omitted].\n\nSet \'context_window_fallback\' - https://docs.litellm.ai/docs/routing#fallbacks',
     type: "invalid_request_error",
     param: null,
     code: "400",
@@ -661,6 +663,85 @@ describe("TritonAI overflow recovery", () => {
         callIds(accepted.input, "function_call_output"),
       );
       expect(JSON.stringify(accepted)).toContain("earlier conversation items");
+    }).pipe(Effect.scoped),
+  );
+
+  // Codex compacts on this route by sending its history plus a summary prompt to /responses.
+  // Without the proxy, Codex retries the gateway's 400 five times and the thread stays stuck.
+  const instructions = [
+    { type: "message", role: "developer", content: [{ type: "input_text", text: "<skills>" }] },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "<environment>" }] },
+  ];
+  const userText = (text: string) => ({
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text }],
+  });
+  const summaryReply = [
+    sse({ type: "response.created" }),
+    sse({
+      type: "response.output_item.done",
+      item: { type: "message", role: "assistant", content: [{ type: "output_text", text: "S" }] },
+    }),
+    sse({ type: "response.completed", response: { output: [], usage: { input_tokens: 9 } } }),
+  ];
+  const gatewayWindow = (limit: number) => (body: unknown) =>
+    JSON.stringify(body).length > limit
+      ? { status: 400, contentType: "application/json", chunks: [litellmOverflow] }
+      : { status: 200, contentType: "text/event-stream", chunks: summaryReply };
+
+  it.effect("lets Codex compact a thread the gateway rejected as too long", () =>
+    Effect.gen(function* () {
+      const compactionPrompt = "You are performing a CONTEXT CHECKPOINT COMPACTION.";
+      const thread = {
+        model: "api-glm-5.3-flash",
+        stream: true,
+        input: [
+          ...instructions,
+          userText(`Review this packet:\n${"clause ".repeat(60_000)}`),
+          { type: "message", role: "assistant", content: [{ type: "output_text", text: "Done" }] },
+          ...instructions,
+          userText("Continue."),
+          userText(compactionPrompt),
+        ],
+      };
+      const gateway = yield* scriptedGateway(gatewayWindow(100_000));
+      const response = yield* post(`${gateway.baseUrl}/responses`, thread);
+      expect(response.status).toBe(200);
+      expect(yield* Effect.promise(() => response.text())).toBe(summaryReply.join(""));
+      expect(gateway.received.length).toBeGreaterThan(1);
+      const accepted = gateway.received.at(-1).input;
+      expect(JSON.stringify(accepted)).not.toContain("clause clause");
+      expect(accepted.at(-1).content[0].text).toBe(compactionPrompt);
+      expect(accepted.at(-2).content[0].text).toBe("Continue.");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("sends a looping reasoning reply back short enough for the next request", () =>
+    Effect.gen(function* () {
+      // A 2026-10-27 GLM 5.3 Flash reply reasoned "maybe" 341,000 times for 18 minutes.
+      const thread = {
+        model: "api-glm-5.3-flash",
+        stream: true,
+        input: [
+          ...instructions,
+          userText("Continue."),
+          {
+            type: "reasoning",
+            summary: [],
+            content: [{ type: "reasoning_text", text: "maybe ".repeat(341_474) }],
+          },
+          userText("Are you still there?"),
+        ],
+      };
+      const gateway = yield* scriptedGateway(gatewayWindow(100_000), "", [], {
+        outputTokenLimit: () => TRITONAI_MAX_OUTPUT_TOKENS,
+      });
+      const response = yield* post(`${gateway.baseUrl}/responses`, thread);
+      expect(response.status).toBe(200);
+      yield* Effect.promise(() => response.text());
+      expect(gateway.received).toHaveLength(1);
+      expect(gateway.received[0].max_output_tokens).toBe(TRITONAI_MAX_OUTPUT_TOKENS);
     }).pipe(Effect.scoped),
   );
 
