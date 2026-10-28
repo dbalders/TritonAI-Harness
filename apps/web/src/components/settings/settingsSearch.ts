@@ -19,6 +19,7 @@ export {
   type SettingsSearchItemId,
 } from "./settingsSearchCatalog";
 import { HOSTED_APP_CHANNEL } from "~/branding";
+import { isFeatureAvailable } from "~/features";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 
@@ -195,6 +196,7 @@ export function filterAvailableSettingsSearchItems(
   const items: ReadonlyArray<SettingsSearchItem> = SETTINGS_SEARCH_ITEMS;
   return items.filter(
     (item) =>
+      (!item.feature || isFeatureAvailable(item.feature)) &&
       (item.id !== "environment-identification" || availability.hasStageArtwork === true) &&
       (!item.cloudOnly || availability.hasCloudPublicConfig) &&
       (!item.environmentOnly || availability.hasEnvironment) &&
@@ -215,6 +217,7 @@ export function settingsForThisPlatform(
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   return items.filter(
     (item) =>
+      (!item.feature || isFeatureAvailable(item.feature)) &&
       (isElectron || item.desktopOnly !== true) &&
       (!item.releaseChannelOnly || isElectron || HOSTED_APP_CHANNEL !== null) &&
       (!item.macOnly || isMacPlatform(platform)) &&

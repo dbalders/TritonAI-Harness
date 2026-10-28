@@ -7,7 +7,7 @@ import { Button } from "../ui/button";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
-import { GUIDED_TOUR_AVAILABLE } from "../../branding";
+import { isFeatureAvailable } from "~/features";
 import { ExperimentalFeaturesSection, LegacyFeaturesSection } from "./SettingsPanels";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
@@ -19,7 +19,7 @@ export function LabsSettingsPanel() {
         {/* Clerk is only mounted when this build has T3 Connect. */}
         {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : <GuestLinksRow />}
       </SettingsSection>
-      {GUIDED_TOUR_AVAILABLE ? <ExperimentalFeaturesSection /> : null}
+      {isFeatureAvailable("guidedTour") ? <ExperimentalFeaturesSection /> : null}
       <LegacyFeaturesSection />
     </SettingsPageContainer>
   );

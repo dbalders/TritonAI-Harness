@@ -4,6 +4,7 @@ import {
   type SourceControlDefinition,
 } from "@t3tools/client-runtime/source-control-clients";
 import { DEFAULT_KEYBINDINGS } from "@t3tools/shared/keybindings";
+import type { FeatureId } from "@t3tools/shared/features";
 import { commandLabel } from "./KeybindingsSettings.labels";
 export type SettingsPath =
   | "/settings/plugins"
@@ -42,6 +43,7 @@ export type SettingsSearchScope =
 export interface SettingsSearchItem {
   readonly id: string;
   readonly title: string;
+  readonly feature?: FeatureId;
   readonly to: SettingsPath;
   readonly targetId?: string;
   readonly searchTerms?: ReadonlyArray<string>;
@@ -211,6 +213,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "experimental-guided-tour",
+    feature: "guidedTour",
     title: "Guided tour (experimental)",
     to: "/settings/labs",
     searchTerms: ["onboarding getting started tutorial walkthrough first run beta experimental"],

@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./features": {
+      "types": "./src/features.ts",
+      "import": "./src/features.ts"
+    },
     "./accountCallback": {
       "types": "./src/accountCallback.ts",
       "import": "./src/accountCallback.ts"

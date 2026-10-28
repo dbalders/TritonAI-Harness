@@ -13,18 +13,21 @@ import {
   prepareModelPreferencesPatch,
 } from "./useSettings";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
+import {
+  isFeatureAvailable,
+  type FeatureEnvironment,
+  type FeatureId,
+} from "@t3tools/shared/features";
 
 const persistenceMocks = vi.hoisted(() => ({
   getClientSettings: vi.fn<() => Promise<ClientSettings | null>>(),
   setClientSettings: vi.fn<(settings: ClientSettings) => Promise<void>>(),
-  guidedTourAvailable: true,
+  featureEnvironment: "nightly" as FeatureEnvironment,
 }));
 
-vi.mock("~/branding", async (original) => ({
-  ...(await original<typeof import("~/branding")>()),
-  get GUIDED_TOUR_AVAILABLE() {
-    return persistenceMocks.guidedTourAvailable;
-  },
+vi.mock("~/features", () => ({
+  isFeatureAvailable: (feature: FeatureId) =>
+    isFeatureAvailable(feature, persistenceMocks.featureEnvironment),
 }));
 
 vi.mock("~/localApi", () => ({
@@ -32,7 +35,7 @@ vi.mock("~/localApi", () => ({
 }));
 
 beforeEach(() => {
-  persistenceMocks.guidedTourAvailable = true;
+  persistenceMocks.featureEnvironment = "nightly";
   persistenceMocks.getClientSettings.mockReset().mockResolvedValue(null);
   persistenceMocks.setClientSettings.mockReset().mockResolvedValue(undefined);
   __resetClientSettingsPersistenceForTests();
@@ -47,12 +50,18 @@ describe("client settings hydration", () => {
     ...DEFAULT_CLIENT_SETTINGS,
     timestampFormat: "12-hour" as const,
     favorites: [{ provider: ProviderInstanceId.make("codex_work"), model: "gpt-5.6" }],
+    gettingStarted: {
+      ...DEFAULT_CLIENT_SETTINGS.gettingStarted,
+      startedAt: "2026-10-27T12:00:00.000Z",
+      activeChapter: "files" as const,
+      completed: ["welcome", "conversation"] as const,
+    },
   };
   const onboardingCompletedAt = "2026-09-05T12:00:00.000Z";
   const complete = (current: ClientSettings) => ({ ...current, onboardingCompletedAt });
 
   it("disables a previously enabled tour on Stable while preserving saved progress and work", async () => {
-    persistenceMocks.guidedTourAvailable = false;
+    persistenceMocks.featureEnvironment = "stable";
     const saved = { ...savedSettings, experimentalGuidedTourEnabled: true };
     persistenceMocks.getClientSettings.mockResolvedValueOnce(saved);
     await ensureClientSettingsHydrated();
@@ -65,11 +74,30 @@ describe("client settings hydration", () => {
     });
   });
 
-  it("retains an enabled tour on Nightly", async () => {
-    const saved = { ...savedSettings, experimentalGuidedTourEnabled: true };
-    persistenceMocks.getClientSettings.mockResolvedValueOnce(saved);
-    await ensureClientSettingsHydrated();
-    expect(getClientSettings()).toEqual(saved);
+  it.each(["nightly", "preview", "development"] as const)(
+    "retains an enabled tour in %s",
+    async (environment) => {
+      persistenceMocks.featureEnvironment = environment;
+      const saved = { ...savedSettings, experimentalGuidedTourEnabled: true };
+      persistenceMocks.getClientSettings.mockResolvedValueOnce(saved);
+      await ensureClientSettingsHydrated();
+      expect(getClientSettings()).toEqual(saved);
+    },
+  );
+
+  it("does not persist or return an enabled Stable experiment through a settings updater", async () => {
+    persistenceMocks.featureEnvironment = "stable";
+    persistenceMocks.getClientSettings.mockResolvedValueOnce(savedSettings);
+    const expected = { ...savedSettings, experimentalGuidedTourEnabled: false, wordWrap: false };
+    await expect(
+      persistClientSettingsUpdate((current) => ({
+        ...current,
+        experimentalGuidedTourEnabled: true,
+        wordWrap: false,
+      })),
+    ).resolves.toEqual(expected);
+    expect(persistenceMocks.setClientSettings).toHaveBeenLastCalledWith(expected);
+    expect(getClientSettings()).toEqual(expected);
   });
 
   it("waits for saved model preferences before applying the first server edit", async () => {
