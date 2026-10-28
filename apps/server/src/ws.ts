@@ -3561,6 +3561,11 @@ export const layerWsRpc = (
         [WS_METHODS.ideasMarkViewed]: (_input) => ideas.markViewed,
         [WS_METHODS.ideasSuggestMore]: (_input) => ideas.suggestMore,
         [WS_METHODS.ideasFeedback]: (input) => ideas.feedback(input),
+        [WS_METHODS.gettingStartedRecord]: ({ event, chapter }) =>
+          analytics.record(`onboarding.${event}`, {
+            ...originProps,
+            ...(chapter === undefined ? {} : { chapter }),
+          }),
         [WS_METHODS.serverListProviderSkillCatalog]: (input) =>
           CodexManagement.listProviderSkillCatalog(input),
         [WS_METHODS.serverInstallProviderSkill]: (input) =>

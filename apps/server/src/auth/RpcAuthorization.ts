@@ -108,6 +108,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.ideasMarkViewed]: AuthOrchestrationOperateScope,
   [WS_METHODS.ideasSuggestMore]: AuthOrchestrationOperateScope,
   [WS_METHODS.ideasFeedback]: AuthOrchestrationOperateScope,
+  [WS_METHODS.gettingStartedRecord]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,
   [WS_METHODS.serverSearchAcpRegistry]: AuthOrchestrationReadScope,
   [WS_METHODS.serverPrepareAcpRegistryAgent]: AuthProvidersManageScope,

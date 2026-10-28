@@ -1343,6 +1343,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:ideas:feedback",
       tag: WS_METHODS.ideasFeedback,
     }),
+    recordGettingStarted: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:getting-started:record",
+      tag: WS_METHODS.gettingStartedRecord,
+    }),
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,

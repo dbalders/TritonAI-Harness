@@ -58,14 +58,23 @@ import { PullRequestMergeMethod } from "./pullRequest.ts";
 export const GettingStartedChapterId = Schema.Literals([
   "welcome",
   "conversation",
+  "approvals",
   "connect",
   "connected-work",
   "files",
+  "skills",
   "ideas",
   "computer-use",
   "ready",
 ]);
 export type GettingStartedChapterId = typeof GettingStartedChapterId.Type;
+
+/** Anonymous guided tour usage. Chapter ids only; never prompts, names, or answers. */
+export const GettingStartedAnalyticsInput = Schema.Struct({
+  event: Schema.Literals(["started", "chapter-completed", "chapter-later", "help-opened"]),
+  chapter: Schema.optionalKey(GettingStartedChapterId),
+});
+export type GettingStartedAnalyticsInput = typeof GettingStartedAnalyticsInput.Type;
 
 const GettingStartedTask = Schema.Struct({
   chapter: GettingStartedChapterId,
