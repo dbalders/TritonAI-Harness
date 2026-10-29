@@ -433,6 +433,12 @@ describe("TritonAI tool search translation", () => {
     });
 
     for (const [name, args, query] of [
+      ["load_plugin_tool", { name: "lookup" }, "__tritonai_exact_plugin_load_v1__ lookup"],
+      [
+        "load_plugin_tool",
+        { name: "account-lookup" },
+        "__tritonai_exact_plugin_load_v1__ account-lookup",
+      ],
       [
         "load_plugin_tool",
         { name: wanted.name },

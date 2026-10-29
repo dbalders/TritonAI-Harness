@@ -48,7 +48,7 @@ export function limitTritonAiRequestImages(body: unknown): void {
 
 const TOOL_SEARCH = "tool_search";
 const MAX_SEARCH_RESULTS = 8;
-const OPERATION_NAME = /^[A-Za-z0-9_-]+_[A-Za-z0-9_-]+$/u;
+const OPERATION_NAME = /^[A-Za-z0-9_-]+$/u;
 // An unindexed query prefix retains load intent across restart and compaction in native history.
 const EXACT_QUERY_PREFIX = "__tritonai_exact_plugin_load_v1__ ";
 const EXACT_LOADER = {
