@@ -184,7 +184,7 @@ export function translateToolSearchForGateway(
       strict: false,
       parameters: tool.parameters,
     };
-    return exactLoading ? [EXACT_LOADER, ...(pluginTools === undefined ? [] : [search])] : [search];
+    return exactLoading ? [EXACT_LOADER] : [search];
   });
   if (!Array.isArray(body.input)) return searchable;
   const exactLoads = new Map<unknown, string>();
@@ -237,7 +237,7 @@ export function translateToolSearchForGateway(
   return searchable;
 }
 
-function toToolSearchCall(item: unknown, exactLoading: boolean, searchMcp: boolean): unknown {
+function toToolSearchCall(item: unknown, exactLoading: boolean): unknown {
   if (
     !Predicate.isObject(item) ||
     item.type !== "function_call" ||
@@ -253,11 +253,7 @@ function toToolSearchCall(item: unknown, exactLoading: boolean, searchMcp: boole
       parsed = { query: item.arguments };
     }
   }
-  if (
-    exactLoading &&
-    item.status !== "in_progress" &&
-    (item.name === PLUGIN_TOOL_LOADER_NAME || !searchMcp)
-  ) {
+  if (exactLoading && item.status !== "in_progress") {
     parsed = {
       query:
         item.name === PLUGIN_TOOL_LOADER_NAME &&
@@ -289,10 +285,7 @@ function toToolSearchCall(item: unknown, exactLoading: boolean, searchMcp: boole
 }
 
 /** Returns a gateway `tool_search` function call to Codex as its client-side search call. */
-export function toCodexToolSearchEvent(
-  data: string,
-  { exactLoading = false, searchMcp = false } = {},
-): string {
+export function toCodexToolSearchEvent(data: string, { exactLoading = false } = {}): string {
   if (!data.includes(`"${TOOL_SEARCH}"`) && !data.includes(`"${PLUGIN_TOOL_LOADER_NAME}"`))
     return data;
   let event: unknown;
@@ -306,7 +299,7 @@ export function toCodexToolSearchEvent(
   if ("item" in event)
     return JSON.stringify({
       ...event,
-      item: toToolSearchCall(event.item, exactLoading, searchMcp),
+      item: toToolSearchCall(event.item, exactLoading),
     });
   return data;
 }
@@ -438,7 +431,6 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
         rewriteResponseEvents(response.stream, (data) =>
           toCodexToolSearchEvent(data, {
             exactLoading,
-            searchMcp: options.pluginTools !== undefined,
           }),
         ),
         {

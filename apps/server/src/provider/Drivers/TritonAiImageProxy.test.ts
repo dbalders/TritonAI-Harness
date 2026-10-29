@@ -440,7 +440,7 @@ describe("TritonAI tool search translation", () => {
       ],
     };
     translateToolSearchForGateway(mixed, [{ namespace: "github", name: neighbor.name }]);
-    expect(mixed.tools).toContainEqual(expect.objectContaining({ name: "tool_search" }));
+    expect(mixed.tools).not.toContainEqual(expect.objectContaining({ name: "tool_search" }));
     expect(JSON.stringify(mixed.tools)).not.toContain(neighbor.name);
     expect(mixed.input[1]).toMatchObject({
       output: "These tools are now available to call: lookup.",

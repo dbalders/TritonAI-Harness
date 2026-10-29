@@ -298,16 +298,31 @@ describe("CodexAdapterV2 thread MCP configuration", () => {
       browserToolsAvailable: true,
     };
     const computerUseMcp = { command: "/fixture/cua-driver", args: ["mcp"], environment: {} };
-    const hosted = CodexAdapterV2.codexThreadRuntimeParams({
+    const hostedInput = {
       mcpSession,
       computerUseMcp,
       keepMcpToolsDirect: true,
+      additionalMcpServers: {
+        "archive.dot": {
+          command: "fixture-mcp",
+          env: { CUSTOM_HEADER: "private-value" },
+          omit_tools_from: ["code_mode"],
+        },
+      },
+    };
+    const hosted = CodexAdapterV2.codexThreadRuntimeParams(hostedInput);
+    assert.deepEqual(hosted.config.mcp_servers, {
+      "archive.dot": { omit_tools_from: ["code_mode", "deferred"] },
     });
     for (const server of ["mcp_servers.t3-code", "mcp_servers.cua-driver"])
       assert.deepInclude(hosted.config[server] as object, { omit_tools_from: ["deferred"] });
     const cloud = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession, computerUseMcp });
     for (const server of ["mcp_servers.t3-code", "mcp_servers.cua-driver"])
       assert.notProperty(cloud.config[server] as object, "omit_tools_from");
+    for (const params of [hosted, cloud]) {
+      assert.isFalse(params.config["features.multi_agent"]);
+      assert.isFalse(params.config["features.multi_agent_v2"]);
+    }
   });
 });
 
@@ -348,6 +363,12 @@ describe("CodexAdapterV2 native protocol logging", () => {
             id: "evt-1",
             http_headers: { Authorization: "Bearer secret-codex-token" },
             usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+            config: {
+              mcp_servers: {
+                external: { args: ["private-argument"], env: { CUSTOM_HEADER: "private-value" } },
+              },
+              model_providers: { custom: { http_headers: { CUSTOM_HEADER: "private-value" } } },
+            },
           },
         },
       });
@@ -374,6 +395,7 @@ describe("CodexAdapterV2 native protocol logging", () => {
               id: "evt-1",
               http_headers: { Authorization: "[REDACTED]" },
               usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+              config: { mcp_servers: "[REDACTED]", model_providers: "[REDACTED]" },
             },
           },
         },
@@ -1265,8 +1287,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           cwd: "/workspace",
           model: "gpt-5.4",
           config: {
-            "tools.update_plan.enabled": true,
-            mcp_optional_startup_grace_ms: 10_000,
+            ...CodexAdapterV2.CODEX_THREAD_CONFIG,
             "mcp_servers.t3-code": {
               url: "http://127.0.0.1:43123/mcp",
               tool_timeout_sec: 3_900,
