@@ -3234,14 +3234,16 @@ export class RegistryRuntime {
       await this.#adoptProviderAuthorizedCapabilities(this.#package(id)).catch(() => undefined);
       await this.#summarize(this.#package(id));
     });
+    // Build the returned list only after the switch's revocation ends; a list taken while it is
+    // still active shows every capability and tool as unavailable.
     return operation
-      .then(() => this.#cachedList())
       .finally(() => {
         const remaining = (this.#serviceEnvironmentSwitches.get(id) ?? 1) - 1;
         if (remaining > 0) this.#serviceEnvironmentSwitches.set(id, remaining);
         else this.#serviceEnvironmentSwitches.delete(id);
         revocation.finish();
-      });
+      })
+      .then(() => this.#cachedList());
   }
 
   /** Compatibility for pre-capability callers; the referenced Access bundle remains authoritative. */

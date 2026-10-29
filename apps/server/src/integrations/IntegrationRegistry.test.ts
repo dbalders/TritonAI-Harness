@@ -882,8 +882,16 @@ describe("IntegrationRegistry lifecycle", () => {
       await expect(read(registry)).resolves.toMatchObject({ environment: "development" });
       expect(registry.isToolAvailableSync("test.fixture.write")).toBe(false);
 
-      // Back on Prod, its earlier sign-in and its Write grant are both still there.
-      await registry.setServiceEnvironment(manifest.id, "production");
+      // Back on Prod, its earlier sign-in and its Write grant are both still there, including in
+      // the list the switch itself returns to Settings.
+      const switchedBack = await registry.setServiceEnvironment(manifest.id, "production");
+      expect(switchedBack.integrations.find(({ id }) => id === manifest.id)).toMatchObject({
+        connectionState: "connected",
+        capabilities: [
+          { id: "fixture.read", available: true },
+          { id: "fixture.write", available: true },
+        ],
+      });
       expect(await summary(registry)).toMatchObject({
         connectionState: "connected",
         accountLabel: "production.example",
