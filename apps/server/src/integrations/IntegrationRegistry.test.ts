@@ -1547,6 +1547,54 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("refuses a staged package whose service environments differ from its manifest", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-staged-environments-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "staged-environments",
+      serviceEnvironments: [
+        { id: "production", displayName: "Prod", description: "records.example" },
+        { id: "development", displayName: "Dev", description: "records-dev.example" },
+      ],
+    };
+    const state: ProviderState = {
+      status: {
+        state: "not_connected",
+        accountLabel: null,
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    const integration = packaged(manifest, provider(manifest.provider!, state));
+    const drifted = {
+      ...integration,
+      bundledFiles: {
+        ...integration.bundledFiles,
+        ".tritonai-plugin/plugin.json": `${JSON.stringify({
+          ...manifest,
+          serviceEnvironments: [
+            manifest.serviceEnvironments![0],
+            { id: "staging", displayName: "Staging", description: "records-staging.example" },
+          ],
+        })}\n`,
+      },
+    };
+    const registry = new RegistryRuntime(root, [drifted]);
+    try {
+      await expect(registry.install(manifest.id)).rejects.toMatchObject({
+        code: "operation_failed",
+      });
+      expect((await registry.list()).integrations[0]?.installed).toBe(false);
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects removed manifest fields and provider contract drift before activation", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-contract-"));
     const state: ProviderState = {

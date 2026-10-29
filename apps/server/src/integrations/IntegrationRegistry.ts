@@ -885,7 +885,9 @@ async function validateStagedPackage(root: string, expected: IntegrationManifest
     installed.provider !== expected.provider ||
     JSON.stringify(installed.capabilities) !== JSON.stringify(expected.capabilities) ||
     JSON.stringify(installed.tools) !== JSON.stringify(expected.tools) ||
-    JSON.stringify(installed.skills) !== JSON.stringify(expected.skills)
+    JSON.stringify(installed.skills) !== JSON.stringify(expected.skills) ||
+    JSON.stringify(installed.serviceEnvironments ?? null) !==
+      JSON.stringify(expected.serviceEnvironments ?? null)
   ) {
     throw new Error("The staged manifest changed after discovery.");
   }

@@ -723,6 +723,21 @@ function IntegrationCard({
                 </div>
               </div>
             </PluginDetailSection>
+          ) : integration.serviceEnvironments?.length ? (
+            // Plugins without a sign-in can still offer environments; keep the picker reachable.
+            <PluginDetailSection
+              title="Environment"
+              count={integration.serviceEnvironments.length}
+              icon={<PlugIcon className="size-4 text-muted-foreground" />}
+            >
+              <ServiceEnvironmentPicker
+                integration={integration}
+                disabled={busy || !integration.installed}
+                onSelect={(serviceEnvironment) =>
+                  void onServiceEnvironment(integration, serviceEnvironment)
+                }
+              />
+            </PluginDetailSection>
           ) : null}
 
           {flow ? (
