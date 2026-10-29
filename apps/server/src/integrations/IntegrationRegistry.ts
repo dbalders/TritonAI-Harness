@@ -533,6 +533,13 @@ function selectedServiceEnvironmentId(
   return environments.some(({ id }) => id === saved) ? saved : environments[0]!.id;
 }
 
+/**
+ * Claude allows a plugin write in its permission callback and dispatches it to MCP right after,
+ * outside Harness's admission check. Switching environments waits this long after such a write is
+ * allowed, so the write cannot reach the newly selected environment.
+ */
+export const PLUGIN_WRITE_SETTLE_MS = 15_000;
+
 function assertExpectedServiceEnvironment(
   manifest: IntegrationManifest,
   installed: InstalledIntegrationState | undefined,
@@ -982,6 +989,8 @@ export class RegistryRuntime {
   readonly #activeProviderCommitWork = new Map<IntegrationProvider, Set<Promise<unknown>>>();
   readonly #providerPreparationWork = new Map<IntegrationProvider, Promise<void>>();
   readonly #providerLastPreparedAt = new Map<IntegrationProvider, number>();
+  /** When a provider last allowed a write for each plugin before dispatching it to MCP. */
+  readonly #pluginWritesAllowedAt = new Map<string, number>();
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
   readonly #providerSummaryRefreshWork = new Map<IntegrationProvider, Set<Promise<void>>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
@@ -2786,6 +2795,26 @@ export class RegistryRuntime {
     return this.toolDefinitions().filter(({ name }) => this.isToolAvailableSync(name));
   }
 
+  /** Records that a provider allowed this plugin write; see PLUGIN_WRITE_SETTLE_MS. */
+  notePluginWriteAllowed(toolName: string, now = Date.now()): void {
+    for (const { manifest } of this.#catalog.values()) {
+      if (!manifest.serviceEnvironments) continue;
+      if (!manifest.tools.some((tool) => tool.name === toolName && tool.effect === "write"))
+        continue;
+      this.#pluginWritesAllowedAt.set(manifest.id, now);
+      return;
+    }
+  }
+
+  #assertPluginWritesSettled(manifest: IntegrationManifest): void {
+    const allowedAt = this.#pluginWritesAllowedAt.get(manifest.id);
+    if (allowedAt === undefined || Date.now() - allowedAt >= PLUGIN_WRITE_SETTLE_MS) return;
+    throw operationError(
+      "operation_failed",
+      `${manifest.name} is starting a change you just approved. Try switching again in a few seconds.`,
+    );
+  }
+
   /**
    * For a tool whose plugin offers service environments, the environment a call would reach now,
    * labeled for approval prompts (for example "n8n Dev"). Undefined for single-environment plugins.
@@ -3126,6 +3155,11 @@ export class RegistryRuntime {
         ),
       );
     }
+    try {
+      this.#assertPluginWritesSettled(registered.manifest);
+    } catch (error) {
+      return Promise.reject(error);
+    }
     const revocation = this.#beginRevocation(id);
     const operation = this.#serializeIntegration(id, async () => {
       await this.#ready;
@@ -3153,6 +3187,8 @@ export class RegistryRuntime {
           `${manifest.name} is still finishing a connection change. Try again in a moment.`,
         );
       }
+      // Checked again just before committing: a write may have been allowed while this waited.
+      this.#assertPluginWritesSettled(manifest);
       const next: InstalledIntegrationState = { ...installed, serviceEnvironment };
       try {
         await this.#updateState((state) => ({

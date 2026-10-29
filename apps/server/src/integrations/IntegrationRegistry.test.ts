@@ -947,6 +947,26 @@ describe("IntegrationRegistry lifecycle", () => {
         registry.setServiceEnvironment(connectedManifest.id, "production"),
       ).rejects.toMatchObject({ code: "invalid_input" });
 
+      // A write a provider just allowed holds the environment until it can reach MCP.
+      registry.notePluginWriteAllowed("test.fixture.read");
+      registry.notePluginWriteAllowed("test.records.list");
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "production"),
+      ).resolves.toBeDefined();
+      registry.notePluginWriteAllowed("test.fixture.write");
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "development"),
+      ).rejects.toMatchObject({
+        code: "operation_failed",
+        message: expect.stringContaining("just approved"),
+      });
+      expect((await summary(registry)).serviceEnvironments?.[0]?.selected).toBe(true);
+      registry.notePluginWriteAllowed("test.fixture.write", 0);
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "development"),
+      ).resolves.toBeDefined();
+      await registry.setServiceEnvironment(manifest.id, "production");
+
       // A fault belongs to its environment: reset it before switching away.
       await registry.setServiceEnvironment(manifest.id, "production");
       skipWriteAdmission = true;

@@ -126,7 +126,6 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { describeToolCallForApproval } from "../../integrations/IntegrationToolPreview.ts";
-import { recordApprovedServiceEnvironment } from "../../integrations/PluginWriteApprovals.ts";
 import {
   BROWSER_NAVIGATION_GRANT,
   browserNavigationRequest,
@@ -9555,26 +9554,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           const integrationTool = claudeIntegrationTool(toolName);
-          // Bind an allowed write by a plugin with service environments to this exact call (tool and
-          // arguments), so the MCP handler can refuse it if the plugin switches environments first.
-          const bindPluginWrite = (serviceEnvironment: string | undefined) => {
-            if (integrationTool && !integrationTool.readOnly && serviceEnvironment) {
-              recordApprovedServiceEnvironment({
-                threadId: String(context.input.threadId),
-                toolName: integrationTool.name,
-                toolInput,
-                serviceEnvironment,
-              });
+          // Claude dispatches an allowed plugin write to MCP after this callback returns. Hold the
+          // plugin's environment briefly so a switch cannot land between the approval and the call.
+          const settlePluginWrite = () => {
+            if (integrationTool && !integrationTool.readOnly) {
+              Integrations.getIntegrationRegistryOptional()?.notePluginWriteAllowed(
+                integrationTool.name,
+              );
             }
           };
           if (!requiresClaudeApproval(context) || integrationTool?.readOnly === true) {
-            if (integrationTool && !integrationTool.readOnly) {
-              bindPluginWrite(
-                Integrations.getIntegrationRegistryOptional()?.toolServiceEnvironmentSync(
-                  integrationTool.name,
-                )?.id,
-              );
-            }
+            settlePluginWrite();
             return {
               behavior: "allow",
               updatedInput: toolInput,
@@ -9617,7 +9607,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               .get(browserGrantThread)
               ?.has(integrationGrantKey) === true
           ) {
-            bindPluginWrite(integrationEnvironment.id);
+            settlePluginWrite();
             return {
               behavior: "allow",
               updatedInput: toolInput,
@@ -9734,7 +9724,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   integrationTool.name,
                 )?.id,
             });
-            if (scoped.result.behavior === "allow") bindPluginWrite(integrationEnvironment.id);
+            if (scoped.result.behavior === "allow") settlePluginWrite();
             const sessionGrant = scoped.sessionGrant;
             if (sessionGrant !== undefined) {
               yield* Ref.update(integrationEnvironmentGrants, (current) => {

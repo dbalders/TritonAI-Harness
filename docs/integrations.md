@@ -203,12 +203,13 @@ level-3 providers cancel such sign-ins when the next operation arrives for the n
 Connect and disconnect requests carry the environment the client showed, and plugin writes carry the
 environment they were approved for; the registry refuses either when the selection has changed.
 "Allow for this session" for such a write applies to that environment only, on both the Codex and
-Claude providers. Claude approves before MCP dispatch, so its approval callback records the approved
-environment for that exact call (thread, tool, and arguments) and the MCP handler passes it to
-registry admission. A Claude Code write by such a plugin with no matching approval is refused unless
-the thread runs with full access. The idle credential keepalive refreshes only the selected
-environment, so a sign-in left unused for longer than the service's refresh-token lifetime may need
-to reconnect. Hosts below level 3 refuse such plugins.
+Claude providers. Claude allows a write in its permission callback and dispatches it to MCP
+afterwards, outside that check, so for 15 seconds after Claude allows a write by such a plugin,
+switching its environment is refused ("try again in a few seconds"); the registry checks again right
+before committing a switch. Writes allowed by Claude's own Auto classifier never reach Harness's
+callback and are not held. The idle credential keepalive refreshes only the selected environment, so
+a sign-in left unused for longer than the service's refresh-token lifetime may need to reconnect.
+Hosts below level 3 refuse such plugins.
 
 Some providers only issue confidential OAuth clients that require a client secret on every token
 request (UCSD Jira Data Center is one). That secret cannot ship in Harness, because configuration
