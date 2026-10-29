@@ -305,17 +305,40 @@ describe("CodexAdapterV2 thread MCP configuration", () => {
       additionalMcpServers: {
         "archive.dot": {
           command: "fixture-mcp",
+          args: ["./relative-server.mjs"],
+          cwd: "../mcp",
           env: { CUSTOM_HEADER: "private-value" },
+          tool_timeout_sec: null,
+          omit_tools_from: ["code_mode"],
+        },
+        "t3-code": {
+          url: "http://stale.invalid/mcp",
+          http_headers: { Authorization: "Bearer stale-fixture" },
           omit_tools_from: ["code_mode"],
         },
       },
     };
     const hosted = CodexAdapterV2.codexThreadRuntimeParams(hostedInput);
-    assert.deepEqual(hosted.config.mcp_servers, {
-      "archive.dot": { omit_tools_from: ["code_mode", "deferred"] },
+    const hostedServers = hosted.config.mcp_servers as Record<string, Record<string, unknown>>;
+    assert.deepEqual(hostedServers["archive.dot"], {
+      command: "fixture-mcp",
+      args: ["./relative-server.mjs"],
+      cwd: "../mcp",
+      env: { CUSTOM_HEADER: "private-value" },
+      omit_tools_from: ["code_mode", "deferred"],
     });
-    for (const server of ["mcp_servers.t3-code", "mcp_servers.cua-driver"])
-      assert.deepInclude(hosted.config[server] as object, { omit_tools_from: ["deferred"] });
+    assert.deepInclude(hostedServers["t3-code"]!, {
+      url: mcpSession.endpoint,
+      http_headers: { Authorization: mcpSession.authorizationHeader },
+      omit_tools_from: ["code_mode", "deferred"],
+    });
+    assert.deepInclude(hostedServers["cua-driver"]!, {
+      command: computerUseMcp.command,
+      args: computerUseMcp.args,
+      env: computerUseMcp.environment,
+    });
+    for (const name of ["t3-code", "cua-driver"])
+      assert.notProperty(hosted.config, `mcp_servers.${name}`);
     const cloud = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession, computerUseMcp });
     for (const server of ["mcp_servers.t3-code", "mcp_servers.cua-driver"])
       assert.notProperty(cloud.config[server] as object, "omit_tools_from");

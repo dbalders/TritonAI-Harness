@@ -1376,6 +1376,19 @@ const CODEX_T3_MCP_GATED_TOOLS = {
   preview_navigate: { approval_mode: "approve" },
 } as const;
 
+// config/read includes null optional fields; native JSON-to-TOML converts them to empty strings.
+function omitNullCodexConfigFields(value: Schema.Json): Schema.Json {
+  if (Array.isArray(value)) return value.map(omitNullCodexConfigFields);
+  if (Predicate.isObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value as Readonly<Record<string, Schema.Json>>)
+        .filter(([, field]) => field !== null)
+        .map(([key, field]) => [key, omitNullCodexConfigFields(field)]),
+    );
+  }
+  return value;
+}
+
 export function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly computerUseMcp?: import("@t3tools/contracts").DesktopMcpServerConfiguration | undefined;
@@ -1383,7 +1396,7 @@ export function codexThreadRuntimeParams(input: {
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   /** Keep MCP direct on the hosted route, leaving native discovery for registered plugins. */
   readonly keepMcpToolsDirect?: boolean;
-  /** Effective native MCP configuration; only its exposure policies are copied. */
+  /** Effective native MCP configuration, forwarded privately to preserve CLI-only transports. */
   readonly additionalMcpServers?: Schema.Json | undefined;
 }): {
   readonly cwd?: string;
@@ -1391,56 +1404,75 @@ export function codexThreadRuntimeParams(input: {
   readonly config: Readonly<Record<string, Schema.Json>>;
 } {
   const { mcpSession, computerUseMcp } = input;
-  const exposure = input.keepMcpToolsDirect === true ? { omit_tools_from: ["deferred"] } : {};
+  const exposure = (server?: Schema.Json) =>
+    input.keepMcpToolsDirect === true
+      ? {
+          omit_tools_from: [
+            ...new Set([
+              ...(Predicate.isObject(server) && Array.isArray(server.omit_tools_from)
+                ? server.omit_tools_from.filter(Predicate.isString)
+                : []),
+              "deferred",
+            ]),
+          ],
+        }
+      : {};
   const additionalMcpServers =
     input.keepMcpToolsDirect &&
     Predicate.isObject(input.additionalMcpServers) &&
     !Array.isArray(input.additionalMcpServers)
       ? Object.fromEntries(
-          Object.entries(input.additionalMcpServers).map(([name, server]) => [
-            name,
-            {
-              omit_tools_from: [
-                ...new Set([
-                  ...(Predicate.isObject(server) && Array.isArray(server.omit_tools_from)
-                    ? server.omit_tools_from.filter(Predicate.isString)
-                    : []),
-                  "deferred",
-                ]),
-              ],
-            },
-          ]),
+          Object.entries(input.additionalMcpServers as Readonly<Record<string, Schema.Json>>).map(
+            ([name, server]) => [
+              name,
+              {
+                ...(Predicate.isObject(server)
+                  ? (omitNullCodexConfigFields(server) as Record<string, Schema.Json>)
+                  : {}),
+                ...exposure(server),
+              },
+            ],
+          ),
         )
       : {};
+  const ownedMcpServers = {
+    ...(computerUseMcp === undefined
+      ? {}
+      : {
+          "cua-driver": {
+            command: computerUseMcp.command,
+            args: [...computerUseMcp.args],
+            env: { ...computerUseMcp.environment },
+            ...exposure(additionalMcpServers["cua-driver"]),
+          },
+        }),
+    ...(mcpSession === undefined
+      ? {}
+      : {
+          "t3-code": {
+            url: mcpSession.endpoint,
+            tool_timeout_sec: CODEX_T3_MCP_TOOL_TIMEOUT_SEC,
+            http_headers: { Authorization: mcpSession.authorizationHeader },
+            tools: CODEX_T3_MCP_GATED_TOOLS,
+            ...exposure(additionalMcpServers["t3-code"]),
+          },
+        }),
+  };
   return {
     ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      // Native applies request overrides in unspecified order. Never mix a root map with
+      // dotted children: the root could erase the fresh Harness rows or CLI-only transports.
       ...(Object.keys(additionalMcpServers).length === 0
-        ? {}
-        : { mcp_servers: additionalMcpServers }),
-      ...(computerUseMcp === undefined
-        ? {}
-        : {
-            "mcp_servers.cua-driver": {
-              command: computerUseMcp.command,
-              args: [...computerUseMcp.args],
-              env: { ...computerUseMcp.environment },
-              ...exposure,
-            },
-          }),
-      ...(mcpSession === undefined
-        ? {}
-        : {
-            "mcp_servers.t3-code": {
-              url: mcpSession.endpoint,
-              tool_timeout_sec: CODEX_T3_MCP_TOOL_TIMEOUT_SEC,
-              http_headers: { Authorization: mcpSession.authorizationHeader },
-              tools: CODEX_T3_MCP_GATED_TOOLS,
-              ...exposure,
-            },
-          }),
+        ? Object.fromEntries(
+            Object.entries(ownedMcpServers).map(([name, server]) => [
+              `mcp_servers.${name}`,
+              server,
+            ]),
+          )
+        : { mcp_servers: { ...additionalMcpServers, ...ownedMcpServers } }),
     },
   };
 }
