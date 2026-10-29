@@ -991,8 +991,8 @@ export class RegistryRuntime {
   readonly #providerLastPreparedAt = new Map<IntegrationProvider, number>();
   /** When a provider last allowed a write for each plugin before dispatching it to MCP. */
   readonly #pluginWritesAllowedAt = new Map<string, number>();
-  /** Plugins whose service environment switch is in progress, from its start until it settles. */
-  readonly #serviceEnvironmentSwitches = new Set<string>();
+  /** Switches in progress per plugin (queued ones included), from their start until they settle. */
+  readonly #serviceEnvironmentSwitches = new Map<string, number>();
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
   readonly #providerSummaryRefreshWork = new Map<IntegrationProvider, Set<Promise<void>>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
@@ -2807,7 +2807,7 @@ export class RegistryRuntime {
       if (!manifest.serviceEnvironments) continue;
       if (!manifest.tools.some((tool) => tool.name === toolName && tool.effect === "write"))
         continue;
-      if (this.#serviceEnvironmentSwitches.has(manifest.id)) return false;
+      if ((this.#serviceEnvironmentSwitches.get(manifest.id) ?? 0) > 0) return false;
       this.#pluginWritesAllowedAt.set(manifest.id, now);
       return true;
     }
@@ -3169,7 +3169,7 @@ export class RegistryRuntime {
       return Promise.reject(error);
     }
     // From here until the switch settles, providers refuse new writes for this plugin.
-    this.#serviceEnvironmentSwitches.add(id);
+    this.#serviceEnvironmentSwitches.set(id, (this.#serviceEnvironmentSwitches.get(id) ?? 0) + 1);
     const revocation = this.#beginRevocation(id);
     const operation = this.#serializeIntegration(id, async () => {
       await this.#ready;
@@ -3237,7 +3237,9 @@ export class RegistryRuntime {
     return operation
       .then(() => this.#cachedList())
       .finally(() => {
-        this.#serviceEnvironmentSwitches.delete(id);
+        const remaining = (this.#serviceEnvironmentSwitches.get(id) ?? 1) - 1;
+        if (remaining > 0) this.#serviceEnvironmentSwitches.set(id, remaining);
+        else this.#serviceEnvironmentSwitches.delete(id);
         revocation.finish();
       });
   }

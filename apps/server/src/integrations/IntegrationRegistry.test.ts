@@ -967,6 +967,12 @@ describe("IntegrationRegistry lifecycle", () => {
       expect(registry.notePluginWriteAllowed("test.fixture.write")).toBe(false);
       await switching;
       expect((await summary(registry)).serviceEnvironments?.[1]?.selected).toBe(true);
+      // Back-to-back switches queue; the mark stays until the last one settles.
+      const first = registry.setServiceEnvironment(manifest.id, "production");
+      const second = registry.setServiceEnvironment(manifest.id, "development");
+      await first;
+      expect(registry.notePluginWriteAllowed("test.fixture.write")).toBe(false);
+      await second;
       // The refused write did not start a hold, so switching back is not blocked by it.
       await expect(
         registry.setServiceEnvironment(manifest.id, "production"),
