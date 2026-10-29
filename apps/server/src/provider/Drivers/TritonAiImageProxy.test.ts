@@ -344,7 +344,7 @@ describe("TritonAI tool search translation", () => {
       {
         type: "function",
         name: "tool_search",
-        description: "# Tool discovery",
+        description: expect.stringContaining("# Tool discovery"),
         strict: false,
         parameters: toolSearchTool.parameters,
       },
@@ -444,6 +444,28 @@ describe("TritonAI tool search translation", () => {
       "[DONE]",
     ])
       expect(toCodexToolSearchEvent(unchanged)).toBe(unchanged);
+  });
+
+  it("bounds an overbroad search without changing its query or a smaller requested limit", () => {
+    for (const [requested, expected] of [
+      [1000, 8],
+      [3, 3],
+    ]) {
+      const event = JSON.parse(
+        toCodexToolSearchEvent(
+          JSON.stringify({
+            type: "response.output_item.done",
+            item: {
+              type: "function_call",
+              name: "tool_search",
+              call_id: "bounded-search",
+              arguments: JSON.stringify({ query: "github list repositories", limit: requested }),
+            },
+          }),
+        ),
+      );
+      expect(event.item.arguments).toEqual({ query: "github list repositories", limit: expected });
+    }
   });
 
   it("adds each found tool once, even when one search lists it twice", () => {

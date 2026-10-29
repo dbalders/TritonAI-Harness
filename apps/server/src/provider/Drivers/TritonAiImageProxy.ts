@@ -43,6 +43,14 @@ export function limitTritonAiRequestImages(body: unknown): void {
 }
 
 const TOOL_SEARCH = "tool_search";
+const MAX_SEARCH_RESULTS = 8;
+const SEARCH_GUIDANCE =
+  "Search by service and required operation, rather than the user's data values. " +
+  "Use short queries such as 'github list repositories' or 'lucid search documents'. " +
+  "Results are candidates: if the requested operation is missing, search again with alternate " +
+  "words or an exact tool name. An account lookup does not list resources, and a folder listing " +
+  "does not search documents. Each search loads at most eight tools; use another focused search " +
+  "when more capabilities are needed.";
 
 function loadedToolNames(tools: unknown): string[] {
   if (!Array.isArray(tools)) return [];
@@ -92,12 +100,9 @@ function addLoadedTools(requestTools: unknown[], loaded: unknown): void {
 }
 
 /**
- * Campus-hosted models behind the gateway drop Codex's client-side `tool_search` tool and reject
- * its call and output items. Send search as an ordinary function, replay earlier searches as
- * function calls, and, when the request offers search, make the tools they found callable.
- * Compaction requests carry the history but no tools, so they get no tools added. Namespaced
- * tools pass through as is. Returns true when the request offers search, so the reply needs the
- * reverse translation.
+ * The campus route rejects native search history. Replay it as function calls, exposing found
+ * tools only when search is offered; compaction receives no tools. Preserve namespaces and
+ * return whether the response needs reverse translation.
  */
 export function translateToolSearchForGateway(body: unknown): boolean {
   if (!Predicate.isObject(body)) return false;
@@ -109,7 +114,7 @@ export function translateToolSearchForGateway(body: unknown): boolean {
     return {
       type: "function",
       name: TOOL_SEARCH,
-      description: tool.description,
+      description: [tool.description, SEARCH_GUIDANCE].filter(Boolean).join("\n\n"),
       strict: false,
       parameters: tool.parameters,
     };
@@ -158,6 +163,13 @@ function toToolSearchCall(item: unknown): unknown {
       parsed = { query: item.arguments };
     }
   }
+  // A broad discovery call must not defeat deferral by loading the entire catalog.
+  if (
+    Predicate.isObject(parsed) &&
+    typeof parsed.limit === "number" &&
+    parsed.limit > MAX_SEARCH_RESULTS
+  )
+    parsed = { ...parsed, limit: MAX_SEARCH_RESULTS };
   return {
     type: "tool_search_call",
     ...(item.id === undefined ? {} : { id: item.id }),
