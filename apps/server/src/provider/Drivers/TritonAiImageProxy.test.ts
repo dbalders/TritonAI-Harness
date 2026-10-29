@@ -336,7 +336,7 @@ const searchedThread = () => ({
 });
 
 describe("TritonAI tool search translation", () => {
-  it("loads one exact browsed operation without exposing a lexical neighbor", () => {
+  it("loads only the browsed plugin from bounded candidates and replays earlier exact loads", () => {
     const wanted = { ...mailSearch, name: "github_repositories_list" };
     const neighbor = { ...mailSearch, name: "github_identity_get" };
     const body = {
@@ -346,13 +346,13 @@ describe("TritonAI tool search translation", () => {
         {
           type: "tool_search_call",
           call_id: "exact",
-          arguments: { query: "__tritonai_exact_plugin_load_v1__ " + wanted.name, limit: 1 },
+          arguments: { query: "__tritonai_exact_plugin_load_v1__ " + wanted.name, limit: 8 },
         },
         {
           type: "tool_search_output",
           call_id: "exact",
           tools: [
-            { type: "namespace", name: "custom_service", tools: [wanted] },
+            { type: "namespace", name: "my_extension", tools: [wanted] },
             { type: "namespace", name: "github", tools: [neighbor, wanted] },
           ],
         },
@@ -375,6 +375,16 @@ describe("TritonAI tool search translation", () => {
           arguments: { query: "__tritonai_exact_plugin_load_v1__ ", limit: 1 },
         },
         { type: "tool_search_output", call_id: "invalid", tools: [] },
+        {
+          type: "tool_search_call",
+          call_id: "earlier",
+          arguments: { query: "__tritonai_exact_plugin_load_v1__ " + wanted.name, limit: 1 },
+        },
+        {
+          type: "tool_search_output",
+          call_id: "earlier",
+          tools: [{ type: "namespace", name: "github", tools: [wanted] }],
+        },
       ],
     };
     const identities = [
@@ -385,6 +395,8 @@ describe("TritonAI tool search translation", () => {
     const compact = { ...structuredClone(body), tools: [] };
     translateToolSearchForGateway(compact, identities);
     expect(compact.tools).toEqual([]);
+    expect(compact.input[2]).toMatchObject({ name: "load_plugin_tool" });
+    expect(compact.input[8]).toMatchObject({ name: "load_plugin_tool" });
     expect(compact.input[5]).toMatchObject({
       output: expect.stringContaining("No exact operation"),
     });
@@ -405,7 +417,9 @@ describe("TritonAI tool search translation", () => {
     });
     expect(JSON.stringify(body.tools)).not.toContain(neighbor.name);
     expect(JSON.stringify(body.tools)).toContain(wanted.name);
-    expect(body.tools).not.toContainEqual(expect.objectContaining({ name: "custom_service" }));
+    expect(body.tools).not.toContainEqual(expect.objectContaining({ name: "my_extension" }));
+    expect(body.input[8]).toMatchObject({ name: "load_plugin_tool" });
+    expect(body.input[9]).toMatchObject({ output: expect.stringContaining(wanted.name) });
 
     const mixed = {
       tools: [toolSearchTool, { type: "function", name: "plugin_tools", parameters: {} }],
@@ -467,7 +481,7 @@ describe("TritonAI tool search translation", () => {
       expect(event.item).toMatchObject({
         type: "tool_search_call",
         call_id: "load",
-        arguments: { query, limit: 1 },
+        arguments: { query, limit: 8 },
       });
     }
   });

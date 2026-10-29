@@ -194,7 +194,6 @@ export function translateToolSearchForGateway(
       const args = item.arguments;
       const name =
         Predicate.isObject(args) &&
-        args.limit === 1 &&
         typeof args.query === "string" &&
         args.query.startsWith(EXACT_QUERY_PREFIX)
           ? args.query.slice(EXACT_QUERY_PREFIX.length)
@@ -267,7 +266,9 @@ function toToolSearchCall(item: unknown, exactLoading: boolean, searchMcp: boole
         OPERATION_NAME.test(parsed.name)
           ? EXACT_QUERY_PREFIX + parsed.name
           : EXACT_QUERY_PREFIX,
-      limit: 1,
+      // Native ranking can put a same-named MCP extension ahead of the registered plugin.
+      // Only the exact registered pair is exposed when these local candidates are replayed.
+      limit: MAX_SEARCH_RESULTS,
     };
   }
   // A broad discovery call must not defeat deferral by loading the entire catalog.
