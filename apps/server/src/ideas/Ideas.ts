@@ -540,7 +540,15 @@ export const make = Effect.gen(function* () {
    * Whether the user has used a feature. Some checks read tool-call history, so
    * they run on the reader connection, off the thread that serves requests.
    */
-  const featureUsed = (feature: FeatureIdea) => feature.used(sql).pipe(NodeSqliteClient.readOnly);
+  const featureUsed = (feature: FeatureIdea) =>
+    feature.used(sql).pipe(
+      NodeSqliteClient.readOnly,
+      // A card is only a hint, so a failed check shows it rather than failing the page.
+      Effect.tapError((error) =>
+        Effect.logWarning("feature use check failed", { feature: feature.id, error }),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
 
   /** Whether a feature card's own draft was sent, which also counts while it is snoozed. */
   const featureDraftSent = (row: IdeaRow) => {

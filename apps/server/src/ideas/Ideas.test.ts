@@ -654,6 +654,20 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
+  it.effect("still lists ideas when a feature check fails", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DROP TABLE orchestration_v2_projection_subagents`;
+        const snapshot = yield* (yield* Ideas.make).list;
+        assert.isNotEmpty(snapshot.ideas);
+        assert.include(featureTitles(snapshot), featureTitle("subagents"));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("skips features already used and retires a card once its feature is tried", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));
