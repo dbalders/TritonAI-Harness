@@ -11,6 +11,7 @@ export const IDEA_SECTIONS: ReadonlyArray<IdeaSection> = [
   "tools",
   "new",
   "starter",
+  "feature",
 ];
 
 /** Sections built from the user's own threads, notes, and files. The rest are discovery. */

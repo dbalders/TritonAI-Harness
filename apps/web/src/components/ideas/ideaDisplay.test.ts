@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { Idea } from "@t3tools/contracts";
-import { IDEA_GROUPS, ideaBasis, ideaHeadline, ideasInGroup, ideaSourceNames } from "./ideaDisplay";
+import {
+  featureIdeas,
+  IDEA_GROUPS,
+  ideaBasis,
+  ideaHeadline,
+  ideasInGroup,
+  ideaSourceNames,
+} from "./ideaDisplay";
 
 describe("ideaHeadline", () => {
   it("turns an older offer into the task itself", () => {
@@ -59,5 +66,35 @@ describe("ideasInGroup", () => {
       "tool",
     ]);
     expect(ideasInGroup(ideas, toTry!).map((idea) => idea.id)).toEqual(["starter"]);
+  });
+});
+
+describe("featureIdeas", () => {
+  const feature = (id: string, snoozedUntil: string | null = null) =>
+    ({
+      id,
+      section: "feature",
+      icon: "👥",
+      title: `Try ${id}`,
+      body: "A feature to try.",
+      sources: [],
+      action: { kind: "new-thread", projectId: null, prompt: `Show me ${id}.` },
+      createdAt: "2026-10-28T12:00:00.000Z",
+      openedAt: null,
+      draftThreadIds: [],
+      snoozedUntil,
+    }) as unknown as Idea;
+
+  it("splits cards to try from snoozed ones and drops hidden cards", () => {
+    const { toTry, snoozed } = featureIdeas(
+      [feature("subagents"), feature("charts", "2026-10-29T09:00:00.000Z"), feature("threads")],
+      new Set(["threads"]),
+    );
+    expect(toTry.map((idea) => idea.id)).toEqual(["subagents"]);
+    expect(snoozed.map((idea) => idea.id)).toEqual(["charts"]);
+  });
+
+  it("is empty when the server sends no feature cards", () => {
+    expect(featureIdeas(undefined, new Set())).toEqual({ toTry: [], snoozed: [] });
   });
 });

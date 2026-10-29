@@ -102,6 +102,7 @@ const SECTION_ICONS: Record<IdeaSection, string> = {
   tools: "🧰",
   new: "✨",
   starter: "💡",
+  feature: "🧭",
 };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
