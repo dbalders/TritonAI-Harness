@@ -1,8 +1,10 @@
 import * as DocumentText from "../../provider/DocumentText.ts";
 import {
+  deferredPluginTool,
   makeCodexFlatToolCatalog,
   type CodexFlatToolCatalog,
 } from "../../provider/CodexFlatTools.ts";
+import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import {
   gateDynamicToolCall,
   dynamicToolApprovalRequired,
@@ -1577,7 +1579,23 @@ export const layerAppServerClientFactory: Layer.Layer<
         const imageProxyUrl = yield* makeTritonAiImageProxy(
           resolveTritonAiCodexBaseUrl(environment),
           environment,
-          { translateToolSearch: (model) => tritonAiHostedModelIds.has(model) },
+          {
+            translateToolSearch: (model) => tritonAiHostedModelIds.has(model),
+            pluginTools: () =>
+              (Integrations.getIntegrationRegistryOptional()?.toolDefinitions() ?? []).flatMap(
+                (tool) => {
+                  const exposure = deferredPluginTool(tool.name, true);
+                  return "namespace" in exposure
+                    ? [
+                        {
+                          namespace: exposure.namespace,
+                          name: Integrations.codexDynamicIntegrationToolName(tool.name),
+                        },
+                      ]
+                    : [];
+                },
+              ),
+          },
         ).pipe(
           Effect.mapError(
             (cause) =>

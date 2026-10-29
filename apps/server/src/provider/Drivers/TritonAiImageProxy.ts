@@ -15,7 +15,10 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/http";
-import { PLUGIN_TOOL_DISCOVERY_NAME } from "../CodexPluginToolDiscovery.ts";
+import {
+  PLUGIN_TOOL_DISCOVERY_NAME,
+  PLUGIN_TOOL_LOADER_NAME,
+} from "../CodexPluginToolDiscovery.ts";
 
 // Match the gateway's four-image limit.
 const MAX_IMAGES = 4;
@@ -45,6 +48,34 @@ export function limitTritonAiRequestImages(body: unknown): void {
 
 const TOOL_SEARCH = "tool_search";
 const MAX_SEARCH_RESULTS = 8;
+const OPERATION_NAME = /^[A-Za-z0-9_-]+_[A-Za-z0-9_-]+$/u;
+// An unindexed query prefix retains load intent across restart and compaction in native history.
+const EXACT_QUERY_PREFIX = "__tritonai_exact_plugin_load_v1__ ";
+const EXACT_LOADER = {
+  type: "function",
+  name: PLUGIN_TOOL_LOADER_NAME,
+  description:
+    `Load the typed schema for one plugin operation. First browse ${PLUGIN_TOOL_DISCOVERY_NAME}, ` +
+    "then copy an exact entries[].name. This accepts operation names, not natural-language searches. " +
+    "If no exact operation matches, browse again rather than substituting another operation.",
+  strict: false,
+  parameters: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        pattern: OPERATION_NAME.source,
+        description: `Exact entries[].name returned by ${PLUGIN_TOOL_DISCOVERY_NAME}.`,
+      },
+    },
+    required: ["name"],
+    additionalProperties: false,
+  },
+};
+interface PluginToolIdentity {
+  readonly namespace: string;
+  readonly name: string;
+}
 const SEARCH_GUIDANCE =
   `For plugin tasks, first use ${PLUGIN_TOOL_DISCOVERY_NAME}, when available, to browse operation names. ` +
   "Then search for the exact returned name with limit 1 to load its schema. " +
@@ -72,6 +103,31 @@ function withoutDeferLoading(tool: unknown): unknown {
   return rest.type === "namespace" && Array.isArray(rest.tools)
     ? { ...rest, tools: rest.tools.map(withoutDeferLoading) }
     : rest;
+}
+
+function exactToolResults(tools: unknown, name: string, plugins?: ReadonlySet<string>): unknown[] {
+  if (!Array.isArray(tools) || name === "") return [];
+  return tools.flatMap((tool) => {
+    if (!Predicate.isObject(tool)) return [];
+    if (tool.type !== "namespace") return plugins === undefined && tool.name === name ? [tool] : [];
+    if (plugins !== undefined && !plugins.has(JSON.stringify([tool.name, name]))) return [];
+    const matching = Array.isArray(tool.tools)
+      ? tool.tools.filter((inner) => Predicate.isObject(inner) && inner.name === name)
+      : [];
+    return matching.length > 0 ? [{ ...tool, tools: matching }] : [];
+  });
+}
+
+function withoutPluginResults(tools: unknown, plugins: ReadonlySet<string>): unknown[] {
+  if (!Array.isArray(tools)) return [];
+  return tools.flatMap((tool) => {
+    if (!Predicate.isObject(tool)) return [];
+    if (tool.type !== "namespace" || !Array.isArray(tool.tools)) return [tool];
+    const matching = tool.tools.filter(
+      (inner) => Predicate.isObject(inner) && !plugins.has(JSON.stringify([tool.name, inner.name])),
+    );
+    return matching.length > 0 ? [{ ...tool, tools: matching }] : [];
+  });
 }
 
 /** Adds tools found by an earlier search, merging into a namespace already in the request. */
@@ -106,42 +162,75 @@ function addLoadedTools(requestTools: unknown[], loaded: unknown): void {
  * tools only when search is offered; compaction receives no tools. Preserve namespaces and
  * return whether the response needs reverse translation.
  */
-export function translateToolSearchForGateway(body: unknown): boolean {
+export function translateToolSearchForGateway(
+  body: unknown,
+  pluginTools?: ReadonlyArray<PluginToolIdentity>,
+): boolean {
   if (!Predicate.isObject(body)) return false;
   let searchable = false;
   const tools = Array.isArray(body.tools) ? (body.tools as unknown[]) : [];
-  body.tools = tools.map((tool) => {
-    if (!Predicate.isObject(tool) || tool.type !== TOOL_SEARCH) return tool;
+  const exactLoading = loadedToolNames(tools).includes(PLUGIN_TOOL_DISCOVERY_NAME);
+  const plugins = new Set(pluginTools?.map((tool) => JSON.stringify([tool.namespace, tool.name])));
+  body.tools = tools.flatMap((tool) => {
+    if (!Predicate.isObject(tool) || tool.type !== TOOL_SEARCH) return [tool];
     searchable = true;
-    return {
+    const search = {
       type: "function",
       name: TOOL_SEARCH,
-      description: [tool.description, SEARCH_GUIDANCE].filter(Boolean).join("\n\n"),
+      description: exactLoading
+        ? `Search deferred MCP extension tools. For Harness plugins, browse ${PLUGIN_TOOL_DISCOVERY_NAME} ` +
+          `and use ${PLUGIN_TOOL_LOADER_NAME} with an exact operation name.`
+        : [tool.description, SEARCH_GUIDANCE].filter(Boolean).join("\n\n"),
       strict: false,
       parameters: tool.parameters,
     };
+    return exactLoading ? [EXACT_LOADER, ...(pluginTools === undefined ? [] : [search])] : [search];
   });
   if (!Array.isArray(body.input)) return searchable;
+  const exactLoads = new Map<unknown, string>();
   body.input = body.input.map((item) => {
     if (!Predicate.isObject(item)) return item;
     if (item.type === "tool_search_call") {
+      const args = item.arguments;
+      const name =
+        Predicate.isObject(args) &&
+        args.limit === 1 &&
+        typeof args.query === "string" &&
+        args.query.startsWith(EXACT_QUERY_PREFIX)
+          ? args.query.slice(EXACT_QUERY_PREFIX.length)
+          : undefined;
+      if (name !== undefined) exactLoads.set(item.call_id, name);
       return {
         type: "function_call",
         call_id: item.call_id,
-        name: TOOL_SEARCH,
-        arguments: JSON.stringify(item.arguments ?? {}),
+        name: name === undefined ? TOOL_SEARCH : PLUGIN_TOOL_LOADER_NAME,
+        arguments: JSON.stringify(name === undefined ? (args ?? {}) : { name }),
       };
     }
     if (item.type === "tool_search_output") {
-      if (searchable) addLoadedTools(body.tools as unknown[], item.tools);
-      const names = loadedToolNames(item.tools);
+      const exactName = exactLoads.get(item.call_id);
+      const found =
+        exactName !== undefined
+          ? exactToolResults(item.tools, exactName, pluginTools === undefined ? undefined : plugins)
+          : exactLoading && pluginTools !== undefined
+            ? withoutPluginResults(item.tools, plugins)
+            : item.tools;
+      if (searchable) addLoadedTools(body.tools as unknown[], found);
+      const names = loadedToolNames(found);
       return {
         type: "function_call_output",
         call_id: item.call_id,
         output:
-          names.length === 0
-            ? "No matching tools were found."
-            : `These tools are now available to call: ${names.join(", ")}.`,
+          exactName !== undefined && names.length === 0
+            ? (exactName === ""
+                ? "Invalid operation name."
+                : `No exact operation named ${exactName}.`) +
+              ` Browse ${PLUGIN_TOOL_DISCOVERY_NAME} and copy a returned operation name.`
+            : names.length === 0
+              ? exactLoading
+                ? `No matching MCP tools. Browse ${PLUGIN_TOOL_DISCOVERY_NAME} for plugin operations.`
+                : "No matching tools were found."
+              : `These tools are now available to call: ${names.join(", ")}.`,
       };
     }
     return item;
@@ -149,11 +238,11 @@ export function translateToolSearchForGateway(body: unknown): boolean {
   return searchable;
 }
 
-function toToolSearchCall(item: unknown): unknown {
+function toToolSearchCall(item: unknown, exactLoading: boolean, searchMcp: boolean): unknown {
   if (
     !Predicate.isObject(item) ||
     item.type !== "function_call" ||
-    item.name !== TOOL_SEARCH ||
+    (item.name !== TOOL_SEARCH && !(exactLoading && item.name === PLUGIN_TOOL_LOADER_NAME)) ||
     item.namespace != null
   )
     return item;
@@ -164,6 +253,22 @@ function toToolSearchCall(item: unknown): unknown {
     } catch {
       parsed = { query: item.arguments };
     }
+  }
+  if (
+    exactLoading &&
+    item.status !== "in_progress" &&
+    (item.name === PLUGIN_TOOL_LOADER_NAME || !searchMcp)
+  ) {
+    parsed = {
+      query:
+        item.name === PLUGIN_TOOL_LOADER_NAME &&
+        Predicate.isObject(parsed) &&
+        typeof parsed.name === "string" &&
+        OPERATION_NAME.test(parsed.name)
+          ? EXACT_QUERY_PREFIX + parsed.name
+          : EXACT_QUERY_PREFIX,
+      limit: 1,
+    };
   }
   // A broad discovery call must not defeat deferral by loading the entire catalog.
   if (
@@ -183,8 +288,12 @@ function toToolSearchCall(item: unknown): unknown {
 }
 
 /** Returns a gateway `tool_search` function call to Codex as its client-side search call. */
-export function toCodexToolSearchEvent(data: string): string {
-  if (!data.includes(`"${TOOL_SEARCH}"`)) return data;
+export function toCodexToolSearchEvent(
+  data: string,
+  { exactLoading = false, searchMcp = false } = {},
+): string {
+  if (!data.includes(`"${TOOL_SEARCH}"`) && !data.includes(`"${PLUGIN_TOOL_LOADER_NAME}"`))
+    return data;
   let event: unknown;
   try {
     event = JSON.parse(data);
@@ -193,7 +302,11 @@ export function toCodexToolSearchEvent(data: string): string {
   }
   if (!Predicate.isObject(event)) return data;
   // Codex reads calls from the item events, not from response.completed's output.
-  if ("item" in event) return JSON.stringify({ ...event, item: toToolSearchCall(event.item) });
+  if ("item" in event)
+    return JSON.stringify({
+      ...event,
+      item: toToolSearchCall(event.item, exactLoading, searchMcp),
+    });
   return data;
 }
 
@@ -245,6 +358,8 @@ const HOP_BY_HOP_HEADERS = ["connection", "content-length", "transfer-encoding",
 export interface TritonAiImageProxyOptions {
   /** Whether a requested model needs Codex tool search translated into an ordinary function. */
   readonly translateToolSearch?: (model: string) => boolean;
+  /** Registry identities distinguish plugins from separately configured MCP tools. */
+  readonly pluginTools?: () => ReadonlyArray<PluginToolIdentity>;
 }
 
 /** A scoped request filter; Effect owns sockets, streaming, cancellation, and cleanup. */
@@ -287,6 +402,7 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
       for (const [key, value] of local.searchParams) target.searchParams.set(key, value);
       let body: HttpBody.HttpBody = HttpBody.stream(request.stream);
       let rewriteSearchReply = false;
+      let exactLoading = false;
       if (
         request.method === "POST" &&
         (suffix === "/responses" || suffix === "/responses/compact")
@@ -297,8 +413,11 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
           Predicate.isObject(input) &&
           typeof input.model === "string" &&
           options.translateToolSearch?.(input.model) === true
-        )
-          rewriteSearchReply = translateToolSearchForGateway(input) && input.stream === true;
+        ) {
+          exactLoading = loadedToolNames(input.tools).includes(PLUGIN_TOOL_DISCOVERY_NAME);
+          rewriteSearchReply =
+            translateToolSearchForGateway(input, options.pluginTools?.()) && input.stream === true;
+        }
         body = HttpBody.jsonUnsafe(input);
       }
       const headers = Headers.removeMany(request.headers, [
@@ -315,7 +434,12 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
       if (!rewriteSearchReply || response.status !== 200)
         return HttpServerResponse.fromClientResponse(response);
       return HttpServerResponse.stream(
-        rewriteResponseEvents(response.stream, toCodexToolSearchEvent),
+        rewriteResponseEvents(response.stream, (data) =>
+          toCodexToolSearchEvent(data, {
+            exactLoading,
+            searchMcp: options.pluginTools !== undefined,
+          }),
+        ),
         {
           status: response.status,
           headers: Headers.removeMany(response.headers, HOP_BY_HOP_HEADERS),

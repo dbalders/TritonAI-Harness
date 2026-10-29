@@ -336,6 +336,136 @@ const searchedThread = () => ({
 });
 
 describe("TritonAI tool search translation", () => {
+  it("loads one exact browsed operation without exposing a lexical neighbor", () => {
+    const wanted = { ...mailSearch, name: "github_repositories_list" };
+    const neighbor = { ...mailSearch, name: "github_identity_get" };
+    const body = {
+      tools: [toolSearchTool, { type: "function", name: "plugin_tools", parameters: {} }],
+      input: [
+        ...searchedThread().input.slice(1, 3),
+        {
+          type: "tool_search_call",
+          call_id: "exact",
+          arguments: { query: "__tritonai_exact_plugin_load_v1__ " + wanted.name, limit: 1 },
+        },
+        {
+          type: "tool_search_output",
+          call_id: "exact",
+          tools: [
+            { type: "namespace", name: "custom_service", tools: [wanted] },
+            { type: "namespace", name: "github", tools: [neighbor, wanted] },
+          ],
+        },
+        {
+          type: "tool_search_call",
+          call_id: "invented",
+          arguments: {
+            query: "__tritonai_exact_plugin_load_v1__ github_unknown_operation",
+            limit: 1,
+          },
+        },
+        {
+          type: "tool_search_output",
+          call_id: "invented",
+          tools: [{ type: "namespace", name: "github", tools: [neighbor] }],
+        },
+        {
+          type: "tool_search_call",
+          call_id: "invalid",
+          arguments: { query: "__tritonai_exact_plugin_load_v1__ ", limit: 1 },
+        },
+        { type: "tool_search_output", call_id: "invalid", tools: [] },
+      ],
+    };
+    const identities = [
+      { namespace: "github", name: wanted.name },
+      { namespace: "github", name: neighbor.name },
+      { namespace: "microsoft365", name: mailSearch.name },
+    ];
+    const compact = { ...structuredClone(body), tools: [] };
+    translateToolSearchForGateway(compact, identities);
+    expect(compact.tools).toEqual([]);
+    expect(compact.input[5]).toMatchObject({
+      output: expect.stringContaining("No exact operation"),
+    });
+    translateToolSearchForGateway(body, identities);
+    expect(body.tools[0]).toMatchObject({
+      name: "load_plugin_tool",
+      parameters: { required: ["name"], additionalProperties: false },
+    });
+    expect(body.input[0]).toMatchObject({ name: "tool_search" });
+    expect(body.input[2]).toMatchObject({
+      name: "load_plugin_tool",
+      arguments: JSON.stringify({ name: wanted.name }),
+    });
+    expect(body.input[3]).toMatchObject({ output: expect.stringContaining(wanted.name) });
+    expect(body.input[5]).toMatchObject({ output: expect.stringContaining("No exact operation") });
+    expect(body.input[7]).toMatchObject({
+      output: expect.stringContaining("Invalid operation name"),
+    });
+    expect(JSON.stringify(body.tools)).not.toContain(neighbor.name);
+    expect(JSON.stringify(body.tools)).toContain(wanted.name);
+    expect(body.tools).not.toContainEqual(expect.objectContaining({ name: "custom_service" }));
+
+    const mixed = {
+      tools: [toolSearchTool, { type: "function", name: "plugin_tools", parameters: {} }],
+      input: [
+        {
+          type: "tool_search_call",
+          call_id: "mcp",
+          arguments: { query: "account lookup", limit: 5 },
+        },
+        {
+          type: "tool_search_output",
+          call_id: "mcp",
+          tools: [
+            { type: "namespace", name: "github", tools: [neighbor] },
+            { type: "namespace", name: "custom_service", tools: [{ ...neighbor, name: "lookup" }] },
+          ],
+        },
+      ],
+    };
+    translateToolSearchForGateway(mixed, [{ namespace: "github", name: neighbor.name }]);
+    expect(mixed.tools).toContainEqual(expect.objectContaining({ name: "tool_search" }));
+    expect(JSON.stringify(mixed.tools)).not.toContain(neighbor.name);
+    expect(mixed.input[1]).toMatchObject({
+      output: "These tools are now available to call: lookup.",
+    });
+
+    for (const [name, args, query] of [
+      [
+        "load_plugin_tool",
+        { name: wanted.name },
+        "__tritonai_exact_plugin_load_v1__ " + wanted.name,
+      ],
+      [
+        "load_plugin_tool",
+        { name: "GitHub repositories connected account list" },
+        "__tritonai_exact_plugin_load_v1__ ",
+      ],
+      [
+        "tool_search",
+        { query: "GitHub repositories connected account list", limit: 5 },
+        "__tritonai_exact_plugin_load_v1__ ",
+      ],
+    ] as const) {
+      const event = JSON.parse(
+        toCodexToolSearchEvent(
+          JSON.stringify({
+            type: "response.output_item.done",
+            item: { type: "function_call", name, call_id: "load", arguments: JSON.stringify(args) },
+          }),
+          { exactLoading: true },
+        ),
+      );
+      expect(event.item).toMatchObject({
+        type: "tool_search_call",
+        call_id: "load",
+        arguments: { query, limit: 1 },
+      });
+    }
+  });
+
   it("sends search as an ordinary function and makes found tools callable", () => {
     const body = searchedThread();
     expect(translateToolSearchForGateway(body)).toBe(true);

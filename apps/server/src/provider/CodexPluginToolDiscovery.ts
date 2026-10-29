@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 export const PLUGIN_TOOL_DISCOVERY_NAME = "plugin_tools";
+export const PLUGIN_TOOL_LOADER_NAME = "load_plugin_tool";
 
 const BrowseInput = Schema.Struct({
   namespace: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
@@ -28,7 +29,7 @@ export function makePluginToolBrowser(
       description:
         "Browse plugin operation names before loading their schemas. Start here for plugin tasks: " +
         "omit namespace or use an empty string to list services, then provide a returned namespace to browse its operations. " +
-        "Choose the operation that matches the task and call tool_search with its exact name and limit 1. " +
+        `Choose the operation that matches the task and call ${PLUGIN_TOOL_LOADER_NAME} with its exact name. ` +
         "Follow nextOffset when more entries exist. This lists session-registered definitions; " +
         "execution separately checks connection, permissions, and approval.",
       inputSchema: Schema.toJsonSchemaDocument(BrowseInput, { onExcessProperty: "error" }).schema,
