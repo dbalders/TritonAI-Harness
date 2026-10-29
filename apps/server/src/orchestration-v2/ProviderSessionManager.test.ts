@@ -2070,6 +2070,9 @@ it.effect(
         assert.isDefined(original);
         const originalToken = original?.authorizationHeader.replace(/^Bearer\s+/, "");
         assert.isDefined(originalToken);
+        const originalScope = yield* registry.resolve(originalToken!);
+        assert.isTrue(originalScope?.thread.integrationToolsViaDynamicTools);
+        assert.isTrue(originalScope?.capabilities.has("integrations.invoke"));
 
         yield* manager.detach({ providerSessionId, threadId, detail: "Workspace changed." });
         assert.equal(
