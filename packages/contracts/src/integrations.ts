@@ -108,6 +108,13 @@ export type IntegrationConnectionSubmission = typeof IntegrationConnectionSubmis
 export const IntegrationConnectInput = Schema.Struct({
   id: TrimmedNonEmptyString,
   submission: Schema.optional(IntegrationConnectionSubmission),
+  /** The service environment the client showed; the server refuses if the selection changed. */
+  serviceEnvironment: Schema.optional(IntegrationServiceEnvironmentId),
+});
+export const IntegrationDisconnectInput = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  /** The service environment the client showed; the server refuses if the selection changed. */
+  serviceEnvironment: Schema.optional(IntegrationServiceEnvironmentId),
 });
 export const IntegrationPollInput = Schema.Struct({
   id: TrimmedNonEmptyString,

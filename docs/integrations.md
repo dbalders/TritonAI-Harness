@@ -199,7 +199,10 @@ other one. Switching stops the plugin's in-flight tool calls, is refused while t
 faulted (reset first, so reset disconnects the environment that faulted), and then follows the
 selected environment's sign-in grant for provider-authorized abilities such as Read and Write.
 Only the user can switch; there is no agent tool for it. Switching cancels a sign-in still
-pending in the previous environment. The idle credential keepalive refreshes only the selected
+pending in the previous environment. Connect and disconnect requests carry the environment the
+client showed, and plugin writes carry the environment they were approved for; the registry
+refuses either when the selection has changed. "Allow for this session" for such a write applies
+to that environment only, on both the Codex and Claude providers. The idle credential keepalive refreshes only the selected
 environment, so a sign-in left unused for longer than the service's refresh-token lifetime may
 need to reconnect. Hosts below level 3 refuse such plugins.
 

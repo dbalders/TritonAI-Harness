@@ -436,6 +436,7 @@ import {
 import { VcsError } from "./vcs.ts";
 import {
   IntegrationConnectInput,
+  IntegrationDisconnectInput,
   IntegrationConnectResult,
   IntegrationIdInput,
   IntegrationOperationError,
@@ -1281,7 +1282,7 @@ const WsIntegrationsPollRpc = Rpc.make(WS_METHODS.integrationsPoll, {
   error: IntegrationRpcError,
 });
 const WsIntegrationsDisconnectRpc = Rpc.make(WS_METHODS.integrationsDisconnect, {
-  payload: IntegrationIdInput,
+  payload: IntegrationDisconnectInput,
   success: IntegrationsListResult,
   error: IntegrationRpcError,
 });

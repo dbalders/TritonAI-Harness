@@ -916,8 +916,27 @@ describe("IntegrationRegistry lifecycle", () => {
         ],
       ).toMatchObject({ serviceEnvironment: "development" });
 
+      // A caller that still shows or approved Prod is refused instead of acting on Dev.
+      const prodSignal = (expectedServiceEnvironment: string) => ({
+        signal: new AbortController().signal,
+        expectedServiceEnvironment,
+      });
+      await expect(
+        registry.invokeTool("test.fixture.read", {}, prodSignal("production")),
+      ).rejects.toMatchObject({ code: "invalid_input", message: expect.stringContaining("Dev") });
+      await expect(
+        registry.disconnect(manifest.id, prodSignal("production")),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      await expect(
+        registry.connect(manifest.id, undefined, prodSignal("production")),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(grants.has("development")).toBe(true);
+      await expect(
+        registry.invokeTool("test.fixture.read", {}, prodSignal("development")),
+      ).resolves.toMatchObject({ environment: "development" });
+
       // Disconnecting Dev signs out of Dev only.
-      await registry.disconnect(manifest.id);
+      await registry.disconnect(manifest.id, prodSignal("development"));
       expect(grants.has("development")).toBe(false);
       expect(grants.has("production")).toBe(true);
 

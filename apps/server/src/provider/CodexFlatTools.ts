@@ -149,7 +149,13 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
         ? { ...(await registry.awaitToolAvailability(canonicalName, { signal })), canonicalName }
         : availability(name);
     },
-    invokeDynamicTool: async ({ name, arguments: args, signal, writeApproved }) => {
+    invokeDynamicTool: async ({
+      name,
+      arguments: args,
+      signal,
+      writeApproved,
+      serviceEnvironment,
+    }) => {
       const current = await runPromise(activeSession, { signal });
       if (!current)
         throw new IntegrationToolUnavailableError(
@@ -191,6 +197,9 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
       return registry.invokeTool(canonicalName, args, {
         signal,
         ...(writeApproved ? { writeApproved: true } : {}),
+        ...(serviceEnvironment === undefined
+          ? {}
+          : { expectedServiceEnvironment: serviceEnvironment }),
       });
     },
   };

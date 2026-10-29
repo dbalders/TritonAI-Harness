@@ -3598,17 +3598,27 @@ export const layerWsRpc = (
           integrationRpcEffect(() =>
             Integrations.getIntegrationRegistry().setServiceEnvironment(id, serviceEnvironment),
           ),
-        [WS_METHODS.integrationsConnect]: ({ id, submission }) =>
+        [WS_METHODS.integrationsConnect]: ({ id, submission, serviceEnvironment }) =>
           integrationRpcEffect((signal) =>
-            Integrations.getIntegrationRegistry().connect(id, submission, { signal }),
+            Integrations.getIntegrationRegistry().connect(id, submission, {
+              signal,
+              ...(serviceEnvironment === undefined
+                ? {}
+                : { expectedServiceEnvironment: serviceEnvironment }),
+            }),
           ),
         [WS_METHODS.integrationsPoll]: ({ id, flowId }) =>
           integrationRpcEffect((signal) =>
             Integrations.getIntegrationRegistry().poll(id, flowId, { signal }),
           ),
-        [WS_METHODS.integrationsDisconnect]: ({ id }) =>
+        [WS_METHODS.integrationsDisconnect]: ({ id, serviceEnvironment }) =>
           integrationRpcEffect((signal) =>
-            Integrations.getIntegrationRegistry().disconnect(id, { signal }),
+            Integrations.getIntegrationRegistry().disconnect(id, {
+              signal,
+              ...(serviceEnvironment === undefined
+                ? {}
+                : { expectedServiceEnvironment: serviceEnvironment }),
+            }),
           ),
       };
       const splitHandlers: Pick<typeof handlers, SplitWsRpc["_tag"]> = handlers;

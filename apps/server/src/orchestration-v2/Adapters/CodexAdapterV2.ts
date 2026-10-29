@@ -5547,6 +5547,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 name: payload.tool,
                 arguments: payload.arguments,
                 ...(gate.definition.requiresApproval ? { writeApproved: true } : {}),
+                ...(environment ? { serviceEnvironment: environment.id } : {}),
               },
             });
           }).pipe(Effect.orDie),

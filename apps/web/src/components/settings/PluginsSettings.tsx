@@ -84,6 +84,14 @@ function connectionTargetName(integration: IntegrationSummary): string {
   return environment ? `${integration.name} ${environment.displayName}` : integration.name;
 }
 
+/** Sent with connection changes so the server refuses them if the environment has changed. */
+function serviceEnvironmentInput(integration: IntegrationSummary): {
+  readonly serviceEnvironment?: string;
+} {
+  const environment = selectedServiceEnvironment(integration);
+  return environment ? { serviceEnvironment: environment.id } : {};
+}
+
 function connectionDetail(integration: IntegrationSummary): string {
   if (integration.accountLabel) return integration.accountLabel;
   const environment = selectedServiceEnvironment(integration);
@@ -929,15 +937,24 @@ function EnvironmentPluginsSettingsPanel({
   const connectionAnnouncement = connectionAttentionState.announcement;
   const connectionAttentionSequenceRef = useRef(0);
   const activeFlowIdsRef = useRef(new Map<string, string>());
+  // Every applied server result advances this, so a list request that started earlier can never
+  // overwrite a newer result, such as the response to an environment switch.
+  const dataGenerationRef = useRef(0);
+  const applyData = (update: Parameters<typeof setData>[0]) => {
+    dataGenerationRef.current += 1;
+    setData(update);
+  };
 
   const load = () => {
     if (!environmentId) return Promise.resolve();
     const targetEnvironmentId = environmentId;
+    const generation = dataGenerationRef.current;
     return listCommand({ environmentId: targetEnvironmentId, input: {} })
       .then((response) => {
         const result = unwrap(response);
         if (environmentIdRef.current !== targetEnvironmentId) return;
-        setData(result);
+        if (dataGenerationRef.current !== generation) return;
+        applyData(result);
         window.dispatchEvent(new Event("getting-started:connections-changed"));
         setErrors((current) => {
           const rest = { ...current };
@@ -985,7 +1002,7 @@ function EnvironmentPluginsSettingsPanel({
         activeFlowIdsRef.current.get(id) !== flow.flowId
       )
         return;
-      setData((current) => ({
+      applyData((current) => ({
         integrations: current.integrations.map((item) =>
           item.id === id ? result.integration : item,
         ),
@@ -1073,7 +1090,7 @@ function EnvironmentPluginsSettingsPanel({
           const flow = unwrap(
             await connectCommand({
               environmentId: targetEnvironmentId,
-              input: { id: integration.id },
+              input: { id: integration.id, ...serviceEnvironmentInput(integration) },
             }),
           );
           if (environmentIdRef.current !== targetEnvironmentId) return;
@@ -1111,11 +1128,11 @@ function EnvironmentPluginsSettingsPanel({
                   })
                 : disconnectCommand({
                     environmentId: targetEnvironmentId,
-                    input: { id: integration.id },
+                    input: { id: integration.id, ...serviceEnvironmentInput(integration) },
                   });
           const result = unwrap(await command);
           if (environmentIdRef.current !== targetEnvironmentId) return;
-          setData(result);
+          applyData(result);
           window.dispatchEvent(new Event("getting-started:connections-changed"));
           // First-time installation is also represented by the "enable" action kind above.
           if (kind === "enable") {
@@ -1168,6 +1185,7 @@ function EnvironmentPluginsSettingsPanel({
             input: {
               id: integration.id,
               submission: { kind: "api_key", flowId, value },
+              ...serviceEnvironmentInput(integration),
             },
           }),
         );
@@ -1221,7 +1239,7 @@ function EnvironmentPluginsSettingsPanel({
           }),
         );
         if (environmentIdRef.current !== targetEnvironmentId) return;
-        setData(result);
+        applyData(result);
         window.dispatchEvent(new Event("getting-started:connections-changed"));
         const updated = result.integrations.find(({ id }) => id === integration.id);
         const updatedCapability = updated?.capabilities.find(({ id }) => id === capability);
@@ -1237,7 +1255,7 @@ function EnvironmentPluginsSettingsPanel({
           const flow = unwrap(
             await connectCommand({
               environmentId: targetEnvironmentId,
-              input: { id: integration.id },
+              input: { id: integration.id, ...serviceEnvironmentInput(integration) },
             }),
           );
           if (environmentIdRef.current !== targetEnvironmentId) return;
@@ -1284,6 +1302,8 @@ function EnvironmentPluginsSettingsPanel({
       delete rest[integration.id];
       return rest;
     });
+    // Results from list requests already in flight describe the old selection.
+    dataGenerationRef.current += 1;
     // A pending sign-in belongs to the environment it started in.
     activeFlowIdsRef.current.delete(integration.id);
     setFlows((current) => {
@@ -1300,7 +1320,7 @@ function EnvironmentPluginsSettingsPanel({
           }),
         );
         if (environmentIdRef.current !== targetEnvironmentId) return;
-        setData(result);
+        applyData(result);
         window.dispatchEvent(new Event("getting-started:connections-changed"));
         const updated = result.integrations.find(({ id }) => id === integration.id);
         setConnectionAttentionState((current) =>

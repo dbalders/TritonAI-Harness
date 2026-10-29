@@ -73,6 +73,12 @@ export interface IntegrationInvocationContext {
    * operation, including status, for plugins whose manifest declares `serviceEnvironments`.
    */
   readonly serviceEnvironment?: string;
+  /**
+   * Host-only. The service environment a caller approved or displayed. Registry operations reject
+   * the call instead of running it when the plugin's selection no longer matches. Never forwarded
+   * to providers.
+   */
+  readonly expectedServiceEnvironment?: string;
   /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
   /**
@@ -525,6 +531,22 @@ function selectedServiceEnvironmentId(
   if (!environments || environments.length === 0) return undefined;
   const saved = installed?.serviceEnvironment;
   return environments.some(({ id }) => id === saved) ? saved : environments[0]!.id;
+}
+
+function assertExpectedServiceEnvironment(
+  manifest: IntegrationManifest,
+  installed: InstalledIntegrationState | undefined,
+  expected: string | undefined,
+  action: string,
+): void {
+  if (expected === undefined || !manifest.serviceEnvironments) return;
+  const selected = selectedServiceEnvironmentId(manifest, installed);
+  if (selected === expected) return;
+  const current = manifest.serviceEnvironments.find(({ id }) => id === selected);
+  throw operationError(
+    "invalid_input",
+    `${manifest.name} switched to ${current?.displayName ?? "another environment"}, so ${action} was not run. Try again.`,
+  );
 }
 
 const EMPTY_STATE: PersistedIntegrationState = {
@@ -2530,12 +2552,14 @@ export class RegistryRuntime {
     if (this.#closing) throw operationError("disabled", "Integration registry is closing.");
     await this.#ready;
     if (this.#closing) throw operationError("disabled", "Integration registry is closing.");
-    const integrations = await Promise.all(
+    await Promise.all(
       [...this.#catalog.values()].map((integration) =>
         this.#serializeIntegration(integration.manifest.id, () => this.#summarize(integration)),
       ),
     );
-    return { integrations };
+    // Return the state as of now, not each summary as captured while slower plugins were still
+    // reporting; an environment switch can complete in between.
+    return this.#cachedList();
   }
 
   list(): Promise<IntegrationsListResult> {
@@ -3206,6 +3230,12 @@ export class RegistryRuntime {
       if (!installed.enabled) {
         throw operationError("disabled", `Enable ${manifest.name} before connecting.`);
       }
+      assertExpectedServiceEnvironment(
+        manifest,
+        installed,
+        context?.expectedServiceEnvironment,
+        "sign-in",
+      );
       if (!hasConnectionLifecycle(provider)) {
         throw operationError("operation_failed", `${manifest.name} does not require a connection.`);
       }
@@ -3315,6 +3345,12 @@ export class RegistryRuntime {
       if (!hasConnectionLifecycle(provider)) {
         throw operationError("operation_failed", `${manifest.name} does not have a connection.`);
       }
+      assertExpectedServiceEnvironment(
+        manifest,
+        ownRecordValue(this.#state.installed, id),
+        context?.expectedServiceEnvironment,
+        "disconnect",
+      );
       try {
         await this.#syncSkills({ integrationId: id, packageRoot: null, activeSkills: [] });
         await this.#providerOperation(
@@ -3619,6 +3655,14 @@ export class RegistryRuntime {
       if (!installed?.enabled) {
         throw operationError("disabled", `${manifest.name} is not enabled.`);
       }
+      // Checked synchronously before this call registers as active work: a later switch then
+      // revokes it, and an earlier one is caught here.
+      assertExpectedServiceEnvironment(
+        manifest,
+        installed,
+        context?.expectedServiceEnvironment,
+        `${tool.displayName}`,
+      );
       if (tool.effect === "write" && context?.writeApproved !== true) {
         throw operationError(
           "operation_failed",

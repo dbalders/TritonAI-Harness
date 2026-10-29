@@ -47,6 +47,8 @@ export interface CodexDynamicToolInvocation {
   readonly arguments: unknown;
   readonly signal: AbortSignal;
   readonly writeApproved?: boolean;
+  /** The plugin service environment this call was approved for; a later switch refuses it. */
+  readonly serviceEnvironment?: string;
 }
 
 export function dynamicToolInvocationAllowed(
