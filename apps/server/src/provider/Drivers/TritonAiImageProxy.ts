@@ -15,6 +15,7 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/http";
+import { PLUGIN_TOOL_DISCOVERY_NAME } from "../CodexPluginToolDiscovery.ts";
 
 // Match the gateway's four-image limit.
 const MAX_IMAGES = 4;
@@ -45,8 +46,9 @@ export function limitTritonAiRequestImages(body: unknown): void {
 const TOOL_SEARCH = "tool_search";
 const MAX_SEARCH_RESULTS = 8;
 const SEARCH_GUIDANCE =
-  "Search by service and required operation, rather than the user's data values. " +
-  "Use short queries such as 'github list repositories' or 'lucid search documents'. " +
+  `For plugin tasks, first use ${PLUGIN_TOOL_DISCOVERY_NAME}, when available, to browse operation names. ` +
+  "Then search for the exact returned name with limit 1 to load its schema. " +
+  "Otherwise search by service and required operation, rather than the user's data values. " +
   "Results are candidates: if the requested operation is missing, search again with alternate " +
   "words or an exact tool name. An account lookup does not list resources, and a folder listing " +
   "does not search documents. Each search loads at most eight tools; use another focused search " +

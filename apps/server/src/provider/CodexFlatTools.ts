@@ -25,6 +25,7 @@ import {
   type CodexDynamicToolAvailability,
   type CodexDynamicToolOptions,
 } from "./CodexDynamicTools.ts";
+import { makePluginToolBrowser, PLUGIN_TOOL_DISCOVERY_NAME } from "./CodexPluginToolDiscovery.ts";
 
 class CodexFlatToolSetupError extends Schema.TaggedError<CodexFlatToolSetupError>()(
   "CodexFlatToolSetupError",
@@ -130,9 +131,20 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
     session?.browserToolsAvailable && input.broker
       ? yield* getCodexPreviewDynamicToolDefinitions
       : [];
+  const pluginBrowser =
+    input.deferPluginTools && integrationAccess
+      ? makePluginToolBrowser(
+          bindings.filter(
+            (tool) =>
+              input.disclosedToolNames === undefined ||
+              input.disclosedToolNames.includes(tool.name),
+          ),
+        )
+      : undefined;
   const definitions = [
     ...preview,
     ...(integrationAccess ? [tritonAiCommonsDynamicToolDefinition] : []),
+    ...(pluginBrowser ? [pluginBrowser.definition] : []),
     ...bindings,
   ];
   if (new Set(definitions.map((definition) => definition.name)).size !== definitions.length) {
@@ -161,7 +173,8 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
   const availability = (name: string): CodexDynamicToolAvailability => {
     if (
       preview.some((definition) => definition.name === name) ||
-      name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME
+      name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME ||
+      (pluginBrowser !== undefined && name === PLUGIN_TOOL_DISCOVERY_NAME)
     )
       return { available: true };
     const canonicalName = byName.get(name);
@@ -194,6 +207,11 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
         throw new IntegrationToolUnavailableError(
           "This thread's provider credential is no longer active.",
         );
+      if (name === PLUGIN_TOOL_DISCOVERY_NAME && pluginBrowser) {
+        if (!current.capabilities?.has("integrations.invoke"))
+          throw new IntegrationToolUnavailableError("This provider session cannot use plugins.");
+        return pluginBrowser.browse(args);
+      }
       if (name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME) {
         if (!current.capabilities?.has("integrations.invoke"))
           throw new IntegrationToolUnavailableError("This provider session cannot use plugins.");
