@@ -31,6 +31,10 @@ export class IntegrationToolRegistrationError extends Schema.TaggedError<Integra
 
 const INTEGRATION_INVOCATION_CAPABILITY = "integrations.invoke" as const;
 
+const canUseIntegrationMcpTools = (scope: McpInvocationContext.McpInvocationScope) =>
+  scope.capabilities.has(INTEGRATION_INVOCATION_CAPABILITY) &&
+  scope.thread?.integrationToolsViaDynamicTools !== true;
+
 function integrationToolInvocationContext(
   definition: IntegrationProviderTool,
   signal: AbortSignal,
@@ -48,12 +52,8 @@ function integrationToolInvocationContext(
 const invocationCanUseIntegrations = (): boolean => {
   const fiber = Fiber.getCurrent();
   if (!fiber) return false;
-  return (
-    Context.getOrUndefined(
-      fiber.context,
-      McpInvocationContext.McpInvocationContext,
-    )?.capabilities.has(INTEGRATION_INVOCATION_CAPABILITY) === true
-  );
+  const scope = Context.getOrUndefined(fiber.context, McpInvocationContext.McpInvocationContext);
+  return scope !== undefined && canUseIntegrationMcpTools(scope);
 };
 
 /** Runtime JSON schemas come from the plugin SDK; access declarations remain host-owned. */
@@ -84,8 +84,7 @@ export function toolRegistration(
           fiber.context,
           McpInvocationContext.McpInvocationContext,
         );
-        return invocation.capabilities.has(INTEGRATION_INVOCATION_CAPABILITY) &&
-          isAvailable(definition.name)
+        return canUseIntegrationMcpTools(invocation) && isAvailable(definition.name)
           ? Effect.tryPromise({
               try: (signal) =>
                 Integrations.getIntegrationRegistry().invokeTool(
