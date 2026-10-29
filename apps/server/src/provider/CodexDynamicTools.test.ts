@@ -1,7 +1,11 @@
 import { ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { dynamicToolApprovalPrompt, invokeAdmittedDynamicTool } from "./CodexDynamicTools.ts";
+import {
+  dynamicToolApprovalPrompt,
+  invokeAdmittedDynamicTool,
+  planDynamicToolApproval,
+} from "./CodexDynamicTools.ts";
 
 const threadId = ThreadId.make("thread-codex-dynamic-tools");
 
@@ -64,4 +68,24 @@ it("shows the change a plugin write will make in its approval prompt", () => {
     }),
     'microsoft365__mail_draft_reply\nmessageId: "m-1"\napiToken: [hidden]',
   );
+});
+
+it("approves plugin writes per service environment and names it in the prompt", () => {
+  const payload = { tool: "n8n__update_workflow", arguments: { workflowId: "wf-1" } };
+  const single = planDynamicToolApproval({ requiresApproval: true, payload });
+  const dev = planDynamicToolApproval({
+    requiresApproval: true,
+    payload,
+    serviceEnvironment: { id: "development", label: "n8n Dev" },
+  });
+  const prod = planDynamicToolApproval({
+    requiresApproval: true,
+    payload,
+    serviceEnvironment: { id: "production", label: "n8n Prod" },
+  });
+  assert.equal(single.grantKey, "n8n__update_workflow");
+  assert.equal(dev.grantKey, "n8n__update_workflow@development");
+  assert.notEqual(dev.grantKey, prod.grantKey);
+  assert.isTrue(dev.prompt.startsWith("n8n__update_workflow (n8n Dev)"));
+  assert.include(dev.prompt, 'workflowId: "wf-1"');
 });

@@ -137,6 +137,10 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
     threadId: input.threadId,
     dynamicTools: disclosed,
     dynamicToolAvailability: availability,
+    dynamicToolServiceEnvironment: (name) => {
+      const canonicalName = byName.get(name);
+      return canonicalName ? registry?.toolServiceEnvironmentSync?.(canonicalName) : undefined;
+    },
     awaitDynamicToolAvailability: async (name, { signal }) => {
       if (!(await runPromise(activeSession, { signal })))
         return unavailable("This thread's provider credential is no longer active.");
@@ -145,7 +149,13 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
         ? { ...(await registry.awaitToolAvailability(canonicalName, { signal })), canonicalName }
         : availability(name);
     },
-    invokeDynamicTool: async ({ name, arguments: args, signal, writeApproved }) => {
+    invokeDynamicTool: async ({
+      name,
+      arguments: args,
+      signal,
+      writeApproved,
+      serviceEnvironment,
+    }) => {
       const current = await runPromise(activeSession, { signal });
       if (!current)
         throw new IntegrationToolUnavailableError(
@@ -187,6 +197,9 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
       return registry.invokeTool(canonicalName, args, {
         signal,
         ...(writeApproved ? { writeApproved: true } : {}),
+        ...(serviceEnvironment === undefined
+          ? {}
+          : { expectedServiceEnvironment: serviceEnvironment }),
       });
     },
   };

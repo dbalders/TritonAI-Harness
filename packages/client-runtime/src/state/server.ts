@@ -1680,6 +1680,12 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    setIntegrationServiceEnvironment: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:integrations:set-service-environment",
+      tag: WS_METHODS.integrationsSetServiceEnvironment,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
     connectIntegration: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:integrations:connect",
       tag: WS_METHODS.integrationsConnect,

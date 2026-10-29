@@ -27,7 +27,13 @@ export interface CodexDynamicToolOptions {
     options: { readonly signal: AbortSignal },
   ) => Promise<CodexDynamicToolAvailability>;
   readonly invokeDynamicTool?: (input: CodexDynamicToolInvocation) => Promise<unknown>;
+  /** The plugin service environment (such as "n8n Dev") a call to this tool would reach now. */
+  readonly dynamicToolServiceEnvironment?: (name: string) => CodexDynamicToolServiceEnvironment;
 }
+
+export type CodexDynamicToolServiceEnvironment =
+  | { readonly id: string; readonly label: string }
+  | undefined;
 export interface CodexDynamicToolDefinition {
   readonly name: string;
   readonly description: string;
@@ -41,6 +47,8 @@ export interface CodexDynamicToolInvocation {
   readonly arguments: unknown;
   readonly signal: AbortSignal;
   readonly writeApproved?: boolean;
+  /** The plugin service environment this call was approved for; a later switch refuses it. */
+  readonly serviceEnvironment?: string;
 }
 
 export function dynamicToolInvocationAllowed(
@@ -295,6 +303,11 @@ export interface DynamicToolApprovalPlan {
 export function planDynamicToolApproval(input: {
   readonly requiresApproval: boolean | undefined;
   readonly payload: Pick<EffectCodexSchema.DynamicToolCallParams, "tool" | "arguments">;
+  /**
+   * A plugin write that targets a service environment approves per environment, so allowing a
+   * Dev write for the session never also allows the same write after switching to Prod.
+   */
+  readonly serviceEnvironment?: CodexDynamicToolServiceEnvironment;
 }): DynamicToolApprovalPlan {
   if (isBrowserNavigationTool(input.payload.tool)) {
     const navigation = browserNavigationRequest(input.payload.tool, input.payload.arguments);
@@ -318,10 +331,15 @@ export function planDynamicToolApproval(input: {
       prompt: dynamicToolApprovalPrompt(input.payload),
     };
   }
+  const environment = input.serviceEnvironment;
   return {
     requiresApproval: input.requiresApproval === true,
-    grantKey: input.payload.tool,
-    prompt: dynamicToolApprovalPrompt(input.payload),
+    grantKey: environment ? `${input.payload.tool}@${environment.id}` : input.payload.tool,
+    prompt: dynamicToolApprovalPrompt(
+      environment
+        ? { ...input.payload, tool: `${input.payload.tool} (${environment.label})` }
+        : input.payload,
+    ),
   };
 }
 

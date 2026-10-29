@@ -188,6 +188,32 @@ system-browser button before the secure key field. A successful API-key submissi
 extend the union with their own secure submission contract and rendering instead of pretending to
 use another flow's fields.
 
+Host contract level 3 adds service environments. A plugin whose service has more than one
+deployment, such as n8n Prod and Dev, lists two to four `serviceEnvironments` (`id`, `displayName`,
+`description`) in its manifest; the first is the default. Settings → Plugins shows them as a
+segmented control above the connection row. The user's choice is saved per plugin in `state.json` as
+`serviceEnvironment`, and every provider call (`status`, `prepare`, `connect`, `poll`, `disconnect`,
+and `invoke`) receives it as `context.serviceEnvironment`. The provider keeps a separate connection
+for each environment, so switching never signs the user out of the other one. Switching stops the
+plugin's in-flight tool calls, is refused while the plugin is faulted (reset first, so reset
+disconnects the environment that faulted), and then follows the selected environment's sign-in grant
+for provider-authorized abilities such as Read and Write. Only the user can switch; there is no
+agent tool for it. Switching stops polling a sign-in still pending in the previous environment, and
+level-3 providers cancel such sign-ins when the next operation arrives for the new environment.
+Connect and disconnect requests carry the environment the client showed, and the registry refuses
+them if the selection has changed. "Allow for this session" for such a write applies to that
+environment only, on both the Codex and Claude providers. Codex plugin writes also carry the
+environment they were approved for, and the registry refuses them if the selection changed before
+they started. Claude allows a write in its permission callback and sends it to MCP afterwards
+without that binding, so Harness instead holds the plugin's environment: while a switch is in
+progress, Claude's plugin writes are refused ("ask again once the switch finishes"), and for 15
+seconds after Claude is allowed such a write, switching is refused ("try again in a few seconds").
+The hold expires after 15 seconds, so a Claude call delayed longer than that is not covered, and
+writes Claude's own Auto classifier allows without Harness's callback start no hold. The idle
+credential keepalive refreshes only the selected environment, so a sign-in left unused for longer
+than the service's refresh-token lifetime may need to reconnect. Hosts below level 3 refuse such
+plugins.
+
 Some providers only issue confidential OAuth clients that require a client secret on every token
 request (UCSD Jira Data Center is one). That secret cannot ship in Harness, because configuration
 embedded in a desktop build is extractable. Such a provider registers a private HTTPS relay as its

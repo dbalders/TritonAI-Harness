@@ -5519,9 +5519,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               );
             const gate = yield* gateDynamicToolCall({ options: catalog.options, payload });
             if (!gate.allowed) return gate.response;
+            const environment = catalog.options.dynamicToolServiceEnvironment?.(payload.tool);
             const approval = planDynamicToolApproval({
               requiresApproval: gate.definition.requiresApproval,
               payload,
+              serviceEnvironment: environment,
             });
             const decision = yield* decideToolApproval({
               context,
@@ -5532,12 +5534,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             });
             if (!dynamicToolInvocationAllowed(approval.requiresApproval, decision))
               return dynamicToolResponse(false, "The user declined this tool call.");
+            if (
+              environment?.id !== catalog.options.dynamicToolServiceEnvironment?.(payload.tool)?.id
+            )
+              return dynamicToolResponse(
+                false,
+                "The plugin switched environments while this call waited for approval. It was not run; ask again to run it in the selected environment.",
+              );
             return yield* invokeAdmittedDynamicTool({
               options: catalog.options,
               invocation: {
                 name: payload.tool,
                 arguments: payload.arguments,
                 ...(gate.definition.requiresApproval ? { writeApproved: true } : {}),
+                ...(environment ? { serviceEnvironment: environment.id } : {}),
               },
             });
           }).pipe(Effect.orDie),
