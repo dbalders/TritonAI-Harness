@@ -5,7 +5,7 @@ export const PLUGIN_SDK_API_MAJOR = 1;
 // Level 3 adds plugin-declared service environments (such as Prod and Dev): the user picks one in
 // Harness, and every provider operation receives the selection as `serviceEnvironment`.
 export const PLUGIN_SDK_HOST_CONTRACT_LEVEL = 3;
-export const PLUGIN_SDK_SERVICE_ENVIRONMENTS_CONTRACT_LEVEL = 3;
+const PLUGIN_SDK_SERVICE_ENVIRONMENTS_CONTRACT_LEVEL = 3;
 
 const API_VERSION = "tritonai.plugin/v1";
 const MANIFEST_KEYS = new Set([

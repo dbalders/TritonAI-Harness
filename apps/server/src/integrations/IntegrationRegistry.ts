@@ -538,7 +538,7 @@ function selectedServiceEnvironmentId(
  * outside Harness's admission check. Switching environments waits this long after such a write is
  * allowed, so the write cannot reach the newly selected environment.
  */
-export const PLUGIN_WRITE_SETTLE_MS = 15_000;
+const PLUGIN_WRITE_SETTLE_MS = 15_000;
 
 function assertExpectedServiceEnvironment(
   manifest: IntegrationManifest,
