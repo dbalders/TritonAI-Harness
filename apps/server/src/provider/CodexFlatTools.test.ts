@@ -56,6 +56,12 @@ describe("plugin operation browsing", () => {
       total: 2,
       nextOffset: null,
     });
+    for (const namespace of ["", "  "])
+      expect(browser.browse({ namespace, offset: 0 })).toEqual({
+        entries: [{ namespace: "github" }, { namespace: "lucid" }],
+        total: 2,
+        nextOffset: null,
+      });
     const first = browser.browse({ namespace: "github" });
     assert.equal(first.entries.length, 32);
     assert.equal(first.nextOffset, 32);

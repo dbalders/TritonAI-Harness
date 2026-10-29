@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 export const PLUGIN_TOOL_DISCOVERY_NAME = "plugin_tools";
 
 const BrowseInput = Schema.Struct({
-  namespace: Schema.optionalKey(Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(64))),
+  namespace: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
   offset: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 });
 
@@ -27,7 +27,7 @@ export function makePluginToolBrowser(
       name: PLUGIN_TOOL_DISCOVERY_NAME,
       description:
         "Browse plugin operation names before loading their schemas. Start here for plugin tasks: " +
-        "omit namespace to list services, then provide a returned namespace to browse its operations. " +
+        "omit namespace or use an empty string to list services, then provide a returned namespace to browse its operations. " +
         "Choose the operation that matches the task and call tool_search with its exact name and limit 1. " +
         "Follow nextOffset when more entries exist. This lists session-registered definitions; " +
         "execution separately checks connection, permissions, and approval.",
@@ -35,7 +35,9 @@ export function makePluginToolBrowser(
       requiresApproval: false,
     },
     browse: (arguments_: unknown) => {
-      const { namespace, offset = 0 } = decodeInput(arguments_, { onExcessProperty: "error" });
+      const input = decodeInput(arguments_, { onExcessProperty: "error" });
+      const namespace = input.namespace?.trim() || undefined;
+      const offset = input.offset ?? 0;
       const entries =
         namespace === undefined
           ? namespaces.map((name) => ({ namespace: name }))
