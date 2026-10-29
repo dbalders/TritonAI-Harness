@@ -189,26 +189,26 @@ extend the union with their own secure submission contract and rendering instead
 use another flow's fields.
 
 Host contract level 3 adds service environments. A plugin whose service has more than one
-deployment, such as n8n Prod and Dev, lists two to four `serviceEnvironments` (`id`,
-`displayName`, `description`) in its manifest; the first is the default. Settings → Plugins shows
-them as a segmented control above the connection row. The user's choice is saved per plugin in
-`state.json` as `serviceEnvironment`, and every provider call (`status`, `prepare`, `connect`,
-`poll`, `disconnect`, and `invoke`) receives it as `context.serviceEnvironment`. The provider
-keeps a separate connection for each environment, so switching never signs the user out of the
-other one. Switching stops the plugin's in-flight tool calls, is refused while the plugin is
-faulted (reset first, so reset disconnects the environment that faulted), and then follows the
-selected environment's sign-in grant for provider-authorized abilities such as Read and Write.
-Only the user can switch; there is no agent tool for it. Switching stops polling a sign-in
-still pending in the previous environment, and level-3 providers cancel such sign-ins when the
-next operation arrives for the new environment. Connect and disconnect requests carry the environment the
-client showed, and plugin writes carry the environment they were approved for; the registry
-refuses either when the selection has changed. "Allow for this session" for such a write applies
-to that environment only, on both the Codex and Claude providers. Claude approves before MCP
-dispatch, so its approval callback records the approved environment for that exact call (thread,
-tool, and arguments) and the MCP handler passes it to registry admission. A Claude Code write by
-such a plugin with no matching approval is refused unless the thread runs with full access. The idle credential keepalive refreshes only the selected
-environment, so a sign-in left unused for longer than the service's refresh-token lifetime may
-need to reconnect. Hosts below level 3 refuse such plugins.
+deployment, such as n8n Prod and Dev, lists two to four `serviceEnvironments` (`id`, `displayName`,
+`description`) in its manifest; the first is the default. Settings → Plugins shows them as a
+segmented control above the connection row. The user's choice is saved per plugin in `state.json` as
+`serviceEnvironment`, and every provider call (`status`, `prepare`, `connect`, `poll`, `disconnect`,
+and `invoke`) receives it as `context.serviceEnvironment`. The provider keeps a separate connection
+for each environment, so switching never signs the user out of the other one. Switching stops the
+plugin's in-flight tool calls, is refused while the plugin is faulted (reset first, so reset
+disconnects the environment that faulted), and then follows the selected environment's sign-in grant
+for provider-authorized abilities such as Read and Write. Only the user can switch; there is no
+agent tool for it. Switching stops polling a sign-in still pending in the previous environment, and
+level-3 providers cancel such sign-ins when the next operation arrives for the new environment.
+Connect and disconnect requests carry the environment the client showed, and plugin writes carry the
+environment they were approved for; the registry refuses either when the selection has changed.
+"Allow for this session" for such a write applies to that environment only, on both the Codex and
+Claude providers. Claude approves before MCP dispatch, so its approval callback records the approved
+environment for that exact call (thread, tool, and arguments) and the MCP handler passes it to
+registry admission. A Claude Code write by such a plugin with no matching approval is refused unless
+the thread runs with full access. The idle credential keepalive refreshes only the selected
+environment, so a sign-in left unused for longer than the service's refresh-token lifetime may need
+to reconnect. Hosts below level 3 refuse such plugins.
 
 Some providers only issue confidential OAuth clients that require a client secret on every token
 request (UCSD Jira Data Center is one). That secret cannot ship in Harness, because configuration
