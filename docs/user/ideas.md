@@ -10,6 +10,8 @@ Ideas are listed in two groups. **For you** has ideas from your own work and too
 
 **Things to try** has plugins and skills that appeared since you started using Ideas, and ready-made ideas that need no project, plus ideas for plugins you have connected, such as a digest of your recent email. A new installation starts with these.
 
+**New features to try**, above both groups, lists TritonAI features you haven't used yet: helper agents that work side by side, threads TritonAI starts for you, scheduled tasks, and charts in replies. It starts collapsed, so select it to see the features. **Try it** puts a ready-made example of the feature in a new draft. A feature leaves the list once you send its draft or use that feature anywhere in TritonAI, and the list disappears when there is nothing left to try. Dismissing a feature hides it for good.
+
 Each idea is one row: the task, one line about it, and what it is based on. Ideas never cite a thread, note, or file that does not exist, and every idea is ready to send as written, with nothing to fill in. To keep the page varied, no more than two ideas at a time are about the same project or tool. Ideas based on your work or tools are replaced after about three days, since the work moves on.
 
 ## Use an idea

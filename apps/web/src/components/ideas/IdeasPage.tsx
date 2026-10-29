@@ -1,15 +1,18 @@
 /**
  * Ideas open as drafts for review. Row feedback hides the card with Undo and
- * informs future suggestions in For you and Things to try.
+ * informs future suggestions in For you and Things to try. Features the user
+ * hasn't tried yet wait, collapsed, above them until tried.
  */
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, Idea, IdeaFeedbackKind, IdeasFeedbackInput } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { ChevronRightIcon, ClockIcon, EllipsisIcon, SparklesIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isElectron } from "../../env";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -37,7 +40,14 @@ import { toastManager } from "../ui/toast";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { IDEA_GROUPS, ideaBasis, ideaHeadline, ideasInGroup, type IdeaGroup } from "./ideaDisplay";
+import {
+  featureIdeas,
+  IDEA_GROUPS,
+  ideaBasis,
+  ideaHeadline,
+  ideasInGroup,
+  type IdeaGroup,
+} from "./ideaDisplay";
 import { useOpenIdeaDraft } from "./useOpenIdeaDraft";
 import { GettingStartedContextHint } from "../onboarding/GettingStartedContextHint";
 
@@ -45,6 +55,7 @@ type HideKind = Extract<IdeaFeedbackKind, "dismissed" | "rejected" | "less-like-
 
 // While ideas are being written, check back this often.
 const GENERATING_REFRESH_MS = 1_500;
+const FEATURES_EXPANDED_KEY = "t3code:ideas:features-expanded";
 
 function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0], fallback: string) {
   const failure = squashAtomCommandFailure(result);
@@ -149,7 +160,8 @@ export function IdeasPage() {
     toastManager.add({
       type: "success",
       title,
-      ...(kind === "dismissed"
+      // A dismissed feature card doesn't come back.
+      ...(kind === "dismissed" && idea.section !== "feature"
         ? { description: "It can come back in a couple of weeks if it still fits." }
         : {}),
       actionProps: {
@@ -193,7 +205,11 @@ export function IdeasPage() {
   };
 
   const visible = (data?.ideas ?? []).filter((idea) => !hidden.has(idea.id));
-  const snoozed = (data?.snoozed ?? []).filter((idea) => !hidden.has(idea.id));
+  const features = featureIdeas(data?.features, hidden);
+  const snoozed = [
+    ...(data?.snoozed ?? []).filter((idea) => !hidden.has(idea.id)),
+    ...features.snoozed,
+  ].toSorted((left, right) => (left.snoozedUntil ?? "").localeCompare(right.snoozedUntil ?? ""));
   const generating = requesting || data?.state === "generating";
 
   let content;
@@ -233,6 +249,14 @@ export function IdeasPage() {
             <p className="text-xs text-muted-foreground">{data.message}</p>
           ) : null}
         </div>
+        {features.toTry.length > 0 ? (
+          <FeatureIdeaList
+            ideas={features.toTry}
+            timestampFormat={timestampFormat}
+            onOpen={handleOpen}
+            onHide={hideIdea}
+          />
+        ) : null}
         {IDEA_GROUPS.map((group) => (
           <IdeaGroupList
             key={group.id}
@@ -316,6 +340,31 @@ function IdeaGroupList({
   );
 }
 
+/** Features not tried yet, collapsed until opened so they don't crowd the page. */
+function FeatureIdeaList({ ideas, ...actions }: IdeaActions & { ideas: ReadonlyArray<Idea> }) {
+  const [expanded, setExpanded] = useLocalStorage(FEATURES_EXPANDED_KEY, false, Schema.Boolean);
+  return (
+    <section aria-label="New features to try">
+      <Collapsible open={expanded} onOpenChange={setExpanded}>
+        <CollapsibleTrigger className="group flex items-center gap-1.5 px-2 text-sm font-semibold text-foreground">
+          <ChevronRightIcon className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
+          New features to try
+          <span className="font-normal text-muted-foreground">{ideas.length}</span>
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          <ul className="mt-1 flex flex-col divide-y divide-border/70">
+            {ideas.map((idea) => (
+              <li key={idea.id} className="py-0.5">
+                <IdeaRow idea={idea} {...actions} />
+              </li>
+            ))}
+          </ul>
+        </CollapsiblePanel>
+      </Collapsible>
+    </section>
+  );
+}
+
 function IdeaRow({ idea, timestampFormat, onOpen, onHide }: IdeaActions & { idea: Idea }) {
   const headline = ideaHeadline(idea.title);
   const basis = ideaBasis(idea.sources);
@@ -349,10 +398,15 @@ function IdeaRow({ idea, timestampFormat, onOpen, onHide }: IdeaActions & { idea
       {/* Shown on hover or focus where the pointer can hover; always shown on touch screens. */}
       <div className="flex shrink-0 items-center gap-1 ps-11 transition-opacity sm:ps-0 sm:[@media(any-hover:hover)]:opacity-0 sm:[@media(any-hover:hover)]:group-hover/idea:opacity-100 sm:[@media(any-hover:hover)]:group-focus-within/idea:opacity-100 sm:[@media(any-hover:hover)]:has-[[data-popup-open]]:opacity-100">
         <Button size="xs" onClick={() => onOpen(idea)}>
-          {idea.action.kind === "resume-thread" ? "Continue in thread" : "Open draft"}
+          {idea.section === "feature"
+            ? "Try it"
+            : idea.action.kind === "resume-thread"
+              ? "Continue in thread"
+              : "Open draft"}
         </Button>
         <IdeaMoreMenu
           headline={headline}
+          feature={idea.section === "feature"}
           timestampFormat={timestampFormat}
           onHide={(kind, snoozedUntil) => onHide(idea, kind, snoozedUntil)}
         />
@@ -363,10 +417,13 @@ function IdeaRow({ idea, timestampFormat, onOpen, onHide }: IdeaActions & { idea
 
 function IdeaMoreMenu({
   headline,
+  feature,
   timestampFormat,
   onHide,
 }: {
   headline: string;
+  /** Feature cards only snooze or dismiss: there is no mix of them to steer. */
+  feature: boolean;
   timestampFormat: TimestampFormat;
   onHide: (kind: HideKind, snoozedUntil?: string) => void;
 }) {
@@ -417,9 +474,13 @@ function IdeaMoreMenu({
           <XIcon />
           Dismiss
         </MenuItem>
-        <MenuSeparator />
-        <MenuItem onClick={() => onHide("less-like-this")}>Less like this</MenuItem>
-        <MenuItem onClick={() => onHide("rejected")}>Not relevant</MenuItem>
+        {feature ? null : (
+          <>
+            <MenuSeparator />
+            <MenuItem onClick={() => onHide("less-like-this")}>Less like this</MenuItem>
+            <MenuItem onClick={() => onHide("rejected")}>Not relevant</MenuItem>
+          </>
+        )}
       </MenuPopup>
     </Menu>
   );

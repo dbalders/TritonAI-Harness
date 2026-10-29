@@ -16,6 +16,21 @@ export const IDEA_GROUPS: ReadonlyArray<IdeaGroup> = [
   { id: "to-try", title: "Things to try", sections: ["new", "starter"] },
 ];
 
+/**
+ * Feature cards still to show and those snoozed. A hidden feature card leaves
+ * both lists; a snoozed one waits with the other snoozed ideas.
+ */
+export function featureIdeas(
+  features: ReadonlyArray<Idea> | undefined,
+  hidden: ReadonlySet<string>,
+): { readonly toTry: ReadonlyArray<Idea>; readonly snoozed: ReadonlyArray<Idea> } {
+  const shown = (features ?? []).filter((idea) => !hidden.has(idea.id));
+  return {
+    toTry: shown.filter((idea) => idea.snoozedUntil === null),
+    snoozed: shown.filter((idea) => idea.snoozedUntil !== null),
+  };
+}
+
 /** The group's ideas, in the order of its sections, keeping the server's order within each. */
 export function ideasInGroup(ideas: ReadonlyArray<Idea>, group: IdeaGroup): ReadonlyArray<Idea> {
   return group.sections.flatMap((section) => ideas.filter((idea) => idea.section === section));
