@@ -2762,6 +2762,27 @@ export class RegistryRuntime {
     return this.toolDefinitions().filter(({ name }) => this.isToolAvailableSync(name));
   }
 
+  /**
+   * For a tool whose plugin offers service environments, the environment a call would reach now,
+   * labeled for approval prompts (for example "n8n Dev"). Undefined for single-environment plugins.
+   */
+  toolServiceEnvironmentSync(
+    name: string,
+  ): { readonly id: string; readonly label: string } | undefined {
+    for (const { manifest } of this.#catalog.values()) {
+      if (!manifest.tools.some((tool) => tool.name === name)) continue;
+      const id = selectedServiceEnvironmentId(
+        manifest,
+        ownRecordValue(this.#state.installed, manifest.id),
+      );
+      const environment = manifest.serviceEnvironments?.find((candidate) => candidate.id === id);
+      return environment
+        ? { id: environment.id, label: `${manifest.name} ${environment.displayName}` }
+        : undefined;
+    }
+    return undefined;
+  }
+
   toolRequiresApprovalSync(name: string): boolean {
     return [...this.#catalog.values()].some(({ manifest }) =>
       manifest.tools.some((tool) => tool.name === name && tool.effect === "write"),

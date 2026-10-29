@@ -137,6 +137,10 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
     threadId: input.threadId,
     dynamicTools: disclosed,
     dynamicToolAvailability: availability,
+    dynamicToolServiceEnvironment: (name) => {
+      const canonicalName = byName.get(name);
+      return canonicalName ? registry?.toolServiceEnvironmentSync?.(canonicalName) : undefined;
+    },
     awaitDynamicToolAvailability: async (name, { signal }) => {
       if (!(await runPromise(activeSession, { signal })))
         return unavailable("This thread's provider credential is no longer active.");

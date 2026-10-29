@@ -78,6 +78,12 @@ function selectedServiceEnvironment(integration: IntegrationSummary) {
   return integration.serviceEnvironments?.find(({ selected }) => selected) ?? null;
 }
 
+/** Names the selected environment in sign-in prompts, such as "n8n Dev". */
+function connectionTargetName(integration: IntegrationSummary): string {
+  const environment = selectedServiceEnvironment(integration);
+  return environment ? `${integration.name} ${environment.displayName}` : integration.name;
+}
+
 function connectionDetail(integration: IntegrationSummary): string {
   if (integration.accountLabel) return integration.accountLabel;
   const environment = selectedServiceEnvironment(integration);
@@ -620,7 +626,7 @@ function IntegrationCard({
             >
               <ServiceEnvironmentPicker
                 integration={integration}
-                disabled={busy || flow !== null || !integration.installed}
+                disabled={busy || !integration.installed}
                 onSelect={(serviceEnvironment) =>
                   void onServiceEnvironment(integration, serviceEnvironment)
                 }
@@ -713,7 +719,7 @@ function IntegrationCard({
 
           {flow ? (
             <IntegrationAuthorizationFlow
-              integrationName={integration.name}
+              integrationName={connectionTargetName(integration)}
               flow={flow}
               busy={busy}
               onApiKeySubmit={(flowId, value) => onApiKeySubmit(integration, flowId, value)}

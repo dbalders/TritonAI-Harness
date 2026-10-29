@@ -198,7 +198,10 @@ keeps a separate connection for each environment, so switching never signs the u
 other one. Switching stops the plugin's in-flight tool calls, is refused while the plugin is
 faulted (reset first, so reset disconnects the environment that faulted), and then follows the
 selected environment's sign-in grant for provider-authorized abilities such as Read and Write.
-Only the user can switch; there is no agent tool for it. Hosts below level 3 refuse such plugins.
+Only the user can switch; there is no agent tool for it. Switching cancels a sign-in still
+pending in the previous environment. The idle credential keepalive refreshes only the selected
+environment, so a sign-in left unused for longer than the service's refresh-token lifetime may
+need to reconnect. Hosts below level 3 refuse such plugins.
 
 Some providers only issue confidential OAuth clients that require a client secret on every token
 request (UCSD Jira Data Center is one). That secret cannot ship in Harness, because configuration
