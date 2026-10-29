@@ -1,46 +1,71 @@
-// @effect-diagnostics globalDate:off
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off
+import * as NodeCrypto from "node:crypto";
+
+import { canonicalJson, type JsonValue } from "@t3tools/shared/pluginSdkContract";
+
 /**
- * Hands the service environment a provider approved for a plugin write (such as "Dev") from its
- * approval callback to the MCP call that follows. Providers that approve before MCP dispatch
- * (Claude) record here; the MCP handler takes the record and passes it to registry admission,
- * which refuses the call if the plugin switched environments in between.
+ * Binds Claude's approval of a plugin write to that exact call (thread, tool, arguments) and its
+ * service environment, so MCP admission can refuse the call after an environment switch.
  */
-const APPROVAL_TTL_MS = 2 * 60_000;
-const MAX_PENDING_PER_TOOL = 16;
+export const CLAUDE_CODE_MCP_CLIENT_NAME = "claude-code";
+
+const APPROVAL_TTL_MS = 10 * 60_000;
+const MAX_PENDING_PER_THREAD = 256;
 
 interface PendingApproval {
+  readonly key: string;
   readonly serviceEnvironment: string;
   readonly expiresAt: number;
 }
 
+// Thread id -> approvals in the order they were granted.
 const pending = new Map<string, Array<PendingApproval>>();
 
-const approvalKey = (threadId: string, toolName: string) => `${threadId}\u0000${toolName}`;
+function approvalKey(toolName: string, input: unknown): string | undefined {
+  try {
+    const digest = NodeCrypto.createHash("sha256")
+      .update(canonicalJson(input as JsonValue))
+      .digest("hex");
+    return `${toolName}\u0000${digest}`;
+  } catch {
+    // Arguments that are not plain JSON cannot be matched, so the call finds no approval.
+    return undefined;
+  }
+}
 
 export function recordApprovedServiceEnvironment(input: {
   readonly threadId: string;
   readonly toolName: string;
+  readonly toolInput: unknown;
   readonly serviceEnvironment: string;
   readonly now?: number;
 }): void {
+  const key = approvalKey(input.toolName, input.toolInput);
+  if (key === undefined) return;
   const now = input.now ?? Date.now();
-  const key = approvalKey(input.threadId, input.toolName);
-  const queue = (pending.get(key) ?? []).filter(({ expiresAt }) => expiresAt > now);
-  queue.push({ serviceEnvironment: input.serviceEnvironment, expiresAt: now + APPROVAL_TTL_MS });
-  pending.set(key, queue.slice(-MAX_PENDING_PER_TOOL));
+  const approvals = (pending.get(input.threadId) ?? []).filter(({ expiresAt }) => expiresAt > now);
+  approvals.push({
+    key,
+    serviceEnvironment: input.serviceEnvironment,
+    expiresAt: now + APPROVAL_TTL_MS,
+  });
+  // An evicted approval is refused at admission, never treated as unrestricted.
+  pending.set(input.threadId, approvals.slice(-MAX_PENDING_PER_THREAD));
 }
 
-/** The oldest unexpired approval for this thread and tool, removed so it covers one call. */
+/** The oldest approval for exactly this tool and these arguments, removed so it covers one call. */
 export function takeApprovedServiceEnvironment(input: {
   readonly threadId: string;
   readonly toolName: string;
+  readonly toolInput: unknown;
   readonly now?: number;
 }): string | undefined {
+  const key = approvalKey(input.toolName, input.toolInput);
   const now = input.now ?? Date.now();
-  const key = approvalKey(input.threadId, input.toolName);
-  const queue = (pending.get(key) ?? []).filter(({ expiresAt }) => expiresAt > now);
-  const next = queue.shift();
-  if (queue.length > 0) pending.set(key, queue);
-  else pending.delete(key);
-  return next?.serviceEnvironment;
+  const approvals = (pending.get(input.threadId) ?? []).filter(({ expiresAt }) => expiresAt > now);
+  const index = key === undefined ? -1 : approvals.findIndex((approval) => approval.key === key);
+  const [approval] = index === -1 ? [] : approvals.splice(index, 1);
+  if (approvals.length > 0) pending.set(input.threadId, approvals);
+  else pending.delete(input.threadId);
+  return approval?.serviceEnvironment;
 }

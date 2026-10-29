@@ -204,8 +204,9 @@ next operation arrives for the new environment. Connect and disconnect requests 
 client showed, and plugin writes carry the environment they were approved for; the registry
 refuses either when the selection has changed. "Allow for this session" for such a write applies
 to that environment only, on both the Codex and Claude providers. Claude approves before MCP
-dispatch, so its approval callback records the approved environment and the MCP handler passes
-it to registry admission. The idle credential keepalive refreshes only the selected
+dispatch, so its approval callback records the approved environment for that exact call (thread,
+tool, and arguments) and the MCP handler passes it to registry admission. A Claude Code write by
+such a plugin with no matching approval is refused unless the thread runs with full access. The idle credential keepalive refreshes only the selected
 environment, so a sign-in left unused for longer than the service's refresh-token lifetime may
 need to reconnect. Hosts below level 3 refuse such plugins.
 

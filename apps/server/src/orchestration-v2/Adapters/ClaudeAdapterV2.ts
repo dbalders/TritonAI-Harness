@@ -9555,7 +9555,26 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           const integrationTool = claudeIntegrationTool(toolName);
+          // Bind an allowed write by a plugin with service environments to this exact call (tool and
+          // arguments), so the MCP handler can refuse it if the plugin switches environments first.
+          const bindPluginWrite = (serviceEnvironment: string | undefined) => {
+            if (integrationTool && !integrationTool.readOnly && serviceEnvironment) {
+              recordApprovedServiceEnvironment({
+                threadId: String(context.input.threadId),
+                toolName: integrationTool.name,
+                toolInput,
+                serviceEnvironment,
+              });
+            }
+          };
           if (!requiresClaudeApproval(context) || integrationTool?.readOnly === true) {
+            if (integrationTool && !integrationTool.readOnly) {
+              bindPluginWrite(
+                Integrations.getIntegrationRegistryOptional()?.toolServiceEnvironmentSync(
+                  integrationTool.name,
+                )?.id,
+              );
+            }
             return {
               behavior: "allow",
               updatedInput: toolInput,
@@ -9598,11 +9617,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               .get(browserGrantThread)
               ?.has(integrationGrantKey) === true
           ) {
-            recordApprovedServiceEnvironment({
-              threadId: browserGrantThread,
-              toolName: integrationTool.name,
-              serviceEnvironment: integrationEnvironment.id,
-            });
+            bindPluginWrite(integrationEnvironment.id);
             return {
               behavior: "allow",
               updatedInput: toolInput,
@@ -9719,13 +9734,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   integrationTool.name,
                 )?.id,
             });
-            if (scoped.result.behavior === "allow") {
-              recordApprovedServiceEnvironment({
-                threadId: browserGrantThread,
-                toolName: integrationTool.name,
-                serviceEnvironment: integrationEnvironment.id,
-              });
-            }
+            if (scoped.result.behavior === "allow") bindPluginWrite(integrationEnvironment.id);
             const sessionGrant = scoped.sessionGrant;
             if (sessionGrant !== undefined) {
               yield* Ref.update(integrationEnvironmentGrants, (current) => {

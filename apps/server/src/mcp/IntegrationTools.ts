@@ -12,8 +12,12 @@ import {
   describeIntegrationToolFailure,
   IntegrationToolUnavailableError,
 } from "../integrations/IntegrationToolFailure.ts";
-import { takeApprovedServiceEnvironment } from "../integrations/PluginWriteApprovals.ts";
+import {
+  CLAUDE_CODE_MCP_CLIENT_NAME,
+  takeApprovedServiceEnvironment,
+} from "../integrations/PluginWriteApprovals.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { loadCaller } from "./threadAccess.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 
 class IntegrationToolInvocationError extends Schema.TaggedError<IntegrationToolInvocationError>()(
@@ -35,19 +39,11 @@ const INTEGRATION_INVOCATION_CAPABILITY = "integrations.invoke" as const;
 function integrationToolInvocationContext(
   definition: IntegrationProviderTool,
   signal: AbortSignal,
-  invocation: McpInvocationContext.McpInvocationScope,
+  expectedServiceEnvironment: string | undefined,
 ): Integrations.IntegrationInvocationContext {
-  // A provider that approved this write before MCP dispatch recorded the environment it approved;
-  // registry admission refuses the call if the plugin has since switched environments.
-  const expectedServiceEnvironment =
-    definition.readOnly || invocation.thread === undefined
-      ? undefined
-      : takeApprovedServiceEnvironment({
-          threadId: invocation.thread.threadId,
-          toolName: definition.name,
-        });
   return {
     signal,
+    // Registry admission refuses the call if the plugin has since switched environments.
     ...(expectedServiceEnvironment === undefined ? {} : { expectedServiceEnvironment }),
     // Harness gives this bearer only to its managed provider runtime, which enforces
     // the selected task mode before issuing an MCP write call. Mark that trusted
@@ -56,6 +52,44 @@ function integrationToolInvocationContext(
     ...(definition.readOnly ? {} : { writeApproved: true }),
   };
 }
+
+/**
+ * The service environment a Claude approval bound to this exact call (thread, tool, arguments).
+ * Claude Code approves in its permission callback before calling MCP. Its write by a plugin with
+ * service environments that lacks a matching approval is refused unless the thread runs with full
+ * access, which approves nothing. Other callers keep their existing approval path.
+ */
+const approvedServiceEnvironment = Effect.fn("IntegrationTools.approvedServiceEnvironment")(
+  function* (
+    definition: IntegrationProviderTool,
+    invocation: McpInvocationContext.McpInvocationScope,
+    payload: unknown,
+  ) {
+    if (definition.readOnly || invocation.thread === undefined) return undefined;
+    const client = yield* Effect.serviceOption(McpSchema.McpServerClient);
+    if (client._tag !== "Some" || client.value.clientInfo.name !== CLAUDE_CODE_MCP_CLIENT_NAME) {
+      return undefined;
+    }
+    if (
+      !Integrations.getIntegrationRegistryOptional()?.toolServiceEnvironmentSync(definition.name)
+    ) {
+      return undefined;
+    }
+    const approved = takeApprovedServiceEnvironment({
+      threadId: invocation.thread.threadId,
+      toolName: definition.name,
+      toolInput: payload,
+    });
+    if (approved !== undefined) return approved;
+    const caller = yield* loadCaller().pipe(Effect.orElseSucceed(() => undefined));
+    if (caller?.limits.runtimeMode === "full-access") return undefined;
+    return yield* new IntegrationToolInvocationError({
+      cause: new IntegrationToolUnavailableError(
+        "This plugin write has no approval for its environment, so it was not run. Ask again to approve it.",
+      ),
+    });
+  },
+);
 
 const invocationCanUseIntegrations = (): boolean => {
   const fiber = Fiber.getCurrent();
@@ -98,15 +132,23 @@ export function toolRegistration(
         );
         return invocation.capabilities.has(INTEGRATION_INVOCATION_CAPABILITY) &&
           isAvailable(definition.name)
-          ? Effect.tryPromise({
-              try: (signal) =>
-                Integrations.getIntegrationRegistry().invokeTool(
-                  definition.name,
-                  payload,
-                  integrationToolInvocationContext(definition, signal, invocation),
-                ),
-              catch: (cause) => new IntegrationToolInvocationError({ cause }),
-            })
+          ? approvedServiceEnvironment(definition, invocation, payload).pipe(
+              Effect.flatMap((expectedServiceEnvironment) =>
+                Effect.tryPromise({
+                  try: (signal) =>
+                    Integrations.getIntegrationRegistry().invokeTool(
+                      definition.name,
+                      payload,
+                      integrationToolInvocationContext(
+                        definition,
+                        signal,
+                        expectedServiceEnvironment,
+                      ),
+                    ),
+                  catch: (cause) => new IntegrationToolInvocationError({ cause }),
+                }),
+              ),
+            )
           : Effect.fail(
               new IntegrationToolInvocationError({
                 cause: new IntegrationToolUnavailableError("Integration tool is unavailable."),
