@@ -39,6 +39,8 @@ import {
 
 interface PluginSdkOperationContext {
   readonly signal: AbortSignal;
+  /** Level 3: the selected service environment, for plugins that declare environments. */
+  readonly serviceEnvironment?: string;
 }
 
 interface PluginSdkLifecycleContext extends PluginSdkOperationContext {
@@ -246,12 +248,28 @@ function beginCommit(
       : Promise.reject(new Error("The host did not admit an external commit."));
 }
 
+function serviceEnvironment(context: IntegrationInvocationContext | undefined): {
+  readonly serviceEnvironment?: string;
+} {
+  return context?.serviceEnvironment === undefined
+    ? {}
+    : { serviceEnvironment: context.serviceEnvironment };
+}
+
+function operationContext(
+  context: IntegrationInvocationContext | undefined,
+): PluginSdkOperationContext {
+  return {
+    signal: context?.signal ?? new AbortController().signal,
+    ...serviceEnvironment(context),
+  };
+}
+
 function lifecycleContext(
   context: IntegrationLifecycleContext | undefined,
 ): PluginSdkLifecycleContext {
-  const controller = new AbortController();
   return {
-    signal: context?.signal ?? controller.signal,
+    ...operationContext(context),
     beginCommit: beginCommit(context),
   };
 }
@@ -259,9 +277,8 @@ function lifecycleContext(
 function invocationContext(
   context: IntegrationInvocationContext | undefined,
 ): PluginSdkInvocationContext {
-  const controller = new AbortController();
   return {
-    signal: context?.signal ?? controller.signal,
+    ...operationContext(context),
     writeApproved: context?.writeApproved === true,
     beginCommit: beginCommit(context),
   };
@@ -309,10 +326,7 @@ function adaptProvider(
     id: provider.id,
     tools,
     status: (context) =>
-      invokeBoundary(
-        () => provider.status({ signal: context?.signal ?? new AbortController().signal }),
-        validateStatusResult,
-      ),
+      invokeBoundary(() => provider.status(operationContext(context)), validateStatusResult),
     ...(provider.prepare
       ? {
           prepare: (context) =>
