@@ -267,6 +267,18 @@ function invocationContext(
   };
 }
 
+/**
+ * A plugin failure whose details say `committed: false` is the plugin proving the external
+ * service refused the change (for example a permission or validation refusal). Harness then
+ * settles the admitted commit instead of faulting the plugin until the user reconnects.
+ * Unknown outcomes never qualify.
+ */
+function provesNothingChanged(error: Record<string, unknown>): boolean {
+  return (
+    error._tag === "PluginFailure" && isRecord(error.details) && error.details.committed === false
+  );
+}
+
 async function invokeBoundary<A>(
   operation: () => unknown | Promise<unknown>,
   validate: (value: unknown) => A | Promise<A>,
@@ -281,7 +293,9 @@ async function invokeBoundary<A>(
       error.message.trim() &&
       error.message.length <= 1_024
     ) {
-      throw new IntegrationProviderPublicError(error.message);
+      throw new IntegrationProviderPublicError(error.message, {
+        unchanged: provesNothingChanged(error),
+      });
     }
     throw error;
   }

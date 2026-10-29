@@ -742,6 +742,40 @@ export function createIntegrationProvider() {
     await expect(provider.close!()).rejects.toThrow(/must be undefined/u);
   });
 
+  it("marks plugin failures that prove nothing changed as unchanged", async () => {
+    const source = `
+export function createIntegrationProvider() {
+  return {
+    id: "${id}",
+    async status() { return { state: "connected", accountLabel: null, grantedCapabilities: ["fixture.read"], message: null }; },
+    async invoke(_toolName, input) {
+      if (input.topic === "alpha") {
+        throw { _tag: "PluginFailure", code: "refused", message: "Refused.", retryable: false, details: { committed: false } };
+      }
+      throw { _tag: "ExternalCommitOutcomeUnknown", code: "external_commit_outcome_unknown", message: "Unclear.", retryable: false, details: { committed: false } };
+    }
+  };
+}
+`;
+    const loaded = await loadPluginSdkIntegration({
+      files: artifact(source),
+      secrets: secretStore(),
+      configuration: { prefix: "fixture" },
+      expected: { id, version: "1.0.0" },
+      hostNodeVersion: "24.13.1",
+    });
+    const provider = loaded.provider;
+    if (!provider) throw new Error("Expected an admitted provider.");
+    const refused = await provider
+      .invoke("fixture.records.list", { topic: "alpha" })
+      .catch((error: unknown) => error);
+    expect(refused).toMatchObject({ _tag: "IntegrationProviderPublicError", unchanged: true });
+    const unclear = await provider
+      .invoke("fixture.records.list", { topic: "beta" })
+      .catch((error: unknown) => error);
+    expect(unclear).toMatchObject({ _tag: "IntegrationProviderPublicError", unchanged: false });
+  });
+
   it("isolates module state by the complete admitted artifact", async () => {
     const statefulSource = `
 let instanceCount = 0;
