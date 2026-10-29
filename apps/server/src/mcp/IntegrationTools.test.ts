@@ -22,6 +22,10 @@ import * as McpToolAccess from "./McpToolAccess.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { liveThreadShell, liveThreadsLayer } from "./McpToolAccess.testkit.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import {
+  recordApprovedServiceEnvironment,
+  takeApprovedServiceEnvironment,
+} from "../integrations/PluginWriteApprovals.ts";
 
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
@@ -451,3 +455,65 @@ it.effect.each([true, false])(
     ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
   },
 );
+
+it.effect(
+  "passes the environment a provider approved for a plugin write into registry admission",
+  () => {
+    const invokeTool = vi
+      .fn<Integrations.RegistryRuntime["invokeTool"]>()
+      .mockResolvedValue({ ok: true });
+    const registrySpy = vi
+      .spyOn(Integrations, "getIntegrationRegistry")
+      .mockReturnValue({ invokeTool } as unknown as Integrations.RegistryRuntime);
+    const scope = invocation(new Set(["integrations.invoke"]));
+    const threads = Layer.mock(ThreadManagementService.ThreadManagementService)({
+      getThreadShell: (threadId) => Effect.succeed(liveThreadShell(threadId, {})),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const call = server
+          .callTool({ name: writeFixtureTool.name, arguments: {} })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        recordApprovedServiceEnvironment({
+          threadId: "thread-1",
+          toolName: writeFixtureTool.name,
+          serviceEnvironment: "development",
+        });
+        yield* call;
+        expect(invokeTool).toHaveBeenLastCalledWith(
+          writeFixtureTool.name,
+          {},
+          expect.objectContaining({
+            writeApproved: true,
+            expectedServiceEnvironment: "development",
+          }),
+        );
+        // Each approval covers one call.
+        yield* call;
+        expect(invokeTool.mock.calls.at(-1)?.[2]).not.toHaveProperty("expectedServiceEnvironment");
+      }).pipe(
+        Effect.provide(
+          registrationLayerFor([writeFixtureTool], () => true).pipe(
+            Layer.provideMerge(Layer.mergeAll(McpServer.McpServer.layer, threads)),
+          ),
+        ),
+      ),
+    ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
+  },
+);
+
+it("keeps approved plugin environments per thread and tool, oldest first, until they expire", () => {
+  const base = { threadId: "thread-approvals", toolName: "fixture.write" };
+  recordApprovedServiceEnvironment({ ...base, serviceEnvironment: "development", now: 0 });
+  recordApprovedServiceEnvironment({ ...base, serviceEnvironment: "production", now: 1 });
+  expect(takeApprovedServiceEnvironment({ ...base, threadId: "other", now: 2 })).toBeUndefined();
+  expect(takeApprovedServiceEnvironment({ ...base, now: 2 })).toBe("development");
+  expect(takeApprovedServiceEnvironment({ ...base, now: 3 })).toBe("production");
+  expect(takeApprovedServiceEnvironment({ ...base, now: 4 })).toBeUndefined();
+  recordApprovedServiceEnvironment({ ...base, serviceEnvironment: "development", now: 0 });
+  expect(takeApprovedServiceEnvironment({ ...base, now: 10 * 60_000 })).toBeUndefined();
+});

@@ -126,6 +126,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { describeToolCallForApproval } from "../../integrations/IntegrationToolPreview.ts";
+import { recordApprovedServiceEnvironment } from "../../integrations/PluginWriteApprovals.ts";
 import {
   BROWSER_NAVIGATION_GRANT,
   browserNavigationRequest,
@@ -9590,11 +9591,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ? `${toolName}@${integrationEnvironment.id}`
             : undefined;
           if (
+            integrationTool &&
+            integrationEnvironment &&
             integrationGrantKey !== undefined &&
             (yield* Ref.get(integrationEnvironmentGrants))
               .get(browserGrantThread)
               ?.has(integrationGrantKey) === true
           ) {
+            recordApprovedServiceEnvironment({
+              threadId: browserGrantThread,
+              toolName: integrationTool.name,
+              serviceEnvironment: integrationEnvironment.id,
+            });
             return {
               behavior: "allow",
               updatedInput: toolInput,
@@ -9711,6 +9719,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   integrationTool.name,
                 )?.id,
             });
+            if (scoped.result.behavior === "allow") {
+              recordApprovedServiceEnvironment({
+                threadId: browserGrantThread,
+                toolName: integrationTool.name,
+                serviceEnvironment: integrationEnvironment.id,
+              });
+            }
             const sessionGrant = scoped.sessionGrant;
             if (sessionGrant !== undefined) {
               yield* Ref.update(integrationEnvironmentGrants, (current) => {

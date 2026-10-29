@@ -12,6 +12,7 @@ import {
   describeIntegrationToolFailure,
   IntegrationToolUnavailableError,
 } from "../integrations/IntegrationToolFailure.ts";
+import { takeApprovedServiceEnvironment } from "../integrations/PluginWriteApprovals.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 
@@ -34,9 +35,20 @@ const INTEGRATION_INVOCATION_CAPABILITY = "integrations.invoke" as const;
 function integrationToolInvocationContext(
   definition: IntegrationProviderTool,
   signal: AbortSignal,
+  invocation: McpInvocationContext.McpInvocationScope,
 ): Integrations.IntegrationInvocationContext {
+  // A provider that approved this write before MCP dispatch recorded the environment it approved;
+  // registry admission refuses the call if the plugin has since switched environments.
+  const expectedServiceEnvironment =
+    definition.readOnly || invocation.thread === undefined
+      ? undefined
+      : takeApprovedServiceEnvironment({
+          threadId: invocation.thread.threadId,
+          toolName: definition.name,
+        });
   return {
     signal,
+    ...(expectedServiceEnvironment === undefined ? {} : { expectedServiceEnvironment }),
     // Harness gives this bearer only to its managed provider runtime, which enforces
     // the selected task mode before issuing an MCP write call. Mark that trusted
     // adapter boundary explicitly so Registry retains its write gate without adding
@@ -91,7 +103,7 @@ export function toolRegistration(
                 Integrations.getIntegrationRegistry().invokeTool(
                   definition.name,
                   payload,
-                  integrationToolInvocationContext(definition, signal),
+                  integrationToolInvocationContext(definition, signal, invocation),
                 ),
               catch: (cause) => new IntegrationToolInvocationError({ cause }),
             })
