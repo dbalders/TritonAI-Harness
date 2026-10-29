@@ -991,6 +991,8 @@ export class RegistryRuntime {
   readonly #providerLastPreparedAt = new Map<IntegrationProvider, number>();
   /** When a provider last allowed a write for each plugin before dispatching it to MCP. */
   readonly #pluginWritesAllowedAt = new Map<string, number>();
+  /** Plugins whose service environment switch is in progress, from its start until it settles. */
+  readonly #serviceEnvironmentSwitches = new Set<string>();
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
   readonly #providerSummaryRefreshWork = new Map<IntegrationProvider, Set<Promise<void>>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
@@ -2795,15 +2797,21 @@ export class RegistryRuntime {
     return this.toolDefinitions().filter(({ name }) => this.isToolAvailableSync(name));
   }
 
-  /** Records that a provider allowed this plugin write; see PLUGIN_WRITE_SETTLE_MS. */
-  notePluginWriteAllowed(toolName: string, now = Date.now()): void {
+  /**
+   * Records that a provider is about to dispatch this plugin write (see PLUGIN_WRITE_SETTLE_MS).
+   * Returns false while the plugin's environment is switching; the provider must refuse the write
+   * then. This and a switch's start run one at a time, so an allowed write blocks a later switch.
+   */
+  notePluginWriteAllowed(toolName: string, now = Date.now()): boolean {
     for (const { manifest } of this.#catalog.values()) {
       if (!manifest.serviceEnvironments) continue;
       if (!manifest.tools.some((tool) => tool.name === toolName && tool.effect === "write"))
         continue;
+      if (this.#serviceEnvironmentSwitches.has(manifest.id)) return false;
       this.#pluginWritesAllowedAt.set(manifest.id, now);
-      return;
+      return true;
     }
+    return true;
   }
 
   #assertPluginWritesSettled(manifest: IntegrationManifest): void {
@@ -3160,6 +3168,8 @@ export class RegistryRuntime {
     } catch (error) {
       return Promise.reject(error);
     }
+    // From here until the switch settles, providers refuse new writes for this plugin.
+    this.#serviceEnvironmentSwitches.add(id);
     const revocation = this.#beginRevocation(id);
     const operation = this.#serializeIntegration(id, async () => {
       await this.#ready;
@@ -3187,8 +3197,6 @@ export class RegistryRuntime {
           `${manifest.name} is still finishing a connection change. Try again in a moment.`,
         );
       }
-      // Checked again just before committing: a write may have been allowed while this waited.
-      this.#assertPluginWritesSettled(manifest);
       const next: InstalledIntegrationState = { ...installed, serviceEnvironment };
       try {
         await this.#updateState((state) => ({
@@ -3226,7 +3234,12 @@ export class RegistryRuntime {
       await this.#adoptProviderAuthorizedCapabilities(this.#package(id)).catch(() => undefined);
       await this.#summarize(this.#package(id));
     });
-    return operation.then(() => this.#cachedList()).finally(revocation.finish);
+    return operation
+      .then(() => this.#cachedList())
+      .finally(() => {
+        this.#serviceEnvironmentSwitches.delete(id);
+        revocation.finish();
+      });
   }
 
   /** Compatibility for pre-capability callers; the referenced Access bundle remains authoritative. */

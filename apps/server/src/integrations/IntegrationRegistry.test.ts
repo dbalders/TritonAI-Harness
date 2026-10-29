@@ -962,6 +962,17 @@ describe("IntegrationRegistry lifecycle", () => {
       });
       expect((await summary(registry)).serviceEnvironments?.[0]?.selected).toBe(true);
       registry.notePluginWriteAllowed("test.fixture.write", 0);
+      // While a switch is saving and publishing, a provider may not allow a write at all.
+      const switching = registry.setServiceEnvironment(manifest.id, "development");
+      expect(registry.notePluginWriteAllowed("test.fixture.write")).toBe(false);
+      await switching;
+      expect((await summary(registry)).serviceEnvironments?.[1]?.selected).toBe(true);
+      // The refused write did not start a hold, so switching back is not blocked by it.
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "production"),
+      ).resolves.toBeDefined();
+      expect(registry.notePluginWriteAllowed("test.fixture.write")).toBe(true);
+      registry.notePluginWriteAllowed("test.fixture.write", 0);
       await expect(
         registry.setServiceEnvironment(manifest.id, "development"),
       ).resolves.toBeDefined();

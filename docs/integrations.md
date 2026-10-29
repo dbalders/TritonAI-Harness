@@ -200,16 +200,19 @@ disconnects the environment that faulted), and then follows the selected environ
 for provider-authorized abilities such as Read and Write. Only the user can switch; there is no
 agent tool for it. Switching stops polling a sign-in still pending in the previous environment, and
 level-3 providers cancel such sign-ins when the next operation arrives for the new environment.
-Connect and disconnect requests carry the environment the client showed, and plugin writes carry the
-environment they were approved for; the registry refuses either when the selection has changed.
-"Allow for this session" for such a write applies to that environment only, on both the Codex and
-Claude providers. Claude allows a write in its permission callback and dispatches it to MCP
-afterwards, outside that check, so for 15 seconds after Claude allows a write by such a plugin,
-switching its environment is refused ("try again in a few seconds"); the registry checks again right
-before committing a switch. Writes allowed by Claude's own Auto classifier never reach Harness's
-callback and are not held. The idle credential keepalive refreshes only the selected environment, so
-a sign-in left unused for longer than the service's refresh-token lifetime may need to reconnect.
-Hosts below level 3 refuse such plugins.
+Connect and disconnect requests carry the environment the client showed, and the registry refuses
+them if the selection has changed. "Allow for this session" for such a write applies to that
+environment only, on both the Codex and Claude providers. Codex plugin writes also carry the
+environment they were approved for, and the registry refuses them if the selection changed before
+they started. Claude allows a write in its permission callback and sends it to MCP afterwards
+without that binding, so Harness instead holds the plugin's environment: while a switch is in
+progress, Claude's plugin writes are refused ("ask again once the switch finishes"), and for 15
+seconds after Claude is allowed such a write, switching is refused ("try again in a few seconds").
+The hold expires after 15 seconds, so a Claude call delayed longer than that is not covered, and
+writes Claude's own Auto classifier allows without Harness's callback start no hold. The idle
+credential keepalive refreshes only the selected environment, so a sign-in left unused for longer
+than the service's refresh-token lifetime may need to reconnect. Hosts below level 3 refuse such
+plugins.
 
 Some providers only issue confidential OAuth clients that require a client secret on every token
 request (UCSD Jira Data Center is one). That secret cannot ship in Harness, because configuration

@@ -9555,16 +9555,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
           const integrationTool = claudeIntegrationTool(toolName);
           // Claude dispatches an allowed plugin write to MCP after this callback returns. Hold the
-          // plugin's environment briefly so a switch cannot land between the approval and the call.
-          const settlePluginWrite = () => {
-            if (integrationTool && !integrationTool.readOnly) {
-              Integrations.getIntegrationRegistryOptional()?.notePluginWriteAllowed(
-                integrationTool.name,
-              );
-            }
-          };
+          // plugin's environment briefly so a switch cannot land between the approval and the call;
+          // while a switch is already in progress, the write is refused instead.
+          const settlePluginWrite = (): boolean =>
+            !integrationTool ||
+            integrationTool.readOnly ||
+            (Integrations.getIntegrationRegistryOptional()?.notePluginWriteAllowed(
+              integrationTool.name,
+            ) ??
+              true);
+          const switchingDenial = {
+            behavior: "deny",
+            message:
+              "The plugin is switching environments, so this call was not run. Ask again once the switch finishes.",
+            toolUseID: callbackOptions.toolUseID,
+          } satisfies PermissionResult;
           if (!requiresClaudeApproval(context) || integrationTool?.readOnly === true) {
-            settlePluginWrite();
+            if (!settlePluginWrite()) return switchingDenial;
             return {
               behavior: "allow",
               updatedInput: toolInput,
@@ -9607,7 +9614,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               .get(browserGrantThread)
               ?.has(integrationGrantKey) === true
           ) {
-            settlePluginWrite();
+            if (!settlePluginWrite()) return switchingDenial;
             return {
               behavior: "allow",
               updatedInput: toolInput,
@@ -9724,7 +9731,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   integrationTool.name,
                 )?.id,
             });
-            if (scoped.result.behavior === "allow") settlePluginWrite();
+            if (scoped.result.behavior === "allow" && !settlePluginWrite()) return switchingDenial;
             const sessionGrant = scoped.sessionGrant;
             if (sessionGrant !== undefined) {
               yield* Ref.update(integrationEnvironmentGrants, (current) => {
