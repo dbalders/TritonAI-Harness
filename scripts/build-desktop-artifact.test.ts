@@ -33,6 +33,7 @@ import { resolveAzureTrustedSigningConfiguration } from "./build-desktop-artifac
 import { resolveDesktopRuntimeDependencies } from "./build-desktop-artifact.ts";
 import { resolveDesktopRuntimeNativeDependencies } from "./build-desktop-artifact.ts";
 import { resolveCuaDriverPatchedLoaderDependencies } from "./build-desktop-artifact.ts";
+import { extractWindowsCuaDriverArchive } from "./build-desktop-artifact.ts";
 
 import { assertNightlySourceVersions } from "./build-desktop-artifact.ts";
 
@@ -42,6 +43,7 @@ import { validateManagedPluginBuildConfiguration } from "./build-desktop-artifac
 import * as NodeCrypto from "node:crypto";
 
 import * as NodePath from "node:path";
+import * as NodeZlib from "node:zlib";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
@@ -2496,3 +2498,46 @@ it("keeps hardened-runtime audio capabilities aligned for the main app and helpe
   assert.include(mainEntitlements, "com.apple.security.device.camera");
   assert.include(inheritedEntitlements, "com.apple.security.device.camera");
 });
+
+it.effect("extracts a deflated Windows helper archive without stalling", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cua-zip-" });
+    const archivePath = path.join(root, "helper.zip");
+    const destination = path.join(root, "extracted");
+    // Keep compressed data above the legacy reader's backpressure boundary.
+    const payload = Buffer.concat(
+      Array.from({ length: 2048 }, (_, index) =>
+        NodeCrypto.createHash("sha256").update(String(index)).digest(),
+      ),
+    );
+    const compressed = NodeZlib.deflateRawSync(payload);
+    assert.isAbove(compressed.length, 64 * 1024);
+    const name = Buffer.from("cua-driver.exe");
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(8, 8);
+    local.writeUInt32LE(NodeZlib.crc32(payload), 14);
+    local.writeUInt32LE(compressed.length, 18);
+    local.writeUInt32LE(payload.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    local.copy(central, 6, 4, 30);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(1, 8);
+    end.writeUInt16LE(1, 10);
+    end.writeUInt32LE(central.length + name.length, 12);
+    end.writeUInt32LE(local.length + name.length + compressed.length, 16);
+    const archive = Buffer.concat([local, name, compressed, central, name, end]);
+    yield* fs.writeFile(archivePath, archive);
+    yield* Effect.tryPromise(() =>
+      extractWindowsCuaDriverArchive(archivePath, { dir: destination }),
+    );
+    assert.deepEqual(yield* fs.readFile(path.join(destination, "cua-driver.exe")), payload);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

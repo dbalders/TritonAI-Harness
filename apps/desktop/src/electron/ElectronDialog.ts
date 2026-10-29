@@ -129,7 +129,7 @@ export class ElectronDialog extends Context.Service<
   }
 >()("@t3tools/desktop/electron/ElectronDialog") {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = ElectronDialog.of({
   pickFolder: Effect.fn("desktop.electron.dialog.pickFolder")(function* (input) {
     const ownerWindowId = Option.match(input.owner, {
@@ -222,7 +222,7 @@ export const make = ElectronDialog.of({
     });
     return result.response === CONFIRM_BUTTON_INDEX;
   }),
-  showMessageBox: (options, owner) =>
+  showMessageBox: Effect.fn("ElectronDialog.showMessageBox")((options, owner) =>
     Effect.tryPromise({
       try: () =>
         owner === undefined
@@ -238,8 +238,9 @@ export const make = ElectronDialog.of({
           cause,
         }),
     }),
-  showErrorBox: (title, content) =>
-    Effect.try({
+  ),
+  showErrorBox: Effect.fn("ElectronDialog.showErrorBox")(function (title, content) {
+    return Effect.try({
       try: () => Electron.dialog.showErrorBox(title, content),
       catch: (cause) =>
         new ElectronDialogShowErrorBoxError({
@@ -247,7 +248,8 @@ export const make = ElectronDialog.of({
           contentLength: content.length,
           cause,
         }),
-    }).pipe(Effect.orDie),
+    }).pipe(Effect.orDie);
+  }),
 });
 
 export const layer = Layer.succeed(ElectronDialog, make);

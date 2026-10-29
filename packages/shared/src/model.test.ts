@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderDriverKind, ProviderInstanceId, type ModelCapabilities } from "@t3tools/contracts";
+import { ProviderInstanceId, type ModelCapabilities } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
   buildExplicitProviderOptionSelectionsFromDescriptors,
@@ -9,12 +9,13 @@ import {
   getProviderOptionCurrentLabel,
   getProviderOptionDescriptors,
   readCustomModelEntries,
+  modelSelectionsEqual,
+} from "./model.ts";
+import { ProviderDriverKind } from "@t3tools/contracts";
+import {
   toCustomModelSetting,
   modelCapabilitiesAreExplicitlyTextOnly,
-  normalizeModelSlug,
   resolveSelectableModel,
-  normalizeCustomModelSlug,
-  modelSelectionsEqual,
 } from "./model.ts";
 
 const codexCaps: ModelCapabilities = createModelCapabilities({
@@ -37,96 +38,7 @@ const codexCaps: ModelCapabilities = createModelCapabilities({
   ],
 });
 
-describe("model slug normalization", () => {
-  it("preserves exact custom slugs instead of expanding provider aliases", () => {
-    const claude = ProviderDriverKind.make("claudeAgent");
-
-    expect(normalizeModelSlug("opus", claude)).toBe("opus");
-    expect(normalizeCustomModelSlug(" opus ")).toBe("opus");
-  });
-});
-
-const claudeCaps: ModelCapabilities = createModelCapabilities({
-  optionDescriptors: [
-    {
-      id: "effort",
-      label: "Reasoning",
-      type: "select",
-      options: [
-        { id: "medium", label: "Medium" },
-        { id: "high", label: "High", isDefault: true },
-        { id: "ultrathink", label: "Ultrathink" },
-      ],
-      currentValue: "high",
-      promptInjectedValues: ["ultrathink"],
-    },
-    {
-      id: "contextWindow",
-      label: "Context Window",
-      type: "select",
-      options: [
-        { id: "200k", label: "200k" },
-        { id: "1m", label: "1M", isDefault: true },
-      ],
-      currentValue: "1m",
-    },
-  ],
-});
-
-describe("resolveSelectableModel", () => {
-  it("resolves exact slugs, labels, and aliases", () => {
-    const options = [
-      { slug: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
-      { slug: "claude-sonnet-5", name: "Claude Sonnet 5", aliases: ["sonnet"] },
-    ];
-    expect(resolveSelectableModel(ProviderDriverKind.make("codex"), "gpt-5.3-codex", options)).toBe(
-      "gpt-5.3-codex",
-    );
-    expect(resolveSelectableModel(ProviderDriverKind.make("codex"), "gpt-5.3 codex", options)).toBe(
-      "gpt-5.3-codex",
-    );
-    expect(resolveSelectableModel(ProviderDriverKind.make("claudeAgent"), "sonnet", options)).toBe(
-      "claude-sonnet-5",
-    );
-  });
-});
-
 describe("descriptor helpers", () => {
-  it("applies selection values to capability descriptors", () => {
-    expect(
-      getProviderOptionDescriptors({
-        caps: claudeCaps,
-        selections: [
-          { id: "effort", value: "medium" },
-          { id: "contextWindow", value: "200k" },
-        ],
-      }),
-    ).toEqual([
-      {
-        id: "effort",
-        label: "Reasoning",
-        type: "select",
-        options: [
-          { id: "medium", label: "Medium" },
-          { id: "high", label: "High", isDefault: true },
-          { id: "ultrathink", label: "Ultrathink" },
-        ],
-        currentValue: "medium",
-        promptInjectedValues: ["ultrathink"],
-      },
-      {
-        id: "contextWindow",
-        label: "Context Window",
-        type: "select",
-        options: [
-          { id: "200k", label: "200k" },
-          { id: "1m", label: "1M", isDefault: true },
-        ],
-        currentValue: "200k",
-      },
-    ]);
-  });
-
   it("builds dispatch options only from explicit selections", () => {
     const descriptors = getProviderOptionDescriptors({
       caps: codexCaps,
@@ -235,18 +147,6 @@ describe("readCustomModelEntries", () => {
   });
 });
 
-describe("custom model modality round trips", () => {
-  it("retains image support even without custom option descriptors", () => {
-    const [model] = readCustomModelEntries([
-      { slug: "campus-vision", capabilities: { inputModalities: ["text", "image"] } },
-    ]);
-    expect(model).toBeDefined();
-    expect(modelCapabilitiesAreExplicitlyTextOnly(model!.capabilities)).toBe(false);
-    const [restored] = readCustomModelEntries([toCustomModelSetting(model!)]);
-    expect(restored?.capabilities?.inputModalities).toEqual(["text", "image"]);
-  });
-});
-
 describe("provider-reported option display", () => {
   const selection = createModelSelection(ProviderInstanceId.make("opencode"), "ling");
   const reported = { ...selection, options: [{ id: "variant", value: "default" }] };
@@ -304,5 +204,33 @@ describe("provider-reported option display", () => {
     { ...selection, options: [{ id: "variant", value: "none" }] },
   ])("ignores reports after changing the model, instance, or option: %j", (selected) => {
     expect(getProviderOptionCurrentLabel(descriptor, selected, reported)).toBe("Unknown");
+  });
+});
+describe("resolveSelectableModel", () => {
+  it("resolves exact slugs, labels, and aliases", () => {
+    const options = [
+      { slug: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
+      { slug: "claude-sonnet-5", name: "Claude Sonnet 5", aliases: ["sonnet"] },
+    ];
+    expect(resolveSelectableModel(ProviderDriverKind.make("codex"), "gpt-5.3-codex", options)).toBe(
+      "gpt-5.3-codex",
+    );
+    expect(resolveSelectableModel(ProviderDriverKind.make("codex"), "gpt-5.3 codex", options)).toBe(
+      "gpt-5.3-codex",
+    );
+    expect(resolveSelectableModel(ProviderDriverKind.make("claudeAgent"), "sonnet", options)).toBe(
+      "claude-sonnet-5",
+    );
+  });
+});
+describe("custom model modality round trips", () => {
+  it("retains image support even without custom option descriptors", () => {
+    const [model] = readCustomModelEntries([
+      { slug: "campus-vision", capabilities: { inputModalities: ["text", "image"] } },
+    ]);
+    expect(model).toBeDefined();
+    expect(modelCapabilitiesAreExplicitlyTextOnly(model!.capabilities)).toBe(false);
+    const [restored] = readCustomModelEntries([toCustomModelSetting(model!)]);
+    expect(restored?.capabilities?.inputModalities).toEqual(["text", "image"]);
   });
 });

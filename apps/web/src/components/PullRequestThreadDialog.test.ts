@@ -8,7 +8,6 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { isValidElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 
 const state = vi.hoisted(() => ({
   canOperate: false,
@@ -114,6 +113,8 @@ vi.mock("./ui/dialog", () => ({
   DialogPopup: "DialogPopup",
   DialogTitle: "DialogTitle",
 }));
+
+import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 
 function findAction(node: ReactNode, label: string): (() => unknown) | null {
   if (Array.isArray(node)) {

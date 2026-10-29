@@ -4,52 +4,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
-const {
-  affectsWindowsTests,
-  readChangedPaths,
-  selectWindowsTests,
-} = require("./windows-test-scope.cjs");
+const { readChangedPaths, selectWindowsTests } = require("./windows-test-scope.cjs");
 
 const refs = { eventName: "pull_request", base: "a".repeat(40), head: "b".repeat(40) };
-
-for (const changedPath of [
-  "packages/shared/src/shell.ts",
-  "packages/contracts/src/workspace.ts",
-  "packages/ssh/src/index.ts",
-  "packages/tailscale/src/index.ts",
-  "packages/effect-acp/src/index.ts",
-  "packages/effect-codex-app-server/src/index.ts",
-  "packages/client-runtime/src/index.ts",
-  "packages/future-workspace/src/windows-input.ts",
-  "apps/mobile/package.json",
-  "infra/relay/package.json",
-  "scripts/package.json",
-  "oxlint-plugin-t3code/package.json",
-  "apps/server/src/workspace/WorkspaceFileSystem.ts",
-  "apps/server/src/process/externalLauncher.ts",
-  "apps/server/src/processRunner.test.ts",
-  "apps/server/src/terminal/NodePtyAdapter.ts",
-  "apps/server/src/device/DeviceService.ts",
-  "apps/server/src/pathExpansion.ts",
-  "apps/server/src/testUtils/gitConfig.setup.ts",
-  "apps/server/src/config.ts",
-  "apps/server/src/stream/collectUint8StreamText.ts",
-  "apps/desktop/src/main.ts",
-  "apps/server/vite.config.ts",
-  "scripts/lib/public-config.ts",
-  "patches/node-pty.patch",
-  "config/tritonai-managed-config.json",
-  "package.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-  "vite.config.ts",
-  "tsconfig.base.json",
-  ".github/workflows/ci.yml",
-  ".github/workflows/windows-tests.yml",
-  ".github/scripts/windows-test-scope.cjs",
-  ".github/scripts/windows-test-scope.test.cjs",
-]) {
-}
 
 test("runs every focused suite when diff resolution fails or refs are unavailable", () => {
   assert.equal(

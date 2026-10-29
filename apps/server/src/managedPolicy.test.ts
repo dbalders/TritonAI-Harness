@@ -73,7 +73,7 @@ describe("TritonAI managed Harness policy", () => {
     migrateLegacyInstallerManagedSettings({
       tritonAiManagedPolicy: {
         migrationVersion: 2,
-        codexBinaryPath: Schema.decodeSync(CodexSettings)({}).binaryPath,
+        codexBinaryPath: compiledDecodeSync1({}).binaryPath,
         codexHomePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
       },
     });
@@ -208,7 +208,7 @@ describe("TritonAI managed Harness policy", () => {
             [managedInstanceId]: {
               driver: ProviderDriverKind.make("codex"),
               enabled: true,
-              config: { ...Schema.decodeSync(CodexSettings)({}), customModels: [model] },
+              config: { ...compiledDecodeSync1({}), customModels: [model] },
             },
           },
         });
@@ -630,3 +630,5 @@ it("locks V2 managed sign-in mode while preserving existing user launch and shad
     configured,
   );
 });
+
+const compiledDecodeSync1 = Schema.decodeSync(CodexSettings);

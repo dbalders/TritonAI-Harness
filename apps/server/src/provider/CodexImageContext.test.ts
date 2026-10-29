@@ -268,6 +268,7 @@ it.layer(testLayer)("CodexImageContext", (it) => {
         { TRITONAI_API_KEY: "test-key" },
         fetchMock as unknown as typeof fetch,
       );
+      // @effect-diagnostics-next-line abortControllerInEffect:off -- Exercises cancellation by an external caller-owned signal.
       const controller = new AbortController();
       const fiber = yield* analyzer({ images: testImages, signal: controller.signal }).pipe(
         Effect.exit,

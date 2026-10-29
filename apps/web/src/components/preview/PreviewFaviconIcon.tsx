@@ -1,7 +1,9 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { type ReactNode, useState } from "react";
+
 import { useFaviconForThreadUrl } from "~/browserFaviconStore";
 import { cn } from "~/lib/utils";
+
 import { BrowserMockup } from "./BrowserMockup";
 
 export function FaviconImage(props: {

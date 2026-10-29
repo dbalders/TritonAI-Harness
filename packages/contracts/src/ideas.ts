@@ -10,9 +10,17 @@ import {
 /**
  * Where an idea came from, which is also the heading it is listed under.
  * `continue` and `projects` come from the user's own work; `tools`, `new`, and
- * `starter` help them discover what TritonAI can do.
+ * `starter` help them discover what TritonAI can do. `feature` cards show a
+ * TritonAI feature the user hasn't tried yet, and are listed apart from the rest.
  */
-export const IdeaSection = Schema.Literals(["continue", "projects", "tools", "new", "starter"]);
+export const IdeaSection = Schema.Literals([
+  "continue",
+  "projects",
+  "tools",
+  "new",
+  "starter",
+  "feature",
+]);
 export type IdeaSection = typeof IdeaSection.Type;
 
 export const IdeaSourceKind = Schema.Literals([
@@ -75,6 +83,12 @@ export type IdeasGenerationState = typeof IdeasGenerationState.Type;
 export const IdeasSnapshot = Schema.Struct({
   ideas: Schema.Array(Idea),
   snoozed: Schema.Array(Idea),
+  /**
+   * Features the user hasn't tried yet, including snoozed ones. Kept out of
+   * `ideas` and `snoozed` so a client that predates them never sees one; a
+   * server that predates them leaves this out.
+   */
+  features: Schema.optional(Schema.Array(Idea)),
   /** Ideas added since the user last opened the Ideas page. */
   unseenCount: NonNegativeInt,
   state: IdeasGenerationState,
@@ -84,12 +98,8 @@ export const IdeasSnapshot = Schema.Struct({
 export type IdeasSnapshot = typeof IdeasSnapshot.Type;
 
 /**
- * - `opened`: the user opened the idea's draft.
- * - `dismissed`: not now; the same idea can come back after a while.
- * - `rejected`: not relevant; never suggested again.
- * - `less-like-this`: hides it and shows fewer ideas from its section.
- * - `snoozed`: hidden until `snoozedUntil`.
- * - `restored`: undoes the last of the above that hid it.
+ * Opened records a draft; dismissed allows a later suggestion; rejected never returns.
+ * Less-like-this reduces its section, snoozed hides until snoozedUntil, and restored undoes hiding.
  */
 export const IdeaFeedbackKind = Schema.Literals([
   "opened",

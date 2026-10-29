@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+
 import { ThreadPullRequestLink } from "./threadPullRequest.ts";
 
 const decodeLinks = Schema.decodeUnknownEffect(Schema.Array(ThreadPullRequestLink));

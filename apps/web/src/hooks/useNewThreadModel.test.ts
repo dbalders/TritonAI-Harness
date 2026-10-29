@@ -1,3 +1,4 @@
+vi.mock("../state/olderSettledShelf", () => ({ readUnloadedThreadCount: () => 0 }));
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -46,7 +47,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   }),
 }));
 vi.mock("./useSettings", () => ({
-  useClientSettings: () => ({
+  getClientSettings: () => ({
     sidebarProjectGroupingMode: "separate",
     sidebarProjectGroupingOverrides: {},
   }),

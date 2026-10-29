@@ -1,5 +1,6 @@
 import type { DiscoveredLocalServer } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+
 import { mergeServers } from "./useDiscoveredLocalServers";
 
 const scannerServer = (

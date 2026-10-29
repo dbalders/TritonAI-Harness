@@ -1,24 +1,7 @@
 /**
- * CodexDriver — first concrete `ProviderDriver` in the new per-instance model.
- *
- * A driver is a plain value (not a Context.Service) whose `create()` returns
- * one `ProviderInstance` bundling:
- *   - `snapshot`   — the live `ManagedServerProvider` for this instance;
- *   - `adapter`    — the Codex session/turn/approval runtime;
- *   - `textGeneration` — commit/PR/branch/title generation via `codex exec`.
- *
- * Each call to `create()` captures the `codexConfig` argument in closures
- * owned by the returned instance. Two instances created with different
- * `homePath`s (e.g. `codex_personal` + `codex_work`) therefore run with
- * fully independent Codex app-server processes and `CODEX_HOME`
- * environments — no shared mutable state.
- *
- * Resource lifecycle: `create()` runs in a scope handed in by the registry.
- * Closing that scope releases the adapter's child processes, the managed
- * snapshot's refresh fibre, and the text-generation binaries' transient
- * scratch files. The registry uses this to tear down an instance when its
- * `providerInstances` entry disappears or its config changes.
- *
+ * Each driver instance captures independent config, app-server processes, and CODEX_HOME.
+ * It combines the live snapshot, adapter, and text-generation runner in the registry scope;
+ * closing that scope releases processes, refresh work, and scratch files.
  * @module provider/Drivers/CodexDriver
  */
 import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
@@ -82,6 +65,7 @@ import { resolveManagedCodexBinary } from "../managedCodexRuntime.ts";
 import { makeManagedCodexProvider } from "./CodexManagedProvider.ts";
 import { codexUsageReader } from "./codexUsage.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
+import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -95,12 +79,7 @@ function isCodexStandaloneCommandPath(commandPath: string): boolean {
   return normalizeCommandPath(commandPath).includes("/packages/standalone/");
 }
 
-/**
- * `codex update` replaces the standalone tree under `CODEX_HOME`. That tree
- * lives in the shared home even when an auth-overlay shadow home is in use
- * (the overlay only carries auth and a few local entries), so the updater
- * runs against `sharedHomePath` rather than the instance's effective home.
- */
+/** `codex update` owns the shared home's standalone tree; auth-overlay homes do not carry it. */
 function makeCodexMaintenanceResolver(sharedHomePath: string) {
   const fallback = makePackageManagedProviderMaintenanceResolver({
     provider: DRIVER_KIND,
@@ -141,7 +120,8 @@ export type CodexDriverEnv =
   | ServerConfig.ServerConfig
   | ServerSecretStore.ServerSecretStore
   | ServerEnvironment.ServerEnvironmentIdentity
-  | CodexInstallation.CodexInstallation;
+  | CodexInstallation.CodexInstallation
+  | CodexManagedTokenBroker.CodexManagedTokenBroker;
 
 export const CodexDriver: ProviderDriver<
   CodexSettings,
@@ -321,13 +301,9 @@ export const CodexDriver: ProviderDriver<
       ),
     );
 
-    // Build a managed snapshot whose settings never change — mutations come
-    // in as instance rebuilds from the registry rather than in-place
-    // updates. Pre-provide `ChildProcessSpawner` so the check fits
-    // `makeManagedServerProvider.checkProvider`'s `R = never`.
-    // Kick the TTL-gated manifest refresh in the background and classify
-    // with the in-memory manifest, so a slow or hung fetch never delays the
-    // provider check. A refresh that lands mid-probe applies on the next one.
+    // Instance settings change through registry rebuilds. Pre-provide ChildProcessSpawner
+    // and probe against the cached manifest while refreshing it in the background.
+    // A slow fetch cannot block status; a newly fetched manifest applies on the next probe.
     const checkProvider = modelCatalog.refreshInBackground.pipe(
       Effect.andThen(
         Effect.zipWith(
@@ -425,13 +401,9 @@ export const CodexDriver: ProviderDriver<
             ),
           );
 
-    // Redemption spends something on the user's account. It serialises on
-    // the account (instances sharing a Codex home share the credit), keeps
-    // one idempotency key until Codex reports an outcome, and is bounded so
-    // a hung app-server cannot hold the account lock.
-    // Keyed on the directory holding auth.json: an auth-overlay instance has
-    // its own account under `effectiveHomePath`, while plain instances share
-    // the common home. The continuation key would conflate the two.
+    // Redemption spends account credit; serialize by the auth.json directory, keep one idempotency key
+    // until the outcome, and bound the wait so a hung app-server cannot hold the account lock.
+    // Auth overlays use effectiveHomePath; the continuation key would conflate them with shared homes.
     const accountKey = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
     const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = () =>
       resetCreditCoordinator
@@ -462,12 +434,8 @@ export const CodexDriver: ProviderDriver<
                 cause,
               }),
           ),
-          // The windows just changed; re-probe so the snapshot says so. A
-          // failed probe republishes the pre-redemption limits rather than
-          // marking them failed, so "confirmed" means `checkedAt` moved
-          // past what was published before the redemption started. Only a
-          // reset claims the limits changed, so only a reset reports an
-          // unconfirmed refresh.
+          // Re-probe after redemption. Failure republishes prior limits; confirmation requires
+          // checkedAt to advance. Only a reset reports an unconfirmed refresh.
           Effect.tap((outcome) =>
             Effect.gen(function* () {
               const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;

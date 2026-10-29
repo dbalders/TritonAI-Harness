@@ -150,8 +150,6 @@ function setup({ localPath = true, autoComplete = true, uploadStatus = 204 } = {
     respondingRequestIds: [],
     showPlanFollowUpPrompt: false,
     activeProposedPlan: null,
-    activeTasksProgress: null,
-    activeTaskSteps: null,
     threadSyncPhase: null,
     runtimeMode: "auto",
     interactionMode: "default",

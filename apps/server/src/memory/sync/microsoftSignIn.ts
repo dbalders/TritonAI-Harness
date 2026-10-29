@@ -1,13 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - A device code's hash names its sign-in flow.
 /**
- * The Microsoft sign-in memory sync uses to reach the user's OneDrive.
- *
- * It uses the same Entra app as the Microsoft 365 plugin. When that plugin is
- * already connected, its saved sign-in is exchanged for OneDrive access
- * without asking the user again; otherwise the user signs in once with a
- * device code. Memory sync then keeps its own credential, so disconnecting the
- * plugin does not stop sync and signing out of sync does not disconnect the
- * plugin.
+ * Reuse the Microsoft 365 sign-in when available, otherwise use device-code sign-in.
+ * Memory sync retains an independent credential, so disconnecting either connection
+ * does not disconnect the other.
  */
 import * as NodeCrypto from "node:crypto";
 import * as Clock from "effect/Clock";
@@ -185,7 +180,9 @@ function describeOAuthError(error: {
   return summary && summary.length > 0 ? summary : error.error;
 }
 
-/** @public Service construction is part of the canonical Effect module API. */
+/**
+ * @public
+ */
 export const make = Effect.fn("microsoftSignIn.make")(function* (
   config: MicrosoftOAuthConfig | null,
 ) {
@@ -245,7 +242,7 @@ export const make = Effect.fn("microsoftSignIn.make")(function* (
     Effect.flatMap((raw) =>
       Option.isSome(raw)
         ? decodeStoredCredential(raw.value).pipe(
-            Effect.map((credential) => Option.some(credential)),
+            Effect.asSome,
             Effect.orElseSucceed(() => Option.none<StoredCredential>()),
           )
         : Effect.succeed(Option.none<StoredCredential>()),

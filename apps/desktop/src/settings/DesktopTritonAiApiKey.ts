@@ -437,7 +437,7 @@ export const readTritonAiCredentialOverride = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const overridePath = tritonAiApiKeyOverridePath(environment);
   const contents = yield* fileSystem.readFileString(overridePath).pipe(
-    Effect.map(Option.some),
+    Effect.asSome,
     Effect.catchTags({
       PlatformError: (cause) =>
         cause.reason._tag === "NotFound"
@@ -536,10 +536,3 @@ export const replaceTritonAiCredentials = Effect.fn("desktop.tritonAiApiKey.repl
 );
 
 // Retain the one-key replacement API for migration callers.
-export const replaceTritonAiApiKey = Effect.fn("desktop.tritonAiApiKey.replace")(function* (
-  rawApiKey: unknown,
-) {
-  const sharedApiKey = normalizeReplacementApiKey(rawApiKey);
-  if (sharedApiKey === null) return yield* new DesktopTritonAiApiKeyInputError();
-  yield* replaceTritonAiCredentials({ sharedApiKey });
-});

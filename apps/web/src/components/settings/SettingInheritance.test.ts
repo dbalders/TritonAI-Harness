@@ -1,6 +1,7 @@
 import { DEFAULT_SERVER_SETTINGS, EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { describe, expect, it } from "vite-plus/test";
+
 import { settingInheritanceLayers } from "./SettingInheritance";
 
 const environmentId = EnvironmentId.make("laptop");
