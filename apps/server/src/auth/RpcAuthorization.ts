@@ -141,6 +141,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.integrationsInstall]: AuthProvidersManageScope,
   [WS_METHODS.integrationsSetEnabled]: AuthProvidersManageScope,
   [WS_METHODS.integrationsSetCapabilityEnabled]: AuthProvidersManageScope,
+  [WS_METHODS.integrationsSetServiceEnvironment]: AuthProvidersManageScope,
   [WS_METHODS.integrationsConnect]: AuthProvidersManageScope,
   [WS_METHODS.integrationsPoll]: AuthProvidersManageScope,
   [WS_METHODS.integrationsDisconnect]: AuthProvidersManageScope,

@@ -3325,6 +3325,46 @@ export function claudeApprovalPresentation(input: {
   };
 }
 
+/**
+ * A write by a plugin with service environments (such as n8n Prod and Dev). "Allow for this
+ * session" becomes a Harness grant for `tool@environment` instead of an SDK rule for the whole
+ * tool, and an approval is refused when the environment changed while the prompt was open.
+ */
+export function environmentScopedPluginPermission(input: {
+  readonly toolName: string;
+  readonly decision: ProviderApprovalDecision;
+  readonly toolInput: Record<string, unknown>;
+  readonly toolUseID: string;
+  readonly feedback?: string;
+  readonly approvedEnvironment: string;
+  readonly currentEnvironment: string | undefined;
+}): { readonly result: PermissionResult; readonly sessionGrant?: string } {
+  const accepted = input.decision === "accept" || input.decision === "acceptForSession";
+  if (accepted && input.currentEnvironment !== input.approvedEnvironment) {
+    return {
+      result: {
+        behavior: "deny",
+        message:
+          "The plugin switched environments while this call waited for approval. It was not run; ask again to run it in the selected environment.",
+        toolUseID: input.toolUseID,
+        decisionClassification: "user_reject",
+      },
+    };
+  }
+  return {
+    result: permissionResultFromDecision({
+      toolName: input.toolName,
+      decision: input.decision === "acceptForSession" ? "accept" : input.decision,
+      toolInput: input.toolInput,
+      toolUseID: input.toolUseID,
+      ...(input.feedback === undefined ? {} : { feedback: input.feedback }),
+    }),
+    ...(input.decision === "acceptForSession"
+      ? { sessionGrant: `${input.toolName}@${input.approvedEnvironment}` }
+      : {}),
+  };
+}
+
 export function permissionResultFromDecision(input: {
   readonly toolName: string;
   readonly decision: ProviderApprovalDecision;
@@ -4601,6 +4641,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         );
         // Browser session grants, by Harness thread then grant key (one per browser profile).
         const browserNavigationGrants = yield* Ref.make(new Map<string, ReadonlySet<string>>());
+        // "Allow for this session" for writes by plugins with service environments (such as n8n
+        // Prod and Dev), by Harness thread then `tool@environment`. Kept here instead of as an SDK
+        // rule for the whole tool, so allowing a Dev write never also allows it after a switch.
+        const integrationEnvironmentGrants = yield* Ref.make(
+          new Map<string, ReadonlySet<string>>(),
+        );
         // Track Claude background tasks and buffer wake messages after the root turn settles.
         // A continuation attaches to the same query stream and receives the buffered output.
         const lastTurnRouteByNativeThread = yield* Ref.make(
@@ -9508,7 +9554,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           const integrationTool = claudeIntegrationTool(toolName);
+          // Claude dispatches an allowed plugin write to MCP after this callback returns. Hold the
+          // plugin's environment briefly so a switch cannot land between the approval and the call;
+          // while a switch is already in progress, the write is refused instead.
+          const settlePluginWrite = (): boolean =>
+            !integrationTool ||
+            integrationTool.readOnly ||
+            (Integrations.getIntegrationRegistryOptional()?.notePluginWriteAllowed(
+              integrationTool.name,
+            ) ??
+              true);
+          const switchingDenial = {
+            behavior: "deny",
+            message:
+              "The plugin is switching environments, so this call was not run. Ask again once the switch finishes.",
+            toolUseID: callbackOptions.toolUseID,
+          } satisfies PermissionResult;
           if (!requiresClaudeApproval(context) || integrationTool?.readOnly === true) {
+            if (!settlePluginWrite()) return switchingDenial;
             return {
               behavior: "allow",
               updatedInput: toolInput,
@@ -9534,11 +9597,41 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             } satisfies PermissionResult;
           }
 
+          const integrationEnvironment = integrationTool
+            ? Integrations.getIntegrationRegistryOptional()?.toolServiceEnvironmentSync(
+                integrationTool.name,
+              )
+            : undefined;
+          // Matches environmentScopedPluginPermission's session grant.
+          const integrationGrantKey = integrationEnvironment
+            ? `${toolName}@${integrationEnvironment.id}`
+            : undefined;
+          if (
+            integrationTool &&
+            integrationEnvironment &&
+            integrationGrantKey !== undefined &&
+            (yield* Ref.get(integrationEnvironmentGrants))
+              .get(browserGrantThread)
+              ?.has(integrationGrantKey) === true
+          ) {
+            if (!settlePluginWrite()) return switchingDenial;
+            return {
+              behavior: "allow",
+              updatedInput: toolInput,
+              toolUseID: callbackOptions.toolUseID,
+            } satisfies PermissionResult;
+          }
+
           const requestKind = providerRequestKindFromClaudeTool(toolName);
-          // A plugin write shows the change it will make, with secret-looking arguments hidden.
-          // Opening a website shows the complete destination.
+          // A plugin write shows the change it will make, with secret-looking arguments hidden,
+          // and names the environment it reaches. Opening a website shows the complete destination.
           const prompt = integrationTool
-            ? describeToolCallForApproval(integrationTool.name, toolInput)
+            ? describeToolCallForApproval(
+                integrationEnvironment
+                  ? `${integrationTool.name} (${integrationEnvironment.label})`
+                  : integrationTool.name,
+                toolInput,
+              )
             : browserApproval?.requiresApproval === true
               ? browserApproval.prompt
               : (callbackOptions.title ??
@@ -9624,6 +9717,33 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               toolInput,
               toolUseID: callbackOptions.toolUseID,
             });
+          }
+
+          if (integrationTool && integrationEnvironment) {
+            const scoped = environmentScopedPluginPermission({
+              toolName,
+              ...resolvedDecision,
+              toolInput,
+              toolUseID: callbackOptions.toolUseID,
+              approvedEnvironment: integrationEnvironment.id,
+              currentEnvironment:
+                Integrations.getIntegrationRegistryOptional()?.toolServiceEnvironmentSync(
+                  integrationTool.name,
+                )?.id,
+            });
+            if (scoped.result.behavior === "allow" && !settlePluginWrite()) return switchingDenial;
+            const sessionGrant = scoped.sessionGrant;
+            if (sessionGrant !== undefined) {
+              yield* Ref.update(integrationEnvironmentGrants, (current) => {
+                const updated = new Map(current);
+                updated.set(
+                  browserGrantThread,
+                  new Set([...(current.get(browserGrantThread) ?? []), sessionGrant]),
+                );
+                return updated;
+              });
+            }
+            return scoped.result;
           }
 
           return permissionResultFromDecision({

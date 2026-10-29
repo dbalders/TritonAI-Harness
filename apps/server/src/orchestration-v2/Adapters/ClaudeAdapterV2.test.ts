@@ -564,6 +564,40 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       ...ClaudeAdapterV2.claudeT3McpHostAllowedTools(),
     ]);
   });
+  it("scopes plugin write session approvals to the approved service environment", () => {
+    const base = {
+      toolName: "mcp__t3-code__n8n_update_workflow",
+      toolInput: { workflowId: "wf-1" },
+      toolUseID: "tool-n8n-write",
+      approvedEnvironment: "development",
+    } as const;
+    const session = ClaudeAdapterV2.environmentScopedPluginPermission({
+      ...base,
+      decision: "acceptForSession",
+      currentEnvironment: "development",
+    });
+    assert.equal(session.result.behavior, "allow");
+    assert.equal(session.sessionGrant, "mcp__t3-code__n8n_update_workflow@development");
+    // No SDK rule for the whole tool, which would also allow the write after a switch to Prod.
+    assert.notProperty(session.result, "updatedPermissions");
+
+    const switched = ClaudeAdapterV2.environmentScopedPluginPermission({
+      ...base,
+      decision: "accept",
+      currentEnvironment: "production",
+    });
+    assert.equal(switched.result.behavior, "deny");
+    assert.isUndefined(switched.sessionGrant);
+
+    const declined = ClaudeAdapterV2.environmentScopedPluginPermission({
+      ...base,
+      decision: "decline",
+      currentEnvironment: "production",
+    });
+    assert.equal(declined.result.behavior, "deny");
+    assert.isUndefined(declined.sessionGrant);
+  });
+
   it("pre-approves plugin reads but never plugin writes", () => {
     const threadId = ThreadId.make("thread-claude-mcp-plugin-tools");
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({

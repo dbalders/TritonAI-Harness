@@ -436,6 +436,7 @@ import {
 import { VcsError } from "./vcs.ts";
 import {
   IntegrationConnectInput,
+  IntegrationDisconnectInput,
   IntegrationConnectResult,
   IntegrationIdInput,
   IntegrationOperationError,
@@ -444,6 +445,7 @@ import {
   IntegrationsListResult,
   IntegrationSetEnabledInput,
   IntegrationSetCapabilityEnabledInput,
+  IntegrationSetServiceEnvironmentInput,
 } from "./integrations.ts";
 
 export const WS_METHODS = {
@@ -608,6 +610,7 @@ export const WS_METHODS = {
   integrationsInstall: "integrations.install",
   integrationsSetEnabled: "integrations.setEnabled",
   integrationsSetCapabilityEnabled: "integrations.setCapabilityEnabled",
+  integrationsSetServiceEnvironment: "integrations.setServiceEnvironment",
   integrationsConnect: "integrations.connect",
   integrationsPoll: "integrations.poll",
   integrationsDisconnect: "integrations.disconnect",
@@ -1260,6 +1263,14 @@ const WsIntegrationsSetCapabilityEnabledRpc = Rpc.make(
     error: IntegrationRpcError,
   },
 );
+const WsIntegrationsSetServiceEnvironmentRpc = Rpc.make(
+  WS_METHODS.integrationsSetServiceEnvironment,
+  {
+    payload: IntegrationSetServiceEnvironmentInput,
+    success: IntegrationsListResult,
+    error: IntegrationRpcError,
+  },
+);
 const WsIntegrationsConnectRpc = Rpc.make(WS_METHODS.integrationsConnect, {
   payload: IntegrationConnectInput,
   success: IntegrationConnectResult,
@@ -1271,7 +1282,7 @@ const WsIntegrationsPollRpc = Rpc.make(WS_METHODS.integrationsPoll, {
   error: IntegrationRpcError,
 });
 const WsIntegrationsDisconnectRpc = Rpc.make(WS_METHODS.integrationsDisconnect, {
-  payload: IntegrationIdInput,
+  payload: IntegrationDisconnectInput,
   success: IntegrationsListResult,
   error: IntegrationRpcError,
 });
@@ -2411,6 +2422,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIntegrationsInstallRpc,
   WsIntegrationsSetEnabledRpc,
   WsIntegrationsSetCapabilityEnabledRpc,
+  WsIntegrationsSetServiceEnvironmentRpc,
   WsIntegrationsConnectRpc,
   WsIntegrationsPollRpc,
   WsIntegrationsDisconnectRpc,
