@@ -3594,6 +3594,10 @@ export const layerWsRpc = (
           integrationRpcEffect(() =>
             Integrations.getIntegrationRegistry().setCapabilityEnabled(id, capability, enabled),
           ),
+        [WS_METHODS.integrationsSetServiceEnvironment]: ({ id, serviceEnvironment }) =>
+          integrationRpcEffect(() =>
+            Integrations.getIntegrationRegistry().setServiceEnvironment(id, serviceEnvironment),
+          ),
         [WS_METHODS.integrationsConnect]: ({ id, submission }) =>
           integrationRpcEffect((signal) =>
             Integrations.getIntegrationRegistry().connect(id, submission, { signal }),

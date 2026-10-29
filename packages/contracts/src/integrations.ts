@@ -40,6 +40,22 @@ export const IntegrationSkill = Schema.Struct({
   available: Schema.Boolean,
 });
 
+export const IntegrationServiceEnvironmentId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(32),
+  Schema.isPattern(/^[a-z][a-z0-9-]*$/u),
+);
+export type IntegrationServiceEnvironmentId = typeof IntegrationServiceEnvironmentId.Type;
+
+/** A deployment of the plugin's service (such as Prod or Dev). Each keeps its own connection. */
+export const IntegrationServiceEnvironment = Schema.Struct({
+  id: IntegrationServiceEnvironmentId,
+  displayName: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString,
+  /** The environment the plugin's connection, status, and tools currently use. */
+  selected: Schema.Boolean,
+});
+export type IntegrationServiceEnvironment = typeof IntegrationServiceEnvironment.Type;
+
 export const IntegrationSummary = Schema.Struct({
   id: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
@@ -55,6 +71,8 @@ export const IntegrationSummary = Schema.Struct({
   capabilities: Schema.Array(IntegrationCapability),
   tools: Schema.Array(IntegrationTool),
   skills: Schema.Array(IntegrationSkill),
+  /** Present only for plugins that offer more than one service environment. */
+  serviceEnvironments: Schema.optional(Schema.Array(IntegrationServiceEnvironment)),
 });
 export type IntegrationSummary = typeof IntegrationSummary.Type;
 
@@ -72,6 +90,10 @@ export const IntegrationSetCapabilityEnabledInput = Schema.Struct({
   id: TrimmedNonEmptyString,
   capability: IntegrationCapabilityId,
   enabled: Schema.Boolean,
+});
+export const IntegrationSetServiceEnvironmentInput = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  serviceEnvironment: IntegrationServiceEnvironmentId,
 });
 export const IntegrationApiKeySubmission = Schema.Struct({
   kind: Schema.Literal("api_key"),

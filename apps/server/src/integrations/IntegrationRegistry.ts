@@ -28,6 +28,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { loadBuiltinIntegrations } from "./builtins.ts";
 import {
   isIntegrationId,
+  isIntegrationServiceEnvironmentId,
   isIntegrationSkillName,
   isIntegrationVersion,
   type IntegrationManifest,
@@ -67,6 +68,11 @@ export interface IntegrationProviderStatus {
 
 export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
+  /**
+   * The user-selected service environment (such as Prod or Dev). Present on every provider
+   * operation, including status, for plugins whose manifest declares `serviceEnvironments`.
+   */
+  readonly serviceEnvironment?: string;
   /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
   /**
@@ -207,6 +213,8 @@ interface PersistedIntegrationState {
       readonly version: string;
       readonly enabled: boolean;
       readonly enabledCapabilities?: ReadonlyArray<string>;
+      /** The selected service environment; absent or no longer declared means the default. */
+      readonly serviceEnvironment?: string;
       /** Legacy v1 state accepted only for migration; capability access now owns availability. */
       readonly disabledSkills?: ReadonlyArray<string>;
     }
@@ -401,11 +409,20 @@ function decodePersistedState(value: unknown): PersistedIntegrationState {
     const entry = raw as Record<string, unknown>;
     const disabledSkills = entry.disabledSkills;
     const enabledCapabilities = entry.enabledCapabilities;
+    const serviceEnvironment = entry.serviceEnvironment;
     if (
       !hasOnlyKeys(
         entry,
-        new Set(["version", "enabled", "enabledCapabilities", "disabledSkills"]),
+        new Set([
+          "version",
+          "enabled",
+          "enabledCapabilities",
+          "serviceEnvironment",
+          "disabledSkills",
+        ]),
       ) ||
+      (serviceEnvironment !== undefined &&
+        !isIntegrationServiceEnvironmentId(serviceEnvironment)) ||
       !isIntegrationVersion(entry.version) ||
       typeof entry.enabled !== "boolean" ||
       (enabledCapabilities !== undefined &&
@@ -426,6 +443,9 @@ function decodePersistedState(value: unknown): PersistedIntegrationState {
         ? {
             enabledCapabilities: [...(enabledCapabilities as ReadonlyArray<string>)].toSorted(),
           }
+        : {}),
+      ...(serviceEnvironment !== undefined
+        ? { serviceEnvironment: serviceEnvironment as string }
         : {}),
       ...(disabledSkills
         ? { disabledSkills: [...(disabledSkills as ReadonlyArray<string>)].toSorted() }
@@ -494,6 +514,17 @@ function connectionCapabilityIds(
   return manifest.capabilities
     .filter(({ id, access }) => selected.has(id) || access === "authorization")
     .map(({ id }) => id);
+}
+
+/** The environment provider operations use: the saved choice when still declared, else the first. */
+function selectedServiceEnvironmentId(
+  manifest: IntegrationManifest,
+  installed: InstalledIntegrationState | undefined,
+): string | undefined {
+  const environments = manifest.serviceEnvironments;
+  if (!environments || environments.length === 0) return undefined;
+  const saved = installed?.serviceEnvironment;
+  return environments.some(({ id }) => id === saved) ? saved : environments[0]!.id;
 }
 
 const EMPTY_STATE: PersistedIntegrationState = {
@@ -1279,6 +1310,9 @@ export class RegistryRuntime {
         version: installed.version,
         enabled: installed.enabled,
         enabledCapabilities: [...selectedCapabilityIds(manifest, installed)].toSorted(),
+        ...(installed.serviceEnvironment !== undefined
+          ? { serviceEnvironment: installed.serviceEnvironment }
+          : {}),
       };
       capabilityMigrationRequired = true;
     }
@@ -1735,6 +1769,21 @@ export class RegistryRuntime {
     }
   }
 
+  /** Bind a provider operation to the plugin's currently selected service environment. */
+  #serviceEnvironmentContext(provider: IntegrationProvider): {
+    readonly serviceEnvironment?: string;
+  } {
+    for (const { manifest, provider: registered } of this.#catalog.values()) {
+      if (registered !== provider) continue;
+      const serviceEnvironment = selectedServiceEnvironmentId(
+        manifest,
+        ownRecordValue(this.#state.installed, manifest.id),
+      );
+      return serviceEnvironment === undefined ? {} : { serviceEnvironment };
+    }
+    return {};
+  }
+
   #invalidateProviderStatus(provider: IntegrationProvider): void {
     const attempt = this.#providerStatusAttempts.get(provider);
     if (!attempt) return;
@@ -1773,7 +1822,10 @@ export class RegistryRuntime {
         if (controller.signal.aborted || this.#closing) {
           throw new Error("The integration provider status check was cancelled.");
         }
-        return provider.status({ signal: controller.signal });
+        return provider.status({
+          signal: controller.signal,
+          ...this.#serviceEnvironmentContext(provider),
+        });
       })
       .then(validateProviderStatus);
     this.#activeStatusWork.add(statusWork);
@@ -1897,6 +1949,7 @@ export class RegistryRuntime {
       }
       return operation({
         signal: controller.signal,
+        ...this.#serviceEnvironmentContext(provider),
         beginCommit: () => {
           if (commitAdmission) return commitAdmission;
           if (controller.signal.aborted || this.#closing) {
@@ -2217,6 +2270,16 @@ export class RegistryRuntime {
         ),
         available: dependencyCapabilityIds(skill).some(available),
       })),
+      ...(manifest.serviceEnvironments
+        ? {
+            serviceEnvironments: manifest.serviceEnvironments.map((environment) => ({
+              id: environment.id,
+              displayName: environment.displayName,
+              description: environment.description,
+              selected: environment.id === selectedServiceEnvironmentId(manifest, installed),
+            })),
+          }
+        : {}),
     };
   }
 
@@ -2954,6 +3017,9 @@ export class RegistryRuntime {
         version: installed.version,
         enabled: installed.enabled,
         enabledCapabilities: [...enabledCapabilities].toSorted(),
+        ...(installed.serviceEnvironment !== undefined
+          ? { serviceEnvironment: installed.serviceEnvironment }
+          : {}),
       };
       try {
         await this.#updateState((state) => ({
@@ -2986,6 +3052,100 @@ export class RegistryRuntime {
     });
     const result = operation.then(() => this.#cachedList());
     return revocation ? result.finally(revocation.finish) : result;
+  }
+
+  /**
+   * Switch which service environment (such as Prod or Dev) a plugin uses. Each environment keeps
+   * its own connection inside the provider, so switching never signs the user out of the other.
+   * In-flight tool calls stop first, the same as for connect and disconnect.
+   */
+  setServiceEnvironment(id: string, serviceEnvironment: string): Promise<IntegrationsListResult> {
+    const registered = this.#catalog.get(id);
+    if (!registered) {
+      return Promise.reject(operationError("not_found", `Integration ${id} was not found.`));
+    }
+    const environments = registered.manifest.serviceEnvironments;
+    if (!environments) {
+      return Promise.reject(
+        operationError(
+          "invalid_input",
+          `${registered.manifest.name} does not offer service environments.`,
+        ),
+      );
+    }
+    if (!environments.some(({ id: candidate }) => candidate === serviceEnvironment)) {
+      return Promise.reject(
+        operationError(
+          "not_found",
+          `${registered.manifest.name} has no ${serviceEnvironment} environment.`,
+        ),
+      );
+    }
+    const revocation = this.#beginRevocation(id);
+    const operation = this.#serializeIntegration(id, async () => {
+      await this.#ready;
+      await revocation.ready;
+      const integration = this.#package(id);
+      const { manifest, provider } = integration;
+      const installed = ownRecordValue(this.#state.installed, id);
+      if (!installed) throw operationError("not_installed", `Integration ${id} is not installed.`);
+      assertCurrentPackageVersion(manifest, installed.version);
+      if (selectedServiceEnvironmentId(manifest, installed) === serviceEnvironment) {
+        await this.#summarize(integration);
+        return;
+      }
+      // A fault belongs to the environment that produced it, and reset disconnects the selected
+      // environment. Switching first would make reset sign the user out of the wrong one.
+      if (provider && this.#faultedProviders.has(provider)) {
+        throw operationError(
+          "operation_failed",
+          `Reset the ${manifest.name} connection before switching environments.`,
+        );
+      }
+      if (provider && this.#activeProviderLifecycleWork.has(provider)) {
+        throw operationError(
+          "operation_failed",
+          `${manifest.name} is still finishing a connection change. Try again in a moment.`,
+        );
+      }
+      const next: InstalledIntegrationState = { ...installed, serviceEnvironment };
+      try {
+        await this.#updateState((state) => ({
+          ...state,
+          installed: { ...state.installed, [id]: next },
+        }));
+        if (provider) {
+          this.#invalidateProviderStatus(provider);
+          this.#providerLastPreparedAt.delete(provider);
+        }
+      } catch (error) {
+        let rollbackFailure: unknown;
+        try {
+          await this.#updateState((state) => ({
+            ...state,
+            installed: { ...state.installed, [id]: installed },
+          }));
+        } catch (rollbackError) {
+          rollbackFailure = rollbackError;
+        }
+        await this.#summarize(integration).catch(() => undefined);
+        if (rollbackFailure !== undefined) {
+          throw operationError(
+            "operation_failed",
+            `Environment change failed and its rollback could not be persisted: ${safeMessage(error)} Rollback failure: ${safeMessage(rollbackFailure)}`,
+          );
+        }
+        throw operationError(
+          "operation_failed",
+          `Environment change was rolled back: ${safeMessage(error)}`,
+        );
+      }
+      // Read and Write are chosen during each environment's own sign-in. Follow the newly
+      // selected environment's grant; availability still requires that grant either way.
+      await this.#adoptProviderAuthorizedCapabilities(this.#package(id)).catch(() => undefined);
+      await this.#summarize(this.#package(id));
+    });
+    return operation.then(() => this.#cachedList()).finally(revocation.finish);
   }
 
   /** Compatibility for pre-capability callers; the referenced Access bundle remains authoritative. */
@@ -3547,6 +3707,7 @@ export class RegistryRuntime {
             tool.effect === "write" && providerContext
               ? {
                   signal: providerContext.signal,
+                  ...this.#serviceEnvironmentContext(provider),
                   writeApproved: true,
                   beginCommit: async () => {
                     const commitSignal = await providerContext.beginCommit();
@@ -3556,6 +3717,7 @@ export class RegistryRuntime {
                 }
               : {
                   signal,
+                  ...this.#serviceEnvironmentContext(provider),
                   extractDocumentText: (request: DocumentTextRequest) =>
                     this.#documentText(request, signal),
                 },

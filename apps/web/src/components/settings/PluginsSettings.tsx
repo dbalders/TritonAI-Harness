@@ -33,6 +33,7 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collaps
 import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Switch } from "../ui/switch";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import {
   integrationConnectResultNeedsPolling,
@@ -71,6 +72,64 @@ function connectionVariant(integration: IntegrationSummary) {
   if (integration.connectionState === "error") return "destructive" as const;
   if (integration.connectionState === "connecting") return "warning" as const;
   return "outline" as const;
+}
+
+function selectedServiceEnvironment(integration: IntegrationSummary) {
+  return integration.serviceEnvironments?.find(({ selected }) => selected) ?? null;
+}
+
+function connectionDetail(integration: IntegrationSummary): string {
+  if (integration.accountLabel) return integration.accountLabel;
+  const environment = selectedServiceEnvironment(integration);
+  return environment
+    ? `Connect to ${environment.displayName} (${environment.description}).`
+    : "Connect the service used by this plugin.";
+}
+
+function ServiceEnvironmentPicker({
+  integration,
+  disabled,
+  onSelect,
+}: {
+  readonly integration: IntegrationSummary;
+  readonly disabled: boolean;
+  readonly onSelect: (serviceEnvironment: string) => void;
+}) {
+  const environments = integration.serviceEnvironments ?? [];
+  const selected = selectedServiceEnvironment(integration);
+  if (environments.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-3 border-b border-border/50 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <p className="text-sm font-medium" id={`${integration.id}-service-environment`}>
+          Environment
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Each environment keeps its own sign-in, so you can switch at any time.
+        </p>
+      </div>
+      <ToggleGroup
+        aria-labelledby={`${integration.id}-service-environment`}
+        value={selected ? [selected.id] : []}
+        disabled={disabled}
+        onValueChange={(next) => {
+          const value = next[0];
+          if (value && value !== selected?.id) onSelect(value);
+        }}
+      >
+        {environments.map((environment) => (
+          <Toggle
+            key={environment.id}
+            value={environment.id}
+            title={environment.description}
+            aria-label={`${environment.displayName} (${environment.description})`}
+          >
+            {environment.displayName}
+          </Toggle>
+        ))}
+      </ToggleGroup>
+    </div>
+  );
 }
 
 export function integrationNeedsConnectionAction(integration: IntegrationSummary): boolean {
@@ -411,6 +470,7 @@ function IntegrationCard({
   onAction,
   onApiKeySubmit,
   onCapabilityEnabled,
+  onServiceEnvironment,
   connectionAttentionRequest,
 }: {
   readonly integration: IntegrationSummary;
@@ -429,6 +489,10 @@ function IntegrationCard({
     integration: IntegrationSummary,
     capability: string,
     enabled: boolean,
+  ) => Promise<void>;
+  readonly onServiceEnvironment: (
+    integration: IntegrationSummary,
+    serviceEnvironment: string,
   ) => Promise<void>;
   readonly connectionAttentionRequest?: number;
 }) {
@@ -554,6 +618,13 @@ function IntegrationCard({
               count={1}
               icon={<PlugIcon className="size-4 text-muted-foreground" />}
             >
+              <ServiceEnvironmentPicker
+                integration={integration}
+                disabled={busy || flow !== null || !integration.installed}
+                onSelect={(serviceEnvironment) =>
+                  void onServiceEnvironment(integration, serviceEnvironment)
+                }
+              />
               <div className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex min-w-0 items-center gap-3">
                   <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-background">
@@ -562,7 +633,7 @@ function IntegrationCard({
                   <div className="min-w-0">
                     <p className="text-sm font-medium">{integration.name}</p>
                     <p className="truncate text-xs text-muted-foreground">
-                      {integration.accountLabel ?? "Connect the service used by this plugin."}
+                      {connectionDetail(integration)}
                     </p>
                     {needsConnectionAction ? (
                       <IntegrationConnectionActionCallout integrationName={integration.name} />
@@ -829,6 +900,10 @@ function EnvironmentPluginsSettingsPanel({
     {
       reportFailure: false,
     },
+  );
+  const serviceEnvironmentCommand = useAtomCommand(
+    serverEnvironment.setIntegrationServiceEnvironment,
+    { reportFailure: false },
   );
   const connectCommand = useAtomCommand(serverEnvironment.connectIntegration, {
     reportFailure: false,
@@ -1191,6 +1266,56 @@ function EnvironmentPluginsSettingsPanel({
     });
   };
 
+  const setServiceEnvironment = async (
+    integration: IntegrationSummary,
+    serviceEnvironment: string,
+  ) => {
+    if (!environmentId) return;
+    const targetEnvironmentId = environmentId;
+    setBusyIds((current) => new Set(current).add(integration.id));
+    setErrors((current) => {
+      const rest = { ...current };
+      delete rest[integration.id];
+      return rest;
+    });
+    // A pending sign-in belongs to the environment it started in.
+    activeFlowIdsRef.current.delete(integration.id);
+    setFlows((current) => {
+      const next = new Map(current);
+      next.delete(integration.id);
+      return next;
+    });
+    return await (async () => {
+      try {
+        const result = unwrap(
+          await serviceEnvironmentCommand({
+            environmentId: targetEnvironmentId,
+            input: { id: integration.id, serviceEnvironment },
+          }),
+        );
+        if (environmentIdRef.current !== targetEnvironmentId) return;
+        setData(result);
+        window.dispatchEvent(new Event("getting-started:connections-changed"));
+        const updated = result.integrations.find(({ id }) => id === integration.id);
+        setConnectionAttentionState((current) =>
+          reconcileConnectionAttentionForIntegration(current, integration.id, updated),
+        );
+      } catch (cause) {
+        if (environmentIdRef.current !== targetEnvironmentId) return;
+        setErrors((current) => ({ ...current, [integration.id]: errorMessage(cause) }));
+        await load();
+      }
+    })().finally(() => {
+      if (environmentIdRef.current === targetEnvironmentId) {
+        setBusyIds((current) => {
+          const next = new Set(current);
+          next.delete(integration.id);
+          return next;
+        });
+      }
+    });
+  };
+
   return (
     <SettingsPageContainer>
       <GettingStartedContextHint chapters={["connect", "connected-work"]} />
@@ -1252,6 +1377,7 @@ function EnvironmentPluginsSettingsPanel({
                 onAction={action}
                 onApiKeySubmit={submitApiKey}
                 onCapabilityEnabled={setCapabilityEnabled}
+                onServiceEnvironment={setServiceEnvironment}
                 {...(connectionAttention?.id === integration.id
                   ? { connectionAttentionRequest: connectionAttention.request }
                   : {})}

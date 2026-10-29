@@ -444,6 +444,7 @@ import {
   IntegrationsListResult,
   IntegrationSetEnabledInput,
   IntegrationSetCapabilityEnabledInput,
+  IntegrationSetServiceEnvironmentInput,
 } from "./integrations.ts";
 
 export const WS_METHODS = {
@@ -608,6 +609,7 @@ export const WS_METHODS = {
   integrationsInstall: "integrations.install",
   integrationsSetEnabled: "integrations.setEnabled",
   integrationsSetCapabilityEnabled: "integrations.setCapabilityEnabled",
+  integrationsSetServiceEnvironment: "integrations.setServiceEnvironment",
   integrationsConnect: "integrations.connect",
   integrationsPoll: "integrations.poll",
   integrationsDisconnect: "integrations.disconnect",
@@ -1256,6 +1258,14 @@ const WsIntegrationsSetCapabilityEnabledRpc = Rpc.make(
   WS_METHODS.integrationsSetCapabilityEnabled,
   {
     payload: IntegrationSetCapabilityEnabledInput,
+    success: IntegrationsListResult,
+    error: IntegrationRpcError,
+  },
+);
+const WsIntegrationsSetServiceEnvironmentRpc = Rpc.make(
+  WS_METHODS.integrationsSetServiceEnvironment,
+  {
+    payload: IntegrationSetServiceEnvironmentInput,
     success: IntegrationsListResult,
     error: IntegrationRpcError,
   },
@@ -2411,6 +2421,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIntegrationsInstallRpc,
   WsIntegrationsSetEnabledRpc,
   WsIntegrationsSetCapabilityEnabledRpc,
+  WsIntegrationsSetServiceEnvironmentRpc,
   WsIntegrationsConnectRpc,
   WsIntegrationsPollRpc,
   WsIntegrationsDisconnectRpc,

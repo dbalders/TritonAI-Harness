@@ -2,7 +2,10 @@ import { type IntegrationManifest, validateIntegrationManifest } from "@t3tools/
 
 export const PLUGIN_SDK_API_MAJOR = 1;
 // Level 2 adds bounded API-key setup instructions and an HTTPS setup deep link.
-export const PLUGIN_SDK_HOST_CONTRACT_LEVEL = 2;
+// Level 3 adds plugin-declared service environments (such as Prod and Dev): the user picks one in
+// Harness, and every provider operation receives the selection as `serviceEnvironment`.
+export const PLUGIN_SDK_HOST_CONTRACT_LEVEL = 3;
+export const PLUGIN_SDK_SERVICE_ENVIRONMENTS_CONTRACT_LEVEL = 3;
 
 const API_VERSION = "tritonai.plugin/v1";
 const MANIFEST_KEYS = new Set([
@@ -20,6 +23,7 @@ const MANIFEST_KEYS = new Set([
   "capabilities",
   "tools",
   "skills",
+  "serviceEnvironments",
 ]);
 const TOOL_KEYS = new Set([
   "name",
@@ -92,6 +96,7 @@ export interface PluginSdkManifest {
   readonly capabilities: IntegrationManifest["capabilities"];
   readonly tools: ReadonlyArray<PluginSdkTool>;
   readonly skills: IntegrationManifest["skills"];
+  readonly serviceEnvironments?: IntegrationManifest["serviceEnvironments"];
 }
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -412,13 +417,25 @@ export function validatePluginSdkManifest(value: unknown): {
       }) => tool,
     ),
     skills: value.skills,
+    ...(value.serviceEnvironments !== undefined
+      ? { serviceEnvironments: value.serviceEnvironments }
+      : {}),
   });
+  assert(
+    registryManifest.serviceEnvironments === undefined ||
+      (value.sdk.requiredHostContractLevel as number) >=
+        PLUGIN_SDK_SERVICE_ENVIRONMENTS_CONTRACT_LEVEL,
+    `Plugin SDK serviceEnvironments require host contract level ${PLUGIN_SDK_SERVICE_ENVIRONMENTS_CONTRACT_LEVEL}.`,
+  );
   const sdkManifest = {
     ...value,
     configurationSchema,
     capabilities: registryManifest.capabilities,
     tools,
     skills: registryManifest.skills,
+    ...(registryManifest.serviceEnvironments
+      ? { serviceEnvironments: registryManifest.serviceEnvironments }
+      : {}),
   } as unknown as PluginSdkManifest;
   assertJson(sdkManifest);
   return { sdkManifest, manifest: registryManifest };
