@@ -46,6 +46,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.integrationsInstall]: "integrations",
   [WS_METHODS.integrationsSetEnabled]: "integrations",
   [WS_METHODS.integrationsSetCapabilityEnabled]: "integrations",
+  [WS_METHODS.integrationsSetServiceEnvironment]: "integrations",
   [WS_METHODS.integrationsConnect]: "integrations",
   [WS_METHODS.integrationsPoll]: "integrations",
   [WS_METHODS.integrationsDisconnect]: "integrations",

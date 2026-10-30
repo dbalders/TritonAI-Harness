@@ -117,12 +117,19 @@ function artifact(
     readonly authorization?: boolean;
     readonly skillFrontmatter?: string;
     readonly extraPayloads?: ReadonlyArray<readonly [string, Uint8Array]>;
+    readonly requiredHostContractLevel?: number;
+    readonly serviceEnvironments?: JsonValue;
   } = {},
 ) {
+  const sdk = { apiMajor: 1, requiredHostContractLevel: options.requiredHostContractLevel ?? 1 };
   const artifactConfigurationSchema = options.configurationSchema ?? configurationSchema;
   const artifactInputSchema = options.inputSchema ?? inputSchema;
   const artifactManifest = {
     ...manifest,
+    sdk,
+    ...(options.serviceEnvironments !== undefined
+      ? { serviceEnvironments: options.serviceEnvironments }
+      : {}),
     configurationSchema: artifactConfigurationSchema,
     capabilities: manifest.capabilities.map((capability) => ({
       ...capability,
@@ -155,7 +162,7 @@ function artifact(
     artifactVersion: 1,
     format: "tritonai.plugin-artifact/v1",
     plugin: { id, version: "1.0.0" },
-    sdk: { apiMajor: 1, requiredHostContractLevel: 1 },
+    sdk,
     target: {
       architecture: "any",
       environments: ["electron-main", "server"],
@@ -611,6 +618,86 @@ export function createIntegrationProvider() {
     );
   });
 
+  it("admits declared service environments and forwards the selection to every operation", async () => {
+    const environments = [
+      { id: "production", displayName: "Prod", description: "records.example" },
+      { id: "development", displayName: "Dev", description: "records-dev.example" },
+    ];
+    const recordingSource = `
+export function createIntegrationProvider() {
+  return {
+    id: "${id}",
+    async status(context) {
+      return { state: "connected", accountLabel: context.serviceEnvironment ?? "none", grantedCapabilities: ["fixture.read"], message: null };
+    },
+    async invoke(_toolName, _input, context) {
+      return { serviceEnvironment: context.serviceEnvironment ?? null };
+    }
+  };
+}
+`;
+    const load = (files: ReturnType<typeof artifact>) =>
+      loadPluginSdkIntegration({
+        files,
+        secrets: secretStore(),
+        configuration: { prefix: "fixture" },
+        expected: { id, version: "1.0.0" },
+        hostNodeVersion: "24.13.1",
+      });
+    const loaded = await load(
+      artifact(recordingSource, "# Fixture reader\n", {
+        requiredHostContractLevel: 3,
+        serviceEnvironments: environments,
+      }),
+    );
+    expect(loaded.manifest.serviceEnvironments).toEqual(environments);
+    const provider = loaded.provider!;
+    const signal = new AbortController().signal;
+    await expect(provider.status({ signal, serviceEnvironment: "development" })).resolves.toEqual(
+      expect.objectContaining({ accountLabel: "development" }),
+    );
+    await expect(provider.status({ signal })).resolves.toEqual(
+      expect.objectContaining({ accountLabel: "none" }),
+    );
+    await expect(
+      provider.invoke(
+        "fixture.records.list",
+        { topic: "alpha" },
+        { signal, serviceEnvironment: "production" },
+      ),
+    ).resolves.toEqual({ serviceEnvironment: "production" });
+
+    // Older contract levels cannot declare environments, and newer levels than this host fail closed.
+    await expect(
+      load(
+        artifact(recordingSource, "# Fixture reader\n", {
+          requiredHostContractLevel: 2,
+          serviceEnvironments: environments,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    await expect(
+      load(artifact(recordingSource, "# Fixture reader\n", { requiredHostContractLevel: 4 })),
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    for (const invalid of [
+      [environments[0]],
+      [environments[0], { ...environments[0] }],
+      [environments[0], { ...environments[1], id: "Dev" }],
+      [environments[0], { ...environments[1], extra: true }],
+      [environments[0], { ...environments[1], displayName: " Dev" }],
+      [environments[0], { ...environments[1], description: "" }],
+    ]) {
+      await expect(
+        load(
+          artifact(recordingSource, "# Fixture reader\n", {
+            requiredHostContractLevel: 3,
+            serviceEnvironments: invalid as JsonValue,
+          }),
+        ),
+      ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    }
+  });
+
   it("requires the manifest's exact skill inventory and frontmatter", async () => {
     const load = (files: ReturnType<typeof artifact>) =>
       loadPluginSdkIntegration({
@@ -740,6 +827,40 @@ export function createIntegrationProvider() {
       /JSON cycle/u,
     );
     await expect(provider.close!()).rejects.toThrow(/must be undefined/u);
+  });
+
+  it("marks plugin failures that prove nothing changed as unchanged", async () => {
+    const source = `
+export function createIntegrationProvider() {
+  return {
+    id: "${id}",
+    async status() { return { state: "connected", accountLabel: null, grantedCapabilities: ["fixture.read"], message: null }; },
+    async invoke(_toolName, input) {
+      if (input.topic === "alpha") {
+        throw { _tag: "PluginFailure", code: "refused", message: "Refused.", retryable: false, details: { committed: false } };
+      }
+      throw { _tag: "ExternalCommitOutcomeUnknown", code: "external_commit_outcome_unknown", message: "Unclear.", retryable: false, details: { committed: false } };
+    }
+  };
+}
+`;
+    const loaded = await loadPluginSdkIntegration({
+      files: artifact(source),
+      secrets: secretStore(),
+      configuration: { prefix: "fixture" },
+      expected: { id, version: "1.0.0" },
+      hostNodeVersion: "24.13.1",
+    });
+    const provider = loaded.provider;
+    if (!provider) throw new Error("Expected an admitted provider.");
+    const refused = await provider
+      .invoke("fixture.records.list", { topic: "alpha" })
+      .catch((error: unknown) => error);
+    expect(refused).toMatchObject({ _tag: "IntegrationProviderPublicError", unchanged: true });
+    const unclear = await provider
+      .invoke("fixture.records.list", { topic: "beta" })
+      .catch((error: unknown) => error);
+    expect(unclear).toMatchObject({ _tag: "IntegrationProviderPublicError", unchanged: false });
   });
 
   it("isolates module state by the complete admitted artifact", async () => {
