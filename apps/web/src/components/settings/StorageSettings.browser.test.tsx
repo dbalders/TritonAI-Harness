@@ -1,10 +1,9 @@
-import { RegistryProvider } from "@effect/atom-react";
-import { StorageSettingsPanel } from "./StorageSettings";
 import { act, render } from "../../../test/render";
-
+import { RegistryProvider } from "@effect/atom-react";
 import { DEFAULT_SERVER_SETTINGS, type StorageCleanupReport } from "@t3tools/contracts";
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
+import { StorageCleanupSections } from "./StorageSettings";
 
 const state = vi.hoisted(() => ({
   settings: {} as typeof DEFAULT_SERVER_SETTINGS,
@@ -66,8 +65,6 @@ vi.mock(import("./useScopedSettings"), async (original) => ({
   useUpdateScopedSettings: () => vi.fn(),
   useClearScopedSettings: () => vi.fn(),
 }));
-// The real page container needs a router and the real row reads write permission and
-// overrides from live environment state; this suite is about the cleanup panel.
 vi.mock(import("./settingsLayout"), async (original) => ({
   ...(await original()),
   SettingsPageContainer: (({ children }: { children: ReactNode }) => children) as never,
@@ -107,7 +104,7 @@ function setup() {
 
 const panel = () => (
   <RegistryProvider>
-    <StorageSettingsPanel />
+    <StorageCleanupSections />
   </RegistryProvider>
 );
 const deleteButton = (container: HTMLElement) =>

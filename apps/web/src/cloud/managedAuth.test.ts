@@ -1,6 +1,7 @@
 import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import * as Effect from "effect/Effect";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   activateManagedRelayAuthentication,
@@ -8,7 +9,7 @@ import {
 } from "./managedAuth";
 
 vi.mock("@clerk/react", () => ({
-  useAuth: vi.fn(),
+  useClerk: vi.fn(),
 }));
 
 vi.mock("../lib/runtime", () => ({

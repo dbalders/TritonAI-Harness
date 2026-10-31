@@ -1,4 +1,5 @@
 import type { SearchMiddleware } from "@tanstack/react-router";
+
 import { validateSettingsScopeSearch, type SettingsScopeSearch } from "./settingsScope";
 
 export function validateSettingsRouteSearch(raw: Record<string, unknown>) {

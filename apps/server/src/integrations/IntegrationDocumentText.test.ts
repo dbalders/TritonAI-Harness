@@ -18,7 +18,7 @@ vi.mock("node:child_process", { spy: true });
 const serverEntry = NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url));
 const realWorker: DocumentTextWorkerCommand = {
   command: process.execPath,
-  args: [serverEntry, "__document-text"],
+  args: [serverEntry, "__integration-document-text"],
 };
 const scriptWorker = (script: string): DocumentTextWorkerCommand => ({
   command: process.execPath,
@@ -27,7 +27,7 @@ const scriptWorker = (script: string): DocumentTextWorkerCommand => ({
 const signal = () => new AbortController().signal;
 describe("isolated document text extraction", () => {
   // regression: #417 fix(server): bound attachment text extraction and browser navigation approval
-  it("extracts PDF and DOCX text through the server's own __document-text process", async () => {
+  it("extracts PDF and DOCX text through the server's own __integration-document-text process", async () => {
     const extract = makeDocumentTextExtractor({ resolveCommand: () => realWorker });
     await expect(
       extract({ format: "pdf", bytes: makePdf(["Synthetic canary 9X2-PDF"]) }, signal()),
@@ -84,7 +84,7 @@ describe("isolated document text extraction", () => {
     const run = (runtimeArgs: ReadonlyArray<string>, heapMb: string) =>
       NodeChildProcess.spawnSync(
         process.execPath,
-        [...runtimeArgs, serverEntry, "__document-text", "docx", "100", heapMb],
+        [...runtimeArgs, serverEntry, "__integration-document-text", "docx", "100", heapMb],
         { input: makeDocx(["Synthetic canary 9X2-DOCX"]), encoding: "utf8", env: {} },
       ).stdout;
     expect(JSON.parse(run([], "96"))).toMatchObject({ status: "failed", reason: "unavailable" });

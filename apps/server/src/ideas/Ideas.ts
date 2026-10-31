@@ -1,23 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off - Deterministic synchronous idea identity uses a content digest.
 // @effect-diagnostics globalDate:off - limits and labels use the host-local day.
 /**
- * Ideas - suggestion cards on the Ideas page: things TritonAI could do next
- * for the user, from their own threads, memory notes, and project files, and
- * from plugins, catalog skills, and a starter library.
- *
- * Ideas are generated in batches by the text generation model, checked against
- * the context it was shown, and stored with a key naming what each is about.
- * Feedback on a key decides whether it comes back: dismissed ideas return
- * after two weeks, rejected and used ones never do. When the model cannot help
- * (no context, failure, or the daily limit), ready-made starter ideas fill the
- * batch, so asking for more always adds something while any are left.
- *
- * Every idea is ready to send as written: one that leaves a blank for the user
- * is never shown. No more than two visible ideas share a project or tool, and
- * generated ideas go stale after a few days, since the work they describe moves on.
- *
- * Accepting an idea opens a draft on the client. The idea stays listed until a
- * message from it is sent, which is detected here from the thread messages.
+ * Generate grounded, ready-to-send ideas; fall back to remaining starters on failure or limits.
+ * Dismissed keys return after two weeks; rejected and used keys never return.
+ * Limit each source to two visible ideas and expire stale generated cards.
+ * Opening creates a draft; hide the card only after a user message is sent.
  */
 import * as NodeCrypto from "node:crypto";
 import {
@@ -48,6 +35,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { listEnabledIntegrations } from "../integrations/IntegrationRegistry.ts";
@@ -79,6 +67,7 @@ import {
   sectionWeights,
   selectByMix,
 } from "./ideaRules.ts";
+import { FEATURE_IDEAS, featureCandidate, type FeatureIdea, featureKey } from "./featureIdeas.ts";
 import { availableStarters, IDEA_KINDS, STARTER_IDEAS } from "./starterIdeas.ts";
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -104,6 +93,8 @@ const VIEW_WINDOW_MS = 2 * DAY_MS;
 /** A page view this long after the previous one counts as a new visit in analytics. */
 const VISIT_GAP_MS = 30 * 60_000;
 const REFRESH_AFTER_MS = 4 * 60 * 60_000;
+/** How often visible feature cards check whether their feature has been tried since. */
+const FEATURE_CHECK_MS = 60_000;
 const DAILY_REFRESH_MS = DAY_MS;
 const DAILY_MODEL_CALLS = 20;
 const CHECK_INTERVAL = Duration.hours(1);
@@ -140,7 +131,16 @@ const SKIPPED_DIRECTORIES = new Set([
   "coverage",
 ]);
 
-type IdeaStatus = "active" | "opened" | "snoozed" | "dismissed" | "rejected" | "sent" | "expired";
+/** `tried` is a feature card whose feature the user has used, so it never returns. */
+type IdeaStatus =
+  | "active"
+  | "opened"
+  | "snoozed"
+  | "dismissed"
+  | "rejected"
+  | "sent"
+  | "expired"
+  | "tried";
 
 const IdeaContent = Schema.Struct({
   icon: Schema.String,
@@ -197,13 +197,22 @@ function isSection(value: string): value is IdeaSection {
   return IDEA_SECTIONS.some((section) => section === value);
 }
 
-const STARTER_KEYS = new Set(STARTER_IDEAS.map((starter) => `starter:${starter.id}`));
+const STARTER_TITLES = new Map<string, string>(
+  STARTER_IDEAS.map((starter) => [`starter:${starter.id}`, starter.title] as const),
+);
+const STARTER_KEYS = new Set(STARTER_TITLES.keys());
 /** Raise when the starter library is replaced, so pages that showed the old one are topped up once. */
 const STARTER_LIBRARY_VERSION = "2";
 
-/** Ideas that must not stay on the page: a blank to fill in, or a starter no longer offered. */
+const FEATURES_BY_KEY = new Map(FEATURE_IDEAS.map((feature) => [featureKey(feature), feature]));
+
+/**
+ * Ideas that must not stay on the page: a blank to fill in, or a starter or
+ * feature no longer offered.
+ */
 function isOutdated(row: IdeaRow, content: IdeaContent): boolean {
   if (row.ideaKey.startsWith("starter:") && !STARTER_KEYS.has(row.ideaKey)) return true;
+  if (row.section === "feature" && !FEATURES_BY_KEY.has(row.ideaKey)) return true;
   return [content.title, content.body, content.action.prompt].some(needsUserInput);
 }
 
@@ -234,14 +243,18 @@ function draftThreadIds(row: IdeaRow): ReadonlyArray<string> {
 function toIdea(row: IdeaRow): Idea | null {
   const content = decodeContent(row.contentJson);
   if (Option.isNone(content) || !isSection(row.section)) return null;
+  // A saved feature card shows the catalog's current wording and prompt.
+  const feature = FEATURES_BY_KEY.get(row.ideaKey);
+  const shown = feature ? featureCandidate(feature) : content.value;
   return {
     id: row.ideaId,
     section: row.section,
-    icon: content.value.icon,
-    title: content.value.title,
-    body: content.value.body,
-    sources: content.value.sources,
-    action: content.value.action,
+    icon: shown.icon,
+    // A saved starter card shows the library's current wording.
+    title: STARTER_TITLES.get(row.ideaKey) ?? shown.title,
+    body: shown.body,
+    sources: shown.sources,
+    action: shown.action,
     createdAt: row.createdAt,
     openedAt: row.openedAt,
     draftThreadIds: draftThreadIds(row).map((threadId) => ThreadId.make(threadId)),
@@ -265,7 +278,9 @@ const ideaColumns = (sql: SqlClient.SqlClient) => sql`
   hidden_at AS "hiddenAt"
 `;
 
-/** @public Service construction is part of the canonical Effect module API. */
+/**
+ * @public
+ */
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const fs = yield* FileSystem.FileSystem;
@@ -323,7 +338,7 @@ export const make = Effect.gen(function* () {
     `.pipe(Effect.andThen(track("ideas.feedback", { kind, section: row.section })));
 
   /** Retires an idea the user has not acted on since it was read, leaving any newer press alone. */
-  const retire = (row: IdeaRow, next: "sent" | "dismissed" | "expired", nowIso: string) =>
+  const retire = (row: IdeaRow, next: "sent" | "dismissed" | "expired" | "tried", nowIso: string) =>
     sql`
       UPDATE ideas SET status = ${next}, previous_status = NULL, hidden_at = ${nowIso}, updated_at = ${nowIso}
       WHERE idea_id = ${row.ideaId} AND status = ${row.status} AND updated_at = ${row.updatedAt}
@@ -337,13 +352,11 @@ export const make = Effect.gen(function* () {
     );
 
   /**
-   * Whether a message was sent from an opened idea's draft, without trusting
-   * message times, which can come from a client with a skewed clock:
-   * - a draft thread recorded for the idea counts once it has any user message;
-   * - an existing thread counts once it has a user message it didn't have when opened.
-   * Without either, a message after the open containing the prompt's fixed text counts.
+   * Detect sends by message identity rather than client clocks: any message in a new
+   * draft thread, or an unseen user message in an existing thread.
+   * Without either record, fall back to prompt text in a message after opening.
    */
-  const wasSent = (row: IdeaRow, content: IdeaContent, openedAt: string) => {
+  const wasSent = Effect.fn("wasSent")((row: IdeaRow, content: IdeaContent, openedAt: string) => {
     if (content.action.kind === "resume-thread") {
       if (row.openedMessageIdsJson !== null) {
         return sql<{ readonly found: number }>`
@@ -381,7 +394,7 @@ export const make = Effect.gen(function* () {
         WHERE role = 'user' AND created_at > ${openedAt} AND instr(text, ${snippet}) > 0
       ) AS "found"
     `.pipe(Effect.map(([found]) => Boolean(found?.found)));
-  };
+  });
 
   const threadIsGone = (threadId: string) =>
     sql<{ readonly gone: number }>`
@@ -426,13 +439,16 @@ export const make = Effect.gen(function* () {
       // Both clocks restart when the card is woken from a snooze or restored.
       const since = Date.parse(row.updatedAt);
       if (row.status === "opened" && row.openedAt !== null) {
-        if (nowMs - Math.max(Date.parse(row.openedAt), since) > OPENED_TTL_MS) {
-          yield* retire(row, "dismissed", nowIso);
-        }
+        // A feature card never comes back once retired, so an unsent draft keeps it open.
+        const dropped =
+          row.section !== "feature" &&
+          nowMs - Math.max(Date.parse(row.openedAt), since) > OPENED_TTL_MS;
+        if (dropped) yield* retire(row, "dismissed", nowIso);
         continue;
       }
       // Any generated idea draws on the user's work or tools as they were, whatever its section.
-      const stale = row.section !== "starter" && nowMs - since > GENERATED_TTL_MS;
+      const stale =
+        row.section !== "starter" && row.section !== "feature" && nowMs - since > GENERATED_TTL_MS;
       if (stale || isOutdated(row, content.value)) {
         yield* retire(row, "expired", nowIso);
       }
@@ -458,7 +474,6 @@ export const make = Effect.gen(function* () {
     }
   });
 
-  /** Gives a first visit something to look at before anything has been generated. */
   /**
    * Gives a first visit something to look at before anything has been generated,
    * and once tops up a page whose old starter ideas were just retired.
@@ -469,7 +484,8 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if ((yield* readState("starter_library")) === STARTER_LIBRARY_VERSION) return;
         const [row] = yield* sql<{ readonly count: number }>`
-          SELECT COUNT(*) AS "count" FROM ideas WHERE status IN ('active', 'opened', 'snoozed')
+          SELECT COUNT(*) AS "count" FROM ideas
+          WHERE status IN ('active', 'opened', 'snoozed') AND section <> 'feature'
         `;
         const slots = TARGET_IDEAS - (row?.count ?? 0);
         if (slots > 0) {
@@ -484,10 +500,92 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * Adds a card for each feature that has none yet. One the user has already
+   * used is recorded as tried, so it is never offered or checked again.
+   */
+  const seedFeatures = (nowMs: number) =>
+    seedLock.withPermits(1)(
+      Effect.gen(function* () {
+        const existing = yield* sql<{ readonly ideaKey: string }>`
+          SELECT DISTINCT idea_key AS "ideaKey" FROM ideas WHERE section = 'feature'
+        `;
+        const seen = new Set(existing.map((row) => row.ideaKey));
+        const nowIso = toIso(nowMs);
+        for (const feature of FEATURE_IDEAS) {
+          if (seen.has(featureKey(feature))) continue;
+          if (yield* featureUsed(feature)) yield* insertTriedFeature(feature, nowIso);
+          else yield* insertIdeas([featureCandidate(feature)], nowIso);
+        }
+      }),
+    );
+
+  /** Records a feature as tried without ever offering its card. */
+  const insertTriedFeature = (feature: FeatureIdea, nowIso: string) => {
+    const idea = featureCandidate(feature);
+    const content = encodeContent({
+      icon: idea.icon,
+      title: idea.title,
+      body: idea.body,
+      sources: idea.sources,
+      action: idea.action,
+    });
+    return sql`
+      INSERT INTO ideas (idea_id, idea_key, section, content_json, status, created_at, updated_at, hidden_at)
+      VALUES (${NodeCrypto.randomUUID()}, ${idea.key}, ${idea.section}, ${content}, 'tried', ${nowIso}, ${nowIso}, ${nowIso})
+    `;
+  };
+
+  /**
+   * Whether the user has used a feature. Some checks read tool-call history, so
+   * they run on the reader connection, off the thread that serves requests.
+   */
+  const featureUsed = (feature: FeatureIdea) =>
+    feature.used(sql).pipe(
+      NodeSqliteClient.readOnly,
+      // A card is only a hint, so a failed check shows it rather than failing the page.
+      Effect.tapError((error) =>
+        Effect.logWarning("feature use check failed", { feature: feature.id, error }),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
+
+  /** Whether a feature card's own draft was sent, which also counts while it is snoozed. */
+  const featureDraftSent = (row: IdeaRow) => {
+    const content = decodeContent(row.contentJson);
+    return row.openedAt === null || Option.isNone(content)
+      ? Effect.succeed(false)
+      : wasSent(row, content.value, row.openedAt);
+  };
+
+  // When feature cards last checked for use. Kept in memory: a restart checks again.
+  const featuresCheckedAt = yield* Ref.make<number | null>(null);
+
+  /** Retires feature cards, snoozed ones included, whose draft was sent or whose feature has been used. */
+  const retireTriedFeatures = Effect.fn("ideas.retireTriedFeatures")(function* (nowMs: number) {
+    const checkedAt = yield* Ref.get(featuresCheckedAt);
+    if (checkedAt !== null && nowMs - checkedAt < FEATURE_CHECK_MS) return;
+    yield* Ref.set(featuresCheckedAt, nowMs);
+    const rows = yield* sql<IdeaRow>`
+      SELECT ${ideaColumns(sql)} FROM ideas
+      WHERE section = 'feature' AND status IN ('active', 'opened', 'snoozed')
+    `;
+    const nowIso = toIso(nowMs);
+    for (const row of rows) {
+      const feature = FEATURES_BY_KEY.get(row.ideaKey);
+      if (!feature) continue;
+      // A sent draft counts as the idea used, whether or not the agent got as far as the feature.
+      if (yield* featureDraftSent(row)) yield* retire(row, "sent", nowIso);
+      else if (yield* featureUsed(feature)) yield* retire(row, "tried", nowIso);
+    }
+  });
+
   const snapshot = Effect.gen(function* () {
     const nowMs = yield* Clock.currentTimeMillis;
     yield* tidy(nowMs);
     yield* seedStarters(nowMs);
+    yield* retireTriedFeatures(nowMs);
+    yield* seedFeatures(nowMs);
     const rows = yield* sql<IdeaRow>`
       SELECT ${ideaColumns(sql)} FROM ideas
       WHERE status IN ('active', 'opened', 'snoozed')
@@ -496,10 +594,15 @@ export const make = Effect.gen(function* () {
     const lastViewedAt = yield* readState("last_viewed_at");
     const ideas: Idea[] = [];
     const snoozed: Idea[] = [];
+    const features: Idea[] = [];
     let unseenCount = 0;
     for (const row of rows) {
       const idea = toIdea(row);
       if (!idea) continue;
+      if (idea.section === "feature") {
+        features.push(idea);
+        continue;
+      }
       if (row.status === "snoozed") {
         snoozed.push(idea);
         continue;
@@ -516,6 +619,7 @@ export const make = Effect.gen(function* () {
       snoozed: snoozed.toSorted((left, right) =>
         (left.snoozedUntil ?? "").localeCompare(right.snoozedUntil ?? ""),
       ),
+      features,
       unseenCount,
       state: current.state,
       message: current.message,
@@ -733,8 +837,9 @@ export const make = Effect.gen(function* () {
   }
 
   const loadExclusions = Effect.fn("ideas.loadExclusions")(function* (nowMs: number) {
+    // Feature cards are never generated, so they neither block nor steer what is.
     const rows = yield* sql<IdeaRow>`
-      SELECT ${ideaColumns(sql)} FROM ideas ORDER BY updated_at DESC
+      SELECT ${ideaColumns(sql)} FROM ideas WHERE section <> 'feature' ORDER BY updated_at DESC
     `;
     const permanent = new Set<string>();
     const permanentlyHidden = new Set<string>();
@@ -890,7 +995,8 @@ export const make = Effect.gen(function* () {
   // Snoozed ideas keep their place, so waking them can't push a subject past the limit.
   const loadVisibleSubjects = Effect.gen(function* () {
     const rows = yield* sql<IdeaRow>`
-      SELECT ${ideaColumns(sql)} FROM ideas WHERE status IN ('active', 'opened', 'snoozed')
+      SELECT ${ideaColumns(sql)} FROM ideas
+      WHERE status IN ('active', 'opened', 'snoozed') AND section <> 'feature'
     `;
     const subjects: string[] = [];
     for (const row of rows) {
@@ -953,14 +1059,16 @@ export const make = Effect.gen(function* () {
   /** Retires the oldest unopened ideas past the page's limit, starter ideas first. */
   const trim = Effect.fn("ideas.trim")(function* (nowIso: string) {
     const [row] = yield* sql<{ readonly count: number }>`
-      SELECT COUNT(*) AS "count" FROM ideas WHERE status IN ('active', 'opened')
+      SELECT COUNT(*) AS "count" FROM ideas
+      WHERE status IN ('active', 'opened') AND section <> 'feature'
     `;
     const excess = (row?.count ?? 0) - MAX_IDEAS;
     if (excess <= 0) return;
     yield* sql`
       UPDATE ideas SET status = 'expired', hidden_at = ${nowIso}, updated_at = ${nowIso}
       WHERE idea_id IN (
-        SELECT idea_id FROM ideas WHERE status = 'active' AND created_at < ${nowIso}
+        SELECT idea_id FROM ideas
+        WHERE status = 'active' AND section <> 'feature' AND created_at < ${nowIso}
         ORDER BY section = 'starter' DESC, created_at ASC
         LIMIT ${excess}
       )
@@ -1089,7 +1197,8 @@ export const make = Effect.gen(function* () {
     }
     yield* tidy(nowMs);
     const [row] = yield* sql<{ readonly count: number }>`
-      SELECT COUNT(*) AS "count" FROM ideas WHERE status IN ('active', 'opened')
+      SELECT COUNT(*) AS "count" FROM ideas
+      WHERE status IN ('active', 'opened') AND section <> 'feature'
     `;
     const visible = row?.count ?? 0;
     const changed = (yield* readState("activity_fingerprint")) !== (yield* activityFingerprint);
@@ -1300,11 +1409,7 @@ export const make = Effect.gen(function* () {
         }),
       )
       .pipe(
-        Effect.catch((error) =>
-          isIdeasError(error)
-            ? Effect.fail(error)
-            : toIdeasError("Couldn't save that change.")(error),
-        ),
+        Effect.catchIf((error) => !isIdeasError(error), toIdeasError("Couldn't save that change.")),
       );
 
   return Ideas.of({

@@ -35,11 +35,8 @@ function isManagedCodexAutoUpdateCandidate(provider: ServerProvider): boolean {
 }
 
 /**
- * Tries each TritonAI-managed Codex instance's engine update once per approved
- * version for the life of this process. Runs through the shared
- * `ProviderMaintenanceRunner`, so clients see the usual `updateState`, manual
- * updates of the same instance are rejected while it runs, and a failure leaves
- * the manual update action in place.
+ * Try each managed instance once per approved version per process. The shared
+ * maintenance runner serializes manual updates and preserves manual retry after failure.
  */
 export const makeManagedCodexAutoUpdater = Effect.fn("makeManagedCodexAutoUpdater")(function* () {
   const providerRegistry = yield* ProviderRegistry;
@@ -131,12 +128,8 @@ export const makeManagedCodexAutoUpdater = Effect.fn("makeManagedCodexAutoUpdate
 });
 
 /**
- * Watches provider snapshots after activation, so a standby server never swaps
- * the engine under the server it may replace. Updates run one at a time.
- *
- * Development servers never update automatically: they share the developer's
- * managed runtime with installed Harness apps, and a branch's approved version
- * would replace those apps' engine. The manual update action stays available.
+ * Start only after activation and update instances sequentially. Development servers
+ * never auto-update the managed runtime shared with installed apps; manual updates remain available.
  */
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {

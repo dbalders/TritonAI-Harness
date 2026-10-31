@@ -8,7 +8,6 @@ const {
   decideMobileBuild,
   lastSuccessfulMobileSource,
   mobileWorkspaceClosure,
-  resolveMobileBuild,
 } = require("./mobile-nightly-changes.cjs");
 
 function repository(t) {

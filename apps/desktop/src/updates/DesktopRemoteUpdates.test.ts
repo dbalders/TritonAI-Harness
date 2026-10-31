@@ -38,9 +38,7 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 import { makeHarness } from "./updatesTestHarness.ts";
 
-// The remote flow hops between the test runtime's fibers and the updater's
-// runPromise-driven event handlers, so settling needs real microtask turns,
-// not just fiber yields.
+// Updater runPromise handlers need real microtasks between test-runtime fiber yields.
 const settle = Effect.gen(function* () {
   for (let i = 0; i < 20; i += 1) {
     yield* Effect.yieldNow;
@@ -342,8 +340,6 @@ describe("DesktopRemoteUpdates", () => {
   });
 
   it.effect("retries a download refused while the check still holds the reservation", () => {
-    // electron-updater emits update-available from inside checkForUpdates,
-    // before the check action releases its reservation.
     const releaseCheck = Deferred.makeUnsafe<void>();
     const harness = makeHarness({ checkForUpdates: Deferred.await(releaseCheck) });
 
@@ -375,9 +371,6 @@ describe("DesktopRemoteUpdates", () => {
   });
 
   it.effect("waits for the download reservation before reporting prepared", () => {
-    // update-downloaded fires from inside downloadUpdate. If the flow
-    // reported "installing" right then, install would be refused for the
-    // held reservation after the irrevocable terminal already went out.
     const releaseDownload = Deferred.makeUnsafe<void>();
     const harness = makeHarness({ downloadUpdate: Deferred.await(releaseDownload) });
 

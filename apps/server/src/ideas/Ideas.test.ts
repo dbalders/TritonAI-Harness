@@ -30,6 +30,7 @@ import {
   TextGeneration,
 } from "../textGeneration/TextGeneration.ts";
 import * as Ideas from "./Ideas.ts";
+import { FEATURE_IDEAS } from "./featureIdeas.ts";
 import { availableStarters } from "./starterIdeas.ts";
 
 // Tests run without plugins, so only the general starter ideas are offered.
@@ -398,6 +399,31 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
       }),
   );
 
+  it.effect("shows a saved starter card with the library's current title", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const starter = GENERAL_STARTERS[0]!;
+        const content = yield* encodeIdeaContent({
+          icon: starter.icon,
+          title: "I can do the old wording",
+          body: starter.body,
+          sources: [],
+          action: { kind: "new-thread", projectId: null, prompt: starter.prompt },
+        });
+        yield* sql`
+          INSERT INTO ideas (idea_id, idea_key, section, content_json, status, created_at, updated_at)
+          VALUES ('saved-starter', ${`starter:${starter.id}`}, 'starter', ${content}, 'active', ${iso(NOW)}, ${iso(NOW)})
+        `;
+        const ideas = yield* Ideas.make;
+        const saved = (yield* ideas.list).ideas.find((idea) => idea.id === "saved-starter");
+        assert.strictEqual(saved?.title, starter.title);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("never brings back an idea whose draft was sent after its card was dismissed", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));
@@ -468,14 +494,14 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
       yield* Effect.gen(function* () {
         const ideas = yield* Ideas.make;
         const [idea] = (yield* ideas.list).ideas;
-        yield* Effect.all(
-          ["desktop-draft", "browser-draft", "desktop-draft"].map((draft) =>
+        yield* Effect.forEach(
+          ["desktop-draft", "browser-draft", "desktop-draft"],
+          (draft) =>
             ideas.feedback({
               ideaId: idea!.id,
               kind: "opened",
               draftThreadId: ThreadId.make(draft),
             }),
-          ),
           { concurrency: "unbounded" },
         );
         const recorded = (yield* ideas.list).ideas.find((entry) => entry.id === idea!.id);
@@ -573,5 +599,300 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
         assert.isUndefined((yield* ideas.list).ideas.find((entry) => entry.id === resume!.id));
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
+  );
+  const featureTitle = (id: string) => FEATURE_IDEAS.find((feature) => feature.id === id)!.title;
+  const featureTitles = (snapshot: IdeasSnapshot) =>
+    (snapshot.features ?? []).map((idea) => idea.title);
+
+  const useScheduledTasks = Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const at = iso(NOW - DAY);
+    yield* sql`
+      INSERT INTO scheduled_tasks (
+        task_id, title, prompt, enabled, schedule_json, project_id, workspace_strategy_json,
+        model_selection_json, runtime_mode, interaction_mode, created_by, creation_source,
+        created_at, updated_at, last_run_status, run_count
+      ) VALUES (
+        'task-1', 'Weekly recap', 'Recap my week.', 1, '{}', 'project-1', '{}',
+        '{}', 'full-access', 'default', 'user', 'web',
+        ${at}, ${at}, 'never', 0
+      )
+    `;
+  });
+
+  const useSubagents = Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_subagents (
+        subagent_id, thread_id, parent_node_id, provider, origin, status, updated_at, payload_json
+      ) VALUES ('subagent-1', 'thread-1', 'node-1', 'codex', 'app_owned', 'completed', ${iso(NOW)}, '{}')
+    `;
+  });
+
+  it.effect("lists untried features apart from other ideas, leaving starter seeding alone", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const ideas = yield* Ideas.make;
+        const snapshot = yield* ideas.list;
+        assert.deepStrictEqual(
+          featureTitles(snapshot),
+          FEATURE_IDEAS.map((feature) => feature.title),
+        );
+        assert.isTrue((snapshot.features ?? []).every((idea) => idea.section === "feature"));
+        assert.isFalse(snapshot.ideas.some((idea) => idea.section === "feature"));
+        // Feature cards don't take the starter ideas' places or count as unseen ideas.
+        assert.strictEqual(
+          snapshot.ideas.filter((idea) => idea.section === "starter").length,
+          Math.min(6, GENERAL_STARTERS.length),
+        );
+        assert.strictEqual(snapshot.unseenCount, snapshot.ideas.length);
+        // Listing again doesn't add a second card for any feature.
+        assert.strictEqual((yield* ideas.list).features?.length, FEATURE_IDEAS.length);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("still lists ideas when a feature check fails", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`DROP TABLE orchestration_v2_projection_subagents`;
+        const snapshot = yield* (yield* Ideas.make).list;
+        assert.isNotEmpty(snapshot.ideas);
+        assert.include(featureTitles(snapshot), featureTitle("subagents"));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("skips features already used and retires a card once its feature is tried", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        yield* seedWork;
+        yield* useScheduledTasks;
+        const ideas = yield* Ideas.make;
+        const first = yield* ideas.list;
+        assert.notInclude(featureTitles(first), featureTitle("scheduled-tasks"));
+        assert.include(featureTitles(first), featureTitle("subagents"));
+
+        // A snoozed card is retired too, and checks wait a minute between runs.
+        const subagents = first.features!.find((idea) => idea.title === featureTitle("subagents"))!;
+        yield* ideas.feedback({
+          ideaId: subagents.id,
+          kind: "snoozed",
+          snoozedUntil: iso(NOW + DAY),
+        });
+        yield* useSubagents;
+        assert.include(featureTitles(yield* ideas.list), featureTitle("subagents"));
+        yield* TestClock.adjust(61_000);
+        const after = yield* ideas.list;
+        assert.notInclude(featureTitles(after), featureTitle("subagents"));
+        assert.include(featureTitles(after), featureTitle("visual-replies"));
+
+        // Neither card comes back later.
+        yield* TestClock.adjust(30 * DAY);
+        const later = yield* ideas.list;
+        assert.notInclude(featureTitles(later), featureTitle("subagents"));
+        assert.notInclude(featureTitles(later), featureTitle("scheduled-tasks"));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("keeps feature cards past the idea limits until tried, sent, or dismissed", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        const first = yield* ideas.list;
+        const [toDismiss, toSend, toKeep] = first.features!;
+
+        // An opened draft that is never sent keeps its card, unlike a generated idea's.
+        yield* ideas.feedback({
+          ideaId: toKeep!.id,
+          kind: "opened",
+          draftThreadId: ThreadId.make("draft-keep"),
+        });
+        yield* ideas.feedback({
+          ideaId: toSend!.id,
+          kind: "opened",
+          draftThreadId: ThreadId.make("draft-send"),
+        });
+        yield* ideas.feedback({ ideaId: toDismiss!.id, kind: "dismissed" });
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-feature', 'draft-send', 'user', 'Sent the feature draft.', 0, ${iso(NOW)}, ${iso(NOW)})
+        `;
+        // Suggest more runs out of starter ideas; trimming the page must not touch feature cards.
+        for (let round = 0; round < 6; round++) {
+          yield* ideas.suggestMore;
+          yield* ideas.awaitIdle;
+        }
+        yield* TestClock.adjust(20 * DAY);
+        const later = yield* ideas.list;
+        const ids = (later.features ?? []).map((idea) => idea.id);
+        assert.notInclude(ids, toDismiss!.id);
+        assert.notInclude(ids, toSend!.id);
+        assert.include(ids, toKeep!.id);
+        assert.strictEqual(ids.length, FEATURE_IDEAS.length - 2);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+  const addToolCall = (id: string, payload: unknown) =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_turn_items (
+          turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json
+        ) VALUES (${id}, 'thread-1', 1, 'dynamic_tool', 'completed', ${iso(NOW)}, ${JSON.stringify(payload)})
+      `;
+    });
+
+  const chartOutput = (title: string) => ({
+    htmlRender: {
+      attachmentId:
+        "dede31cf-8914-43c7-995a-a66a1af52c79-a6f6bc404758b75c-22a8da64-d6ff-487c-a69d-1dea8da4e05c-html",
+      title,
+      height: 420,
+    },
+  });
+
+  it.effect("counts a chart only when the agent showed one, not text that names the tool", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        // Reading the renderer's source names it twice, but shows nothing.
+        yield* addToolCall("read-source", {
+          toolName: "Read",
+          input: { file_path: "apps/server/src/htmlRender/HtmlRender.ts" },
+          output: "export const htmlRender = ...; // calls html_render",
+        });
+        const ideas = yield* Ideas.make;
+        assert.include(featureTitles(yield* ideas.list), featureTitle("visual-replies"));
+
+        // Failed renders, more than one page of them, come before the one that worked.
+        for (let index = 0; index < 25; index++) {
+          yield* addToolCall(`failed-chart-${index}`, {
+            toolName: "t3-code.html_render",
+            output: { ...chartOutput("Broken chart"), isError: true },
+          });
+        }
+        yield* TestClock.adjust(61_000);
+        assert.include(featureTitles(yield* ideas.list), featureTitle("visual-replies"));
+
+        // Some providers store the call's status after its name.
+        yield* addToolCall("chart", {
+          toolName: "t3-code.html_render completed",
+          output: chartOutput("Tickets by month"),
+        });
+        yield* TestClock.adjust(61_000);
+        assert.notInclude(featureTitles(yield* ideas.list), featureTitle("visual-replies"));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("remembers scheduled tasks that were deleted, from the agent's call or a run", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        assert.include(featureTitles(yield* ideas.list), featureTitle("scheduled-tasks"));
+
+        // A call that failed, and one that only mentions a task id, are not a scheduled task.
+        yield* addToolCall("failed-schedule", {
+          toolName: "t3-code.schedule_task",
+          output: { isError: true, error: "Invalid schedule", scheduledTaskId: "scheduled-task:x" },
+        });
+        yield* addToolCall("list-tasks", {
+          toolName: "t3-code.list_scheduled_tasks",
+          output: { tasks: [{ scheduledTaskId: "scheduled-task:y" }] },
+        });
+        yield* TestClock.adjust(61_000);
+        assert.include(featureTitles(yield* ideas.list), featureTitle("scheduled-tasks"));
+
+        // An agent made a task, and it has since been deleted: no scheduled_tasks row is left.
+        yield* addToolCall("schedule", {
+          toolName: "mcp__t3-code__schedule_task",
+          output: { scheduledTaskId: "scheduled-task:z", title: "Weekly recap" },
+        });
+        yield* TestClock.adjust(61_000);
+        assert.notInclude(featureTitles(yield* ideas.list), featureTitle("scheduled-tasks"));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("counts a deleted scheduled task that ran at least once", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        assert.include(featureTitles(yield* ideas.list), featureTitle("scheduled-tasks"));
+        yield* seedV2Activity({
+          threadId: "scheduled-run",
+          projectId: "project-1",
+          title: "Weekly recap",
+          at: iso(NOW),
+          messages: [{ id: "run-message", role: "user", text: "Recap my week." }],
+        });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          UPDATE orchestration_v2_projection_messages
+          SET payload_json = json_set(payload_json, '$.scheduledTaskId', 'scheduled-task:run')
+          WHERE message_id = 'run-message'
+        `;
+        yield* TestClock.adjust(61_000);
+        assert.notInclude(featureTitles(yield* ideas.list), featureTitle("scheduled-tasks"));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+  it.effect(
+    "retires a snoozed feature card once its draft is sent, even if the feature never ran",
+    () =>
+      Effect.gen(function* () {
+        const { layer } = yield* makeHarness(() => Effect.succeed([]));
+        yield* TestClock.setTime(NOW);
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* seedWork;
+          const ideas = yield* Ideas.make;
+          const helpers = (yield* ideas.list).features!.find(
+            (idea) => idea.title === featureTitle("subagents"),
+          )!;
+          yield* ideas.feedback({
+            ideaId: helpers.id,
+            kind: "opened",
+            draftThreadId: ThreadId.make("draft-helpers"),
+          });
+          yield* ideas.feedback({
+            ideaId: helpers.id,
+            kind: "snoozed",
+            snoozedUntil: iso(NOW + 7 * DAY),
+          });
+          // The draft is sent, then stopped before the agent starts any helpers.
+          yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-helpers', 'draft-helpers', 'user', 'Compare three meeting setups.', 0, ${iso(NOW)}, ${iso(NOW)})
+        `;
+          yield* TestClock.adjust(61_000);
+          const after = yield* ideas.list;
+          assert.notInclude(featureTitles(after), featureTitle("subagents"));
+          const [row] = yield* sql<{ readonly status: string }>`
+          SELECT status FROM ideas WHERE idea_id = ${helpers.id}
+        `;
+          assert.strictEqual(row?.status, "sent");
+        }).pipe(Effect.scoped, Effect.provide(layer));
+      }),
   );
 });

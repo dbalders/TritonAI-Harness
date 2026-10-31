@@ -1,14 +1,24 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { GettingStartedChapterId, IntegrationSummary } from "@t3tools/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
+import { LifeBuoyIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { APP_BASE_NAME } from "../../branding";
+import { resolveDefaultProviderModelSelection } from "../../providerInstances";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import {
+  GETTING_STARTED_APPROVAL_PRACTICE,
   GETTING_STARTED_CHAPTERS,
   GETTING_STARTED_SAMPLE,
+  GETTING_STARTED_SAMPLE_EMAILS,
+  gettingStartedSkillRecipes,
+  type GettingStartedSkillRecipe,
 } from "../../onboarding/gettingStarted.logic";
 import {
   openGettingStarted,
+  prepareGettingStartedHelp,
   updateGettingStarted,
   useGettingStarted,
   useGettingStartedEnabled,
@@ -54,6 +64,60 @@ function usableMail(integration: IntegrationSummary | null): boolean {
   );
 }
 
+/** Starter recipes for the skills chapter, checked against connected plugins when it opens. */
+function useStarterRecipes(
+  environmentId: ReturnType<typeof usePrimaryEnvironmentId>,
+  active: boolean,
+): ReadonlyArray<GettingStartedSkillRecipe> {
+  const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const listIntegrations = useAtomCommand(serverEnvironment.listIntegrations, {
+    reportFailure: false,
+  });
+  const [plugins, setPlugins] = useState<{
+    readonly environmentId: string;
+    readonly skills: ReadonlyMap<string, ReadonlySet<string>>;
+  } | null>(null);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Refresh connected plugin skills for the active chapter and environment.
+  useEffect(() => {
+    if (!active || !environmentId) return;
+    let current = true;
+    void listIntegrations({ environmentId, input: {} }).then((result) => {
+      if (!current) return;
+      const integrations = result._tag === "Success" ? result.value.integrations : [];
+      setPlugins({
+        environmentId,
+        skills: new Map(
+          integrations.map((integration) => [
+            integration.id,
+            new Set(
+              integration.skills.filter((skill) => skill.available).map((skill) => skill.name),
+            ),
+          ]),
+        ),
+      });
+    });
+    return () => {
+      current = false;
+    };
+  }, [active, environmentId, listIntegrations]);
+
+  const config = environmentId ? serverConfigs.get(environmentId) : undefined;
+  if (!config || plugins?.environmentId !== environmentId) return [];
+  const selection = resolveDefaultProviderModelSelection(
+    config.providers,
+    config.settings.defaultModelSelection,
+  );
+  const provider = config.providers.find((item) => item.instanceId === selection?.instanceId);
+  return gettingStartedSkillRecipes(
+    new Set(
+      (provider?.skills ?? [])
+        .filter((skill) => skill.enabled && skill.userInvocable !== false)
+        .map((skill) => skill.name),
+    ),
+    plugins.skills,
+  );
+}
+
 /** The chapter tray never replaces a route or traps focus; exercises use ordinary app controls. */
 export function GettingStartedHost() {
   const state = useGettingStarted();
@@ -71,6 +135,14 @@ export function GettingStartedHost() {
     !state.paused &&
     state.environmentId === environmentId &&
     ["connect", "connected-work"].includes(state.activeChapter);
+  const starterRecipes = useStarterRecipes(
+    environmentId,
+    enabled &&
+      state.startedAt !== null &&
+      !state.paused &&
+      state.environmentId === environmentId &&
+      state.activeChapter === "skills",
+  );
   const connectionEnvironment = relevantConnection ? environmentId : null;
   const refreshKey = `${pathname}:${connectionRevision}`;
   const microsoft = useIntegrationConnection("microsoft-365", connectionEnvironment, refreshKey);
@@ -131,6 +203,12 @@ export function GettingStartedHost() {
     await navigate({ to: "/settings/plugins" });
     await updateGettingStarted({ type: "close", generation, fromChapter: chapter.id });
   };
+  const askHelp = async () => {
+    if (!environmentId) return;
+    prepareGettingStartedHelp(environmentId, chapter.id);
+    await navigate({ to: "/help" });
+    await updateGettingStarted({ type: "close", generation, fromChapter: chapter.id });
+  };
   const openIdeas = async () => {
     await navigate({ to: "/ideas" });
     await updateGettingStarted({ type: "close", generation, fromChapter: chapter.id });
@@ -147,8 +225,9 @@ export function GettingStartedHost() {
     content = (
       <>
         <p className="text-sm text-muted-foreground">
-          Try a conversation, connect your work, explore Ideas, and decide whether computer use is
-          useful for you. You can pause or skip a chapter anytime.
+          Try a conversation, see how approvals keep you in control, connect your work, use a skill,
+          explore Ideas, and decide whether computer use is useful for you. You can pause or skip a
+          chapter anytime, and Help is one click away if you get stuck.
         </p>
         <Button
           size="sm"
@@ -182,6 +261,26 @@ export function GettingStartedHost() {
         <p className="text-xs text-muted-foreground">
           The sample is sent to your configured AI service when you press Send. Your personal
           accounts are not needed.
+        </p>
+      </>
+    );
+  } else if (chapter.id === "approvals") {
+    title = "You decide what it changes";
+    description =
+      "Practice conversations are Supervised: it can read and answer, but it asks before changing anything. Try a request that saves a file and see the approval.";
+    target = "composer";
+    content = (
+      <>
+        <Button
+          size="sm"
+          disabled={pending}
+          onClick={() => void prepare("approvals", GETTING_STARTED_APPROVAL_PRACTICE)}
+        >
+          {pending ? "Preparing…" : "Prepare a practice request"}
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          It saves a small practice file in your TritonAI folder only if you approve. The mode menu
+          under the message box changes how much it does on its own.
         </p>
       </>
     );
@@ -250,6 +349,20 @@ export function GettingStartedHost() {
             Prepare my first email request
           </Button>
         ) : null}
+        {!mail && chapter.id === "connected-work" ? (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Not ready to connect? Practice the same task with made-up emails.
+            </p>
+            <Button
+              size="sm"
+              disabled={pending}
+              onClick={() => void prepare("connected-work", GETTING_STARTED_SAMPLE_EMAILS)}
+            >
+              {pending ? "Preparing…" : "Practice with sample emails"}
+            </Button>
+          </>
+        ) : null}
         {chapter.id === "connect" && done ? (
           <Button size="sm" onClick={next}>
             Try a connected task
@@ -279,6 +392,50 @@ export function GettingStartedHost() {
           }
         >
           Open a file conversation
+        </Button>
+      </>
+    );
+  } else if (chapter.id === "skills") {
+    title = "Skills are saved recipes for common work";
+    description =
+      "A skill gives the assistant step-by-step know-how for a kind of task. Start one by typing $ in the message box, or pick one below.";
+    target = "composer";
+    content = (
+      <>
+        {starterRecipes.length > 0 ? (
+          <div className="grid gap-2">
+            {starterRecipes.map((recipe) => (
+              <Button
+                key={recipe.id}
+                size="sm-multiline"
+                variant="outline"
+                className="justify-start text-left"
+                disabled={pending}
+                onClick={() => void prepare("skills", recipe.prompt)}
+              >
+                <span className="grid gap-0.5">
+                  <span className="font-medium">{recipe.title}</span>
+                  <span className="line-clamp-2 text-xs text-muted-foreground">
+                    {recipe.description}
+                  </span>
+                </span>
+              </Button>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No skills are turned on yet. Add one from the catalog, then come back here.
+          </p>
+        )}
+        <Button
+          size="sm"
+          variant="ghost-muted"
+          onClick={async () => {
+            await navigate({ to: "/settings/skills" });
+            await updateGettingStarted({ type: "close", generation, fromChapter: chapter.id });
+          }}
+        >
+          Browse all skills
         </Button>
       </>
     );
@@ -437,6 +594,10 @@ export function GettingStartedHost() {
                     Next chapter
                   </Button>
                 ) : null}
+                <Button size="sm" variant="ghost-muted" onClick={() => void askHelp()}>
+                  <LifeBuoyIcon />
+                  Stuck? Ask Help
+                </Button>
                 {chapter.id !== "ready" ? (
                   <Button
                     size="sm"

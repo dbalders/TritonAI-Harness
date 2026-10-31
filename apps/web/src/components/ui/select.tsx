@@ -3,7 +3,8 @@ import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
 import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
-import * as React from "react";
+import type * as React from "react";
+
 import { cn } from "~/lib/utils";
 
 const Select = SelectPrimitive.Root;
@@ -51,7 +52,7 @@ function SelectTrigger({
     >
       {children}
       <SelectPrimitive.Icon data-slot="select-icon">
-        {icon ?? <ChevronDownIcon className="-me-1 size-3 opacity-50" />}
+        {icon ?? <ChevronDownIcon className="-me-1 size-3.5 opacity-70" />}
       </SelectPrimitive.Icon>
     </SelectPrimitive.Trigger>
   );
@@ -76,7 +77,7 @@ function SelectButton({
       children: (
         <>
           <span className="min-w-0 flex-1 truncate text-left">{children}</span>
-          <ChevronDownIcon aria-hidden className="-me-1 size-3 shrink-0 opacity-50" />
+          <ChevronDownIcon aria-hidden className="-me-1 size-3.5 shrink-0 opacity-70" />
         </>
       ),
     },

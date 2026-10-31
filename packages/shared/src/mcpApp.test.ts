@@ -1,5 +1,6 @@
 import * as NodeVM from "node:vm";
 import { describe, expect, it } from "vite-plus/test";
+
 import {
   injectMcpAppCsp,
   injectMcpAppThemeBootstrap,

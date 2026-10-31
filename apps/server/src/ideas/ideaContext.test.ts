@@ -6,7 +6,7 @@ import { IDEA_KINDS } from "./starterIdeas.ts";
 
 const CONTEXT: IdeasContext = {
   today: "2026-10-13",
-  weights: { continue: 1, projects: 1, tools: 1, new: 1, starter: 1 },
+  weights: { continue: 1, projects: 1, tools: 1, new: 1, starter: 1, feature: 1 },
   projects: [{ id: "project-1", title: "Budget Office" }],
   threads: [
     {

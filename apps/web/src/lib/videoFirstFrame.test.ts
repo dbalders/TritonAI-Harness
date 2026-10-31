@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import { prepareVideoFirstFrame } from "./videoFirstFrame";
 
 type PreviewVideo = Parameters<typeof prepareVideoFirstFrame>[0];

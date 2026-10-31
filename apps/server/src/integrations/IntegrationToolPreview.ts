@@ -34,13 +34,9 @@ function describeValue(value: unknown): string | undefined {
 }
 
 /**
- * Describes a Harness tool call for an approval prompt: the tool name, then the call's actual
- * arguments, one bounded `name: value` line each, so the user approves what will run rather than a
- * bare tool name. Secret-looking arguments are hidden because the detail is persisted.
- *
- * A non-empty string `summary` argument is shown alone instead. Write tools that accept one must
- * reject any summary that does not exactly match the change they will make (see
- * docs/integrations.md); the Jira plugin's plan-based apply tool is one.
+ * Describe actual tool arguments in bounded lines; redact secret-looking values before persistence.
+ * A nonempty summary replaces arguments only when the write tool validates it exactly
+ * against its planned change (see docs/integrations.md).
  */
 export function describeToolCallForApproval(toolName: string, args: unknown): string {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return toolName;

@@ -183,7 +183,7 @@ function secretStore(names: string[] = []): ServerSecretStore.ServerSecretStore[
   return {
     get: (name) => {
       names.push(name);
-      return Effect.succeed(Option.some(new TextEncoder().encode("host-secret")));
+      return Effect.succeedSome(new TextEncoder().encode("host-secret"));
     },
     set: () => Effect.void,
     create: () => Effect.void,
@@ -631,7 +631,7 @@ describe("production built-in package verification", () => {
           }) => { readonly credential: () => Promise<string | null> };
         };
         const provider = new loaded.FixtureProvider({
-          get: () => Effect.succeed(Option.some(new TextEncoder().encode("host-secret"))),
+          get: () => Effect.succeedSome(new TextEncoder().encode("host-secret")),
         });
         await expect(provider.credential()).resolves.toBe("host-secret");
       });

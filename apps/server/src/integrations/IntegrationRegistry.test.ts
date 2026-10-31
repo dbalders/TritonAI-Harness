@@ -717,6 +717,316 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("routes every provider operation to the selected service environment", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-service-environments-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "environment-fixture",
+      name: "Environment Fixture",
+      provider: "environment-fixture-provider",
+      capabilities: [
+        {
+          id: "fixture.read",
+          displayName: "Read",
+          description: "Read fixture records.",
+          access: "authorization",
+        },
+        {
+          id: "fixture.write",
+          displayName: "Write",
+          description: "Write fixture records.",
+          access: "authorization",
+        },
+      ],
+      tools: [
+        {
+          name: "test.fixture.read",
+          displayName: "Read fixture",
+          description: "Read fixture.",
+          capabilities: ["fixture.read"],
+          effect: "read",
+        },
+        {
+          name: "test.fixture.write",
+          displayName: "Write fixture",
+          description: "Write fixture.",
+          capabilities: ["fixture.write"],
+          effect: "write",
+        },
+      ],
+      skills: [],
+      serviceEnvironments: [
+        { id: "production", displayName: "Prod", description: "records.example" },
+        { id: "development", displayName: "Dev", description: "records-dev.example" },
+      ],
+    };
+    // Each environment holds its own grant, as a plugin's separate sign-ins would.
+    const grants = new Map<string, ReadonlyArray<string>>([
+      ["production", ["fixture.read", "fixture.write"]],
+    ]);
+    const calls: Array<readonly [string, string | undefined]> = [];
+    let skipWriteAdmission = false;
+    const environmentOf = (context?: { readonly serviceEnvironment?: string }) => {
+      const environment = context?.serviceEnvironment;
+      if (environment !== "production" && environment !== "development") {
+        throw new Error(`Unexpected service environment ${String(environment)}.`);
+      }
+      return environment;
+    };
+    const implementation: IntegrationProvider = {
+      id: manifest.provider!,
+      tools: [
+        {
+          name: "test.fixture.read",
+          description: "Read fixture.",
+          input: EmptyIntegrationToolInput,
+          readOnly: true,
+          openWorld: false,
+        },
+        {
+          name: "test.fixture.write",
+          description: "Write fixture.",
+          input: EmptyIntegrationToolInput,
+          readOnly: false,
+          openWorld: false,
+        },
+      ],
+      status: async (context) => {
+        const environment = environmentOf(context);
+        calls.push(["status", environment]);
+        const granted = grants.get(environment);
+        return granted
+          ? {
+              state: "connected",
+              accountLabel: `${environment}.example`,
+              grantedCapabilities: granted,
+              message: null,
+            }
+          : { state: "not_connected", accountLabel: null, grantedCapabilities: [], message: null };
+      },
+      connect: async (_capabilities, context) => {
+        const environment = environmentOf(context);
+        calls.push(["connect", environment]);
+        grants.set(environment, ["fixture.read"]);
+        return { kind: "connected", flowId: `${environment}-flow`, message: "Connected." };
+      },
+      disconnect: async (context) => {
+        const environment = environmentOf(context);
+        calls.push(["disconnect", environment]);
+        grants.delete(environment);
+      },
+      invoke: async (toolName, _input, context) => {
+        const environment = environmentOf(context);
+        calls.push([toolName, environment]);
+        if (toolName === "test.fixture.write" && !skipWriteAdmission) {
+          await context?.beginCommit?.();
+        }
+        return { environment };
+      },
+    };
+    const otherState: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Test User",
+        grantedCapabilities: ["records.read", "events.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    const packages = () => [
+      packaged(manifest, implementation),
+      packaged(connectedManifest, provider("test-connected-provider", otherState)),
+    ];
+    const read = (target: RegistryRuntime) =>
+      target.invokeTool("test.fixture.read", {}, { signal: new AbortController().signal });
+    const summary = async (target: RegistryRuntime) =>
+      (await target.list()).integrations.find(({ id }) => id === manifest.id)!;
+    let registry: RegistryRuntime | null = new RegistryRuntime(root, packages());
+
+    try {
+      await registry.install(manifest.id);
+      await registry.install(connectedManifest.id);
+      expect(await summary(registry)).toMatchObject({
+        connectionState: "connected",
+        accountLabel: "production.example",
+        serviceEnvironments: [
+          { id: "production", displayName: "Prod", selected: true },
+          { id: "development", displayName: "Dev", selected: false },
+        ],
+      });
+      expect(
+        (await registry.list()).integrations.find(({ id }) => id === connectedManifest.id)
+          ?.serviceEnvironments,
+      ).toBeUndefined();
+      await expect(read(registry)).resolves.toMatchObject({ environment: "production" });
+      expect(registry.isToolAvailableSync("test.fixture.write")).toBe(true);
+
+      // Switching to an environment without a sign-in leaves the other one intact.
+      const switched = await registry.setServiceEnvironment(manifest.id, "development");
+      expect(switched.integrations.find(({ id }) => id === manifest.id)).toMatchObject({
+        connectionState: "not_connected",
+        accountLabel: null,
+        serviceEnvironments: [{ selected: false }, { selected: true }],
+      });
+      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
+      await expect(read(registry)).rejects.toMatchObject({ code: "not_connected" });
+      expect(grants.has("production")).toBe(true);
+
+      // Dev's own sign-in grants Read only; Write follows that grant while Dev is selected.
+      await expect(registry.connect(manifest.id)).resolves.toMatchObject({
+        flowId: "development-flow",
+      });
+      await expect(read(registry)).resolves.toMatchObject({ environment: "development" });
+      expect(registry.isToolAvailableSync("test.fixture.write")).toBe(false);
+
+      // Back on Prod, its earlier sign-in and its Write grant are both still there, including in
+      // the list the switch itself returns to Settings.
+      const switchedBack = await registry.setServiceEnvironment(manifest.id, "production");
+      expect(switchedBack.integrations.find(({ id }) => id === manifest.id)).toMatchObject({
+        connectionState: "connected",
+        capabilities: [
+          { id: "fixture.read", available: true },
+          { id: "fixture.write", available: true },
+        ],
+      });
+      expect(await summary(registry)).toMatchObject({
+        connectionState: "connected",
+        accountLabel: "production.example",
+        capabilities: [
+          { id: "fixture.read", enabled: true, available: true },
+          { id: "fixture.write", enabled: true, available: true },
+        ],
+      });
+      expect(registry.isToolAvailableSync("test.fixture.write")).toBe(true);
+      await expect(
+        registry.invokeTool(
+          "test.fixture.write",
+          {},
+          { signal: new AbortController().signal, writeApproved: true },
+        ),
+      ).resolves.toMatchObject({ environment: "production" });
+
+      // The selection survives a restart.
+      await registry.setServiceEnvironment(manifest.id, "development");
+      await registry.close();
+      registry = new RegistryRuntime(root, packages());
+      expect(await summary(registry)).toMatchObject({
+        connectionState: "connected",
+        accountLabel: "development.example",
+        serviceEnvironments: [{ selected: false }, { selected: true }],
+      });
+      expect(
+        JSON.parse(await NodeFSP.readFile(NodePath.join(root, "state.json"), "utf8")).installed[
+          manifest.id
+        ],
+      ).toMatchObject({ serviceEnvironment: "development" });
+
+      // A caller that still shows or approved Prod is refused instead of acting on Dev.
+      const prodSignal = (expectedServiceEnvironment: string) => ({
+        signal: new AbortController().signal,
+        expectedServiceEnvironment,
+      });
+      await expect(
+        registry.invokeTool("test.fixture.read", {}, prodSignal("production")),
+      ).rejects.toMatchObject({ code: "invalid_input", message: expect.stringContaining("Dev") });
+      await expect(
+        registry.disconnect(manifest.id, prodSignal("production")),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      await expect(
+        registry.connect(manifest.id, undefined, prodSignal("production")),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(grants.has("development")).toBe(true);
+      await expect(
+        registry.invokeTool("test.fixture.read", {}, prodSignal("development")),
+      ).resolves.toMatchObject({ environment: "development" });
+
+      // Disconnecting Dev signs out of Dev only.
+      await registry.disconnect(manifest.id, prodSignal("development"));
+      expect(grants.has("development")).toBe(false);
+      expect(grants.has("production")).toBe(true);
+
+      await expect(registry.setServiceEnvironment(manifest.id, "staging")).rejects.toMatchObject({
+        code: "not_found",
+      });
+      await expect(
+        registry.setServiceEnvironment(connectedManifest.id, "production"),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+
+      // A write a provider just allowed holds the environment until it can reach MCP.
+      registry.notePluginWriteAllowed("test.fixture.read");
+      registry.notePluginWriteAllowed("test.records.list");
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "production"),
+      ).resolves.toBeDefined();
+      registry.notePluginWriteAllowed("test.fixture.write");
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "development"),
+      ).rejects.toMatchObject({
+        code: "operation_failed",
+        message: expect.stringContaining("just approved"),
+      });
+      expect((await summary(registry)).serviceEnvironments?.[0]?.selected).toBe(true);
+      registry.notePluginWriteAllowed("test.fixture.write", 0);
+      // While a switch is saving and publishing, a provider may not allow a write at all.
+      const switching = registry.setServiceEnvironment(manifest.id, "development");
+      expect(registry.notePluginWriteAllowed("test.fixture.write")).toBe(false);
+      await switching;
+      expect((await summary(registry)).serviceEnvironments?.[1]?.selected).toBe(true);
+      // Back-to-back switches queue; the mark stays until the last one settles.
+      const first = registry.setServiceEnvironment(manifest.id, "production");
+      const second = registry.setServiceEnvironment(manifest.id, "development");
+      await first;
+      expect(registry.notePluginWriteAllowed("test.fixture.write")).toBe(false);
+      await second;
+      // The refused write did not start a hold, so switching back is not blocked by it.
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "production"),
+      ).resolves.toBeDefined();
+      expect(registry.notePluginWriteAllowed("test.fixture.write")).toBe(true);
+      registry.notePluginWriteAllowed("test.fixture.write", 0);
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "development"),
+      ).resolves.toBeDefined();
+      await registry.setServiceEnvironment(manifest.id, "production");
+
+      // A fault belongs to its environment: reset it before switching away.
+      await registry.setServiceEnvironment(manifest.id, "production");
+      skipWriteAdmission = true;
+      await expect(
+        registry.invokeTool(
+          "test.fixture.write",
+          {},
+          { signal: new AbortController().signal, writeApproved: true },
+        ),
+      ).rejects.toMatchObject({ code: "operation_failed" });
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "development"),
+      ).rejects.toMatchObject({
+        code: "operation_failed",
+        message: expect.stringContaining("Reset the Environment Fixture connection"),
+      });
+      expect((await summary(registry)).serviceEnvironments?.[0]?.selected).toBe(true);
+      await registry.disconnect(manifest.id);
+      expect(calls.filter(([operation]) => operation === "disconnect").at(-1)).toEqual([
+        "disconnect",
+        "production",
+      ]);
+      expect(grants.has("production")).toBe(false);
+
+      expect(
+        calls.every(
+          ([, environment]) => environment === "production" || environment === "development",
+        ),
+      ).toBe(true);
+    } finally {
+      await registry?.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("forwards write approval and preserves an admitted write receipt through cancellation", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-write-commit-admission-"),
@@ -1231,6 +1541,54 @@ describe("IntegrationRegistry lifecycle", () => {
       });
       expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
       expect(registry.isSkillAvailableSync("fixture-reader")).toBe(false);
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a staged package whose service environments differ from its manifest", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-staged-environments-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "staged-environments",
+      serviceEnvironments: [
+        { id: "production", displayName: "Prod", description: "records.example" },
+        { id: "development", displayName: "Dev", description: "records-dev.example" },
+      ],
+    };
+    const state: ProviderState = {
+      status: {
+        state: "not_connected",
+        accountLabel: null,
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    const integration = packaged(manifest, provider(manifest.provider!, state));
+    const drifted = {
+      ...integration,
+      bundledFiles: {
+        ...integration.bundledFiles,
+        ".tritonai-plugin/plugin.json": `${JSON.stringify({
+          ...manifest,
+          serviceEnvironments: [
+            manifest.serviceEnvironments![0],
+            { id: "staging", displayName: "Staging", description: "records-staging.example" },
+          ],
+        })}\n`,
+      },
+    };
+    const registry = new RegistryRuntime(root, [drifted]);
+    try {
+      await expect(registry.install(manifest.id)).rejects.toMatchObject({
+        code: "operation_failed",
+      });
+      expect((await registry.list()).integrations[0]?.installed).toBe(false);
     } finally {
       await registry.close();
       await NodeFSP.rm(root, { recursive: true, force: true });

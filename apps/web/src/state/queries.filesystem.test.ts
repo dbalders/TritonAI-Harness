@@ -1,6 +1,5 @@
 import { AuthFilesystemReadScope, EnvironmentId, type AuthSessionState } from "@t3tools/contracts";
 import { beforeEach, expect, it, vi } from "vite-plus/test";
-import { useProjectContentSearch } from "./queries";
 
 const state = vi.hoisted(() => ({
   session: null as Pick<AuthSessionState, "authenticated" | "scopes"> | null,
@@ -67,6 +66,8 @@ vi.mock("./query", () => ({
     refresh: vi.fn(),
   }),
 }));
+
+import { useProjectContentSearch } from "./queries";
 
 const target = {
   environmentId: EnvironmentId.make("test-environment"),

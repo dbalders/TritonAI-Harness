@@ -1,20 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off - resolves the mock ACP agent script path relative to this test file.
 import * as NodePath from "node:path";
-
 import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-
 import { describe, expect, it } from "@effect/vitest";
-
 import * as Effect from "effect/Effect";
-
 import * as FileSystem from "effect/FileSystem";
-
 import * as Schema from "effect/Schema";
-
 import { HttpClient, HttpClientResponse } from "effect/http";
-
 import { GrokSettings } from "@t3tools/provider-grok/settings";
 
 import {
@@ -23,13 +16,10 @@ import {
   grokSlashCommandsFromInitialize,
   parseGrokModelsCliOutput,
 } from "@t3tools/provider-grok/testing";
-
 import { execScriptSource, writeFakeCli } from "@t3tools/provider-testing/fakeCli";
-
 import { grokUsageResponseToLimits, readGrokAccount } from "@t3tools/provider-grok/testing";
 
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
-
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 
 const LOGGED_IN_MODELS_OUTPUT = [
@@ -314,7 +304,7 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
   );
 
   // An expired access token prints the logged-out banner, then the CLI refreshes it in the
-  // same run, so the next `grok models` reports the login (#14285).
+  // same run, so the next `grok models` reports the login.
   it.effect("reports authenticated when `grok models` logs in after refreshing a token", () =>
     Effect.gen(function* () {
       const snapshot = yield* Effect.scoped(
@@ -359,6 +349,27 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
       ]);
       expect(snapshot.message).toContain("ACP initialize failed");
       expect(snapshot.slashCommands.map((command) => command.name)).toEqual(["compact"]);
+    }),
+  );
+
+  it.effect("warns instead of reporting ready when no models are discovered", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const grokPath = yield* writeFakeGrokCli({
+            modelsOutput: "You are logged in with grok.com.\n",
+            acp: true,
+          });
+          return yield* checkGrokProviderStatus(
+            decodeGrokSettings({ enabled: true, binaryPath: grokPath }),
+            { ...process.env, XAI_API_KEY: "", T3_ACP_OMIT_INITIALIZE_MODEL_STATE: "1" },
+          );
+        }),
+      );
+
+      expect(snapshot.status).toBe("warning");
+      expect(snapshot.message).toContain("did not list any models");
+      expect(snapshot.models.map((model) => model.slug)).toEqual(["grok-build"]);
     }),
   );
 

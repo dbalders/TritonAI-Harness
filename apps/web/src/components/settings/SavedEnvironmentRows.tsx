@@ -48,6 +48,7 @@ import {
   supportsServerUpdateThreadContinuation,
 } from "~/versionSkew";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
+import { isElectron } from "~/env";
 import { useCloudLinkController } from "~/cloud/useCloudLinkController";
 import { environmentCatalog } from "~/connection/catalog";
 import { readEnvironmentScope } from "~/state/session";
@@ -65,6 +66,7 @@ import {
   ServerUpdateProgress,
 } from "../ServerUpdateAction";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
+import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 
 type SavedBackendListRowProps = {
   environment: EnvironmentPresentation;
@@ -476,6 +478,7 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
     operationError,
     reconcileCloudState,
   } = useCloudLinkController();
+  const { openAuthPrompt } = useT3ConnectAuthPrompt();
   const [isUpdating, setIsUpdating] = useState(false);
   const [isUpdatingPreference, setIsUpdatingPreference] = useState(false);
 
@@ -485,6 +488,21 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
       ? "Your session does not have permission to manage TritonAI Connect access."
       : null;
   const isBusy = isUpdating || isUpdatingPreference;
+  const switchDisabled =
+    !canManageRelay ||
+    !isSignedIn ||
+    primaryCloudLinkState.data === null ||
+    primaryCloudLinkState.isPending ||
+    isBusy;
+  // `isSignedIn` is undefined until Clerk loads. Signed out, one row shows a
+  // sign-in button instead of its switch; the onboarding dialog that opens after
+  // a fresh sign-in offers both linking and publishing.
+  const signedOut = isSignedIn === false;
+  const signInButton = (
+    <Button size="sm" variant="outline" onClick={openAuthPrompt}>
+      Sign in
+    </Button>
+  );
   const refreshLinkState = useEffectEvent(primaryCloudLinkState.refresh);
   // The server rechecks reachability when the tunnel's 30 s readiness poll changes.
   // Poll while mounted, so a failed read does not stop later ones.
@@ -579,7 +597,7 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
 
   return (
     <>
-      {window.desktopBridge ? (
+      {isElectron ? (
         <SettingsRow
           title={searchableSetting("t3-connect").title}
           description={
@@ -597,18 +615,16 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
           }
           status={operationError ?? primaryCloudLinkState.error ?? reachabilityStatus}
           control={
-            <CloudLinkSwitch
-              checked={managedTunnelActive}
-              disabled={
-                !canManageRelay ||
-                !isSignedIn ||
-                primaryCloudLinkState.data === null ||
-                primaryCloudLinkState.isPending ||
-                isBusy
-              }
-              disabledReason={disabledReason}
-              onCheckedChange={(enabled) => void updateManagedTunnel(enabled)}
-            />
+            signedOut ? (
+              signInButton
+            ) : (
+              <CloudLinkSwitch
+                checked={managedTunnelActive}
+                disabled={switchDisabled}
+                disabledReason={disabledReason}
+                onCheckedChange={(enabled) => void updateManagedTunnel(enabled)}
+              />
+            )
           }
         />
       ) : linkRevoked ? (
@@ -644,7 +660,7 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
             <CloudLinkSwitch
               ariaLabel="Hold webhook requests while this environment is offline"
               checked={holdWebhooksWhileOffline}
-              disabled={!canManageRelay || !isSignedIn || primaryCloudLinkState.isPending || isBusy}
+              disabled={switchDisabled}
               disabledReason={disabledReason}
               onCheckedChange={(enabled) => void updateHoldWebhooks(enabled)}
             />

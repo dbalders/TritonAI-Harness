@@ -5,12 +5,15 @@ import type {
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
 import {
   applyPreviewServerSnapshot,
   readThreadPreviewState,
   resetPreviewStateForTests,
 } from "~/previewStateStore";
+
 import { useClosedViewStore } from "~/closedViewStore";
+
 import { closePreviewSession } from "./closePreviewSession";
 
 const threadRef = {

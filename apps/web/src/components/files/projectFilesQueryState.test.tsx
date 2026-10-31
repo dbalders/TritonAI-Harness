@@ -10,9 +10,6 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
-
-import { useProjectEntriesQuery, useProjectFileQuery } from "./projectFilesQueryState";
 
 const authorizationMocks = vi.hoisted(() => ({
   sessionAtom: null as Atom.Atom<
@@ -100,6 +97,9 @@ vi.mock("~/state/queries", () => ({
   useProjectPathSearch: vi.fn(),
 }));
 
+import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
+import { useProjectEntriesQuery, useProjectFileQuery } from "./projectFilesQueryState";
+
 const environmentId = EnvironmentId.make("environment-1");
 
 function deferred<A>() {
@@ -155,6 +155,35 @@ describe("project query refresh", () => {
       expect(entries.data).toBeNull();
       expect(entries.error).toBe("This connection cannot read host files.");
       expect(entries.isPending).toBe(false);
+    } finally {
+      registry.dispose();
+      atomHooks.registry = null;
+    }
+  });
+
+  it("refetches a listing when the workspace mutation changes, not when it is first read", async () => {
+    let fetches = 0;
+    const listing = Atom.make(() => {
+      fetches += 1;
+      return AsyncResult.success({ entries: [], truncated: false });
+    }).pipe(Atom.keepAlive);
+    projectMocks.listEntries.mockReturnValue(listing);
+    const registry = AtomRegistry.make();
+    atomHooks.registry = registry;
+    const read = (mutationId: string | null) =>
+      useProjectEntriesQuery(environmentId, "/repo", "src", mutationId);
+
+    try {
+      read("mutation-1");
+      read("mutation-1");
+      expect(fetches).toBe(1);
+
+      read("mutation-2");
+      // The refetch runs after the render that read the new revision; a reader that is not
+      // subscribed sees it on its next read.
+      await Promise.resolve();
+      read("mutation-2");
+      expect(fetches).toBe(2);
     } finally {
       registry.dispose();
       atomHooks.registry = null;

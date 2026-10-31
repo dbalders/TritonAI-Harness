@@ -528,9 +528,11 @@ describe("chat evidence persistence", () => {
           runs: [{ runId: "R1", status: "completed", userMessageId: "M1", startedAt: AT }],
           run: null,
           timelineEntries,
+          answeredRunIds: new Set(["R1"]),
           isWorking: false,
           hasPendingApproval: false,
           hasPendingQuestion: false,
+          skills: [],
         }),
       );
       for (let render = 0; render < 4; render++) {

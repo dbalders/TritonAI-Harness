@@ -7,7 +7,6 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { assert, beforeEach, expect, it, vi } from "vite-plus/test";
-import { useOrchestrationCommand } from "./use-orchestration-command";
 
 const state = vi.hoisted(() => ({
   allowed: new Set<string>(),
@@ -18,6 +17,8 @@ const state = vi.hoisted(() => ({
 vi.mock("react", () => ({ useCallback: (callback: unknown) => callback }));
 vi.mock("./session", () => ({ readEnvironmentScope: state.readScope }));
 vi.mock("./use-atom-command", () => ({ useAtomCommand: () => state.run }));
+
+import { useOrchestrationCommand } from "./use-orchestration-command";
 
 const first = EnvironmentId.make("primary");
 const second = EnvironmentId.make("secondary");

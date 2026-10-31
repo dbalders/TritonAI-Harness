@@ -1,31 +1,19 @@
-import { type ChatAttachment } from "@t3tools/contracts";
-import { type ServerProvider } from "@t3tools/contracts";
-
+import * as DocumentText from "../provider/DocumentText.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
-
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
-
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
-
 import * as TerminalManager from "../terminal/Manager.ts";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
-
 import * as FileSystem from "effect/FileSystem";
-
 import * as ServerConfig from "../config.ts";
-
 import { createPendingAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
-
 import * as ThreadMessageIntake from "./ThreadMessageIntake.ts";
-
 import { assert, it, vi } from "@effect/vitest";
-
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-
 import {
   ChatAttachmentId,
   ComposerContextId,
+  type ChatAttachment,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
   GitCommandError,
@@ -35,94 +23,54 @@ import {
   ProviderInstanceId,
   OrchestrationV2ThreadProjectionJson,
   ScheduledTaskId,
+  type ServerProvider,
   ThreadId,
 } from "@t3tools/contracts";
-
 import * as Cause from "effect/Cause";
-
 import * as Deferred from "effect/Deferred";
-
 import * as DateTime from "effect/DateTime";
-
 import * as Duration from "effect/Duration";
-
 import * as Effect from "effect/Effect";
-
 import * as Exit from "effect/Exit";
-
 import * as Layer from "effect/Layer";
-
 import * as Option from "effect/Option";
-
 import * as Ref from "effect/Ref";
-
 import * as Result from "effect/Result";
-
 import * as Stream from "effect/Stream";
-
 import * as Schema from "effect/Schema";
-
 import * as SqlClient from "effect/sql/SqlClient";
-
 import * as TestClock from "effect/testing/TestClock";
-
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
-
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
-
 import * as ProjectStore from "./ProjectStore.ts";
-
 import * as ProjectService from "../project/ProjectService.ts";
-
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
-
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
-
 import * as ProviderRegistryMock from "../provider/testUtils/providerRegistryMock.ts";
-
 import * as ServerSettings from "../serverSettings.ts";
-
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
-
 import * as SecretRequests from "../secrets/SecretRequests.ts";
-
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
-
 import { ClaudeProviderCapabilitiesV2 } from "./Adapters/ClaudeAdapterV2.ts";
-
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
-
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
-
 import * as EffectOutbox from "./EffectOutbox.ts";
-
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
-
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
-
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
-
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
-
 import * as ThreadManagement from "./ThreadManagementService.ts";
-
 import * as ThreadTitleRegeneration from "./ThreadTitleRegenerationService.ts";
-
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
-
-import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const projectId = ProjectId.make("project:launch-test");
-
 const otherProjectId = ProjectId.make("project:launch-other");
-
 const encodeThreadProjection = Schema.encodeEffect(OrchestrationV2ThreadProjectionJson);
-
 const modelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
   model: "gpt-5.1-codex",
 } as const;
-
 const project = {
   id: projectId,
   title: "Project",
@@ -156,7 +104,6 @@ const claudeModelSelection = {
   instanceId: ProviderInstanceId.make("claudeAgent"),
   model: "claude-opus-5-5",
 } as const;
-
 const claudeAdapter = {
   instanceId: claudeModelSelection.instanceId,
   driver: ProviderDriverKind.make("claudeAgent"),
@@ -239,7 +186,7 @@ function makeHarness(options: HarnessOptions = {}) {
               ? Option.some(otherProject)
               : Option.none(),
         ),
-      getByWorkspaceRoot: () => Effect.succeed(Option.some(project)),
+      getByWorkspaceRoot: () => Effect.succeedSome(project),
       snapshot: Effect.die("unused"),
       getShell: () => Effect.die("unused"),
       listShells: () => Effect.die("unused"),
@@ -270,7 +217,7 @@ function makeHarness(options: HarnessOptions = {}) {
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
         isScratchProject: () => Effect.succeed(false),
-        folderForThread: () => Effect.succeed(Option.none()),
+        folderForThread: () => Effect.succeedNone,
       }),
   );
   const layerLaunch = ThreadLaunch.layer.pipe(
@@ -733,7 +680,6 @@ it.effect("keeps native maintenance commands out of steering and restart message
           attachments: [],
           dispatchMode: { type: scenario.mode, targetRunId: targetRun.id },
         });
-        // A steer sent while a maintenance turn runs waits as a queued follow-up.
         if (scenario.name.startsWith("steer-")) {
           yield* dispatch;
           const queued = (yield* threads.getThreadProjection(launched.threadId)).runs[1];
@@ -1659,6 +1605,73 @@ it.effect("does not let a failing same-command caller strand a concurrent durabl
   }),
 );
 
+it.effect("reports one concurrent same-command launch as new and the rest as resumed", () =>
+  Effect.gen(function* () {
+    // Both launches read no receipt before either one claims the thread.
+    const arrived = yield* Ref.make(0);
+    const bothRead = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      managedFolders: Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        namedProjectsRoot: "/projects",
+        isScratchProject: () => Effect.succeed(false),
+        folderForThread: () =>
+          Ref.updateAndGet(arrived, (count) => count + 1).pipe(
+            Effect.tap((count) =>
+              count === 2 ? Deferred.succeed(bothRead, undefined) : Effect.void,
+            ),
+            Effect.andThen(Deferred.await(bothRead)),
+            Effect.as(Option.none()),
+          ),
+      }),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const input = launchInput({
+        command: "command:launch:concurrent-resumed",
+        thread: "thread:launch:concurrent-resumed",
+      });
+      const results = yield* Effect.all([launches.launch(input), launches.launch(input)], {
+        concurrency: "unbounded",
+      });
+      assert.deepEqual(results.map((result) => result.resumed).sort(), [false, true]);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect(
+  "does not report a retry as resumed when the earlier attempt only claimed the thread",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const launches = yield* ThreadLaunch.ThreadLaunchService;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const input = launchInput({
+          command: "command:launch:claimed-only",
+          thread: "thread:launch:claimed-only",
+          message: "Counted once",
+        });
+        yield* threads.dispatch({
+          type: "thread.create",
+          commandId: input.commandId,
+          threadId: input.threadId,
+          projectId: input.projectId,
+          title: input.title,
+          modelSelection: input.modelSelection,
+          runtimeMode: input.runtimeMode,
+          interactionMode: input.interactionMode,
+          branch: null,
+          worktreePath: null,
+          createdBy: input.createdBy,
+          creationSource: input.creationSource,
+        });
+        const retried = yield* launches.launch(input);
+        assert.isFalse(retried.resumed);
+        assert.isTrue((yield* launches.launch(input)).resumed);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+);
+
 it.effect("schedules an accepted preparing message exactly once across concurrent retries", () =>
   Effect.gen(function* () {
     const setupEntered = yield* Deferred.make<void>();
@@ -1769,7 +1782,7 @@ it.effect("creates a strong provider-thread mapping for an imported native sessi
 it.effect("shared intake preserves durable attachment bytes after a lost launch result", () => {
   const harness = makeHarness();
   const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "t3-message-intake-" }).pipe(
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   );
   return Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
@@ -1841,10 +1854,9 @@ it.effect("shared intake preserves durable attachment bytes after a lost launch 
     );
     assert.isDefined(stored);
     assert.notEqual(stored.attachments[0]?.id, attachment.id);
-    assert.equal(
-      (stored.context?.records[0] as { attachmentId: string }).attachmentId,
-      stored.attachments[0]?.id,
-    );
+    const record = stored.context?.records[0];
+    assert.isDefined(record);
+    assert.equal((record as { attachmentId: string }).attachmentId, stored.attachments[0]?.id);
     const userItem = accepted.turnItems.find(
       (item) => item.type === "user_message" && item.messageId === stored.id,
     );
@@ -2063,7 +2075,6 @@ it.effect("stops an in-flight branch rename when tracked setup is cancelled", ()
       yield* Deferred.await(setupEntered);
       yield* Deferred.await(branchNameStarted);
       assert.isTrue(yield* tracker.cancel(launched.threadId));
-      // Let a rename that survived the cancel finish, then check it never ran.
       yield* Deferred.succeed(allowBranchName, undefined);
       yield* Effect.raceFirst(
         Deferred.await(branchNameInterrupted),
@@ -2188,7 +2199,7 @@ it.effect.each([
 it.effect("replays an accepted send after the project disables the instance", () => {
   const harness = makeHarness();
   const layerFiles = ServerConfig.layerTest(process.cwd(), { prefix: "t3-send-retry-" }).pipe(
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   );
   return Effect.gen(function* () {
     const launches = yield* ThreadLaunch.ThreadLaunchService;

@@ -5,6 +5,7 @@ import {
 } from "@t3tools/client-runtime/connection";
 import { buildRemoteOpenUrl, EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+
 import { resolveRemoteOpenState } from "./remoteOpen";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -49,8 +50,7 @@ describe("resolveRemoteOpenState", () => {
   });
 
   it("keeps exec behavior for the desktop app's own primary even on a NAT URL", () => {
-    // wsl-only mode binds the primary to the WSL2 NAT address; it is still
-    // this machine because the desktop app manages its own primary backend.
+    // wsl-only binds the desktop-owned primary to its WSL2 NAT address.
     expect(
       resolveRemoteOpenState({
         target: primaryTarget("http://172.29.112.1:14369"),

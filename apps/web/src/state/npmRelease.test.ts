@@ -1,6 +1,7 @@
 import { AtomRegistry } from "effect/reactivity";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import { afterAll, afterEach, describe, expect, it, vi } from "vite-plus/test";
+
 import { npmReleasePublishedAtom } from "./npmRelease";
 
 const version = "0.0.46-nightly.20261012.3021";

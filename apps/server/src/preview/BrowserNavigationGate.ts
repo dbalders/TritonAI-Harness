@@ -5,16 +5,9 @@ import type * as Scope from "effect/Scope";
 import type { BrowserNavigationRequest } from "./BrowserNavigationApproval.ts";
 
 /**
- * Lets a provider adapter approve the MCP `preview_open` and `preview_navigate` calls its own
- * threads make, the same way it approves its direct browser tools.
- *
- * Codex reaches the browser through two routes: its direct (dynamic) tools, which the Codex
- * adapter approves, and the Harness MCP server, which Codex approves itself (in Auto, through its
- * automatic reviewer). The Codex adapter registers a gate here and the MCP browser handlers ask it
- * before loading a page, so both routes apply the same runtime mode, prompt and session grant.
- *
- * Providers that approve MCP calls before they reach the server (Claude, through canUseTool) or
- * that follow their own runtime's approvals register nothing, and their calls are unchanged.
+ * Apply the adapter’s navigation approval gate to MCP preview_open/preview_navigate
+ * as well as direct Codex tools, preserving runtime mode and session grants.
+ * Providers that approve before MCP dispatch register no gate.
  */
 export interface BrowserNavigationAdmissionRequest {
   readonly threadId: ThreadId;
@@ -66,7 +59,7 @@ export const admitBrowserNavigation = Effect.fn("admitBrowserNavigation")(functi
   const registered = gates.get(providerInstanceId);
   if (registered === undefined || registered.size === 0)
     return { admitted: true } as BrowserNavigationAdmission;
-  for (const gate of [...registered]) {
+  for (const gate of registered) {
     const decision = yield* gate(request);
     if (decision !== undefined) return decision;
   }

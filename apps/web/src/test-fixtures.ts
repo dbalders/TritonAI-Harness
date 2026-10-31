@@ -12,6 +12,7 @@ import {
   type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+
 import type { ChatMessage, Thread } from "./types";
 
 const DEFAULT_TIMESTAMP = "2026-01-01T00:00:00.000Z";
