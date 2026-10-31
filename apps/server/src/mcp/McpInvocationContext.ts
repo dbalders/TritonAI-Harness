@@ -28,6 +28,8 @@ export interface McpThreadCaller {
   readonly providerInstanceId: ProviderInstanceId;
   /** A delegated child task; its parent owns the work it hands back. */
   readonly subagent?: boolean;
+  /** This provider invokes plugins through its native dynamic-tool approval path. */
+  readonly integrationToolsViaDynamicTools?: boolean;
 }
 
 export interface McpClientCaller {

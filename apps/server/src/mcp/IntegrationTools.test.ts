@@ -11,12 +11,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
+import { HttpRouter } from "effect/http";
+import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import { EmptyIntegrationToolInput } from "../integrations/IntegrationTool.ts";
 import * as Integrations from "../integrations/IntegrationRegistry.ts";
 import {
   integrationToolsRegistrationLayer as registrationLayer,
   integrationToolsRegistrationLayerFor as registrationLayerFor,
   toolkitRegistration,
+  layerMcpTransport,
 } from "./McpHttpServer.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -451,3 +454,144 @@ it.effect.each([true, false])(
     ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
   },
 );
+
+// regression: #460 avoid eager MCP copies of Codex dynamic plugin tools
+it("keeps Codex plugin tools on their dynamic route while preserving core MCP and other clients", async () => {
+  const invokeTool = vi
+    .fn<Integrations.RegistryRuntime["invokeTool"]>()
+    .mockResolvedValue({ ok: true });
+  const registrySpy = vi
+    .spyOn(Integrations, "getIntegrationRegistry")
+    .mockReturnValue({ invokeTool } as unknown as Integrations.RegistryRuntime);
+  const base = invocation(new Set(["integrations.invoke"]));
+  const codexScope = {
+    ...base,
+    thread: { ...base.thread!, integrationToolsViaDynamicTools: true },
+  };
+  const claudeScope = {
+    ...base,
+    thread: { ...base.thread!, integrationToolsViaDynamicTools: false },
+  };
+  const scopes = new Map<string, McpInvocationContext.McpInvocationScope>([
+    ["codexdynamic", codexScope],
+    ["claudemcp", claudeScope],
+    ["defaultmcp", base],
+    [
+      "outsidemcp",
+      {
+        ...base,
+        thread: undefined,
+        client: { sessionId: "outside-fixture", label: "Outside fixture", access: "full-access" },
+      },
+    ],
+  ]);
+  const core = Toolkit.make(
+    Tool.make("core_fixture", {
+      description: "Core fixture.",
+      parameters: EmptyIntegrationToolInput,
+      success: Schema.Unknown,
+    }),
+  );
+  const coreLayer = toolkitRegistration(
+    core,
+    McpToolAccess.toLayer(core, {
+      core_fixture: McpToolAccess.reads(() => Effect.succeed({ core: true })),
+    }),
+  );
+  const app = HttpRouter.toWebHandler(
+    Layer.mergeAll(
+      coreLayer,
+      registrationLayerFor([fixtureTool, writeFixtureTool], () => true),
+    ).pipe(
+      Layer.provideMerge(layerMcpTransport),
+      Layer.provide(
+        Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+          resolve: (token) =>
+            Effect.succeed(
+              scopes.get(token) as McpInvocationContext.McpThreadInvocationScope | undefined,
+            ),
+        }),
+      ),
+      Layer.provide(liveThreadsLayer),
+    ),
+    { disableLogger: true },
+  );
+  const rpc = async (
+    token: string,
+    id: number,
+    method: string,
+    params: unknown,
+    sessionId?: string,
+  ) => {
+    const response = await app.handler(
+      new Request("http://fixture.invalid/mcp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          authorization: `Bearer ${token}`,
+          ...(sessionId
+            ? { "mcp-session-id": sessionId, "mcp-protocol-version": "2025-06-18" }
+            : {}),
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const payload = JSON.parse(
+      text.trim().startsWith("data:")
+        ? text
+            .split("\n")
+            .find((line) => line.startsWith("data:"))!
+            .slice(5)
+        : text,
+    );
+    return { payload, sessionId: response.headers.get("mcp-session-id")! };
+  };
+  try {
+    for (const token of scopes.keys()) {
+      const hidden = token === "codexdynamic";
+      const init = await rpc(token, 1, "initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "fixture", version: "1" },
+      });
+      const list = await rpc(token, 2, "tools/list", {}, init.sessionId);
+      expect(list.payload.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(
+        hidden
+          ? ["core_fixture"]
+          : ["core_fixture", fixtureTool.name, writeFixtureTool.name].sort(),
+      );
+      const coreResult = await rpc(
+        token,
+        3,
+        "tools/call",
+        { name: "core_fixture", arguments: {} },
+        init.sessionId,
+      );
+      expect(coreResult.payload.result.isError).not.toBe(true);
+      for (const tool of [fixtureTool, writeFixtureTool]) {
+        const before = invokeTool.mock.calls.length;
+        const call = await rpc(
+          token,
+          4,
+          "tools/call",
+          { name: tool.name, arguments: {} },
+          init.sessionId,
+        );
+        if (hidden) {
+          expect(call.payload.error).toMatchObject({ code: -32602 });
+          expect(call.payload.error.message).toContain("not found");
+          expect(invokeTool.mock.calls.length).toBe(before);
+        } else {
+          expect(call.payload.result.isError).toBe(false);
+          expect(invokeTool.mock.calls.length).toBe(before + 1);
+        }
+      }
+    }
+  } finally {
+    await app.dispose();
+    registrySpy.mockRestore();
+  }
+});

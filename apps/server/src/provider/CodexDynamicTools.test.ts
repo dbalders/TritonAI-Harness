@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
   dynamicToolApprovalPrompt,
+  gateDynamicToolCall,
   invokeAdmittedDynamicTool,
   planDynamicToolApproval,
 } from "./CodexDynamicTools.ts";
@@ -69,6 +70,39 @@ it("shows the change a plugin write will make in its approval prompt", () => {
     'microsoft365__mail_draft_reply\nmessageId: "m-1"\napiToken: [hidden]',
   );
 });
+
+it.effect("admits a deferred tool only in the namespace this session disclosed", () =>
+  Effect.gen(function* () {
+    const options = {
+      threadId,
+      dynamicTools: [
+        {
+          name: "n8n_search_workflows",
+          description: "Search workflows.",
+          inputSchema: { type: "object" },
+          namespace: "n8n",
+          deferLoading: true,
+        },
+        { name: "tritonai_commons_submit_skill", description: "Submit.", inputSchema: {} },
+      ],
+      dynamicToolAvailability: () => ({ available: true }) as const,
+      invokeDynamicTool: async () => "ok",
+    };
+    const gate = (tool: string, namespace?: string) =>
+      gateDynamicToolCall({ options, payload: { tool, ...(namespace ? { namespace } : {}) } });
+    assert.isTrue((yield* gate("n8n_search_workflows", "n8n")).allowed);
+    assert.isTrue((yield* gate("tritonai_commons_submit_skill")).allowed);
+    // Threads started before deferral call the same tool without a namespace.
+    assert.isTrue((yield* gate("n8n_search_workflows")).allowed);
+    for (const [tool, namespace] of [
+      ["n8n_search_workflows", "github"],
+      ["tritonai_commons_submit_skill", "n8n"],
+    ] as const) {
+      const result = yield* gate(tool, namespace);
+      assert.isFalse(result.allowed, `${namespace}/${tool}`);
+    }
+  }),
+);
 
 it("approves plugin writes per service environment and names it in the prompt", () => {
   const payload = { tool: "n8n__update_workflow", arguments: { workflowId: "wf-1" } };
