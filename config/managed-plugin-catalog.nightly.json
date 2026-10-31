@@ -3,8 +3,8 @@
   "kind": "tritonai-managed-plugin-catalog",
   "source": {
     "repository": "https://github.com/dbalders/TritonAI-Plugins.git",
-    "ref": "f124aeef89c6ec85b972dc8ea3935f23ed0deb99",
-    "commit": "f124aeef89c6ec85b972dc8ea3935f23ed0deb99"
+    "ref": "refs/tags/v0.1.18",
+    "commit": "e4fdc81be6b14c1d55292252c5c6ea382555578a"
   },
   "packages": [
     {
@@ -27,9 +27,9 @@
     },
     {
       "pluginId": "kuali-build",
-      "version": "1.1.0",
-      "digest": "a8d1bc87524ae7fd86175af4255c2d9dbc4d1398481cd434ba52dce57e11dfd4",
-      "manifestDigest": "038306455d102deb3d115a4d22566586c98c202b3c7344ea03e07994d3f6a098"
+      "version": "1.2.0",
+      "digest": "e5d87afc07077ef6a6a956094b3430d4ea2a200edc76c6a177ce1184e8aab83d",
+      "manifestDigest": "7173f58d44c8b5c76c68237e92c5262548fa5cc3f9ff216edf95497044cfdf55"
     },
     {
       "pluginId": "lucid",
@@ -45,9 +45,9 @@
     },
     {
       "pluginId": "n8n",
-      "version": "1.1.3",
-      "digest": "30630b8da095fd92258745c9315c7e9cf7b5933ef5c37a731321f1d45a376cab",
-      "manifestDigest": "d3356c4db8a32df557e84646a0fa26a8f5a2651637e63045e35165e239dbcb31"
+      "version": "1.2.0",
+      "digest": "767dc6ed455f3e847a679d32beaf2ddc3fa049334d88a8dd996790cf479f4c38",
+      "manifestDigest": "0590714605437ff3980b2f7ad85d421d7d9710a3e502aaf4572e4f1b4da29bdc"
     },
     {
       "pluginId": "tableau",
