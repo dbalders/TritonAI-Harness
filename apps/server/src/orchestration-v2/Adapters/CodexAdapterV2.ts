@@ -61,7 +61,11 @@ import {
   type RuntimeRequestId,
   type ThreadId,
 } from "@t3tools/contracts";
-import { makeTritonAiImageProxy } from "../../provider/Drivers/TritonAiImageProxy.ts";
+import {
+  makeTritonAiGatewayProxy,
+  TRITONAI_MAX_OUTPUT_TOKENS,
+} from "../../provider/Drivers/TritonAiGatewayProxy.ts";
+import { managedConfig } from "../../managedPolicy.ts";
 import {
   makeCodexImageContextAnalyzer,
   formatUntrustedImageContext,
@@ -1543,6 +1547,15 @@ function isSensitiveCodexProtocolKey(key: string): boolean {
   );
 }
 
+// Campus-hosted models stream until the context window is full when no output limit is sent.
+const tritonAiHostedModelIds = new Set(
+  managedConfig.models.catalog
+    .filter((model) => model.route === "on-prem")
+    .map((model) => model.id),
+);
+const tritonAiHostedOutputTokenLimit = (model: string): number | undefined =>
+  tritonAiHostedModelIds.has(model) ? TRITONAI_MAX_OUTPUT_TOKENS : undefined;
+
 export const layerAppServerClientFactory: Layer.Layer<
   CodexAppServerClientFactory,
   never,
@@ -1568,9 +1581,10 @@ export const layerAppServerClientFactory: Layer.Layer<
           ...codexAppServerEnvironment(input.environment),
           ...(input.settings.homePath ? { CODEX_HOME: input.settings.homePath } : {}),
         };
-        const imageProxyUrl = yield* makeTritonAiImageProxy(
+        const gatewayProxyUrl = yield* makeTritonAiGatewayProxy(
           resolveTritonAiCodexBaseUrl(environment),
           environment,
+          { outputTokenLimit: tritonAiHostedOutputTokenLimit },
         ).pipe(
           Effect.mapError(
             (cause) =>
@@ -1581,7 +1595,7 @@ export const layerAppServerClientFactory: Layer.Layer<
               }),
           ),
         );
-        const providerEnvironment = { ...environment, [UCSD_AI_BASE_URL_ENV]: imageProxyUrl };
+        const providerEnvironment = { ...environment, [UCSD_AI_BASE_URL_ENV]: gatewayProxyUrl };
         const noProxy = [environment.no_proxy || environment.NO_PROXY, "127.0.0.1", "localhost"]
           .filter(Boolean)
           .join(",");
