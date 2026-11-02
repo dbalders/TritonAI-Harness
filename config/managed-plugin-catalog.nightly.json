@@ -54,6 +54,12 @@
       "version": "1.1.0",
       "digest": "99b627d5a10f9c7fea9bfaaebf435fa50236bad037411f721190efc8e42141c5",
       "manifestDigest": "9447a651f9dee86010b4dae5857fb0f8ddc3388c48b2cb3f55959d6b720b59cf"
+    },
+    {
+      "pluginId": "ucsd-assistant",
+      "version": "0.1.0",
+      "digest": "31f9a3ffa466f68332bda199a57f30b10b567a3ee4e93c78da6b3e530214c161",
+      "manifestDigest": "43bafc7dbb8dedf74d66563a7b5417e5c57d3e94c09c1299834639a20a65bf24"
     }
   ]
 }
