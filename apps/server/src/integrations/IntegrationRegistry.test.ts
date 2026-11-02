@@ -1566,8 +1566,8 @@ describe("IntegrationRegistry lifecycle", () => {
     const decodeGate = new Promise<void>((resolve) => {
       releaseDecode = resolve;
     });
-    // Holds a read between its admission checks and its dispatch to the provider.
-    const PausableReadInput = Schema.Struct({
+    // Holds a call between its admission checks and its dispatch to the provider.
+    const PausableInput = Schema.Struct({
       pause: Schema.Boolean.pipe(
         Schema.decodeTo(
           Schema.Boolean,
@@ -1586,20 +1586,21 @@ describe("IntegrationRegistry lifecycle", () => {
       ),
     });
     let reads = 0;
+    let writes = 0;
     const implementation: IntegrationProvider = {
       id: "test-write-timeout-provider",
       tools: [
         {
           name: "test.fixture.read",
           description: "Read fixture.",
-          input: PausableReadInput,
+          input: PausableInput,
           readOnly: true,
           openWorld: false,
         },
         {
           name: "test.fixture.write",
           description: "Write one fixture record.",
-          input: EmptyIntegrationToolInput,
+          input: PausableInput,
           readOnly: false,
           openWorld: false,
         },
@@ -1614,6 +1615,7 @@ describe("IntegrationRegistry lifecycle", () => {
       disconnect: async () => undefined,
       invoke: async (toolName, _input, context) => {
         if (toolName === "test.fixture.read") return { reads: ++reads };
+        writes += 1;
         if (mode === "hang-before-commit") {
           await new Promise<never>((_resolve, reject) =>
             context!.signal.addEventListener("abort", () => reject(new Error("Aborted.")), {
@@ -1633,10 +1635,10 @@ describe("IntegrationRegistry lifecycle", () => {
       undefined,
       { providerOperationTimeoutMs: 50 },
     );
-    const write = () =>
+    const write = (pause = false) =>
       registry.invokeTool(
         "test.fixture.write",
-        {},
+        { pause },
         { signal: new AbortController().signal, writeApproved: true },
       );
     const read = (pause: boolean) =>
@@ -1655,6 +1657,7 @@ describe("IntegrationRegistry lifecycle", () => {
 
       mode = "hang-after-commit";
       const pausedRead = failureText(read(true));
+      const pausedWrite = failureText(write(true));
       await decoding;
       const unknown = await failureText(write());
       expect(unknown).toMatch(/may or may not have made its change/u);
@@ -1663,7 +1666,9 @@ describe("IntegrationRegistry lifecycle", () => {
       // that it clears shortly.
       releaseDecode();
       expect(await pausedRead).toContain("still finishing an earlier request");
+      expect(await pausedWrite).toContain("still finishing an earlier request");
       expect(reads).toBe(0);
+      expect(writes).toBe(2);
       expect(await failureText(write())).toContain("still finishing an earlier request");
       expect(registry.toolAvailabilitySync("test.fixture.read")).toMatchObject({
         available: false,

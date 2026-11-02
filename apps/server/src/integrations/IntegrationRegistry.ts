@@ -3624,21 +3624,6 @@ export class RegistryRuntime {
           );
         }
         const invokeProvider = (providerContext?: IntegrationLifecycleContext) => {
-          // A read must not observe a write or credential change that is still in flight.
-          if (
-            !providerContext &&
-            this.#activeProviderLifecycleWork.has(provider) &&
-            !this.#providerPreparationWork.has(provider)
-          ) {
-            throw operationError(
-              "operation_failed",
-              this.#settlingDetail(
-                manifest,
-                provider,
-                `${manifest.name} is finishing another change. Try again shortly.`,
-              ),
-            );
-          }
           if (
             signal.aborted ||
             this.#closing ||
@@ -3669,11 +3654,26 @@ export class RegistryRuntime {
                 },
           );
         };
-        const invocationWork = Promise.resolve().then(() =>
-          tool.effect === "write"
+        const invocationWork = Promise.resolve().then(() => {
+          // Nothing may overlap a write or credential change still in flight, and a read must not
+          // observe one. Only reads may run beside a shared credential refresh.
+          if (
+            this.#activeProviderLifecycleWork.has(provider) &&
+            (tool.effect === "write" || !this.#providerPreparationWork.has(provider))
+          ) {
+            throw operationError(
+              "operation_failed",
+              this.#settlingDetail(
+                manifest,
+                provider,
+                `${manifest.name} is finishing another change. Try again shortly.`,
+              ),
+            );
+          }
+          return tool.effect === "write"
             ? this.#providerOperation(provider, invokeProvider, { signal })
-            : invokeProvider(),
-        );
+            : invokeProvider();
+        });
         this.#activeInvocationWork.add(invocationWork);
         void invocationWork.then(
           () => this.#activeInvocationWork.delete(invocationWork),
