@@ -157,6 +157,7 @@ describe("searchSettings", () => {
       "review-guide-instructions",
       "source-control-writing-style",
       "t3-connect",
+      "guest-links",
       "hold-webhooks-while-offline",
       "tailscale-https",
       "wsl-backend",

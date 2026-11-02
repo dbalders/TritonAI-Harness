@@ -15,10 +15,11 @@ import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings"
 export function LabsSettingsPanel() {
   return (
     <SettingsPageContainer>
-      <SettingsSection id="beta" title="Beta">
-        {/* Clerk is only mounted when this build has T3 Connect. */}
-        {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : <GuestLinksRow />}
-      </SettingsSection>
+      {hasCloudPublicConfig() ? (
+        <SettingsSection id="beta" title="Beta">
+          <GuestLinksRowWithSignIn />
+        </SettingsSection>
+      ) : null}
       {isFeatureAvailable("guidedTour") ? <ExperimentalFeaturesSection /> : null}
       <LegacyFeaturesSection />
     </SettingsPageContainer>
