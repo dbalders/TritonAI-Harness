@@ -123,6 +123,7 @@ function HelpSession({
   // Read-only context outlives operation access, but stays local to this prepared connection.
   const [diagnosticContext, setDiagnosticContext] = useState<HelpContext | null>(null);
   const protectedAccess = canViewContext && allowed && !snapshot.accessDenied;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Revoke the external help conversation and pending reads when authorization changes.
   useEffect(() => {
     if (!canReadDiagnostics || !canReadOrchestration || authorizationDenied) {
       // oxlint-disable-next-line react/set-state-in-effect -- Discard the completed external read when context access is revoked.
@@ -147,6 +148,7 @@ function HelpSession({
     readonly previous: typeof query.data;
     readonly canAsk: boolean;
   } | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Discard a remote diagnostic read invalidated by the help server.
   useEffect(() => {
     if (!snapshot.diagnosticsInvalidated) return;
     // Reads started before an authoritative Ask denial cannot restore access.
@@ -156,6 +158,7 @@ function HelpSession({
   }, [snapshot.diagnosticsInvalidated]);
   const refresh = query.refresh;
   const contextBeforeRefresh = useEffectEvent(() => query.data);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refresh remote help diagnostics at the current connection and authorization boundary.
   useEffect(() => {
     if (
       !canReadContext ||
@@ -168,6 +171,7 @@ function HelpSession({
     refreshBoundary.current = { connection, previous: contextBeforeRefresh(), canAsk: allowed };
     refresh();
   }, [allowed, canReadContext, connection, environmentId, refresh]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Apply the completed remote diagnostic read only for the current authorized connection.
   useEffect(() => {
     if (
       canReadContext &&
@@ -201,6 +205,7 @@ function HelpSession({
     query.isPending,
     query.isSuccess,
   ]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Scroll the newest help question into view before paint.
   useLayoutEffect(() => {
     if (snapshot.messages.length === 0 && !snapshot.pendingQuestion && !snapshot.failedQuestion)
       return;
@@ -263,6 +268,7 @@ function HelpSession({
       section.ownerDocument.defaultView?.matchMedia("(pointer: coarse)").matches !== true;
     send();
   };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restore DOM focus dropped by the disabled composer after its request finishes.
   useEffect(() => {
     if (pending || !restoreComposerFocus.current) return;
     restoreComposerFocus.current = false;

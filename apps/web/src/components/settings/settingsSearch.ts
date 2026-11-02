@@ -20,7 +20,7 @@ export {
 } from "./settingsSearchCatalog";
 import { HOSTED_APP_CHANNEL } from "~/branding";
 import { isFeatureAvailable } from "~/features";
-import { isElectron } from "~/env";
+import { isElectron, isSecretsFeatureEnabled } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -43,6 +43,7 @@ export interface SettingsSearchAvailability {
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
   readonly managedTunnelActive?: boolean;
+  readonly hasPeerLinkHost?: boolean;
 }
 
 const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const));
@@ -67,6 +68,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/worktrees": "project-defaults",
   "/settings/connections": "connections",
   "/settings/access": "connections",
+  "/settings/secrets": null,
   "/settings/scheduled-tasks": null,
   "/settings/maintenance": null,
   "/settings/labs": null,
@@ -123,11 +125,7 @@ export function getSettingsSearchTargetScope(targetId: string) {
 interface AutoSettlementSearchEnvironment {
   readonly environmentId: EnvironmentId;
   readonly connection: { readonly phase: EnvironmentConnectionPhase };
-  readonly serverConfig: {
-    readonly environment: {
-      readonly capabilities: { readonly threadAutoSettlement?: boolean };
-    };
-  } | null;
+  readonly serverConfig: object | null;
 }
 
 export function getThreadAutoSettlementSearchAvailability(
@@ -138,12 +136,7 @@ export function getThreadAutoSettlementSearchAvailability(
     (environment) =>
       environment.connection.phase === "connected" && environment.serverConfig !== null,
   );
-  const eligibleEnvironmentIds = connected
-    .filter(
-      (environment) =>
-        environment.serverConfig?.environment.capabilities.threadAutoSettlement === true,
-    )
-    .map((environment) => environment.environmentId);
+  const eligibleEnvironmentIds = connected.map((environment) => environment.environmentId);
   const selected = connected.filter((environment) =>
     scope?.environmentIds.includes(environment.environmentId),
   );
@@ -206,7 +199,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.localEnvironmentOnly || !availability.localEnvironmentDisabled) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
       (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
-      (!item.managedTunnelOnly || availability.managedTunnelActive === true),
+      (!item.managedTunnelOnly || availability.managedTunnelActive === true) &&
+      (!item.peerLinksOnly || availability.hasPeerLinkHost === true),
   );
 }
 
@@ -220,6 +214,7 @@ export function settingsForThisPlatform(
       (!item.feature || isFeatureAvailable(item.feature)) &&
       (isElectron || item.desktopOnly !== true) &&
       (!item.releaseChannelOnly || isElectron || HOSTED_APP_CHANNEL !== null) &&
+      (!item.secretsFeatureOnly || isSecretsFeatureEnabled) &&
       (!item.macOnly || isMacPlatform(platform)) &&
       (!item.windowsOnly || isWindowsPlatform(platform)),
   );

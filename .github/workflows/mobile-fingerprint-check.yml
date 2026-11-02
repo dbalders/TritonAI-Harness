@@ -2,7 +2,8 @@ name: Mobile Fingerprint Check
 
 # Detects whether a PR changes the native fingerprint — i.e. whether merging
 # it would leave main un-OTA-able until a new store build ships. Native-change
-# PRs get the "📱 Native Change" label so they can be held and merged as a
+# PRs get the "📱 Native Change" label (applied by mobile-fingerprint-label.yml,
+# which runs from main so fork PRs get it too) so they can be held and merged as a
 # batch right before the next store submission, keeping main OTA-able for
 # everything else in between. (Once one native PR merges, every later merge
 # inherits the drifted fingerprint and loses OTA reach too — that is why the

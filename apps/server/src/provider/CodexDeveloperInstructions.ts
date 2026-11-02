@@ -2,6 +2,9 @@ import { describeComputerUseReadiness, type DesktopComputerUseState } from "@t3t
 import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 
+import { T3_CODE_ORCHESTRATION_SECTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
+
+/** Codex silently truncates additionalContext values over 1,000 tokens, counted as UTF-8 bytes / 4. */
 export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
 
 const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `## TritonAI Harness collaborative browser
@@ -11,7 +14,7 @@ You are running inside TritonAI Harness. Its product-native collaborative browse
 For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. For background online research call \`preview_open\` with \`show=false\`; use \`show=true\` when the user asks to see or interact with the browser. Then use \`preview_navigate\`, \`preview_snapshot\`, and \`preview_evaluate\` to read the page. Prefer snapshot-provided locators over coordinates and include the source URLs used in the answer. Browser results provide DOM text and semantic page data, not screenshot images.
 
 Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.`;
-import { T3_CODE_ORCHESTRATION_SECTIONS } from "@t3tools/provider-core/server/orchestrationInstructions";
+
 const TRITONAI_COMPUTER_USE_INSTRUCTIONS = `## TritonAI Harness computer use
 
 Users invoke computer use in plain language or with /computer-use; it is a built-in capability, not a $ skill. When the user specifically asks for computer use, prefer the cua-driver tools over browser-only automation or shell scripts.

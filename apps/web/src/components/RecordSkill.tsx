@@ -252,6 +252,7 @@ function RecordSkillFlow({ bridge }: { bridge: RecordSkillBridge }) {
   const deliver = useDeliverRecordedSkill();
 
   // A page that goes away mid-recording takes its recording with it.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Cancel the native skill recording owned by this page when it unmounts.
   useEffect(
     () => () => {
       const { sessionId } = useActiveRecording.getState();
@@ -341,6 +342,7 @@ function RecordSkillFlow({ bridge }: { bridge: RecordSkillBridge }) {
         });
       });
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Subscribe to native skill-recording controls and remove the listener on unmount.
   useEffect(
     () =>
       bridge.onSkillRecordingControl?.(({ sessionId, action }) => handleControl(sessionId, action)),

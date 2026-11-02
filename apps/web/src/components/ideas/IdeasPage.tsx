@@ -88,6 +88,7 @@ export function IdeasPage() {
 
   // Opening the page records recent use; a first visit also starts personal ideas.
   const [viewedEnvironmentId, setViewedEnvironmentId] = useState<EnvironmentId | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Mark remote ideas viewed while their environment page is mounted.
   useEffect(() => {
     if (environmentId === null) return;
     void markViewed({ environmentId, input: {} }).then(() => {
@@ -98,6 +99,7 @@ export function IdeasPage() {
 
   // Keep view tracking current while new ideas arrive on the page.
   const unseenCount = data?.unseenCount ?? 0;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keep remote view tracking current as new ideas arrive on the mounted page.
   useEffect(() => {
     if (environmentId === null || viewedEnvironmentId !== environmentId || unseenCount === 0) {
       return;
@@ -105,6 +107,7 @@ export function IdeasPage() {
     void markViewed({ environmentId, input: {} }).then(() => refresh());
   }, [environmentId, markViewed, refresh, unseenCount, viewedEnvironmentId]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Own the remote idea-generation refresh timer until generation ends or the page unmounts.
   useEffect(() => {
     if (data?.state !== "generating") return;
     const timer = setTimeout(() => refresh(), GENERATING_REFRESH_MS);

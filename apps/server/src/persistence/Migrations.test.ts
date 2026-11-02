@@ -54,6 +54,14 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [77, "WebhookDedupe"],
   [78, "ShellStopRequestIndex"],
   [79, "ThreadMessageSearch"],
+  // Upstream v0.1.4-v0.1.6 migrations 70-76, appended after Harness's shipped 79.
+  [80, "PeerLinks"],
+  [81, "PeerLinkFence"],
+  [82, "WaitingLinkRequestIndex"],
+  [83, "ActiveTurnItemIndexes"],
+  [84, "ExcludeAttachmentPlaceholdersFromSearch"],
+  [85, "SubagentDeliveryState"],
+  [86, "ProjectionProjectsPinArchive"],
 ];
 
 it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(

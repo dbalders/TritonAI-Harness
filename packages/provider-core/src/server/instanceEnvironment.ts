@@ -16,6 +16,8 @@ export const mergeProviderInstanceEnvironment = Effect.fn(function* (
   const effectivePlatform = platform ?? (yield* HostProcess.Platform);
   const next: NodeJS.ProcessEnv = { ...baseEnv };
   for (const variable of environment) {
+    // An unresolved secret reference carries no value; the registry resolves it for the provider.
+    if (typeof variable.value !== "string") continue;
     if (effectivePlatform === "win32") {
       const normalizedName = variable.name.toLowerCase();
       for (const existingName of Object.keys(next)) {

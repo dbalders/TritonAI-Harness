@@ -77,7 +77,7 @@ function useStarterRecipes(
     readonly environmentId: string;
     readonly skills: ReadonlyMap<string, ReadonlySet<string>>;
   } | null>(null);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Refresh connected plugin skills for the active chapter and environment.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refresh remote plugin skill inventory for the mounted chapter and environment.
   useEffect(() => {
     if (!active || !environmentId) return;
     let current = true;
@@ -154,6 +154,7 @@ export function GettingStartedHost() {
         ? google
         : null;
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refresh connection state on focus and sign-in notifications while this chapter is mounted.
   useEffect(() => {
     if (!relevantConnection) return;
     const refresh = () => setConnectionRevision((value) => value + 1);
@@ -165,6 +166,7 @@ export function GettingStartedHost() {
     };
   }, [relevantConnection]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Persist the chapter milestone when the external mail integration becomes connected.
   useEffect(() => {
     if (
       mail &&

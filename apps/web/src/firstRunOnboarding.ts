@@ -21,7 +21,7 @@ import {
   useUpdatePrimarySettings,
 } from "./hooks/useSettings";
 import { useNewThreadHandler } from "./hooks/useHandleNewThread";
-import { inferProjectTitleFromPath } from "./lib/projectPaths";
+import { inferProjectTitleFromPath } from "@t3tools/client-runtime/state/projects";
 import { newProjectId } from "./lib/utils";
 import { readProject, useEnvironmentThreadRefs, useProjects } from "./state/entities";
 import { usePrimaryEnvironmentId } from "./state/environments";
@@ -87,6 +87,7 @@ export function getTritonAiFirstRunOnboardingDecision(input: {
 function useComposerDraftStoreHydrated(): boolean {
   const [hydrated, setHydrated] = useState(() => useComposerDraftStore.persist.hasHydrated());
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Subscribe to persisted composer draft hydration and unsubscribe when hydration completes.
   useEffect(() => {
     if (hydrated) return;
     return useComposerDraftStore.persist.onFinishHydration(() => {
@@ -148,6 +149,7 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
   );
   const runningRef = useRef(false);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Coordinate the one-time remote onboarding workspace with hydrated client state and the primary connection.
   useEffect(() => {
     if (!primaryEnvironmentId) return;
 

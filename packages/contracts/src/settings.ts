@@ -1,4 +1,4 @@
-import { EasDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
+import { EasDeviceHostConfigs, SimlockDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
 import {
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
@@ -21,6 +21,7 @@ import {
   TrimmedString,
 } from "./baseSchemas.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
+import { SecretProviderId, SecretProviderSlug } from "./secretReference.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
@@ -135,16 +136,6 @@ export const SidebarProjectGroupingMode = Schema.Literals([
 ]);
 export type SidebarProjectGroupingMode = typeof SidebarProjectGroupingMode.Type;
 const DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE: SidebarProjectGroupingMode = "repository";
-export const MIN_SIDEBAR_THREAD_PREVIEW_COUNT = 1;
-export const MAX_SIDEBAR_THREAD_PREVIEW_COUNT = 15;
-export const SidebarThreadPreviewCount = Schema.Int.check(
-  Schema.isBetween({
-    minimum: MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
-    maximum: MAX_SIDEBAR_THREAD_PREVIEW_COUNT,
-  }),
-);
-export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
-const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
 export const MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 1;
 export const MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 90;
 export const SidebarAutoSettleAfterDays = Schema.Int.check(
@@ -155,6 +146,45 @@ export const SidebarAutoSettleAfterDays = Schema.Int.check(
 );
 export type SidebarAutoSettleAfterDays = typeof SidebarAutoSettleAfterDays.Type;
 const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 14;
+
+export const MAX_SNOOZE_PRESET_MINUTES = 30 * 24 * 60;
+export const MAX_SNOOZE_PRESETS = 8;
+export const SnoozePresetDay = Schema.Literals([
+  "today",
+  "tomorrow",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+]);
+export type SnoozePresetDay = typeof SnoozePresetDay.Type;
+/** `after` wakes a fixed time from now. `at` wakes at a local time; a weekday is its next occurrence after today. */
+export const SnoozePresetSetting = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("after"),
+    minutes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_SNOOZE_PRESET_MINUTES })),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("at"),
+    day: SnoozePresetDay,
+    time: Schema.String.check(Schema.isPattern(/^([01]\d|2[0-3]):[0-5]\d$/)),
+  }),
+]);
+export type SnoozePresetSetting = typeof SnoozePresetSetting.Type;
+export const SnoozePresetSettings = Schema.Array(SnoozePresetSetting).check(
+  Schema.isMaxLength(MAX_SNOOZE_PRESETS),
+);
+export const DEFAULT_SNOOZE_PRESETS: ReadonlyArray<SnoozePresetSetting> = [
+  { kind: "after", minutes: 60 },
+  { kind: "after", minutes: 180 },
+  { kind: "at", day: "today", time: "18:00" },
+  { kind: "at", day: "tomorrow", time: "09:00" },
+  { kind: "at", day: "monday", time: "09:00" },
+];
+
 export const MIN_GLASS_OPACITY = 40;
 export const MAX_GLASS_OPACITY = 100;
 export const GlassOpacity = Schema.Int.check(
@@ -216,7 +246,15 @@ export const TerminalFontSize = Schema.Int.check(
 export type TerminalFontSize = typeof TerminalFontSize.Type;
 const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;
 
-export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
+// "artwork" follows the running channel and shows nothing on Latest. The fixed artwork
+// modes let any channel opt into a specific channel's art.
+export const EnvironmentIdentificationMode = Schema.Literals([
+  "artwork",
+  "nightly-artwork",
+  "dev-artwork",
+  "pill",
+  "none",
+]);
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
 export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
 
@@ -358,6 +396,10 @@ export const DiffColorScheme = Schema.Literals(["red-green", "blue-orange"]);
 export const ChatWidth = Schema.Literals(["comfortable", "wide", "full"]);
 export type ChatWidth = typeof ChatWidth.Type;
 
+/** How the composer shows reasoning effort: the level's name, or rising bars. */
+export const EffortDisplay = Schema.Literals(["label", "bars"]);
+export type EffortDisplay = typeof EffortDisplay.Type;
+
 export const ModelFavorite = Schema.Struct({
   provider: ProviderInstanceId,
   model: TrimmedNonEmptyString,
@@ -384,6 +426,7 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),
   ),
   chatWidth: ChatWidth.pipe(Schema.withDecodingDefault(Effect.succeed("comfortable" as const))),
+  effortDisplay: EffortDisplay.pipe(Schema.withDecodingDefault(Effect.succeed("label" as const))),
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   appearanceContrast: AppearanceContrast.pipe(
@@ -443,9 +486,6 @@ export const ClientSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   confirmThreadUnpin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
   diffFilesCollapsed: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   diffIgnoreWhitespace: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   tritonAiFirstRunOnboardingCompleted: Schema.Boolean.pipe(
@@ -505,9 +545,6 @@ export const ClientSettingsSchema = Schema.Struct({
   experimentalGuidedTourEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
-  // Desktop resting composer: scrolling an existing thread's conversation
-  // settles the composer into its single-line layout. Losing focus never does.
-  composerCollapseOnScroll: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   composerRichTextEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   sendShortcut: Schema.Literals(["enter", "mod-enter-multiline", "mod-enter"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("enter")),
@@ -517,6 +554,20 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   proactivePanelsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   showSkillsInSlashMenu: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Harness: project folders are the default sidebar layout.
+  boringSidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  boringSidebarMultilineRows: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  // Retired Labs toggle. Still read as the default for the Usage item in threadDetailsItems.
+  threadDetailsUsageEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Sparse show/hide overrides for thread details card items. Missing ids use the client's
+  // default, so new items appear for everyone and unknown ids survive a downgrade.
+  threadDetailsItems: Schema.Record(Schema.String, Schema.Boolean).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  // Opt-in for the removed legacy sidebar. Still read so those users land in
+  // the boring sidebar; the boring sidebar toggle clears it.
   legacySidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   voiceInput: VoiceInputSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_VOICE_INPUT_SETTINGS)),
@@ -540,9 +591,6 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarThreadSortOrder: SidebarThreadSortOrder.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_SORT_ORDER)),
   ),
-  sidebarThreadPreviewCount: SidebarThreadPreviewCount.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
-  ),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
   ),
@@ -563,8 +611,6 @@ export const ClientSettingsSchema = Schema.Struct({
   // Opt-in TeX typesetting in rendered Markdown. Off keeps math parsing and
   // KaTeX out of the render path entirely.
   mathRenderingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  // The quieter sidebar, composer and panel design. Off keeps the classic look.
-  redesignEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -632,6 +678,8 @@ declare module "effect/Schema" {
       readonly settingsSecret?: boolean | undefined;
       /** A constrained presentation value that read-only support may inspect. */
       readonly supportValue?: boolean | undefined;
+      /** Set by `SettingsSecretValue`: the credential may name a secret provider reference. */
+      readonly settingsSecretReference?: boolean | undefined;
       readonly providerSettingsForm?: ProviderSettingsFormAnnotation | undefined;
       readonly providerSettingsFormSchema?: ProviderSettingsFormSchemaAnnotation | undefined;
     }
@@ -920,6 +968,26 @@ export const UsageLimitSourceConfig = Schema.Struct({
 });
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
 
+export const SecretProviderKind = SecretProviderSlug.pipe(Schema.brand("SecretProviderKind"));
+export type SecretProviderKind = typeof SecretProviderKind.Type;
+
+export const SecretProviderLabel = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+
+/** Kinds decode their own config; unknown-kind envelopes round-trip verbatim across versions. */
+export const SecretProviderConfig = Schema.Struct({
+  kind: SecretProviderKind,
+  label: TrimmedNonEmptyString,
+  config: Schema.optionalKey(Schema.Unknown),
+});
+export type SecretProviderConfig = typeof SecretProviderConfig.Type;
+
+// Limits that may change later are enforced on writes only, never on the stored envelope. The
+// server also checks the kind and its config against the secret providers it has loaded.
+const SecretProviderConfigWrite = Schema.Struct({
+  ...SecretProviderConfig.fields,
+  label: SecretProviderLabel,
+});
+
 export const SourceControlHostSettings = Schema.Record(Schema.String, Schema.Unknown);
 export type SourceControlHostSettings = typeof SourceControlHostSettings.Type;
 
@@ -1002,7 +1070,6 @@ export const BackgroundActivityOverrides = Schema.Struct({
   providerHealthRefreshInterval: Schema.optionalKey(Schema.DurationFromMillis),
   hostPowerMonitorActiveInterval: Schema.optionalKey(Schema.DurationFromMillis),
   hostPowerMonitorIdleInterval: Schema.optionalKey(Schema.DurationFromMillis),
-  idleClientTtl: Schema.optionalKey(Schema.DurationFromMillis),
   pauseWhenHostLocked: Schema.optionalKey(Schema.Boolean),
   pauseWhenHostLowPower: Schema.optionalKey(Schema.Boolean),
   pauseWhenClientLowPower: Schema.optionalKey(Schema.Boolean),
@@ -1129,6 +1196,16 @@ export const ProjectSettingsOverrides = Schema.Struct({
 } satisfies Record<ProjectScopedServerSettingKey | "providerInstances", unknown>);
 export type ProjectSettingsOverrides = typeof ProjectSettingsOverrides.Type;
 
+// Whole-entry writers must round-trip unknown keys; keep the type closed to catch misspellings.
+export const keepUnknownOverrideKeys = <Entry extends Schema.Struct<Schema.Struct.Fields>>(
+  entry: Entry,
+): Schema.Codec<
+  Entry["Type"],
+  Entry["Encoded"],
+  Entry["DecodingServices"],
+  Entry["EncodingServices"]
+> => Schema.StructWithRest(entry, [Schema.Record(Schema.String, Schema.Unknown)]);
+
 /** True if null stores an override; otherwise null removes it. */
 export function isNullableProjectSettingsOverride(key: ProjectScopedServerSettingKey): boolean {
   return NULLABLE_PROJECT_SETTINGS_OVERRIDES.has(key);
@@ -1251,13 +1328,17 @@ export const ServerSettings = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  fallbackModelSelection: Schema.NullOr(ModelSelection).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   defaultRuntimeMode: RuntimeMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE)),
   ),
 
-  projectSettingsOverrides: Schema.Record(ProjectId, ProjectSettingsOverrides).pipe(
-    Schema.withDecodingDefault(Effect.succeed({})),
-  ),
+  projectSettingsOverrides: Schema.Record(
+    ProjectId,
+    keepUnknownOverrideKeys(ProjectSettingsOverrides),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   /** Fold once so restarts cannot undo later UI resets. */
   projectSettingsFolded: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 
@@ -1267,6 +1348,9 @@ export const ServerSettings = Schema.Struct({
   deviceOnboardingCompleted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   deviceHosts: SshDeviceHostConfigs.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   easDeviceHosts: EasDeviceHostConfigs.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  simlockDeviceHosts: SimlockDeviceHostConfigs.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Alpha: Simlock device hosts. Off, the server ignores `simlockDeviceHosts`. */
+  simlockDeviceHostsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
@@ -1276,8 +1360,16 @@ export const ServerSettings = Schema.Struct({
   idleCompaction: Schema.optionalKey(IdleCompactionMode),
   snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  snoozePresets: SnoozePresetSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNOOZE_PRESETS)),
+  ),
   /** Beta: guest links for this machine's threads. Off refuses new links and pauses existing ones. */
   guestSharingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /**
+   * Beta: links to the user's other machines, both ways. Off refuses new links, calls over links
+   * and tasks on another machine; tasks already running there finish.
+   */
+  linkedEnvironmentsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarAutoSettleKeepPullRequests: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -1374,6 +1466,9 @@ export const ServerSettings = Schema.Struct({
   ),
   // User-chosen ids preserve rows across edits; undecodable entries round-trip untouched.
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  secretProviders: Schema.Record(SecretProviderId, SecretProviderConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   cursorKeychainUsageEnabled: Schema.Boolean.pipe(
@@ -1505,6 +1600,7 @@ export const ServerSettingsOperation = Schema.Literals([
   "remove-secret",
   "remove-stale-secret",
   "write-secret",
+  "write-secret-provider",
   "write-file",
   "prepare-directory",
 ]);
@@ -1610,15 +1706,18 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   defaultModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   defaultRuntimeMode: Schema.optionalKey(RuntimeMode),
+  fallbackModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   /** Replaces each project's override set; null removes it. Omitted providerInstances retains its stored value. */
   projectSettingsOverrides: Schema.optionalKey(
     Schema.Record(
       ProjectId,
       Schema.NullOr(
-        Schema.Struct({
-          ...ProjectSettingsOverrides.fields,
-          sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyleSettings),
-        }),
+        keepUnknownOverrideKeys(
+          Schema.Struct({
+            ...ProjectSettingsOverrides.fields,
+            sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyleSettings),
+          }),
+        ),
       ),
     ),
   ),
@@ -1627,6 +1726,8 @@ export const ServerSettingsPatch = Schema.Struct({
   deviceOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
   deviceHosts: Schema.optionalKey(SshDeviceHostConfigs),
   easDeviceHosts: Schema.optionalKey(EasDeviceHostConfigs),
+  simlockDeviceHosts: Schema.optionalKey(SimlockDeviceHostConfigs),
+  simlockDeviceHostsEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   compactIdleThreads: Schema.optionalKey(LegacyCompactIdleThreads),
   idleCompaction: Schema.optionalKey(IdleCompactionMode),
@@ -1636,7 +1737,9 @@ export const ServerSettingsPatch = Schema.Struct({
   memorySyncEnabled: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  snoozePresets: Schema.optionalKey(SnoozePresetSettings),
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
+  linkedEnvironmentsEnabled: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),
@@ -1686,6 +1789,9 @@ export const ServerSettingsPatch = Schema.Struct({
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
   ),
+  secretProviders: Schema.optionalKey(
+    Schema.Record(SecretProviderId, Schema.NullOr(SecretProviderConfigWrite)),
+  ),
   cursorKeychainUsageEnabled: Schema.optionalKey(Schema.Boolean),
 
   usagePriceOverrides: Schema.optionalKey(
@@ -1705,7 +1811,12 @@ export function requiredScopesForServerSettingsPatch(
   let changesSettings = false;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
-    if (key === "providers" || key === "providerInstances" || key === "usageLimitSources") {
+    if (
+      key === "providers" ||
+      key === "providerInstances" ||
+      key === "usageLimitSources" ||
+      key === "secretProviders"
+    ) {
       changesProviders = true;
     } else {
       changesSettings = true;
@@ -1735,6 +1846,7 @@ export const ClientSettingsPatch = Schema.Struct({
   inAppNotificationsEnabled: Schema.optionalKey(Schema.Boolean),
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
   chatWidth: Schema.optionalKey(ChatWidth),
+  effortDisplay: Schema.optionalKey(EffortDisplay),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
   appearanceContrast: Schema.optionalKey(AppearanceContrast),
@@ -1782,12 +1894,15 @@ export const ClientSettingsPatch = Schema.Struct({
   pullRequestLinksOpenInApp: Schema.optionalKey(Schema.Boolean),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
   contextWindowMeterEnabled: Schema.optionalKey(Schema.Boolean),
-  composerCollapseOnScroll: Schema.optionalKey(Schema.Boolean),
   composerRichTextEnabled: Schema.optionalKey(Schema.Boolean),
   sendShortcut: Schema.optionalKey(Schema.Literals(["enter", "mod-enter-multiline", "mod-enter"])),
   followUpBehavior: Schema.optionalKey(Schema.Literals(["queue", "steer"])),
   proactivePanelsEnabled: Schema.optionalKey(Schema.Boolean),
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
+  boringSidebarEnabled: Schema.optionalKey(Schema.Boolean),
+  boringSidebarMultilineRows: Schema.optionalKey(Schema.Boolean),
+  threadDetailsUsageEnabled: Schema.optionalKey(Schema.Boolean),
+  threadDetailsItems: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   voiceInput: Schema.optionalKey(VoiceInputSettings),
   sidebarWorkingShelfEnabled: Schema.optionalKey(Schema.Boolean),
@@ -1797,7 +1912,6 @@ export const ClientSettingsPatch = Schema.Struct({
   ),
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
-  sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),
   snapShotIncludeAccessibility: Schema.optionalKey(Schema.Boolean),
@@ -1808,6 +1922,5 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotAnimations: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
   mathRenderingEnabled: Schema.optionalKey(Schema.Boolean),
-  redesignEnabled: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

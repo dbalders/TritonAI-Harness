@@ -36,7 +36,8 @@ export const mergeCodexProviderEnvironment = Effect.fn(function* (
       : instanceId === TRITONAI_FRONTIER_PROVIDER_INSTANCE_ID
         ? TRITONAI_FRONTIER_API_KEY_ENV
         : undefined;
-  const sourceName = requestedSourceName?.trim();
+  const sourceName =
+    typeof requestedSourceName === "string" ? requestedSourceName.trim() : undefined;
   const isManagedRoute = expectedSourceName !== undefined && sourceName === expectedSourceName;
   // Process-level TritonAI credentials are Installer-managed in this
   // distribution. A personal Codex instance can opt in only by configuring

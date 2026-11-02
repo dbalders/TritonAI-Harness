@@ -40,7 +40,7 @@ beforeEach(() => {
     projectExpandedById: {},
     projectOrder: [],
     pinnedProjectOrder: [],
-    sidebarProjectScopeKey: null,
+    sidebarProjectScopeKeys: [],
     pullRequestMergeMethod: "squash",
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},

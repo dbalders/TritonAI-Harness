@@ -19,7 +19,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   getProjectOrderKey,
   selectProjectGroupingSettings,
-} from "../logicalProject";
+} from "@t3tools/client-runtime/state/project-grouping";
 import { resolveNewThreadEnvMode, resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
   readProject,
@@ -44,6 +44,8 @@ import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore"
 import { getClientSettings } from "./useSettings";
 import { useThreadRouteTarget } from "./useThreadRouteTarget";
 import { readUnloadedThreadCount } from "../state/olderSettledShelf";
+import { resolveProjectDefaultProviderModelSelection } from "../providerInstances";
+import { resolveNewThreadModelSelection } from "@t3tools/shared/usageLimits";
 
 interface NewThreadWorkspaceOptions {
   branch?: string | null;
@@ -93,6 +95,8 @@ export function createNewThreadHandler(router: AnyRouter) {
       replace?: boolean;
       /** Cancels an app-owned draft request while project defaults are loading. */
       isCurrent?: () => boolean;
+      /** Composer text for the draft, set before it shows. A draft with user text keeps it. */
+      prompt?: string;
     },
   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
     if (options?.isCurrent?.() === false) return Promise.resolve(null);
@@ -111,7 +115,14 @@ export function createNewThreadHandler(router: AnyRouter) {
       setDraftThreadContext,
       setLogicalProjectDraftThreadId,
       setModelSelection,
+      setPrompt,
     } = useComposerDraftStore.getState();
+    // Never over text the user wrote: a draft can gain some while this awaits.
+    const seedPrompt = (draftId: DraftId) => {
+      if (options?.prompt === undefined) return;
+      if (composerDraftHasUserContent(getComposerDraft(draftId))) return;
+      setPrompt(draftId, options.prompt);
+    };
     const requestingRouteHref = router.state.location.href;
     const routeChangedSinceRequest = () => router.state.location.href !== requestingRouteHref;
     const currentRouteTarget = getCurrentRouteTarget();
@@ -146,15 +157,38 @@ export function createNewThreadHandler(router: AnyRouter) {
       project?.id ?? null,
       project,
     );
-    const projectDefaultModelSelection = projectSettings.settings.defaultModelSelection;
+    // Harness: the server's default model applies when the project sets none.
+    const configuredDefaultModelSelection =
+      projectSettings.settings.defaultModelSelection ??
+      targetServerSettings.defaultModelSelection ??
+      null;
+    const fallbackResolution = resolveNewThreadModelSelection({
+      defaultSelection:
+        configuredDefaultModelSelection ??
+        (useComposerDraftStore.getState().stickyActiveProvider !== null
+          ? null
+          : resolveProjectDefaultProviderModelSelection(
+              environmentServerConfigs.get(projectRef.environmentId)?.providers ?? [],
+              targetServerSettings,
+              projectRef.projectId,
+            )),
+      fallbackSelection: targetServerSettings.fallbackModelSelection ?? null,
+      providers: environmentServerConfigs.get(projectRef.environmentId)?.providers ?? [],
+      settings: targetServerSettings,
+      projectId: projectRef.projectId,
+      now: Date.now(),
+    });
+    const projectDefaultModelSelection = fallbackResolution.fallback
+      ? fallbackResolution.selection
+      : configuredDefaultModelSelection;
+    // Harness: new threads remember the last explicit runtime mode and model.
     const resolveDefaultRuntimeMode = () =>
       useComposerDraftStore.getState().stickyRuntimeMode ??
       projectSettings.settings.defaultRuntimeMode;
     const resolveModelSelectionOverride = () => {
       const state = useComposerDraftStore.getState();
       return resolveNewThreadModelSelectionOverride({
-        projectDefaultSelection:
-          projectDefaultModelSelection ?? targetServerSettings.defaultModelSelection ?? null,
+        projectDefaultSelection: projectDefaultModelSelection,
         lastSelectedModel: state.stickyActiveProvider
           ? (state.stickyModelSelectionByProvider[state.stickyActiveProvider] ?? null)
           : null,
@@ -314,6 +348,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           draftId: emptyStoredDraftThread.draftId,
           threadId: emptyStoredDraftThread.threadId,
         };
+        seedPrompt(emptyStoredDraftThread.draftId);
         const routeTargetAfterWrites = getCurrentRouteTarget();
         if (
           routeTargetAfterWrites?.kind === "draft" &&
@@ -352,6 +387,7 @@ export function createNewThreadHandler(router: AnyRouter) {
         interactionMode: latestActiveDraftThread.interactionMode,
         ...pickExplicitWorkspaceOptions(options),
       });
+      seedPrompt(currentRouteTarget.draftId);
       return Promise.resolve({
         draftId: currentRouteTarget.draftId,
         threadId: latestActiveDraftThread.threadId,
@@ -380,6 +416,7 @@ export function createNewThreadHandler(router: AnyRouter) {
           interactionMode: racedDraft.interactionMode,
           ...pickExplicitWorkspaceOptions(options),
         });
+        seedPrompt(racedDraft.draftId);
         await router.navigate({
           to: "/draft/$draftId",
           params: { draftId: racedDraft.draftId },
@@ -408,6 +445,7 @@ export function createNewThreadHandler(router: AnyRouter) {
         setModelSelection(draftId, modelSelectionOverride, { replaceOptions: true });
       }
       seedNewDraftPrompt(draftId, options?.newDraftPrompt);
+      seedPrompt(draftId);
       await router.navigate({
         to: "/draft/$draftId",
         params: { draftId },
@@ -423,7 +461,7 @@ export function resolveDefaultProjectRef(
   projectOrder: readonly string[],
 ): ScopedProjectRef | null {
   const [defaultProject] = orderItemsByPreferredIds({
-    items: projects,
+    items: projects.filter((project) => project.archivedAt == null),
     preferredIds: projectOrder,
     getId: getProjectOrderKey,
     getPreferenceIds: (project) => [

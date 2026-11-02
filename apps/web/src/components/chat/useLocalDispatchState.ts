@@ -83,10 +83,12 @@ export function useLocalDispatchState(input: {
     threadError: input.threadError,
   });
   const activeLocalDispatch = serverAcknowledgedLocalDispatch ? null : localDispatch;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Clear the local dispatch handoff store when the remote server acknowledges the command.
   useEffect(() => {
     if (!serverAcknowledgedLocalDispatch || !localDispatch) return;
     clearLocalDispatchHandoff(input.threadKey, localDispatch);
   }, [input.threadKey, localDispatch, serverAcknowledgedLocalDispatch]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Expire an unacknowledged dispatch handoff with a timer owned by the mounted thread.
   useEffect(() => {
     if (!localDispatch) return;
     const parsedStartedAt = Date.parse(localDispatch.startedAt);

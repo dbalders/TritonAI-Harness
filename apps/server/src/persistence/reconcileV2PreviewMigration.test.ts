@@ -56,6 +56,13 @@ describe("V2 preview upgrade", () => {
         [77, "WebhookDedupe"],
         [78, "ShellStopRequestIndex"],
         [79, "ThreadMessageSearch"],
+        [80, "PeerLinks"],
+        [81, "PeerLinkFence"],
+        [82, "WaitingLinkRequestIndex"],
+        [83, "ActiveTurnItemIndexes"],
+        [84, "ExcludeAttachmentPlaceholdersFromSearch"],
+        [85, "SubagentDeliveryState"],
+        [86, "ProjectionProjectsPinArchive"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -155,6 +162,13 @@ describe("V2 preview upgrade", () => {
         [77, "WebhookDedupe"],
         [78, "ShellStopRequestIndex"],
         [79, "ThreadMessageSearch"],
+        [80, "PeerLinks"],
+        [81, "PeerLinkFence"],
+        [82, "WaitingLinkRequestIndex"],
+        [83, "ActiveTurnItemIndexes"],
+        [84, "ExcludeAttachmentPlaceholdersFromSearch"],
+        [85, "SubagentDeliveryState"],
+        [86, "ProjectionProjectsPinArchive"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

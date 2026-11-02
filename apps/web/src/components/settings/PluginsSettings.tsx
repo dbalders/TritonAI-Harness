@@ -268,6 +268,7 @@ function IntegrationFlowPoller({
   readonly flow: ScheduledIntegrationFlow;
   readonly poll: PollIntegrationFlow;
 }) {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Own the integration sign-in polling timer and cancel it when this flow unmounts.
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(
@@ -552,6 +553,7 @@ function IntegrationCard({
     }
   }
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Focus the plugin connection button when an external connection-attention request arrives.
   useEffect(() => {
     if (
       !shouldFocusConnectionAction({
@@ -911,6 +913,7 @@ function EnvironmentPluginsSettingsPanel({
   readonly environmentId: EnvironmentId | null;
 }) {
   const environmentIdRef = useRef(environmentId);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Bind asynchronous plugin operations to the mounted environment and invalidate them on unmount.
   useEffect(() => {
     environmentIdRef.current = environmentId;
     return () => {
@@ -986,6 +989,7 @@ function EnvironmentPluginsSettingsPanel({
       });
   };
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Load the remote integration inventory for the currently mounted environment.
   useEffect(() => {
     void load();
   }, [load]);

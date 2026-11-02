@@ -33,6 +33,8 @@ import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
 const INITIAL_RESTART_DELAY = Duration.millis(500);
 const MAX_RESTART_DELAY = Duration.seconds(10);
+// Pre-server failures (configuration, missing entry) that repeat this many times
+// cannot heal by retrying; instances with onRepeatedStartupFailure stop instead.
 const MAX_STARTUP_FAILURE_ATTEMPTS = 3;
 // After this many consecutive fatal preflight failures, stop the silent
 // restart loop and surface the reason via onPreflightFailed. Transient
@@ -46,6 +48,9 @@ const DEFAULT_BACKEND_READINESS_REQUEST_TIMEOUT = Duration.seconds(1);
 const DEFAULT_BACKEND_TERMINATE_GRACE = Duration.seconds(5);
 const DEFAULT_BACKEND_OUTPUT_DRAIN_TIMEOUT = Duration.seconds(5);
 const BACKEND_READINESS_PATH = "/.well-known/t3/environment";
+// Three restarts without readiness is about 2 s of backoff: past a blip, early enough to help.
+const STARTUP_FAILURE_RESTART_ATTEMPTS = 3;
+const STARTUP_FAILURE_OUTPUT_CHARS = 4_000;
 const { logWarning: logBackendProcessWarning } =
   DesktopObservability.makeComponentLogger("desktop-backend-process");
 
@@ -222,6 +227,12 @@ export const PRIMARY_INSTANCE_ID: BackendInstanceId = BackendInstanceId(
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 );
 
+export interface BackendStartupFailure {
+  readonly reason: string;
+  /** Tail of the last run's stdout and stderr. */
+  readonly output: string;
+}
+
 export interface DesktopBackendInstance {
   readonly id: BackendInstanceId;
   readonly label: Effect.Effect<string>;
@@ -240,14 +251,16 @@ export interface BackendInstanceSpec {
   readonly onReady?: (httpBaseUrl: URL) => Effect.Effect<void>;
   readonly onShutdown?: () => Effect.Effect<void>;
   readonly onPreflightFailed?: (failure: PreflightFailure) => Effect.Effect<boolean>;
-  // Fired once when the backend repeatedly fails before it ever becomes ready.
+  // Fired once when a pre-server failure (configuration or missing entry) repeats.
   // Primary instances surface a diagnostic and end the app instead of leaving
-  // users in an invisible restart loop; secondary instances may omit it.
+  // users in a restart loop that cannot heal; secondary instances may omit it.
   readonly onRepeatedStartupFailure?: (failure: {
     readonly reason: string;
     readonly attempt: number;
   }) => Effect.Effect<void>;
   readonly onStateDirOwned?: () => Effect.Effect<void>;
+  /** Fires on each repeated crash or readiness timeout until the backend becomes ready. */
+  readonly onStartupFailure?: (failure: BackendStartupFailure) => Effect.Effect<void>;
 }
 
 interface ActiveBackendRun {
@@ -272,8 +285,8 @@ interface BackendManagerState {
 
 type RestartAction =
   | { readonly _tag: "None" }
-  | { readonly _tag: "Schedule"; readonly delay: Duration.Duration }
-  | { readonly _tag: "SurfaceFailure"; readonly attempt: number };
+  | { readonly _tag: "Schedule"; readonly delay: Duration.Duration; readonly attempt: number }
+  | { readonly _tag: "Stop"; readonly attempt: number };
 
 const initialState: BackendManagerState = {
   desiredRunning: false,
@@ -645,6 +658,14 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const httpClient = yield* HttpClient.HttpClient;
   const state = yield* Ref.make(initialState);
   const mutex = yield* Semaphore.make(1);
+  const outputTail = yield* Ref.make("");
+  // One streaming decoder per stream keeps UTF-8 characters split across chunks intact.
+  const makeOutputDecoders = () => ({ stdout: new TextDecoder(), stderr: new TextDecoder() });
+  let outputDecoders = makeOutputDecoders();
+  const reportStartupFailure = (reason: string) =>
+    Ref.get(outputTail).pipe(
+      Effect.flatMap((output) => spec.onStartupFailure?.({ reason, output }) ?? Effect.void),
+    );
 
   const { logWarning: logInstanceWarning, logError: logInstanceError } =
     DesktopObservability.makeComponentLogger(`desktop-backend-instance:${spec.id}`);
@@ -714,7 +735,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         );
         if (Option.isNone(config)) {
           yield* scheduleRestart("failed to generate desktop backend configuration", {
-            surfaceRepeatedFailure: true,
+            stopOnRepeatedFailure: true,
           });
           return;
         }
@@ -790,7 +811,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
         if (!entryExists) {
           yield* scheduleRestart(`missing server entry at ${config.value.entryPath}`, {
-            surfaceRepeatedFailure: true,
+            stopOnRepeatedFailure: true,
           });
           return;
         }
@@ -891,7 +912,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                   yield* (spec.onStateDirOwned?.() ?? Effect.void).pipe(Effect.ignore);
                   return;
                 }
-                yield* scheduleRestart(reason, { surfaceRepeatedFailure: !wasReady });
+                yield* scheduleRestart(reason);
               }
             }),
           );
@@ -909,6 +930,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               ...run,
               pid: Option.some(pid),
             }));
+            yield* Ref.set(outputTail, "");
+            outputDecoders = makeOutputDecoders();
             yield* backendOutputLog.beginSession({
               details: `pid=${pid} port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
             });
@@ -957,9 +980,16 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               yield* backendOutputLog.persistFailureSnapshot({
                 details: error.message,
               });
+              yield* reportStartupFailure("The server started but did not become ready in time.");
             },
           ),
-          onOutput: (streamName, chunk) => backendOutputLog.writeOutputChunk(streamName, chunk),
+          onOutput: (streamName, chunk) =>
+            Ref.update(outputTail, (tail) =>
+              // A cut through a surrogate pair would make encodeURIComponent throw when rendering.
+              (tail + outputDecoders[streamName].decode(chunk, { stream: true }))
+                .slice(-STARTUP_FAILURE_OUTPUT_CHARS)
+                .toWellFormed(),
+            ).pipe(Effect.andThen(backendOutputLog.writeOutputChunk(streamName, chunk))),
         }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -982,44 +1012,36 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
   const scheduleRestart = Effect.fn("desktop.backendInstance.scheduleRestart")(function* (
     reason: string,
-    options: { readonly surfaceRepeatedFailure?: boolean } = {},
+    options: { readonly stopOnRepeatedFailure?: boolean } = {},
   ) {
     const action = yield* Ref.modify(
       state,
       (latest): readonly [RestartAction, BackendManagerState] => {
         if (!latest.desiredRunning || Option.isSome(latest.restartFiber)) {
-          return [{ _tag: "None" } as const, latest] as const;
+          return [{ _tag: "None" }, latest] as const;
         }
 
         const attempt = latest.restartAttempt + 1;
         if (
-          options.surfaceRepeatedFailure === true &&
+          options.stopOnRepeatedFailure === true &&
           spec.onRepeatedStartupFailure !== undefined &&
           attempt >= MAX_STARTUP_FAILURE_ATTEMPTS
         ) {
           return [
-            { _tag: "SurfaceFailure", attempt } as const,
-            {
-              ...latest,
-              desiredRunning: false,
-              restartAttempt: attempt,
-            },
+            { _tag: "Stop", attempt },
+            { ...latest, desiredRunning: false, restartAttempt: attempt },
           ] as const;
         }
-        const delay = calculateRestartDelay(latest.restartAttempt);
         return [
-          { _tag: "Schedule", delay } as const,
-          {
-            ...latest,
-            restartAttempt: attempt,
-          },
+          { _tag: "Schedule", delay: calculateRestartDelay(latest.restartAttempt), attempt },
+          { ...latest, restartAttempt: attempt },
         ] as const;
       },
     );
 
     if (action._tag === "None") return;
-    if (action._tag === "SurfaceFailure") {
-      yield* logInstanceError("backend failed repeatedly before readiness; stopping", {
+    if (action._tag === "Stop") {
+      yield* logInstanceError("backend failed repeatedly before it could start; stopping", {
         reason,
         attempt: action.attempt,
       });
@@ -1027,44 +1049,45 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       return;
     }
 
-    yield* Effect.gen(function* () {
-      const delay = action.delay;
-      yield* logInstanceError("backend exited unexpectedly; restart scheduled", {
-        reason,
-        delayMs: Duration.toMillis(delay),
-      });
-      const restartFiber = yield* Effect.forkIn(
-        Effect.sleep(delay).pipe(
-          Effect.andThen(
-            Ref.modify(state, (latest) => {
-              const shouldRestart = latest.desiredRunning;
-              return [
-                shouldRestart,
-                {
-                  ...latest,
-                  restartFiber: Option.none(),
-                },
-              ] as const;
-            }),
-          ),
-          Effect.flatMap((shouldRestart) => (shouldRestart ? start : Effect.void)),
-          Effect.catchCause((cause) =>
-            logInstanceError("desktop backend restart fiber failed", {
-              cause: Cause.pretty(cause),
-            }),
-          ),
-        ),
-        parentScope,
-      );
-      yield* Ref.update(state, (latest) =>
-        Option.isNone(latest.restartFiber)
-          ? {
-              ...latest,
-              restartFiber: Option.some(restartFiber),
-            }
-          : latest,
-      );
+    const { delay, attempt } = action;
+    yield* logInstanceError("backend exited unexpectedly; restart scheduled", {
+      reason,
+      delayMs: Duration.toMillis(delay),
     });
+    if (attempt >= STARTUP_FAILURE_RESTART_ATTEMPTS) {
+      yield* reportStartupFailure(`The server could not start (${reason}).`);
+    }
+    const restartFiber = yield* Effect.forkIn(
+      Effect.sleep(delay).pipe(
+        Effect.andThen(
+          Ref.modify(state, (latest) => {
+            const shouldRestart = latest.desiredRunning;
+            return [
+              shouldRestart,
+              {
+                ...latest,
+                restartFiber: Option.none(),
+              },
+            ] as const;
+          }),
+        ),
+        Effect.flatMap((shouldRestart) => (shouldRestart ? start : Effect.void)),
+        Effect.catchCause((cause) =>
+          logInstanceError("desktop backend restart fiber failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      ),
+      parentScope,
+    );
+    yield* Ref.update(state, (latest) =>
+      Option.isNone(latest.restartFiber)
+        ? {
+            ...latest,
+            restartFiber: Option.some(restartFiber),
+          }
+        : latest,
+    );
   });
 
   const stop = Effect.fn("desktop.backendInstance.stop")(function* (options?: {

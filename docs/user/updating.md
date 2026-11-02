@@ -23,6 +23,23 @@ interrupts its connections.
 Dismissing the version warning only hides that reminder for the two displayed versions. It does not
 update either side.
 
+## If the desktop app does not start
+
+If the desktop app's server keeps failing at startup, TritonAI Harness shows a window explaining
+that it could not start instead of opening the app. If a newer version is available, choose
+**Update** to install it. If not, the window points to the last version that started on your
+computer. Use **Copy details** to include the error in a bug report. Rerun the
+[TritonAI Installer](https://github.com/dbalders/TritonAI-Installer/releases/latest) to repair
+the installation.
+
+## Registries and proxies
+
+Each server checks providers installed with npm through its own npm, so the checks use npm's
+configured registry, authentication, and proxy settings. Providers installed with Homebrew or pnpm
+check through those tools. Configure npm on the server's machine. If that registry cannot be
+reached, the update shows as unavailable; TritonAI Harness does not try the public registry
+instead. The managed Codex engine follows the version approved in your Harness release.
+
 ## Update providers
 
 The UCSD-managed Codex engine updates to the version approved in your Harness release on its own.

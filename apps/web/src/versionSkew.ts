@@ -105,12 +105,6 @@ export function supportsDesktopAppUpdate(
   return false;
 }
 
-export function supportsServerUpdateThreadContinuation(
-  _serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
-): boolean {
-  return false;
-}
-
 export function buildVersionMismatchDismissalKey(
   environmentId: EnvironmentId,
   mismatch: Pick<VersionMismatch, "clientVersion" | "serverVersion">,

@@ -17,7 +17,14 @@ import {
 import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
 
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
-export type ComposerSlashCommand = "model" | "plan" | "default" | "computer-use" | "record-skill";
+export type ComposerSlashCommand =
+  | "model"
+  | "plan"
+  | "default"
+  | "side"
+  | "btw"
+  | "computer-use"
+  | "record-skill";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
 
 export interface ComposerTrigger {
@@ -90,8 +97,6 @@ export function composerSubmissionIntentForKey(input: {
     return null;
   return "foreground";
 }
-
-const isInlineTokenSegment = (segment: ComposerPromptSegment): boolean => segment.type !== "text";
 
 function clampCursor(text: string, cursor: number): number {
   if (!Number.isFinite(cursor)) return text.length;
@@ -249,34 +254,6 @@ export function collapseExpandedComposerCursor(
   return collapsedCursor;
 }
 
-export function isCollapsedCursorAdjacentToInlineToken(
-  text: string,
-  cursorInput: number,
-  direction: "left" | "right",
-): boolean {
-  const segments = splitPromptIntoComposerSegments(text);
-  if (!segments.some(isInlineTokenSegment)) {
-    return false;
-  }
-
-  const cursor = clampCollapsedComposerCursorForSegments(segments, cursorInput);
-  let collapsedOffset = 0;
-
-  for (const segment of segments) {
-    if (isInlineTokenSegment(segment)) {
-      if (direction === "left" && cursor === collapsedOffset + 1) {
-        return true;
-      }
-      if (direction === "right" && cursor === collapsedOffset) {
-        return true;
-      }
-    }
-    collapsedOffset += collapsedSegmentLength(segment);
-  }
-
-  return false;
-}
-
 export function detectComposerTrigger(text: string, cursorInput: number): ComposerTrigger | null {
   const cursor = clampCursor(text, cursorInput);
   const tokenStart = tokenStartForCursor(text, cursor);
@@ -347,6 +324,12 @@ export function composerStateAtPromptEnd(
   };
 }
 
+/** `/side [prompt]`, or its alias `/btw [prompt]`, as the whole message. */
+export function parseSideChatCommand(text: string): { prompt: string } | null {
+  const match = /^\/(?:side|btw)(?:\s+([\s\S]*))?$/i.exec(text.trim());
+  return match ? { prompt: match[1]?.trim() ?? "" } : null;
+}
+
 export function parseStandaloneComposerSlashCommand(text: string): "plan" | "default" | null {
   const match = /^\/(plan|default)\s*$/i.exec(text.trim());
   if (!match) {
@@ -372,14 +355,4 @@ export function extendReplacementRangeForTrailingSpace(
   return text[rangeEnd] === " " ? rangeEnd + 1 : rangeEnd;
 }
 
-export function replaceTextRange(
-  text: string,
-  rangeStart: number,
-  rangeEnd: number,
-  replacement: string,
-): { text: string; cursor: number } {
-  const safeStart = Math.max(0, Math.min(text.length, rangeStart));
-  const safeEnd = Math.max(safeStart, Math.min(text.length, rangeEnd));
-  const nextText = `${text.slice(0, safeStart)}${replacement}${text.slice(safeEnd)}`;
-  return { text: nextText, cursor: safeStart + replacement.length };
-}
+export { replaceTextRange } from "@t3tools/shared/composerTrigger";

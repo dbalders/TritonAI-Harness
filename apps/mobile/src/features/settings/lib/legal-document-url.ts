@@ -25,20 +25,20 @@ function marketingSiteDocumentUrl(path: string): string {
 // TritonAI publishes privacy and security guidance together. Its footer links
 // to UC San Diego's shared terms; do not invent policy paths on the campus site.
 const isTritonAiSite = MARKETING_SITE_URL.origin === DEFAULT_MARKETING_SITE_URL;
-export const PRIVACY_POLICY_URL = marketingSiteDocumentUrl(
+const PRIVACY_POLICY_URL = marketingSiteDocumentUrl(
   isTritonAiSite ? "about/trust-architecture.html" : "privacy-policy",
 );
-export const SECURITY_POLICY_URL = marketingSiteDocumentUrl(
+const SECURITY_POLICY_URL = marketingSiteDocumentUrl(
   isTritonAiSite ? "about/trust-architecture.html" : "security-policy",
 );
-export const TERMS_OF_SERVICE_URL = isTritonAiSite
+const TERMS_OF_SERVICE_URL = isTritonAiSite
   ? "https://ucsd.edu/about/terms-of-use.html"
   : marketingSiteDocumentUrl("terms-of-service");
 export const LEGAL_URL = marketingSiteDocumentUrl(
   isTritonAiSite ? "about/trust-architecture.html" : "legal",
 );
 
-export const ALLOWED_LEGAL_DOCUMENT_URLS = [
+const ALLOWED_LEGAL_DOCUMENT_URLS = [
   LEGAL_URL,
   PRIVACY_POLICY_URL,
   TERMS_OF_SERVICE_URL,

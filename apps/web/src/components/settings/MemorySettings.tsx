@@ -100,6 +100,7 @@ function MemorySignIn({
   readonly finish: (id: EnvironmentId, error: string | null) => void;
 }) {
   const poll = useAtomCommand(serverEnvironment.pollMemorySync, { reportFailure: false });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Own the pending device sign-in polling timer and cancel it when the flow leaves the screen.
   useEffect(() => {
     let cancelled = false;
     let intervalSeconds = flow.intervalSeconds;
@@ -181,6 +182,7 @@ export function MemorySettingsSection() {
       environment.serverConfig?.settings.memorySyncEnabled,
     ]),
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refresh the remote memory-sync status when its environment configuration changes.
   useEffect(() => {
     for (const [id] of JSON.parse(settingsKey) as [EnvironmentId, boolean, boolean][]) refresh(id);
   }, [refresh, settingsKey]);

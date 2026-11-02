@@ -3,10 +3,14 @@ name: Mobile Fingerprint Label
 # Runs trusted default-branch code only after the read-only PR fingerprint
 # workflow finishes. The artifact is untrusted input and must pass strict
 # schema, PR association, and current-head validation before label mutation.
+# It never checks out or runs PR code.
 on:
   workflow_run:
     workflows: [Mobile Fingerprint Check]
     types: [completed]
+
+permissions:
+  contents: read
 
 concurrency:
   group: mobile-fingerprint-label-${{ github.event.workflow_run.id }}
@@ -19,6 +23,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       actions: read
       contents: read
@@ -69,9 +74,29 @@ jobs:
               throw new Error("Fingerprint result platforms are invalid");
             }
 
-            const associatedPullRequests = JSON.parse(process.env.ASSOCIATED_PULL_REQUESTS ?? "[]");
+            const run = context.payload.workflow_run;
+            let associatedPullRequests = JSON.parse(process.env.ASSOCIATED_PULL_REQUESTS ?? "[]");
+            if (!Array.isArray(associatedPullRequests)) {
+              throw new Error("Fingerprint run pull request association is invalid");
+            }
+            // workflow_run.pull_requests is empty for fork PRs, so look up open PRs
+            // by head owner and branch at the checked commit instead.
+            if (associatedPullRequests.length === 0) {
+              const open = await github.paginate(github.rest.pulls.list, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                head: `${run.head_repository?.owner?.login}:${run.head_branch}`,
+                per_page: 100,
+              });
+              associatedPullRequests = open.filter(
+                (candidate) =>
+                  candidate.head.sha === run.head_sha &&
+                  candidate.head.ref === run.head_branch &&
+                  candidate.head.repo?.full_name === run.head_repository?.full_name,
+              );
+            }
             if (
-              !Array.isArray(associatedPullRequests) ||
               associatedPullRequests.length !== 1 ||
               associatedPullRequests[0]?.number !== result.prNumber
             ) {

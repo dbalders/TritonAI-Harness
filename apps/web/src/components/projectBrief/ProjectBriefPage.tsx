@@ -18,11 +18,9 @@ import { mergeEnvironmentSettings, useClientSettings } from "../../hooks/useSett
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import { randomUUID } from "../../lib/utils";
 import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
   isProviderInstancePickerReady,
   resolveDefaultProviderModelSelection,
-  sortProviderInstanceEntries,
+  providerInstanceEntriesFor,
 } from "../../providerInstances";
 import { useProject } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
@@ -82,9 +80,7 @@ export function ProjectBriefPage({
   const modelSelection =
     selectedModel ??
     resolveDefaultProviderModelSelection(providers, projectSettings.defaultModelSelection);
-  const entries = sortProviderInstanceEntries(
-    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings, projectId),
-  );
+  const entries = providerInstanceEntriesFor(providers, settings, projectId);
   const modelOptions = getCustomModelOptionsByInstance(
     settings,
     providers,
