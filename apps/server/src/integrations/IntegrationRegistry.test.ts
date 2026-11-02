@@ -5778,6 +5778,13 @@ describe("IntegrationRegistry lifecycle", () => {
       ],
       tools: [
         {
+          name: "test.fixture.read",
+          displayName: "Read fixture",
+          description: "Read fixture.",
+          capabilities: ["fixture.read"],
+          effect: "read",
+        },
+        {
           name: "test.fixture.write",
           displayName: "Write fixture",
           description: "Write one fixture record.",
@@ -5788,18 +5795,20 @@ describe("IntegrationRegistry lifecycle", () => {
       skills: [],
     };
     let granted: ReadonlyArray<string> = ["fixture.read"];
-    let unclear = false;
+    let mode: "sign-in" | "reject" | "finish-late" = "sign-in";
+    let releaseLate!: () => void;
+    const lateGate = new Promise<void>((resolve) => {
+      releaseLate = resolve;
+    });
     const implementation: IntegrationProvider = {
       id: "test-unclear-grant-provider",
-      tools: [
-        {
-          name: "test.fixture.write",
-          description: "Write one fixture record.",
-          input: EmptyIntegrationToolInput,
-          readOnly: false,
-          openWorld: false,
-        },
-      ],
+      tools: ["test.fixture.read", "test.fixture.write"].map((name) => ({
+        name,
+        description: "Fixture.",
+        input: EmptyIntegrationToolInput,
+        readOnly: name.endsWith(".read"),
+        openWorld: false,
+      })),
       status: async () => ({
         state: "connected",
         accountLabel: "Fixture user",
@@ -5807,33 +5816,57 @@ describe("IntegrationRegistry lifecycle", () => {
         message: null,
       }),
       connect: async (_capabilities, context) => {
-        if (!unclear) return { kind: "connected", flowId: "fixture-flow", message: "Connected." };
+        if (mode === "sign-in") {
+          return { kind: "connected", flowId: "fixture-flow", message: "Connected." };
+        }
         await context!.beginCommit();
+        if (mode === "reject") {
+          granted = ["fixture.read", "fixture.write"];
+          throw new Error("The sign-in result was unclear.");
+        }
+        await lateGate;
         granted = ["fixture.read", "fixture.write"];
-        throw new Error("The sign-in result was unclear.");
+        return { kind: "connected", flowId: "fixture-flow", message: "Connected." };
       },
       disconnect: async () => undefined,
-      invoke: async () => ({ written: true }),
+      invoke: async () => ({ ok: true }),
     };
-    const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+    const registry = new RegistryRuntime(
+      root,
+      [packaged(manifest, implementation)],
+      undefined,
+      undefined,
+      { providerOperationTimeoutMs: 50 },
+    );
+    const write = async () => (await registry.list()).integrations[0]?.capabilities[1];
     try {
       await registry.install(manifest.id);
       await registry.connect(manifest.id);
-      expect((await registry.list()).integrations[0]?.capabilities[1]).toMatchObject({
-        id: "fixture.write",
-        enabled: false,
-      });
+      expect(await write()).toMatchObject({ id: "fixture.write", enabled: false });
 
-      unclear = true;
+      // The sign-in fails promptly, but its commit landed.
+      mode = "reject";
       await expect(registry.connect(manifest.id)).rejects.toMatchObject({
         code: "operation_failed",
       });
-      expect((await registry.list()).integrations[0]?.capabilities[1]).toMatchObject({
-        id: "fixture.write",
-        enabled: true,
+      expect(await write()).toMatchObject({ enabled: true, available: true });
+
+      // The sign-in overruns its deadline and lands only after Harness reported the failure.
+      granted = ["fixture.read"];
+      mode = "sign-in";
+      await registry.connect(manifest.id);
+      expect(await write()).toMatchObject({ enabled: false });
+      mode = "finish-late";
+      await expect(registry.connect(manifest.id)).rejects.toMatchObject({
+        code: "operation_failed",
+      });
+      releaseLate();
+      await expect(registry.awaitToolAvailability("test.fixture.read")).resolves.toEqual({
         available: true,
       });
+      expect(await write()).toMatchObject({ enabled: true, available: true });
     } finally {
+      releaseLate?.();
       await registry.close();
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

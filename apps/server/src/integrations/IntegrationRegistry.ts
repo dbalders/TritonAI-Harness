@@ -680,14 +680,13 @@ function providerPublicMessage(error: unknown, fallback: string): string {
  * The plugin stays usable; the agent gets the plugin's own explanation and is told to check first.
  */
 function unknownWriteOutcomeMessage(toolName: string, pluginName: string, error: unknown): string {
+  const check =
+    "read the record back to check whether the change happened before you retry or adjust the request.";
+  if (error instanceof ProviderOperationTimeoutError) {
+    return `${toolName} may or may not have made its change. ${pluginName} did not finish in time. It becomes available again when that change finishes; then ${check}`;
+  }
   const said = providerPublicMessage(error, "");
-  const reason =
-    error instanceof ProviderOperationTimeoutError
-      ? "did not finish in time."
-      : said
-        ? `said: ${said}`
-        : "did not confirm the outcome.";
-  return `${toolName} may or may not have made its change. ${pluginName} stays available: read the record back to check whether the change happened before you retry or adjust the request. ${pluginName} ${reason}`;
+  return `${toolName} may or may not have made its change. ${pluginName} stays available: ${check} ${pluginName} ${said ? `said: ${said}` : "did not confirm the outcome."}`;
 }
 
 function assertCurrentPackageVersion(
@@ -2048,11 +2047,19 @@ export class RegistryRuntime {
   #refreshSummaryAfterProviderSettlement(
     integration: IntegrationPackage,
     provider: IntegrationProvider,
+    options: { readonly adoptGrants?: boolean } = {},
   ): void {
     const active = [...(this.#activeProviderLifecycleWork.get(provider) ?? [])];
     const refresh = Promise.allSettled(active)
       .then(async () => {
-        if (!this.#closing) await this.#summarize(integration);
+        if (this.#closing) return;
+        if (options.adoptGrants) {
+          // Serialized so a disconnect or environment switch cannot interleave with the adoption.
+          await this.#serializeIntegration(integration.manifest.id, () =>
+            this.#adoptProviderAuthorizedCapabilities(integration).catch(() => undefined),
+          );
+        }
+        await this.#summarize(integration);
       })
       .catch(() => undefined);
     this.#activeSummaryRefreshWork.add(refresh);
@@ -2496,8 +2503,8 @@ export class RegistryRuntime {
   /**
    * Like `toolAvailabilitySync`, but waits out transient provider work (a shared credential
    * refresh, a write commit) before deciding, and re-samples a stale cached summary once when no
-   * such work remains. Bounded by the provider operation timeout, which also bounds that work,
-   * and by the caller's signal and registry shutdown.
+   * such work remains. Bounded by the provider operation timeout (overdue work can outlast it),
+   * the caller's signal, and registry shutdown.
    */
   async awaitToolAvailability(
     name: string,
@@ -3077,7 +3084,9 @@ export class RegistryRuntime {
    */
   async #refreshAfterFailedSignIn(id: string, provider: IntegrationProvider): Promise<void> {
     if (this.#activeProviderLifecycleWork.has(provider)) {
-      this.#refreshSummaryAfterProviderSettlement(this.#package(id), provider);
+      this.#refreshSummaryAfterProviderSettlement(this.#package(id), provider, {
+        adoptGrants: true,
+      });
       return;
     }
     await this.#adoptProviderAuthorizedCapabilities(this.#package(id)).catch(() => undefined);
