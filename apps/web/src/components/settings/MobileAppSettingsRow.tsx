@@ -8,8 +8,8 @@ import { searchableSetting } from "./settingsSearch";
 const stores = [
   {
     label: "iPhone and iPad",
-    store: "App Store",
-    url: "https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824",
+    store: "TestFlight",
+    url: "https://testflight.apple.com/join/7fUqZU3C",
     Icon: AppleIcon,
   },
   {
