@@ -60,7 +60,8 @@ A plugin error never locks the plugin. Recovery would mean a reset, and resettin
 keys and sign-ins. An admitted write that fails without proving nothing changed has an unknown
 outcome. The agent gets an error that says so, includes the plugin's own message (bounded to 1,024
 characters), and tells it to read the record back before it retries or adjusts the request. The
-plugin stays connected. Harness never retries a write itself, so each retry needs the same approval.
+plugin stays connected. Harness never retries a write itself, so each retry goes through the same
+approval policy.
 A provider proves a refusal with `IntegrationProviderPublicError` and `unchanged: true`, or for SDK
 plugins with `details.committed === false`. Harness records unknown outcomes, timeouts, and contract
 violations as `integrations.provider.fault` warnings. Stateless-provider support remains read-only.
@@ -269,9 +270,11 @@ fresh watchdog. Admission returns a commit-tail signal that aborts shortly befor
 providers must pass it to fallible storage or network work so mutations stop before the host reports
 a timeout. Cancellation or timeout before admission wins. Only a settled success proves the commit
 happened; a rejection or watchdog expiry is reported as an unknown outcome and never locks the
-provider. Until the provider's work actually settles, Harness refuses overlapping operations for that
-provider and tools report `connection_changing`. Afterwards the next status check decides whether it
-is connected. Older builds left `commit-journal/` files that locked a plugin on every launch; startup
+provider. Until the provider's work actually settles, Harness refuses overlapping operations and
+reads for that provider, so a read-back cannot observe a half-finished change, and tools report
+`connection_changing`. Work that overran its deadline says so in that refusal and in Settings,
+instead of promising it clears shortly. Afterwards the next status check decides whether the
+provider is connected, and a failed sign-in adopts whatever grants that status reports. Older builds left `commit-journal/` files that locked a plugin on every launch; startup
 records each one as a fault and deletes them.
 
 Shutdown never calls `close` concurrently with admitted commit work. It first closes providers that
@@ -282,7 +285,9 @@ future process-isolation boundary. Authenticated providers must make credential 
 transactional: a rejected or cancelled connect/poll operation cannot leave a newly active credential.
 Provider work should complete in memory before one serialized final commit. A provider whose stored
 credential is actually unusable reports an error or `not_connected` status, so the user reconnects;
-that is a real sign-in problem, not a lock after an unclear write. Registry shutdown aborts
+that is a real sign-in problem, not a lock after an unclear write. After an unclear credential
+commit, a provider should re-check its stored credential on the next status check rather than refuse
+calls until the user disconnects. Registry shutdown aborts
 outstanding non-committing provider work, boundedly drains admitted commit tails, and then invokes
 each safe provider's optional idempotent `close` hook.
 

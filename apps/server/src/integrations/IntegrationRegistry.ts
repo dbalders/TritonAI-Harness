@@ -662,6 +662,10 @@ function cancellationError(signal: AbortSignal): Error {
     : new Error("Integration tool invocation was cancelled.");
 }
 
+function overdueProviderDetail(pluginName: string): string {
+  return `${pluginName} is still finishing an earlier request that did not finish in time. It becomes available again when that request ends or after Harness restarts.`;
+}
+
 function providerPublicMessage(error: unknown, fallback: string): string {
   return error instanceof Error &&
     "_tag" in error &&
@@ -683,7 +687,7 @@ function unknownWriteOutcomeMessage(toolName: string, pluginName: string, error:
       : said
         ? `said: ${said}`
         : "did not confirm the outcome.";
-  return `${toolName} may or may not have made its change. ${pluginName} is still connected: read the record back to check whether the change happened before you retry or adjust the request. ${pluginName} ${reason}`;
+  return `${toolName} may or may not have made its change. ${pluginName} stays available: read the record back to check whether the change happened before you retry or adjust the request. ${pluginName} ${reason}`;
 }
 
 function assertCurrentPackageVersion(
@@ -959,6 +963,8 @@ export class RegistryRuntime {
   readonly #activeStatusChecks = new Set<AbortController>();
   readonly #activeStatusWork = new Set<Promise<IntegrationProviderStatus>>();
   readonly #providerStatusAttempts = new Map<IntegrationProvider, ProviderStatusAttempt>();
+  /** Providers whose operation passed its deadline and has not settled yet. */
+  readonly #overdueProviders = new Set<IntegrationProvider>();
   readonly #activeInvocationWork = new Set<Promise<unknown>>();
   readonly #activeInvocationCompletions = new Set<Promise<void>>();
   readonly #activeInvocationCompletionsByIntegration = new Map<string, Set<Promise<void>>>();
@@ -1360,7 +1366,7 @@ export class RegistryRuntime {
       if (!this.#catalog.has(integrationId)) continue;
       this.#reportProviderFault(
         integrationId,
-        "A write from an earlier session never confirmed its outcome; it may or may not have happened.",
+        "A change from an earlier session never confirmed its outcome; it may or may not have happened.",
       );
     }
     await NodeFSP.rm(journalRoot, { recursive: true, force: true, maxRetries: 4 }).catch(
@@ -1702,6 +1708,17 @@ export class RegistryRuntime {
     }
   }
 
+  /** Why a provider with unsettled work refuses calls; a hung one must not promise "shortly". */
+  #settlingDetail(
+    manifest: IntegrationManifest,
+    provider: IntegrationProvider | undefined,
+    fallback: string,
+  ): string {
+    return provider && this.#overdueProviders.has(provider)
+      ? overdueProviderDetail(manifest.name)
+      : fallback;
+  }
+
   /** Bind a provider operation to the plugin's currently selected service environment. */
   #serviceEnvironmentContext(provider: IntegrationProvider): {
     readonly serviceEnvironment?: string;
@@ -1843,6 +1860,7 @@ export class RegistryRuntime {
     let rejectOperation: (error: Error) => void = () => undefined;
     let timeout = setTimeout(() => {
       timedOut = true;
+      this.#overdueProviders.add(provider);
       if (!commitStarted) this.#recordProviderFault(provider, new ProviderOperationTimeoutError());
       controller.abort();
     }, this.#providerOperationTimeoutMs);
@@ -1898,6 +1916,7 @@ export class RegistryRuntime {
           );
           timeout = setTimeout(() => {
             timedOut = true;
+            this.#overdueProviders.add(provider);
             const timeoutError = new ProviderOperationTimeoutError();
             this.#recordProviderFault(provider, timeoutError);
             rejectOperation(timeoutError);
@@ -1926,7 +1945,10 @@ export class RegistryRuntime {
       this.#activeLifecycleWork.delete(settlement);
       providerWork.delete(settlement);
       resolveSettlement();
-      if (providerWork.size === 0) this.#activeProviderLifecycleWork.delete(provider);
+      if (providerWork.size === 0) {
+        this.#activeProviderLifecycleWork.delete(provider);
+        this.#overdueProviders.delete(provider);
+      }
       this.#activeLifecycleControllers.delete(controller);
       this.#committingLifecycleControllers.delete(controller);
       this.#invalidateProviderStatus(provider);
@@ -2310,6 +2332,9 @@ export class RegistryRuntime {
         ) {
           return {
             ...current,
+            ...(provider && this.#overdueProviders.has(provider)
+              ? { statusMessage: overdueProviderDetail(manifest.name) }
+              : {}),
             capabilities: current.capabilities.map((capability) => ({
               ...capability,
               available: false,
@@ -2440,7 +2465,11 @@ export class RegistryRuntime {
     }
     const changing = unavailable(
       "connection_changing",
-      `${manifest.name} is refreshing its connection. Try again shortly.`,
+      this.#settlingDetail(
+        manifest,
+        provider,
+        `${manifest.name} is refreshing its connection. Try again shortly.`,
+      ),
     );
     if (settling) return changing;
     const summary = this.#summaries.get(manifest.id);
@@ -3042,6 +3071,19 @@ export class RegistryRuntime {
     return this.setCapabilityEnabled(id, capabilities[0]!, enabled);
   }
 
+  /**
+   * After a failed sign-in the provider's status decides: an unclear commit may have landed, so
+   * once its work settles, adopt the grants it reports, as a successful sign-in would.
+   */
+  async #refreshAfterFailedSignIn(id: string, provider: IntegrationProvider): Promise<void> {
+    if (this.#activeProviderLifecycleWork.has(provider)) {
+      this.#refreshSummaryAfterProviderSettlement(this.#package(id), provider);
+      return;
+    }
+    await this.#adoptProviderAuthorizedCapabilities(this.#package(id)).catch(() => undefined);
+    await this.#summarize(this.#package(id)).catch(() => undefined);
+  }
+
   connect(
     id: string,
     submission?: IntegrationConnectionSubmission,
@@ -3099,11 +3141,7 @@ export class RegistryRuntime {
         await this.#summarize(this.#package(id));
         return result;
       } catch (error) {
-        if (this.#activeProviderLifecycleWork.has(provider)) {
-          this.#refreshSummaryAfterProviderSettlement(this.#package(id), provider);
-        } else {
-          await this.#summarize(this.#package(id)).catch(() => undefined);
-        }
+        await this.#refreshAfterFailedSignIn(id, provider);
         throw operationError(
           "operation_failed",
           providerPublicMessage(
@@ -3149,11 +3187,7 @@ export class RegistryRuntime {
         }
         return { ...result, integration: await this.#summarize(this.#package(id)) };
       } catch (error) {
-        if (this.#activeProviderLifecycleWork.has(provider)) {
-          this.#refreshSummaryAfterProviderSettlement(this.#package(id), provider);
-        } else {
-          await this.#summarize(this.#package(id)).catch(() => undefined);
-        }
+        await this.#refreshAfterFailedSignIn(id, provider);
         throw operationError(
           "operation_failed",
           providerPublicMessage(
@@ -3499,7 +3533,11 @@ export class RegistryRuntime {
       ) {
         throw operationError(
           "operation_failed",
-          `${manifest.name} is unavailable while its connection is changing.`,
+          this.#settlingDetail(
+            manifest,
+            provider,
+            `${manifest.name} is unavailable while its connection is changing.`,
+          ),
         );
       }
       const controller = new AbortController();
@@ -3526,7 +3564,11 @@ export class RegistryRuntime {
         if (this.#activeProviderLifecycleWork.has(provider)) {
           throw operationError(
             "operation_failed",
-            `${manifest.name} is unavailable while its connection is changing.`,
+            this.#settlingDetail(
+              manifest,
+              provider,
+              `${manifest.name} is unavailable while its connection is changing.`,
+            ),
           );
         }
         const status = await this.#providerStatus(provider, signal);
@@ -3573,6 +3615,21 @@ export class RegistryRuntime {
           );
         }
         const invokeProvider = (providerContext?: IntegrationLifecycleContext) => {
+          // A read must not observe a write or credential change that is still in flight.
+          if (
+            !providerContext &&
+            this.#activeProviderLifecycleWork.has(provider) &&
+            !this.#providerPreparationWork.has(provider)
+          ) {
+            throw operationError(
+              "operation_failed",
+              this.#settlingDetail(
+                manifest,
+                provider,
+                `${manifest.name} is finishing another change. Try again shortly.`,
+              ),
+            );
+          }
           if (
             signal.aborted ||
             this.#closing ||
@@ -3660,7 +3717,9 @@ export class RegistryRuntime {
         if (error instanceof ProviderOperationTimeoutError) {
           throw operationError(
             "operation_failed",
-            `${manifest.name} did not respond in time, before ${tool.displayName} started its change. Try again.`,
+            tool.effect === "write"
+              ? `${manifest.name} did not respond in time, before ${tool.displayName} started its change. Try again.`
+              : `${manifest.name} did not respond in time. Try again.`,
           );
         }
         throw error;
