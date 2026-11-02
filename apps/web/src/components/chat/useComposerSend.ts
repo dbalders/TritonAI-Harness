@@ -635,7 +635,6 @@ export function useComposerSend(input: ComposerSendInput) {
         const draftBeforeCheck = useComposerDraftStore
           .getState()
           .getComposerDraft(composerDraftTarget);
-        const composerBeforeCheck = composerRef.current;
         sendInFlightRef.current = true;
         const readyToSend = await (async () => {
           try {
@@ -644,7 +643,7 @@ export function useComposerSend(input: ComposerSendInput) {
             );
             if (
               promptRef.current !== promptForSend ||
-              composerRef.current !== composerBeforeCheck ||
+              currentRouteThreadKeyRef.current !== routeThreadKey ||
               useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !==
                 draftBeforeCheck
             )
