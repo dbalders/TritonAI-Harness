@@ -455,6 +455,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "guest-links",
     title: "Guest links",
     to: "/settings/labs",
+    cloudOnly: true,
     scope: "environment",
     searchTerms: ["beta share guest invite link teammate watch t3 connect tunnel"],
   },
