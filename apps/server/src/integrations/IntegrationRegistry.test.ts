@@ -1739,7 +1739,10 @@ describe("IntegrationRegistry lifecycle", () => {
         restarted.invokeTool("test.records.list", {}, { signal: new AbortController().signal }),
       ).resolves.toBeDefined();
       await expect(NodeFSP.access(journalRoot)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(faults).toMatchObject([{ integrationId: connectedManifest.id }]);
+      expect(faults.map(({ integrationId }) => integrationId).toSorted()).toEqual([
+        connectedManifest.id,
+        "unreadable",
+      ]);
       expect(state.credential).toBe("present");
     } finally {
       await first.close();
@@ -5749,10 +5752,8 @@ describe("IntegrationRegistry lifecycle", () => {
         code: "operation_failed",
       });
       expect(faults).toEqual([
-        {
-          integrationId: connectedManifest.id,
-          reason: "Credential commit result was ambiguous.",
-        },
+        // A raw provider error is logged by name only; its message is not public.
+        { integrationId: connectedManifest.id, reason: "Error" },
       ]);
       expect((await registry.snapshot()).integrations[0]).toMatchObject({
         connectionState: "connected",

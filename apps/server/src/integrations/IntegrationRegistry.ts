@@ -641,12 +641,18 @@ function operationError(
   return new IntegrationOperationError({ code, message });
 }
 
-/** A fault reason for logs: system errors by code only, since their messages carry paths. */
+/**
+ * A fault reason for logs. Only host messages and messages a provider marked public are kept;
+ * other errors log their name or system code, since raw messages can carry paths or remote text.
+ */
 function faultReason(error: unknown): string {
   if (!(error instanceof Error)) return "Unknown failure.";
   const code = (error as NodeJS.ErrnoException).code;
   if (typeof code === "string") return `${error.name} (${code})`;
-  const message = error.message.trim() || error.name;
+  const message =
+    error instanceof ProviderOperationTimeoutError
+      ? error.message
+      : providerPublicMessage(error, error.name);
   return message.length > 200 ? `${message.slice(0, 199)}…` : message;
 }
 
@@ -686,7 +692,7 @@ function unknownWriteOutcomeMessage(toolName: string, pluginName: string, error:
     return `${toolName} may or may not have made its change. ${pluginName} did not finish in time. It becomes available again when that change finishes; then ${check}`;
   }
   const said = providerPublicMessage(error, "");
-  return `${toolName} may or may not have made its change. ${pluginName} stays available: ${check} ${pluginName} ${said ? `said: ${said}` : "did not confirm the outcome."}`;
+  return `${toolName} may or may not have made its change. Before you retry or adjust the request, read the record back to check whether the change happened. ${pluginName} ${said ? `said: ${said}` : "did not confirm the outcome."}`;
 }
 
 function assertCurrentPackageVersion(
@@ -1362,7 +1368,7 @@ export class RegistryRuntime {
     const entries = await NodeFSP.readdir(journalRoot).catch(() => []);
     for (const name of entries) {
       const integrationId = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
-      if (!this.#catalog.has(integrationId)) continue;
+      if (!isIntegrationId(integrationId)) continue;
       this.#reportProviderFault(
         integrationId,
         "A change from an earlier session never confirmed its outcome; it may or may not have happened.",
