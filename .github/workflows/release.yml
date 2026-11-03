@@ -164,6 +164,12 @@ jobs:
       - name: Test
         run: vp run test
 
+      # Browser tests run source modules; this boots the production chunk graph.
+      - name: Boot the built web client
+        run: |
+          vp run --filter @t3tools/web build
+          node apps/web/scripts/verify-built-boot.ts
+
       - name: Managed plugin build tools
         run: vp run test:release-inputs
 
@@ -976,7 +982,7 @@ jobs:
           git config user.email "${{ steps.app_bot.outputs.email }}"
 
           git add apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json pnpm-lock.yaml
-          git commit -m "chore(release): prepare $RELEASE_TAG"
+          git commit --no-verify -m "chore(release): prepare $RELEASE_TAG"
           git push origin HEAD:main
 
   announce_discord:

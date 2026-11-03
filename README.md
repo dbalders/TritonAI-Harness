@@ -82,7 +82,7 @@ Community skill contributions are welcome through [TritonAI Commons](docs/user/t
 
 ## Development
 
-This repository contains the Harness server and desktop, web, and mobile clients. Development requires Node.js 24 and [Vite+](https://viteplus.dev/guide/).
+This repository contains the Harness server and desktop, web, and mobile clients. Development requires Node.js 26 and [Vite+](https://viteplus.dev/guide/).
 
 ### Install `vp`
 

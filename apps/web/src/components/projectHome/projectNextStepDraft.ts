@@ -1,6 +1,6 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ProjectNextStep, ProjectOverview } from "@t3tools/contracts";
-import { threadContextRecord } from "../../lib/composerContextRecords";
+import { threadContextRecord } from "@t3tools/shared/composerContextReferences";
 
 /** Keep the chosen action in the user's voice; source history travels as thread references. */
 export function projectNextStepDraft(

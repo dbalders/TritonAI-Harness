@@ -1,14 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { isElectron } from "../../env";
 import { environmentPresentations } from "../../state/presentation";
 import { serverEnvironment } from "../../state/server";
 import { environmentSession } from "../../state/session";
-import {
-  resolvePrimaryOperateAccess,
-  resolveRemoteOperateAccess,
-} from "../settings/ProviderSettingsPanel.logic";
+import { resolveRemoteOperateAccess } from "../settings/ProviderSettingsPanel.logic";
 import { UsageProviderSettings } from "../settings/UsageProviderSettings";
 import {
   Dialog,
@@ -28,10 +24,7 @@ const usageSourceTargetsAtom = Atom.make((get) =>
       isPending: session.waiting,
       hasError: session._tag === "Failure",
     };
-    const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
-    const access = isPrimary
-      ? resolvePrimaryOperateAccess({ ...sessionAccess, isPrimary, hasDesktopBridge: isElectron })
-      : resolveRemoteOperateAccess(sessionAccess);
+    const access = resolveRemoteOperateAccess(sessionAccess);
     return {
       environmentId,
       label: environment.entry.target.label,

@@ -27,11 +27,12 @@
 - [Updating TritonAI Harness](./user/updating.md)
 - [Source control integrations](./user/source-control.md)
 - [Background service distribution policy](./user/background-service.md)
-- Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md)
+- Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md) · [Pi](./user/providers-pi.md) · [Muse Code](./user/providers-muse.md) · [fx](./user/providers-fx.md)
 
 Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
 
 - [Outside agents (MCP)](./user/outside-agents.md)
+- [Triage an issue](./user/triage.md)
 
 ---
 

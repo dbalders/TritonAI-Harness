@@ -111,6 +111,7 @@ const makeHarness = Effect.fn("HelpPermissionsTest.makeHarness")(function* (
       subscribeServerConfig: (input) => client.subscribeServerConfig(input),
       ready: Effect.void,
       probe: Effect.void,
+      inboundFrames: Effect.succeed(0),
       closed: Effect.never,
     };
     supervisors.set(

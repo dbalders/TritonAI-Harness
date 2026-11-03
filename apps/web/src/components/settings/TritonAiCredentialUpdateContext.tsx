@@ -28,6 +28,7 @@ function useTritonAiCredentialUpdate(update: UpdateCredentials, connected: boole
   if (connected && (phase === "reconnecting" || phase === "timed-out")) {
     setPhase("idle");
   }
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Own the credential-update reconnect timeout and cancel it once the connection returns.
   useEffect(() => {
     if (connected || phase !== "reconnecting") return;
     const timeout = window.setTimeout(() => setPhase("timed-out"), 10_000);

@@ -17,6 +17,7 @@ export function useGettingStartedActions(environmentId: EnvironmentId | null) {
   const router = useRouter();
   const preparingRef = useRef(false);
   const lifetime = useRef<{ environmentId: EnvironmentId | null } | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keep asynchronous workspace creation bound to the mounted environment; invalidate it on unmount.
   useLayoutEffect(() => {
     lifetime.current = { environmentId };
     return () => {

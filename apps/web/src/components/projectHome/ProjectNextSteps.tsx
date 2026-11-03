@@ -17,7 +17,7 @@ function ProjectSummary({ text, about = false }: { text: string; about?: boolean
   const ref = useRef<HTMLParagraphElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
-  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize the disclosure with rendered text overflow and container resizing.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Observe rendered text overflow and container resizing for the disclosure control.
   useEffect(() => {
     const element = ref.current;
     if (!text || !element || expanded) return;

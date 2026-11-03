@@ -21,6 +21,7 @@ export function GuidedOnboarding() {
     if (saved) void navigate({ to: "/", replace: true });
     else setFailed(true);
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Open the persisted remote chapter and invalidate its asynchronous request when the environment unmounts.
   useEffect(() => {
     if (!environmentId) return;
     void open();

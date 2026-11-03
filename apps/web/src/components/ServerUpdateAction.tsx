@@ -1,4 +1,5 @@
 import type {
+  DesktopUpdateChannel,
   ServerInstallation,
   AuthSessionState,
   EnvironmentId,
@@ -91,8 +92,12 @@ export interface ServerUpdateTarget {
   readonly installation?: ServerInstallation | undefined;
   readonly targetVersion: string;
   readonly desktopAppUpdate?: boolean;
-  readonly threadContinuation?: boolean;
-  readonly continueThreadsAfterServerUpdate?: boolean;
+  /** Set only by a track switch; the host's desktop app moves to this track. */
+  readonly channel?: DesktopUpdateChannel;
+  /** A track switch's checked release migration; the host re-checks its own database. */
+  readonly targetDatabaseMigration?: number;
+  /** The host already runs its track's newest build and only saves the track. */
+  readonly trackOnly?: boolean;
 }
 
 /** Managed distributions are updated on the host through the approved Harness updater. */

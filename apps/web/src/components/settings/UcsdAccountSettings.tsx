@@ -60,10 +60,12 @@ function AccountConnection({ environmentId }: { readonly environmentId: Environm
     controller.subscribe,
     controller.getSnapshot,
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Activate the account controller only while its environment connection is mounted.
   useEffect(() => {
     if (preparedConnection._tag === "None") return;
     return controller.activate();
   }, [controller, preparedConnection]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Recheck the external sign-in when the browser regains focus and remove the listener on unmount.
   useEffect(() => {
     const checkOnReturn = () => {
       void controller.check();

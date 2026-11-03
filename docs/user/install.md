@@ -23,6 +23,15 @@ TritonAI Harness ships separate Stable and Nightly desktop apps for macOS and Wi
 installation, update the app from **Settings → About → Check for Updates**. See
 [TritonAI updates](./updates.md) for how app, engine, and skill updates are delivered.
 
+### The `t3` command
+
+The desktop app includes the `t3` command-line tool. To run it from any
+terminal, open **Settings → About** and choose **Install** next to
+**t3 command**. On macOS and Linux it adds a `t3` link to a folder on your
+`PATH`; on Windows it adds the app's command folder to your `PATH`. Open a new
+terminal afterwards. **Remove** takes it off again. If you already have a `t3`
+command on your `PATH`, it stays as it is.
+
 ### Windows Subsystem for Linux
 
 Choose a WSL distro in **Settings → Connections** to run agents and projects

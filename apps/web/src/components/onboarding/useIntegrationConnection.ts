@@ -164,6 +164,7 @@ export function useIntegrationConnection(
   const current = session !== null && session.key === key ? session : null;
   const scheduled = current?.scheduled ?? null;
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Load the remote integration state for the mounted environment and invalidate stale requests.
   useEffect(() => {
     const owner = ++generation.current;
     if (!environmentId || key === null) return;
@@ -191,6 +192,7 @@ export function useIntegrationConnection(
   const attempt = current?.attempt ?? null;
 
   // Follow the sign-in until the provider reports it finished, failed, or expired.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Own and cancel the external integration sign-in polling timer for the active flow.
   useEffect(() => {
     if (!environmentId || key === null || !scheduled || attempt === null) return;
     const owner = generation.current;

@@ -22,7 +22,7 @@ import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
 import * as DesktopObservability from "../app/DesktopObservability.ts";
-
+import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
@@ -98,6 +98,7 @@ function layerPool(
         input.shutdown === undefined
           ? DesktopShutdown.layer
           : Layer.succeed(DesktopShutdown.DesktopShutdown, input.shutdown),
+        DesktopState.layer,
         DesktopWslEnvironment.layerTest(),
         Layer.succeed(ElectronDialog.ElectronDialog, {
           ...ElectronDialog.make,

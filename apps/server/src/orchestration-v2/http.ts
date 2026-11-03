@@ -5,7 +5,6 @@ import {
   EnvironmentHttpApi,
   type OrchestrationProjectShell,
 } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
 import * as Predicate from "effect/Predicate";
@@ -34,11 +33,7 @@ import {
 } from "./threadHistoryPaging.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import {
-  buildActiveShellSnapshot,
-  loadShellSnapshotParts,
-  shellSnapshotForSubscriber,
-} from "./ShellStream.ts";
+import { loadSubscriberShellSnapshot } from "./ShellStream.ts";
 import { boundedSnapshotResponseFields } from "./ThreadStream.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
 
@@ -87,19 +82,19 @@ export const layer = HttpApiBuilder.group(
         readonly omitIdleSubagents: boolean;
         readonly omitOlderSettled: boolean;
       }) {
-        const base = buildActiveShellSnapshot(
-          yield* loadShellSnapshotParts({
-            sql,
-            readThreads: threadManagement.readShellSnapshot({ location: "active" }),
-            listProjects: projectStore.listShells(),
-            latestSequence: applicationEvents.latestApplicationSequence,
-          }),
-        );
-        const { snapshot } = shellSnapshotForSubscriber(base, {
-          ...options,
-          now: yield* DateTime.now,
+        const { snapshot } = yield* loadSubscriberShellSnapshot({
+          sql,
+          listShellIndex: threadManagement.listActiveShellIndex(),
+          readThreads: (threadIds) =>
+            threadManagement.readShellSnapshot({
+              location: "active",
+              ...(threadIds === undefined ? {} : { threadIds }),
+            }),
+          listProjects: projectStore.listShells(),
+          latestSequence: applicationEvents.latestApplicationSequence,
+          options,
         });
-        const projects = yield* enrichProjectShells(base.projects);
+        const projects = yield* enrichProjectShells(snapshot.projects);
         return { ...snapshot, projects };
       },
     );
@@ -136,10 +131,12 @@ export const layer = HttpApiBuilder.group(
         anchorThreadId?: Parameters<
           typeof threadManagement.getThreadSnapshotWindow
         >[1]["anchorThreadId"],
+        deferWork = false,
       ) {
         return yield* threadManagement
           .getThreadSnapshotWindow(threadId, {
             rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
+            deferWork,
             userTurnLimit:
               anchorItemId === undefined
                 ? THREAD_HISTORY_PAGE_POLICY.maxUserTurns
@@ -238,9 +235,12 @@ export const layer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.threadBoundedSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          const snapshot = yield* loadThreadSnapshotWindow(args.params.threadId).pipe(
-            traceLocalHandlerWork,
-          );
+          const snapshot = yield* loadThreadSnapshotWindow(
+            args.params.threadId,
+            undefined,
+            undefined,
+            args.query.deferWork === "1",
+          ).pipe(traceLocalHandlerWork);
           const bounded = buildBoundedThreadProjection({
             projection: snapshot.projection,
             snapshotSequence: snapshot.snapshotSequence,
@@ -276,6 +276,11 @@ export const layer = HttpApiBuilder.group(
               args.query.cursor,
               args.query.throughEntryId,
               args.query.view === "conversation",
+              args.query.view === "work"
+                ? "work"
+                : args.query.deferWork === "1"
+                  ? "deferred"
+                  : undefined,
             )
             .pipe(
               Effect.map((page) =>

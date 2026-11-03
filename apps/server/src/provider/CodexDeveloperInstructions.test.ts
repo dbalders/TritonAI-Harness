@@ -63,6 +63,18 @@ describe("Codex orchestration context", () => {
   });
 });
 
+describe("Codex device context", () => {
+  it("adds the device block only when the session holds device access", () => {
+    const tools = (device: boolean) =>
+      buildCodexAdditionalContext({ model: "gpt-6.1-sol" }, { browser: true, device }).t3_code_tools
+        ?.value ?? "";
+
+    NodeAssert.ok(tools(true).includes("`device_list`"));
+    NodeAssert.ok(!tools(true).includes("ToolSearch"));
+    NodeAssert.ok(!tools(false).includes("`device_list`"));
+  });
+});
+
 function runtimeInstructions(runtime: Parameters<typeof buildCodexAdditionalContext>[0]) {
   return buildCodexAdditionalContext(runtime).t3_code_runtime!.value;
 }

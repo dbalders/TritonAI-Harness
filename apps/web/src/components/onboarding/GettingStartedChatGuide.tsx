@@ -50,6 +50,7 @@ export function useGettingStartedChatGuide(input: GuideChatInput): ComposerBanne
       item.environmentId === environmentId &&
       item.threadId === threadId,
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Persist guide milestones from completed remote agent runs while the guide is mounted.
   useEffect(() => {
     if (!enabled || !threadId) return;
     for (const event of gettingStartedRunEvents({

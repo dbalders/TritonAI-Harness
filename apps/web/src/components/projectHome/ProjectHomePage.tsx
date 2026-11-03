@@ -371,6 +371,7 @@ function ProjectOverview({
     .join("|");
   const previousCompletionKey = useRef(completionKey);
   const refreshMemory = memory.refresh;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refresh remote project memory when an agent completes a run.
   useEffect(() => {
     if (previousCompletionKey.current === completionKey) return;
     previousCompletionKey.current = completionKey;

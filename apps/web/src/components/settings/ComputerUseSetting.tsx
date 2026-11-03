@@ -16,6 +16,7 @@ export function ComputerUseSetting() {
   const [readError, setReadError] = useState<string | null>(null);
   const watcher = useRef<ReturnType<typeof watchComputerUseState> | null>(null);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Subscribe to native desktop permission and driver state and dispose the observer on unmount.
   useEffect(() => {
     if (!bridge || pending) return;
     const observer = watchComputerUseState({

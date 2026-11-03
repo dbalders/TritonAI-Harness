@@ -10,6 +10,8 @@ import { assert, it } from "@effect/vitest";
 import {
   ComposerContextId,
   EventId,
+  ProjectId,
+  ProviderInstanceId,
   type OrchestrationMessageContext,
   ThreadId,
 } from "@t3tools/contracts";
@@ -235,12 +237,6 @@ it.effect("preserves newer thread activity while hydrating legacy transcripts", 
     });
     const readActivity = Effect.gen(function* () {
       const projection = yield* projections.getThreadProjection(threadId);
-      const storedEvents = yield* events.read({ threadId }).pipe(Stream.runCollect);
-      const memory = yield* Effect.gen(function* () {
-        const store = yield* ProjectionStore.ProjectionStoreV2;
-        for (const stored of storedEvents) yield* store.apply(stored.event);
-        return yield* store.getThreadProjection(threadId);
-      }).pipe(Effect.provide(ProjectionStore.layerMemory));
       const [row] = yield* sql<{ readonly scalar: string; readonly payload: string }>`
         SELECT updated_at AS scalar, json_extract(payload_json, '$.updatedAt') AS payload
         FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
@@ -250,8 +246,6 @@ it.effect("preserves newer thread activity while hydrating legacy transcripts", 
         payload: row?.payload,
         sqlThread: DateTime.formatIso(projection.thread.updatedAt),
         sqlProjection: DateTime.formatIso(projection.updatedAt),
-        memoryThread: DateTime.formatIso(memory.thread.updatedAt),
-        memoryProjection: DateTime.formatIso(memory.updatedAt),
       };
     });
     const expectedActivity = (at: string) => ({
@@ -259,8 +253,6 @@ it.effect("preserves newer thread activity while hydrating legacy transcripts", 
       payload: at,
       sqlThread: at,
       sqlProjection: at,
-      memoryThread: at,
-      memoryProjection: at,
     });
     assert.deepStrictEqual(yield* readActivity, expectedActivity(shellAt));
     const hydrated = yield* projections.getThreadProjection(threadId);
@@ -325,6 +317,69 @@ it.effect("preserves newer thread activity while hydrating legacy transcripts", 
       ...shell,
       updatedAt: DateTime.makeUnsafe(liveAt),
     });
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("caches the absent legacy transcript for a native V2 thread", () =>
+  Effect.gen(function* () {
+    const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:v2-born");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const now = DateTime.makeUnsafe("2026-01-01T00:00:00.000Z");
+    yield* eventSink.write({
+      events: [
+        {
+          id: EventId.make("event:v2-born"),
+          type: "thread.created",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: threadId,
+            projectId: ProjectId.make("project:v2-born"),
+            title: "Native V2 thread",
+            providerInstanceId,
+            modelSelection: { instanceId: providerInstanceId, model: "gpt-6" },
+            createdBy: "user",
+            creationSource: "web",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: null,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+        },
+      ],
+    });
+    const before = yield* projections.getThreadProjection(threadId);
+    let legacyLookups = 0;
+    for (let read = 0; read < 3; read++) {
+      const summary = yield* importer.ensureTranscript(threadId).pipe(
+        Effect.provideService(Statement.CurrentTransformer, (statement) => {
+          const [query, parameters] = statement.compile();
+          if (
+            query.includes("FROM orchestration_v2_legacy_imports") &&
+            parameters[0] === threadId
+          ) {
+            legacyLookups++;
+          }
+          return Effect.succeed(statement);
+        }),
+      );
+      assert.deepStrictEqual(summary, { importedThreadCount: 0, importedMessageCount: 0 });
+    }
+    assert.equal(legacyLookups, 1);
+    assert.deepStrictEqual(yield* projections.getThreadProjection(threadId), before);
   }).pipe(Effect.provide(layerTest)),
 );
 

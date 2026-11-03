@@ -9,7 +9,7 @@ import { DESKTOP_UPDATE_RESTART_MARKER_FILE } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 
 import * as Deferred from "effect/Deferred";
-
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 
 import * as Fiber from "effect/Fiber";
@@ -123,17 +123,21 @@ describe("DesktopUpdates", () => {
           {
             version: "1.2.4-nightly.20260709.766",
             items: ["feat(client): persist offline environment data by @juliusmarminge in #3795"],
+            releasedAt: "2026-07-09",
             totalItems: 1,
           },
           {
             version: "1.2.4-nightly.20260709.765",
             items: ["[codex] Upgrade Clerk stack by @juliusmarminge in #3821"],
+            releasedAt: "2026-07-09",
             totalItems: 1,
           },
-          { version: "1.2.4-nightly.20260709.764", items: ["Change 764"], totalItems: 1 },
-          { version: "1.2.4-nightly.20260709.763", items: ["Change 763"], totalItems: 1 },
-          { version: "1.2.4-nightly.20260709.762", items: ["Change 762"], totalItems: 1 },
-          { version: "1.2.4-nightly.20260709.761", items: ["Change 761"], totalItems: 1 },
+          ...[764, 763, 762, 761].map((build) => ({
+            version: `1.2.4-nightly.20260709.${build}`,
+            items: [`Change ${build}`],
+            releasedAt: "2026-07-09",
+            totalItems: 1,
+          })),
         ]);
         assert.equal(state.omittedReleaseCount, 1);
         assert.deepEqual(harness.sentStates.at(-1)?.releaseNotes, state.releaseNotes);
@@ -821,7 +825,8 @@ describe("DesktopUpdates", () => {
             assert.deepEqual(harness.channelChecks().at(-1), {
               channel,
               allowPrerelease: channel === "nightly",
-              allowDowngrade: channel === "nightly",
+              // An older build can lack this one's migrations; only a guarded track switch may.
+              allowDowngrade: false,
             });
             harness.emit("update-available", {
               version: otherChannel === "nightly" ? "0.3.5-nightly.20260914.1" : "0.3.5",
@@ -857,37 +862,6 @@ describe("DesktopUpdates", () => {
   });
 
   // regression: #236 fix(desktop): harden macOS updates and release validation
-  it.effect("accepts an older Nightly offered by its own feed", () => {
-    const olderVersion = "0.3.4-nightly.20260915.17";
-    let installs = 0;
-    const harness = makeHarness({
-      appVersion: "0.3.4-nightly.20260916.20",
-      quitAndInstall: Effect.sync(() => {
-        installs += 1;
-      }),
-    });
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const updates = yield* DesktopUpdates.DesktopUpdates;
-        yield* updates.configure;
-        yield* updates.check("manual");
-        assert.deepEqual(harness.channelChecks().at(-1), {
-          channel: "nightly",
-          allowPrerelease: true,
-          allowDowngrade: true,
-        });
-        harness.emit("update-available", { version: olderVersion });
-        yield* flushCallbacks;
-        assert.equal((yield* updates.getState).availableVersion, olderVersion);
-        harness.emit("update-downloaded", { version: olderVersion });
-        yield* flushCallbacks;
-        assert.equal((yield* updates.getState).downloadedVersion, olderVersion);
-        assert.isTrue((yield* updates.install).accepted);
-        assert.equal(installs, 1);
-      }),
-    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
-  });
-
   it.effect("persists channel changes through the settings service", () => {
     const harness = makeHarness({ isPackaged: false });
 
@@ -903,6 +877,26 @@ describe("DesktopUpdates", () => {
         assert.equal(state.channel, "nightly");
         assert.equal(persistedSettings.updateChannel, "nightly");
         assert.equal(persistedSettings.updateChannelConfiguredByUser, true);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("ignores a finished download from a track it no longer follows", () => {
+    const harness = makeHarness();
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        // A backed-out switch's download keeps reporting progress until it finishes.
+        harness.emit("download-progress", { percent: 40 });
+        yield* flushCallbacks;
+        harness.emit("update-downloaded", { version: "1.2.4-nightly.20261027.1" });
+        yield* flushCallbacks;
+
+        const state = yield* updates.getState;
+        assert.equal(state.downloadedVersion, null);
+        assert.notEqual(state.status, "downloading");
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
@@ -926,11 +920,27 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("fails channel changes with a typed error while a check is in progress", () =>
+  it.effect("never offers an older Nightly to a Nightly build's own checks", () => {
+    const harness = makeHarness({ appVersion: "1.2.4-nightly.20261027.1" });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.check("poll");
+
+        assert.equal((yield* updates.getState).channel, "nightly");
+        assert.deepEqual(harness.checkAllowedDowngrade, [false]);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("waits out a background check instead of refusing a track change", () =>
     Effect.gen(function* () {
       const checkStarted = yield* Deferred.make<void>();
       const releaseCheck = yield* Deferred.make<void>();
       const harness = makeHarness({
+        beforeSetUpdateChannel: Effect.void,
         checkForUpdates: Deferred.succeed(checkStarted, undefined).pipe(
           Effect.andThen(Deferred.await(releaseCheck)),
         ),
@@ -940,21 +950,16 @@ describe("DesktopUpdates", () => {
         Effect.gen(function* () {
           const updates = yield* DesktopUpdates.DesktopUpdates;
           yield* updates.configure;
-
-          const checkFiber = yield* updates.check("manual").pipe(Effect.forkScoped);
+          yield* updates.check("poll").pipe(Effect.forkScoped);
           yield* Deferred.await(checkStarted);
 
-          const exit = yield* Effect.exit(updates.setChannel("latest"));
-          assert.equal(exit._tag, "Failure");
-          if (exit._tag === "Failure") {
-            const error = Cause.squash(exit.cause);
-            assert.instanceOf(error, DesktopUpdates.DesktopUpdateActionInProgressError);
-            assert.equal(error.action, "check");
-            assert.equal(error.requestedChannel, "latest");
-          }
-
+          // Packaged Harness builds stay on their installed track, so re-select it.
+          const channelFiber = yield* updates.setChannel("latest").pipe(Effect.forkScoped);
           yield* Deferred.succeed(releaseCheck, undefined);
-          yield* Fiber.join(checkFiber);
+          yield* TestClock.adjust(Duration.seconds(2));
+          const state = yield* Fiber.join(channelFiber);
+
+          assert.equal(state.channel, "latest");
         }),
       ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
     }),

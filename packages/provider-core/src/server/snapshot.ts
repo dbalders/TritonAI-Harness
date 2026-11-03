@@ -1,4 +1,8 @@
-import type { ProviderUsageLimitsUpdate, ServerProvider } from "@t3tools/contracts";
+import type {
+  ProviderUsageLimitsUpdate,
+  ServerProvider,
+  ServerSettingsError,
+} from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as PubSub from "effect/PubSub";
 import type * as Scope from "effect/Scope";
@@ -12,6 +16,7 @@ export interface ManagedServerProvider {
   }) => Effect.Effect<ProviderMaintenanceCapabilities>;
   readonly getSnapshot: Effect.Effect<ServerProvider>;
   readonly refresh: Effect.Effect<ServerProvider>;
+  readonly refreshUsage?: Effect.Effect<void, ServerSettingsError>;
   readonly streamChanges: Stream.Stream<ServerProvider>;
   /** Acquire the change subscription before forking its consumer to avoid losing startup events. */
   readonly subscribeChanges?: Effect.Effect<

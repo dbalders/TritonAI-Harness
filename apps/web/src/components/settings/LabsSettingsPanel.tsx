@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { useT3ConnectAuthPrompt } from "../clerk/useT3ConnectAuthPrompt";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -15,14 +16,37 @@ import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings"
 export function LabsSettingsPanel() {
   return (
     <SettingsPageContainer>
-      {hasCloudPublicConfig() ? (
-        <SettingsSection id="beta" title="Beta">
-          <GuestLinksRowWithSignIn />
-        </SettingsSection>
-      ) : null}
+      <SettingsSection id="beta" title="Beta">
+        <BoringSidebarRow />
+        {/* Harness: Guest links need T3 Connect, so builds without it hide the row. */}
+        {hasCloudPublicConfig() ? <GuestLinksRowWithSignIn /> : null}
+        <LinkedEnvironmentsRow />
+        <SimlockHostsRow />
+      </SettingsSection>
       {isFeatureAvailable("guidedTour") ? <ExperimentalFeaturesSection /> : null}
       <LegacyFeaturesSection />
     </SettingsPageContainer>
+  );
+}
+
+function BoringSidebarRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("boring-sidebar")}
+      description="Group sidebar threads into project folders. Pinned threads stay on top, and Snoozed and Settled stay below the folders."
+      control={
+        <Switch
+          checked={settings.boringSidebarEnabled || settings.legacySidebarEnabled}
+          // Turning it off also clears the opt-in of the removed legacy sidebar.
+          onCheckedChange={(checked) =>
+            updateSettings({ boringSidebarEnabled: Boolean(checked), legacySidebarEnabled: false })
+          }
+          aria-label="Boring sidebar (group by project)"
+        />
+      }
+    />
   );
 }
 
@@ -69,6 +93,78 @@ function GuestLinksRow() {
           checked={settings.guestSharingEnabled}
           onCheckedChange={(checked) => updateSettings({ guestSharingEnabled: Boolean(checked) })}
           aria-label="Guest links"
+        />
+      }
+    />
+  );
+}
+
+function LinkedEnvironmentsRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      serverScoped
+      {...searchableSetting("linked-environments-beta")}
+      settingKeys={["linkedEnvironmentsEnabled"]}
+      description={
+        <>
+          Let agents here work on your other machines, and theirs here. Turn it on for each machine,
+          then link them in{" "}
+          <Link to="/settings/connections" className="underline underline-offset-2">
+            Connections
+          </Link>
+          . While it is off, nothing new starts over a link; tasks already running finish.
+        </>
+      }
+      control={
+        <ScopedSwitch
+          settingKeys={["linkedEnvironmentsEnabled"]}
+          checked={settings.linkedEnvironmentsEnabled}
+          onCheckedChange={(checked) =>
+            updateSettings({ linkedEnvironmentsEnabled: Boolean(checked) })
+          }
+          aria-label="Linked environments"
+        />
+      }
+    />
+  );
+}
+
+function SimlockHostsRow() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  return (
+    <SettingsRow
+      serverScoped
+      {...searchableSetting("simlock-hosts")}
+      settingKeys={["simlockDeviceHostsEnabled"]}
+      description={
+        <>
+          Let the Device panel lease simulators and emulators from your own{" "}
+          <a
+            href="https://incubator.callstack.com/simlock/"
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-2"
+          >
+            Simlock
+          </a>{" "}
+          pool, added in{" "}
+          <Link to="/settings/devices" className="underline underline-offset-2">
+            Devices
+          </Link>
+          . An alpha that may change or break. TritonAI Harness never installs Simlock.
+        </>
+      }
+      control={
+        <ScopedSwitch
+          settingKeys={["simlockDeviceHostsEnabled"]}
+          checked={settings.simlockDeviceHostsEnabled}
+          onCheckedChange={(checked) =>
+            updateSettings({ simlockDeviceHostsEnabled: Boolean(checked) })
+          }
+          aria-label="Simlock device hosts"
         />
       }
     />

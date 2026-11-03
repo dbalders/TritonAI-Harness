@@ -88,6 +88,13 @@ import UpstreamMigration0066 from "./Migrations/066_RepairClientSettlementTimest
 import UpstreamMigration0067 from "./Migrations/067_WebhookDedupe.ts";
 import UpstreamMigration0068 from "./Migrations/068_ShellStopRequestIndex.ts";
 import UpstreamMigration0069 from "./Migrations/069_ThreadMessageSearch.ts";
+import UpstreamMigration0070 from "./Migrations/070_PeerLinks.ts";
+import UpstreamMigration0071 from "./Migrations/071_PeerLinkFence.ts";
+import UpstreamMigration0072 from "./Migrations/072_WaitingLinkRequestIndex.ts";
+import UpstreamMigration0073 from "./Migrations/073_ActiveTurnItemIndexes.ts";
+import UpstreamMigration0074 from "./Migrations/074_ExcludeAttachmentPlaceholdersFromSearch.ts";
+import UpstreamMigration0075 from "./Migrations/075_SubagentDeliveryState.ts";
+import UpstreamMigration0076 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -174,6 +181,14 @@ export const migrationEntries = [
   [77, "WebhookDedupe", UpstreamMigration0067],
   [78, "ShellStopRequestIndex", UpstreamMigration0068],
   [79, "ThreadMessageSearch", UpstreamMigration0069],
+  // IDs through 79 shipped in Harness. Upstream v0.1.4-v0.1.6 migrations 70-76 append here.
+  [80, "PeerLinks", UpstreamMigration0070],
+  [81, "PeerLinkFence", UpstreamMigration0071],
+  [82, "WaitingLinkRequestIndex", UpstreamMigration0072],
+  [83, "ActiveTurnItemIndexes", UpstreamMigration0073],
+  [84, "ExcludeAttachmentPlaceholdersFromSearch", UpstreamMigration0074],
+  [85, "SubagentDeliveryState", UpstreamMigration0075],
+  [86, "ProjectionProjectsPinArchive", UpstreamMigration0076],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
