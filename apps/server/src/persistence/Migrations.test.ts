@@ -1,6 +1,9 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
@@ -228,4 +231,40 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
       }),
     );
   },
+);
+
+it.effect("upgrades the packaged launch fixture and preserves its seeded conversation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const temp = yield* fs.makeTempDirectoryScoped({ prefix: "harness-launch-fixture-" });
+      const database = path.join(temp, "statev2.sqlite");
+      yield* fs.copyFile(
+        path.join(
+          import.meta.dirname,
+          "../../../../scripts/fixtures/desktop-launch/statev2.sqlite",
+        ),
+        database,
+      );
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations();
+        const threads = yield* sql<{ readonly title: string }>`
+          SELECT json_extract(payload_json, '$.title') AS title
+          FROM orchestration_v2_projection_threads
+        `;
+        const messages = yield* sql<{ readonly text: string }>`
+          SELECT json_extract(payload_json, '$.text') AS text
+          FROM orchestration_v2_projection_messages
+          WHERE thread_id = 'launch-check-thread'
+        `;
+        assert.equal(threads.length, 2);
+        assert.isTrue(threads.some((thread) => thread.title === "Release launch check"));
+        assert.isTrue(
+          messages.some((message) => message.text === "The release opens and shows this thread."),
+        );
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: database })));
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
 );
