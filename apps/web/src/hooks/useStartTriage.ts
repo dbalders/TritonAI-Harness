@@ -12,19 +12,8 @@ import { currentClientMetadata } from "~/connection/platform";
 import { projectEnvironment } from "~/state/projects";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { writeTextToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useScratchProject } from "./useScratchProject";
-
-export const TRIAGE_CLI_COMMAND = "npx t3 triage";
-
-const copyTriageCliCommand = () =>
-  writeTextToClipboard(TRIAGE_CLI_COMMAND, "command").catch(() =>
-    toastManager.add({
-      type: "error",
-      title: `Could not copy. Type ${TRIAGE_CLI_COMMAND} instead.`,
-    }),
-  );
 
 /** A draft is a triage draft while its message still links the playbook file. */
 export const isTriagePrompt = (prompt: string) => prompt.includes(`[${TRIAGE_PROMPT_FILE_NAME}](`);
@@ -42,17 +31,18 @@ export function useStartTriage() {
   const prepare = useAtomCommand(serverEnvironment.prepareTriage, { reportFailure: false });
   const openScratch = useAtomCommand(projectEnvironment.openScratch, { reportFailure: false });
 
-  // With no draft to show, a toast is the only place to point at the CLI.
+  // Feedback remains available when the environment cannot start a support thread.
   const fail = (description: string) =>
     toastManager.add(
       stackedThreadToast({
         type: "error",
         title: "Could not start triage",
-        description: `${description} Run ${TRIAGE_CLI_COMMAND} in a terminal on that machine instead.`,
+        description: `${description} Open Help to prepare feedback with the error details.`,
         timeout: 0,
-        actionProps: { children: "Copy command", onClick: () => void copyTriageCliCommand() },
-        // "Copy command" is the copy that helps here, not the error text.
-        data: { hideCopyButton: true },
+        actionProps: {
+          children: "Open Help",
+          onClick: () => void router.navigate({ to: "/help" }),
+        },
       }),
     );
   const failWith = (
@@ -77,7 +67,7 @@ export function useStartTriage() {
     // A null result means the user went elsewhere; only a throw is a failure.
     await handleNewThread(scopeProjectRef(project.value.environmentId, project.value.id), {
       prompt: prepared.value.prompt,
-    }).catch(() => fail("T3 Code could not open a new thread."));
+    }).catch(() => fail("Harness could not open a new thread."));
   };
 
   return async (environmentId: EnvironmentId) => {

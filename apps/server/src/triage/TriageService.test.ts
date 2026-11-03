@@ -58,6 +58,7 @@ const makeTriage = (
   Effect.gen(function* () {
     const git = yield* GitVcsDriver.GitVcsDriver;
     const commands: string[] = [];
+    const sourceRepositories: string[] = [];
     const triage = yield* Layer.build(TriageService.layer).pipe(
       Effect.map(Context.get(TriageService.TriageService)),
       Effect.provideService(GitVcsDriver.GitVcsDriver, {
@@ -65,6 +66,8 @@ const makeTriage = (
         execute: (input) => {
           const command = input.args[0] ?? "";
           commands.push(command);
+          if (command === "ls-remote") sourceRepositories.push(input.args[1]!);
+          if (command === "remote") sourceRepositories.push(input.args[3]!);
           return answer(command).pipe(
             Effect.map((stdout) => ({
               exitCode: ChildProcessSpawner.ExitCode(0),
@@ -77,7 +80,7 @@ const makeTriage = (
         },
       }),
     );
-    return { triage, commands };
+    return { triage, commands, sourceRepositories };
   });
 
 const readContext = Effect.gen(function* () {
@@ -91,7 +94,7 @@ const readContext = Effect.gen(function* () {
 it.effect("sessions started during a clone share it, and a release tag is looked up once", () =>
   Effect.gen(function* () {
     const fetches = yield* Queue.unbounded<void>();
-    const { triage, commands } = yield* makeTriage((command) =>
+    const { triage, commands, sourceRepositories } = yield* makeTriage((command) =>
       command === "fetch"
         ? Queue.offer(fetches, undefined).pipe(Effect.andThen(Effect.never))
         : Effect.succeed(
@@ -102,6 +105,11 @@ it.effect("sessions started during a clone share it, and a release tag is looked
     yield* triage.prepare({ client: {} });
     yield* triage.prepare({ client: {} });
     yield* Queue.take(fetches);
+
+    assert.deepEqual(sourceRepositories, [
+      "https://github.com/dbalders/TritonAI-Harness",
+      "https://github.com/dbalders/TritonAI-Harness",
+    ]);
 
     assert.deepEqual(
       commands.filter((command) => command === "ls-remote" || command === "init"),
