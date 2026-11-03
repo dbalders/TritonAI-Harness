@@ -48,9 +48,9 @@ export function makeTritonAiCodexConfigArgs(
     "--config",
     `${providerKey}.stream_idle_timeout_ms=300000`,
     "--config",
-    "features.multi_agent=true",
+    "features.multi_agent=false",
     "--config",
-    "agents.max_threads=5",
+    "features.multi_agent_v2=false",
     // Preserve Harness's planning tool after Codex 0.152 changed its default.
     "--config",
     "tools.update_plan.enabled=true",

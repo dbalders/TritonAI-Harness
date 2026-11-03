@@ -25,11 +25,52 @@ import {
   type CodexDynamicToolAvailability,
   type CodexDynamicToolOptions,
 } from "./CodexDynamicTools.ts";
+import { makePluginToolBrowser, PLUGIN_TOOL_DISCOVERY_NAME } from "./CodexPluginToolDiscovery.ts";
 
 class CodexFlatToolSetupError extends Schema.TaggedError<CodexFlatToolSetupError>()(
   "CodexFlatToolSetupError",
   { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
 ) {}
+
+// Codex 0.161 rejects a whole thread whose dynamic tools use one of these namespaces (its
+// app-server `validate_dynamic_tools`), so tools that would land in one stay direct.
+const RESERVED_NAMESPACES = new Set([
+  "api_tool",
+  "browser",
+  "computer",
+  "container",
+  "file_search",
+  "functions",
+  "image_gen",
+  "mcp",
+  "multi_agent_v1",
+  "multi_tool_use",
+  "python",
+  "python_user_visible",
+  "submodel_delegator",
+  "terminal",
+  "tool_search",
+  "web",
+]);
+
+/**
+ * Groups a plugin tool under its plugin (the canonical name's first segment, such as "n8n") so
+ * Codex can defer it and find it with tool search. Tool names stay unchanged.
+ */
+export function deferredPluginTool(
+  canonicalName: string,
+  defer: boolean,
+): { readonly namespace: string; readonly deferLoading: true } | Record<string, never> {
+  if (!defer) return {};
+  const namespace = canonicalName.split(".")[0]?.replace(/[^a-zA-Z0-9_-]/gu, "_") ?? "";
+  if (
+    !/^[a-zA-Z0-9_-]{1,64}$/u.test(namespace) ||
+    RESERVED_NAMESPACES.has(namespace) ||
+    namespace.startsWith("mcp__")
+  )
+    return {};
+  return { namespace, deferLoading: true };
+}
 
 /** A native thread's disclosed catalog; each invocation still checks the live grant. */
 export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(function* (input: {
@@ -37,6 +78,8 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
   readonly instanceId: ProviderInstanceId;
   readonly disclosedToolNames?: ReadonlyArray<string>;
   readonly broker?: PreviewAutomationBroker.PreviewAutomationBroker["Service"];
+  /** Defer plugin tools behind Codex tool search; only for models that can search. */
+  readonly deferPluginTools?: boolean;
 }) {
   const sessions = yield* McpProviderSessions.McpProviderSessions;
   const session = yield* sessions.read(input.threadId);
@@ -79,6 +122,7 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
               description: `${definition.description} Integration plugin tool: ${definition.name}.`,
               inputSchema: integrationToolJsonSchema(definition),
               requiresApproval: registry.toolRequiresApprovalSync?.(definition.name) ?? false,
+              ...deferredPluginTool(definition.name, input.deferPluginTools === true),
             },
           ];
         })
@@ -87,9 +131,20 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
     session?.browserToolsAvailable && input.broker
       ? yield* getCodexPreviewDynamicToolDefinitions
       : [];
+  const pluginBrowser =
+    input.deferPluginTools && integrationAccess
+      ? makePluginToolBrowser(
+          bindings.filter(
+            (tool) =>
+              input.disclosedToolNames === undefined ||
+              input.disclosedToolNames.includes(tool.name),
+          ),
+        )
+      : undefined;
   const definitions = [
     ...preview,
     ...(integrationAccess ? [tritonAiCommonsDynamicToolDefinition] : []),
+    ...(pluginBrowser ? [pluginBrowser.definition] : []),
     ...bindings,
   ];
   if (new Set(definitions.map((definition) => definition.name)).size !== definitions.length) {
@@ -118,7 +173,8 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
   const availability = (name: string): CodexDynamicToolAvailability => {
     if (
       preview.some((definition) => definition.name === name) ||
-      name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME
+      name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME ||
+      (pluginBrowser !== undefined && name === PLUGIN_TOOL_DISCOVERY_NAME)
     )
       return { available: true };
     const canonicalName = byName.get(name);
@@ -161,6 +217,11 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
         throw new IntegrationToolUnavailableError(
           "This thread's provider credential is no longer active.",
         );
+      if (name === PLUGIN_TOOL_DISCOVERY_NAME && pluginBrowser) {
+        if (!current.capabilities?.has("integrations.invoke"))
+          throw new IntegrationToolUnavailableError("This provider session cannot use plugins.");
+        return pluginBrowser.browse(args);
+      }
       if (name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME) {
         if (!current.capabilities?.has("integrations.invoke"))
           throw new IntegrationToolUnavailableError("This provider session cannot use plugins.");

@@ -40,6 +40,10 @@ export interface CodexDynamicToolDefinition {
   readonly inputSchema: Readonly<Record<string, unknown>>;
   /** Marks a write tool whose confirmation follows the task runtime mode. */
   readonly requiresApproval?: boolean;
+  /** Groups a deferred tool for Codex tool search; Codex requires one for deferral. */
+  readonly namespace?: string;
+  /** Leaves the tool out of each request until the model finds it with tool search. */
+  readonly deferLoading?: boolean;
 }
 
 export interface CodexDynamicToolInvocation {
@@ -169,8 +173,14 @@ export const gateDynamicToolCall = Effect.fn("CodexDynamicTools.gateDynamicToolC
     readonly payload: Pick<EffectCodexSchema.DynamicToolCallParams, "tool" | "namespace">;
   }): Effect.fn.Return<CodexDynamicToolGate> {
     const { options, payload } = input;
-    const definition = options.dynamicTools?.find((tool) => tool.name === payload.tool);
-    if (payload.namespace || !definition || !options.invokeDynamicTool) {
+    // A deferred tool is called in its namespace, which must match what this session disclosed.
+    // Threads started before plugin tools were deferred still call them by name alone.
+    const definition = options.dynamicTools?.find(
+      (tool) =>
+        tool.name === payload.tool &&
+        (payload.namespace == null || tool.namespace === payload.namespace),
+    );
+    if (!definition || !options.invokeDynamicTool) {
       const current = payload.namespace
         ? undefined
         : options.dynamicToolAvailability

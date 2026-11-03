@@ -238,6 +238,117 @@ describe("CodexAdapterV2 runtime policy", () => {
   );
 });
 
+describe("CodexAdapterV2 thread MCP configuration", () => {
+  it("overrides only Harness servers so other launch-configured MCP servers survive", () => {
+    const params = CodexAdapterV2.codexThreadRuntimeParams({
+      mcpSession: {
+        environmentId: EnvironmentId.make("mcp-merge-environment"),
+        threadId: ThreadId.make("mcp-merge-thread"),
+        providerSessionId: "mcp-merge-session",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture-token",
+        browserToolsAvailable: true,
+      },
+      computerUseMcp: {
+        command: "/fixture/cua-driver",
+        args: ["mcp"],
+        environment: { FIXTURE: "desktop" },
+      },
+      modelSelection: { model: "gpt-5.4" },
+      runtimePolicy: {
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: "/workspace/mcp-merge",
+      },
+    });
+    assert.notProperty(params.config, "mcp_servers");
+    assert.deepEqual(params.config["mcp_servers.cua-driver"], {
+      command: "/fixture/cua-driver",
+      args: ["mcp"],
+      env: { FIXTURE: "desktop" },
+    });
+    assert.deepEqual(params.config["mcp_servers.t3-code"], {
+      url: "http://127.0.0.1:43123/mcp",
+      tool_timeout_sec: 3900,
+      http_headers: { Authorization: "Bearer fixture-token" },
+      tools: {
+        preview_open: { approval_mode: "approve" },
+        preview_navigate: { approval_mode: "approve" },
+      },
+    });
+    assert.equal(params.cwd, "/workspace/mcp-merge");
+    assert.equal(params.model, "gpt-5.4");
+    const withoutSession = CodexAdapterV2.codexThreadRuntimeParams({
+      mcpSession: undefined,
+      computerUseMcp: { command: "/fixture/cua-driver", args: ["mcp"], environment: {} },
+    });
+    assert.notProperty(withoutSession.config, "mcp_servers.t3-code");
+    assert.property(withoutSession.config, "mcp_servers.cua-driver");
+  });
+
+  it("keeps Harness MCP tools out of tool search on the hosted route", () => {
+    const mcpSession = {
+      environmentId: EnvironmentId.make("mcp-direct-environment"),
+      threadId: ThreadId.make("mcp-direct-thread"),
+      providerSessionId: "mcp-direct-session",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer fixture-token",
+      browserToolsAvailable: true,
+    };
+    const computerUseMcp = { command: "/fixture/cua-driver", args: ["mcp"], environment: {} };
+    const hostedInput = {
+      mcpSession,
+      computerUseMcp,
+      keepMcpToolsDirect: true,
+      additionalMcpServers: {
+        "archive.dot": {
+          command: "fixture-mcp",
+          args: ["./relative-server.mjs"],
+          cwd: "../mcp",
+          env: { CUSTOM_HEADER: "private-value" },
+          tool_timeout_sec: null,
+          omit_tools_from: ["code_mode"],
+        },
+        "t3-code": {
+          url: "http://stale.invalid/mcp",
+          http_headers: { Authorization: "Bearer stale-fixture" },
+          omit_tools_from: ["code_mode"],
+        },
+      },
+    };
+    const hosted = CodexAdapterV2.codexThreadRuntimeParams(hostedInput);
+    const hostedServers = hosted.config.mcp_servers as Record<string, Record<string, unknown>>;
+    assert.deepEqual(hostedServers["archive.dot"], {
+      command: "fixture-mcp",
+      args: ["./relative-server.mjs"],
+      cwd: "../mcp",
+      env: { CUSTOM_HEADER: "private-value" },
+      omit_tools_from: ["code_mode", "deferred"],
+    });
+    assert.deepInclude(hostedServers["t3-code"]!, {
+      url: mcpSession.endpoint,
+      http_headers: { Authorization: mcpSession.authorizationHeader },
+      omit_tools_from: ["code_mode", "deferred"],
+    });
+    assert.deepInclude(hostedServers["cua-driver"]!, {
+      command: computerUseMcp.command,
+      args: computerUseMcp.args,
+      env: computerUseMcp.environment,
+    });
+    for (const name of ["t3-code", "cua-driver"])
+      assert.notProperty(hosted.config, `mcp_servers.${name}`);
+    const cloud = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession, computerUseMcp });
+    for (const server of ["mcp_servers.t3-code", "mcp_servers.cua-driver"])
+      assert.notProperty(cloud.config[server] as object, "omit_tools_from");
+    for (const params of [hosted, cloud]) {
+      assert.isFalse(params.config["features.multi_agent"]);
+      assert.isFalse(params.config["features.multi_agent_v2"]);
+    }
+  });
+});
+
 describe("CodexAdapterV2 native protocol logging", () => {
   it.effect("logs decoded app-server frames once with credentials redacted", () =>
     Effect.gen(function* () {
@@ -275,6 +386,12 @@ describe("CodexAdapterV2 native protocol logging", () => {
             id: "evt-1",
             http_headers: { Authorization: "Bearer secret-codex-token" },
             usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+            config: {
+              mcp_servers: {
+                external: { args: ["private-argument"], env: { CUSTOM_HEADER: "private-value" } },
+              },
+              model_providers: { custom: { http_headers: { CUSTOM_HEADER: "private-value" } } },
+            },
           },
         },
       });
@@ -301,6 +418,7 @@ describe("CodexAdapterV2 native protocol logging", () => {
               id: "evt-1",
               http_headers: { Authorization: "[REDACTED]" },
               usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+              config: { mcp_servers: "[REDACTED]", model_providers: "[REDACTED]" },
             },
           },
         },
@@ -1192,8 +1310,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           cwd: "/workspace",
           model: "gpt-5.4",
           config: {
-            "tools.update_plan.enabled": true,
-            mcp_optional_startup_grace_ms: 10_000,
+            ...CodexAdapterV2.CODEX_THREAD_CONFIG,
             "mcp_servers.t3-code": {
               url: "http://127.0.0.1:43123/mcp",
               tool_timeout_sec: 3_900,
