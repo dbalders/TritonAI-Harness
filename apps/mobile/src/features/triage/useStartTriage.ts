@@ -5,7 +5,6 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigation } from "@react-navigation/native";
-import * as Clipboard from "expo-clipboard";
 import Constants from "expo-constants";
 
 import * as Dialog from "../../components/ui/Dialog";
@@ -20,8 +19,6 @@ import {
 } from "../../state/use-composer-drafts";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 
-const CLI_COMMAND = "npx t3 triage";
-
 /**
  * In-app `t3 triage`, as on web: the server writes the session files and
  * clones the matching source, then a No project draft opens with the prompt.
@@ -35,17 +32,7 @@ export function useStartTriage() {
   const fail = (message: string) =>
     Dialog.alert(
       "Could not start triage",
-      `${message} Run ${CLI_COMMAND} in a terminal on that machine instead.`,
-      [
-        {
-          text: "Copy command",
-          onPress: () =>
-            void Clipboard.setStringAsync(CLI_COMMAND).catch(() =>
-              Dialog.alert("Could not copy", `Type ${CLI_COMMAND} instead.`),
-            ),
-        },
-        { text: "OK", style: "cancel" },
-      ],
+      `${message} Open Help in the Harness desktop or web app to prepare feedback with the error details.`,
     );
   const errorMessage = (error: unknown, fallback: string) =>
     error instanceof Error ? error.message : fallback;

@@ -62,10 +62,10 @@ function fixture(t, { lsof = true } = {}) {
     owner(child.pid);
     return child;
   };
-  const start = async (command = "start") => {
+  const start = async (command = "start", overrides = {}) => {
     const child = cp.spawn(process.execPath, [script, command], {
       cwd: root,
-      env,
+      env: { ...env, ...overrides },
       stdio: ["ignore", "pipe", "pipe"],
     });
     children.push(child);
@@ -103,6 +103,20 @@ function fixture(t, { lsof = true } = {}) {
 }
 
 const posix = { skip: os.platform() === "win32" };
+
+test("owns an isolated data home outside the checkout for No project threads", posix, async (t) => {
+  const f = fixture(t);
+  const dataHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "harness-dev-data-")));
+  const overrides = { TRITONAI_HARNESS_DEV_HOME: dataHome };
+  t.after(() => fs.rmSync(dataHome, { recursive: true, force: true }));
+  const started = await f.start("start", overrides);
+  assert.equal(started.home, dataHome);
+  assert.equal(started.profileRoot, path.join(dataHome, "electron"));
+  assert.equal(JSON.parse(f.run("status", overrides).stdout).running, true);
+  assert.equal(JSON.parse(f.run("status").stdout).running, false);
+  assert.equal(f.run("stop", overrides).status, 0);
+  assert.equal(JSON.parse(f.run("status", overrides).stdout).running, false);
+});
 
 // regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test("a reused PID is not running and is never stopped", posix, async (t) => {
