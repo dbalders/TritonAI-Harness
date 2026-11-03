@@ -2,7 +2,8 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-const minimumFixedVersion = [42, 4, 1];
+// This floor also includes the earlier safeStorage startup fix.
+const minimumFixedVersion = [44, 9, 1];
 const desktopDir = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(
   NodeFS.readFileSync(NodePath.join(desktopDir, "package.json"), "utf8"),
@@ -40,8 +41,8 @@ function compareVersions(left, right) {
 
 if (compareVersions(parseExactVersion(electronVersion), minimumFixedVersion) < 0) {
   throw new Error(
-    `Electron ${electronVersion} predates the macOS safeStorage lazy-initialization fix; ` +
-      `use ${minimumFixedVersion.join(".")} or newer to prevent startup Keychain prompts.`,
+    `Electron ${electronVersion} predates the required Electron security fixes; ` +
+      `use ${minimumFixedVersion.join(".")} or newer for the certificate mitigation and safeStorage startup fix.`,
   );
 }
 if (installedElectronVersion !== electronVersion) {
@@ -51,10 +52,10 @@ if (installedElectronVersion !== electronVersion) {
 }
 if (compareVersions(parseExactVersion(installedElectronVersion), minimumFixedVersion) < 0) {
   throw new Error(
-    `Installed Electron ${installedElectronVersion} predates the macOS safeStorage lazy-initialization fix.`,
+    `Installed Electron ${installedElectronVersion} predates the required Electron security fixes.`,
   );
 }
 
 process.stdout.write(
-  `Electron ${installedElectronVersion} is installed from the exact manifest pin and includes the macOS safeStorage startup fix.\n`,
+  `Electron ${installedElectronVersion} is installed from the exact manifest pin and includes the certificate mitigation and safeStorage startup fix.\n`,
 );

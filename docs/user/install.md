@@ -52,6 +52,10 @@ command cannot reach the app, start or update the desktop app and try again.
 
 ## Mobile app
 
+On iPhone or iPad, install [TritonAI Harness Preview through TestFlight](https://testflight.apple.com/join/7fUqZU3C).
+The same invitation is available as a link and QR code under **Settings → About → Mobile app**
+in the desktop and web app.
+
 The phone connects to a TritonAI Harness server on another machine. Follow
 [remote access](./remote-access.md) to link it with a pairing URL.
 
