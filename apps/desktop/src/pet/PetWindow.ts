@@ -7,11 +7,7 @@ import {
 } from "@t3tools/shared/petCompanionSprites";
 import type { DesktopPetState } from "@t3tools/contracts";
 
-import {
-  PET_WINDOW_ACTION_CHANNEL,
-  PET_WINDOW_INPUT_CHANNEL,
-  PET_WINDOW_MOVE_CHANNEL,
-} from "../ipc/channels.ts";
+import { PET_WINDOW_ACTION_CHANNEL, PET_WINDOW_INPUT_CHANNEL } from "../ipc/channels.ts";
 import { isPetWindowAction, type PetWindowAction } from "./petWindowAction.ts";
 
 type PetFrameData = {
@@ -63,7 +59,7 @@ export function petHtml(): string {
     font: 12px "Segoe UI", sans-serif; color: #fff; user-select: none; pointer-events: none; }
   .actor { position: absolute; left: 0; top: 0; width: 0; height: 0; will-change: transform; }
   .sprite { position: absolute; left: 0; top: 0; width: 64px; height: 64px;
-    pointer-events: auto; cursor: grab; touch-action: none; }
+    pointer-events: auto; cursor: grab; touch-action: none; -webkit-app-region: drag; }
   .sprite:active { cursor: grabbing; }
   canvas { display: block; width: 64px; height: 64px; image-rendering: pixelated; }
   .pills { position: absolute; left: 0; bottom: 72px; display: grid; gap: 5px;
@@ -119,7 +115,6 @@ export function petHtml(): string {
   let wanderUntil = 0;
   let moveUntil = 0;
   let direction = 1;
-  let drag = null;
 
   const clamp = (value, min, max) => Math.min(Math.max(value, min), Math.max(min, max));
   const petFrames = () => frames[state.pet][animation] ?? frames[state.pet].idle;
@@ -189,7 +184,7 @@ export function petHtml(): string {
       frameAt = now;
       draw();
     }
-    if (!drag && state.movement === "playful" && !state.threads.some(thread => thread.status === "working" || thread.status === "review" || thread.status === "waiting")) {
+    if (state.movement === "playful" && !state.threads.some(thread => thread.status === "working" || thread.status === "review" || thread.status === "waiting")) {
       if (moveUntil > now) {
         x = clamp(x + direction * 18 * 0.04, 0, Math.max(window.innerWidth - 64, 0));
         position();
@@ -206,39 +201,11 @@ export function petHtml(): string {
   let interactive = false;
   document.addEventListener("mousemove", (event) => {
     const target = event.target instanceof Element ? event.target : null;
-    const nextInteractive = Boolean(drag || target?.closest("[data-interactive]"));
+    const nextInteractive = Boolean(target?.closest("[data-interactive]"));
     if (nextInteractive === interactive) return;
     interactive = nextInteractive;
     bridge?.setInteractive(interactive);
   });
-  sprite.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    sprite.setPointerCapture(event.pointerId);
-    drag = {
-      id: event.pointerId,
-      screenX: event.screenX,
-      screenY: event.screenY,
-    };
-    setAnimation("wave");
-  });
-  sprite.addEventListener("pointermove", (event) => {
-    if (!drag || drag.id !== event.pointerId) return;
-    const dx = event.screenX - drag.screenX;
-    const dy = event.screenY - drag.screenY;
-    if (dx === 0 && dy === 0) return;
-    drag.screenX = event.screenX;
-    drag.screenY = event.screenY;
-    bridge?.moveWindow(dx, dy);
-  });
-  const endDrag = (event) => {
-    if (!drag || drag.id !== event.pointerId) return;
-    if (sprite.hasPointerCapture(event.pointerId)) sprite.releasePointerCapture(event.pointerId);
-    drag = null;
-    setAnimation(activityAnimation());
-  };
-  sprite.addEventListener("pointerup", endDrag);
-  sprite.addEventListener("pointercancel", endDrag);
   const setMenu = (open) => {
     menuOpen = open;
     menu.classList.toggle("open", menuOpen);
@@ -296,21 +263,8 @@ export function makePetWindow(
     const options = { forward: !interactive };
     window.setIgnoreMouseEvents(!interactive, options);
   };
-  const moveListener = (event: Electron.IpcMainEvent, dx: unknown, dy: unknown) => {
-    if (!isPetSender(event.sender)) return;
-    if (typeof dx !== "number" || typeof dy !== "number") return;
-    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
-    const window = current;
-    if (window === null || window.isDestroyed()) return;
-    const position = window.getPosition();
-    const x = position[0];
-    const y = position[1];
-    if (x === undefined || y === undefined) return;
-    window.setPosition(x + Math.round(dx), y + Math.round(dy));
-  };
   Electron.ipcMain.on(PET_WINDOW_ACTION_CHANNEL, actionListener);
   Electron.ipcMain.on(PET_WINDOW_INPUT_CHANNEL, inputListener);
-  Electron.ipcMain.on(PET_WINDOW_MOVE_CHANNEL, moveListener);
 
   const show = (area: Electron.Rectangle) => {
     visible = true;
@@ -388,7 +342,6 @@ export function makePetWindow(
     if (window !== null && !window.isDestroyed()) window.destroy();
     Electron.ipcMain.removeListener(PET_WINDOW_ACTION_CHANNEL, actionListener);
     Electron.ipcMain.removeListener(PET_WINDOW_INPUT_CHANNEL, inputListener);
-    Electron.ipcMain.removeListener(PET_WINDOW_MOVE_CHANNEL, moveListener);
   };
   return { show, update, hide, destroy };
 }

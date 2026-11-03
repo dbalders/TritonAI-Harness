@@ -22,7 +22,6 @@ class TestElement {
   textContent = "";
   title = "";
   open = false;
-  captured = false;
   classList = {
     toggle: (_name: string, value: boolean) => {
       this.open = value;
@@ -56,15 +55,6 @@ class TestElement {
   getContext() {
     return { clearRect() {}, fillRect() {}, fillStyle: "" };
   }
-  setPointerCapture() {
-    this.captured = true;
-  }
-  hasPointerCapture() {
-    return this.captured;
-  }
-  releasePointerCapture() {
-    this.captured = false;
-  }
 }
 function page() {
   const elements = Object.fromEntries(
@@ -73,7 +63,6 @@ function page() {
   const events: Record<string, (event: Input) => void> = {};
   const actions: unknown[] = [];
   const modes: boolean[] = [];
-  const moves: Array<[number, number]> = [];
   let tick = () => {};
   let now = 0;
   const win = {
@@ -83,7 +72,6 @@ function page() {
     t3PetBridge: {
       send: (action: unknown) => actions.push(action),
       setInteractive: (value: boolean) => modes.push(value),
-      moveWindow: (dx: number, dy: number) => moves.push([dx, dy]),
     },
     __updatePet: (_state: unknown) => {},
   };
@@ -110,7 +98,6 @@ function page() {
     events,
     actions,
     modes,
-    moves,
     win,
     tick: (time: number) => {
       now = time;
@@ -153,27 +140,10 @@ describe("pet page behavior", () => {
     p.elements.menu!.fire("click", { target: button });
     expect(p.actions).toEqual([{ kind: "set-movement", movement: "playful" }, { kind: "close" }]);
   });
-  it("drags the pet window by screen-coordinate deltas", () => {
-    const p = page();
-    p.win.__updatePet({ pet: "raccoon", movement: "static", threads: [summary] });
-    const before = p.elements.actor!.style.transform;
-    p.elements.sprite!.fire("pointerdown", {
-      button: 0,
-      pointerId: 1,
-      clientX: 1836,
-      clientY: 996,
-      screenX: 1836,
-      screenY: 996,
-    });
-    p.elements.sprite!.fire("pointermove", { pointerId: 1, screenX: 1436, screenY: 996 });
-    p.elements.sprite!.fire("pointermove", { pointerId: 1, screenX: 1436, screenY: 996 });
-    p.elements.sprite!.fire("pointermove", { pointerId: 1, screenX: 1936, screenY: 896 });
-    expect(p.moves).toEqual([
-      [-400, 0],
-      [500, -100],
-    ]);
-    expect(p.elements.actor!.style.transform).toBe(before);
-    p.elements.sprite!.fire("pointerup", { pointerId: 1 });
+  it("makes the sprite a native drag region", () => {
+    const css = petHtml().split("<style>")[1] ?? "";
+    const rule = css.split(".sprite")[1] ?? "";
+    expect(rule).toContain("-webkit-app-region: drag");
   });
   it("keeps static position and releases input away from controls", () => {
     const p = page();
