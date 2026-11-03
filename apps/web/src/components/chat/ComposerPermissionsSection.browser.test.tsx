@@ -56,7 +56,9 @@ it("reaches Permissions from the mode items with arrow keys, previews, and picks
   await expect.element(supervised).toHaveFocus();
   await expect
     .element(supervised)
-    .toHaveAccessibleDescription("Ask before commands and file changes.");
+    .toHaveAccessibleDescription(
+      "Where supported, safe read-only commands may run; ask before commands needing more access, file changes, and write tools.",
+    );
 
   await userEvent.keyboard("{ArrowRight}");
   await expect

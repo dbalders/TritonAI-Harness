@@ -134,19 +134,16 @@ describe("collectChannelSwitchTargets", () => {
         target.trackOnly ?? false,
       ]),
     ).toEqual([
-      ["old-service", "0.1.3", undefined, false],
       ["linux-desktop", "0.1.3", "latest", false],
       ["stable-desktop", "0.1.3", "latest", false],
       ["current-desktop", "0.1.3", "latest", true],
     ]);
     expect(targets.every((target) => target.targetDatabaseMigration === 69)).toBe(true);
     expect(skipped.map((entry) => [entry.label, entry.reason])).toEqual([
-      ["newer-service", "run `t3 update --channel stable --allow-downgrade` there"],
-      [
-        "new-service",
-        "its database has changes 0.1.3 does not support yet; stay on Nightly until Stable has them",
-      ],
-      ["old-server", "its server predates database checks; update it on Nightly first"],
+      ["old-service", "needs a manual update"],
+      ["newer-service", "needs a manual update"],
+      ["new-service", "needs a manual update"],
+      ["old-server", "needs a manual update"],
       ["mac-desktop", "switch the Mac app on that Mac"],
       ["preview", "runs a preview build"],
     ]);
@@ -173,14 +170,10 @@ describe("collectChannelSwitchTargets", () => {
       nightly,
     );
 
-    expect(targets.map((target) => [target.serverLabel, target.targetVersion])).toEqual([
-      ["service", NIGHTLY],
-    ]);
+    expect(targets).toEqual([]);
     expect(skipped.map((entry) => [entry.label, entry.reason])).toEqual([
-      [
-        "ahead",
-        `its database has changes ${NIGHTLY} does not support yet; stay on Stable until Nightly has them`,
-      ],
+      ["service", "needs a manual update"],
+      ["ahead", "needs a manual update"],
       ["old-desktop", "needs a newer desktop app"],
     ]);
   });

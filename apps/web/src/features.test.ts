@@ -57,7 +57,7 @@ it.each([
     vi.stubEnv("VITE_HOSTED_APP_CHANNEL", hosted);
     Object.defineProperty(globalThis, "window", {
       configurable: true,
-      value: { desktopBridge: {} },
+      value: { desktopBridge: { getAppBranding: () => null } },
     });
     expect((await import("./features")).isFeatureAvailable("guidedTour")).toBe(available);
   },
