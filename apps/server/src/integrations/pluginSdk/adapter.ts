@@ -287,7 +287,7 @@ function invocationContext(
 /**
  * A plugin failure whose details say `committed: false` is the plugin proving the external
  * service refused the change (for example a permission or validation refusal). Harness then
- * settles the admitted commit instead of faulting the plugin until the user reconnects.
+ * reports a refusal instead of asking the agent to check an unknown outcome.
  * Unknown outcomes never qualify.
  */
 function provesNothingChanged(error: Record<string, unknown>): boolean {
@@ -307,8 +307,7 @@ async function invokeBoundary<A>(
       isRecord(error) &&
       (error._tag === "PluginFailure" || error._tag === "ExternalCommitOutcomeUnknown") &&
       typeof error.message === "string" &&
-      error.message.trim() &&
-      error.message.length <= 1_024
+      error.message.trim()
     ) {
       throw new IntegrationProviderPublicError(error.message, {
         unchanged: provesNothingChanged(error),
