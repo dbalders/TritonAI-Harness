@@ -14,10 +14,14 @@ export class DesktopPet extends Context.Service<
   DesktopPet,
   {
     readonly open: (ownerId: number) => Effect.Effect<void>;
-    readonly close: () => Effect.Effect<void>;
+    readonly close: (ownerId?: number) => Effect.Effect<void>;
     readonly setState: (state: DesktopPetState) => Effect.Effect<void>;
   }
 >()("@t3tools/desktop/pet/DesktopPet") {}
+
+function sendToOwners(ownerIds: ReadonlySet<number>, action: PetWindowAction) {
+  for (const ownerId of ownerIds) sendToOwner(ownerId, action);
+}
 
 function sendToOwner(ownerId: number, action: PetWindowAction) {
   const contents = Electron.webContents.fromId(ownerId);
@@ -41,20 +45,22 @@ function ownerWorkAreaForOwner(ownerId: number): Electron.Rectangle {
 
 const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  let ownerId: number | null = null;
+  const ownerIds = new Set<number>();
+  let currentOwnerId: number | null = null;
   const watchedOwners = new WeakSet();
   const petPreloadPath = environment.path.join(environment.dirname, "petPreload.cjs");
   const pet = makePetWindow(environment.platform, petPreloadPath, (action) => {
-    if (ownerId === null) return;
-    sendToOwner(ownerId, action);
+    if (ownerIds.size === 0) return;
+    sendToOwners(ownerIds, action);
     if (action.kind === "close" || (action.kind === "set-pet" && action.pet === "off")) {
-      ownerId = null;
+      ownerIds.clear();
+      currentOwnerId = null;
       pet.hide();
     }
   });
 
   const refreshWorkArea = () => {
-    if (ownerId !== null) pet.show(petWindowAreas());
+    if (currentOwnerId !== null) pet.show(petWindowAreas());
   };
   let screenListenersRegistered = false;
   const registerScreenListeners = () => {
@@ -69,7 +75,8 @@ const make = Effect.gen(function* () {
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
-      ownerId = null;
+      ownerIds.clear();
+      currentOwnerId = null;
       Electron.app.removeListener("ready", registerScreenListeners);
       if (screenListenersRegistered) {
         Electron.screen.removeListener("display-metrics-changed", refreshWorkArea);
@@ -83,18 +90,18 @@ const make = Effect.gen(function* () {
   return DesktopPet.of({
     open: Effect.fn("DesktopPet.open")(function* (nextOwnerId) {
       yield* Effect.sync(() => {
-        if (ownerId !== nextOwnerId) {
-          const contents = Electron.webContents.fromId(nextOwnerId);
-          if (contents && !watchedOwners.has(contents)) {
-            watchedOwners.add(contents);
-            contents.once("destroyed", () => {
-              if (ownerId !== nextOwnerId) return;
-              ownerId = null;
-              pet.hide();
-            });
-          }
+        ownerIds.add(nextOwnerId);
+        currentOwnerId = nextOwnerId;
+        const contents = Electron.webContents.fromId(nextOwnerId);
+        if (contents && !watchedOwners.has(contents)) {
+          watchedOwners.add(contents);
+          contents.once("destroyed", () => {
+            ownerIds.delete(nextOwnerId);
+            if (currentOwnerId !== nextOwnerId) return;
+            currentOwnerId = ownerIds.size > 0 ? ([...ownerIds][0] ?? null) : null;
+            if (currentOwnerId === null) pet.hide();
+          });
         }
-        ownerId = nextOwnerId;
         const areas = petWindowAreas();
         const ownerArea = ownerWorkAreaForOwner(nextOwnerId);
         pet.show(areas, {
@@ -103,22 +110,26 @@ const make = Effect.gen(function* () {
         });
       });
     }),
-    close: Effect.fn("DesktopPet.close")(function* () {
+    close: Effect.fn("DesktopPet.close")(function* (requesterId) {
       yield* Effect.sync(() => {
-        // Renderer teardown calls close on reload. Do not echo a user-style
-        // close action into the same webContents; that would reset a persisted
-        // pet selection after the page has already reloaded.
-        ownerId = null;
-        pet.hide();
+        // Renderer teardown is sender-aware. Closing one window must not hide
+        // the pet while another renderer still wants it visible.
+        const ownerId = requesterId ?? currentOwnerId;
+        if (ownerId === null || !ownerIds.has(ownerId)) return;
+        ownerIds.delete(ownerId);
+        if (currentOwnerId !== ownerId) return;
+        currentOwnerId = ownerIds.size > 0 ? ([...ownerIds][0] ?? null) : null;
+        if (currentOwnerId === null) pet.hide();
       });
     }),
     setState: Effect.fn("DesktopPet.setState")(function* (state) {
       yield* Effect.sync(() => {
         if (state.pet === "off") {
-          const currentOwnerId = ownerId;
-          ownerId = null;
+          const previousOwners = new Set(ownerIds);
+          ownerIds.clear();
+          currentOwnerId = null;
           pet.hide();
-          if (currentOwnerId !== null) sendToOwner(currentOwnerId, { kind: "close" });
+          sendToOwners(previousOwners, { kind: "close" });
           return;
         }
         pet.update(state);

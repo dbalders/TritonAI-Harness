@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
 import { DesktopEnvironment } from "../app/DesktopEnvironment.ts";
+import { PET_ACTION_CHANNEL } from "../ipc/channels.ts";
 import { DesktopPet, layer } from "./DesktopPet.ts";
 
 const state = vi.hoisted(() => ({
@@ -69,6 +70,34 @@ beforeEach(() => {
   state.reads = 0;
   state.readyListener = () => {};
 });
+
+function setupTwoOwners() {
+  const ownerBounds = { x: 2560, y: 100, width: 1920, height: 1080 };
+  const send7 = vi.fn();
+  const send8 = vi.fn();
+  const contents7 = {
+    id: 7,
+    isDestroyed: () => false,
+    getBounds: () => ownerBounds,
+    send: send7,
+    once: vi.fn(),
+  };
+  const contents8 = {
+    id: 8,
+    isDestroyed: () => false,
+    getBounds: () => ownerBounds,
+    send: send8,
+    once: vi.fn(),
+  };
+  state.fromId.mockImplementation((id: number) => (id === 7 ? contents7 : contents8));
+  state.fromWebContents.mockReturnValue({
+    isDestroyed: () => false,
+    getBounds: () => ownerBounds,
+  });
+  state.getAllDisplays.mockReturnValue([{ id: 3, workArea: ownerBounds }]);
+  state.getDisplayMatching.mockReturnValue({ workArea: ownerBounds });
+  return { send7, send8 };
+}
 
 it.effect("builds before ready without touching screen, then registers and cleans up", () =>
   Effect.gen(function* () {
@@ -154,5 +183,62 @@ it.effect("hides on close without notifying the renderer", () =>
     );
     expect(state.petWindow.hide).toHaveBeenCalledOnce();
     expect(send).not.toHaveBeenCalled();
+  }),
+);
+
+it.effect("ignores close from a non-owner renderer", () =>
+  Effect.gen(function* () {
+    state.ready = true;
+    setupTwoOwners();
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(runtime);
+        const pet = Context.get(context, DesktopPet);
+        yield* pet.open(7);
+        yield* pet.open(8);
+        yield* pet.close(7);
+        expect(state.petWindow.hide).not.toHaveBeenCalled();
+        yield* pet.close(8);
+      }),
+    );
+    expect(state.petWindow.hide).toHaveBeenCalledOnce();
+  }),
+);
+
+it.effect("hands the pet to another owner when the current owner closes", () =>
+  Effect.gen(function* () {
+    state.ready = true;
+    setupTwoOwners();
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(runtime);
+        const pet = Context.get(context, DesktopPet);
+        yield* pet.open(7);
+        yield* pet.open(8);
+        yield* pet.close(8);
+        expect(state.petWindow.hide).not.toHaveBeenCalled();
+        yield* pet.close(7);
+      }),
+    );
+    expect(state.petWindow.hide).toHaveBeenCalledOnce();
+  }),
+);
+
+it.effect("explicit off clears every owner and syncs all renderers", () =>
+  Effect.gen(function* () {
+    state.ready = true;
+    const { send7, send8 } = setupTwoOwners();
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(runtime);
+        const pet = Context.get(context, DesktopPet);
+        yield* pet.open(7);
+        yield* pet.open(8);
+        yield* pet.setState({ pet: "off", movement: "static", threads: [] });
+      }),
+    );
+    expect(state.petWindow.hide).toHaveBeenCalledOnce();
+    expect(send7).toHaveBeenCalledWith(PET_ACTION_CHANNEL, { kind: "close" });
+    expect(send8).toHaveBeenCalledWith(PET_ACTION_CHANNEL, { kind: "close" });
   }),
 );

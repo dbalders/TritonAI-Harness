@@ -24,9 +24,9 @@ export const closePet = makeIpcMethod({
   channel: IpcChannels.PET_CLOSE_CHANNEL,
   payload: Schema.Void,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.pet.close")(function* () {
+  handler: Effect.fn("desktop.ipc.pet.close")(function* (_, event) {
     const pet = yield* DesktopPet.DesktopPet;
-    yield* pet.close();
+    yield* pet.close(ownerOf(event));
   }),
 });
 

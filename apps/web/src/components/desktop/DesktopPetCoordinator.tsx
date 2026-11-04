@@ -37,7 +37,7 @@ export function DesktopPetCoordinator() {
         if (cancelled) return;
         if (selection === "off") {
           openedRef.current = false;
-          await pet.close();
+          await pet.setState({ pet: "off", movement, threads: [] });
           return;
         }
         if (!openedRef.current) {
