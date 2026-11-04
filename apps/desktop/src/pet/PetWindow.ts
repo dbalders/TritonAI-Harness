@@ -49,8 +49,12 @@ const PET_FRAME_DATA: Record<PetId, Record<string, PetFrameData[]>> = {
   raccoon: frameDataFor("raccoon"),
 };
 
-export function petHtml(): string {
+export function petHtml(initialSpritePosition?: {
+  readonly x: number;
+  readonly y: number;
+}): string {
   const frames = JSON.stringify(PET_FRAME_DATA);
+  const initialSprite = initialSpritePosition ? JSON.stringify(initialSpritePosition) : "null";
   return `<!doctype html>
 <html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
@@ -59,7 +63,7 @@ export function petHtml(): string {
     font: 12px "Segoe UI", sans-serif; color: #fff; user-select: none; pointer-events: none; }
   .actor { position: absolute; left: 0; top: 0; width: 0; height: 0; will-change: transform; }
   .sprite { position: absolute; left: 0; top: 0; width: 64px; height: 64px;
-    pointer-events: auto; cursor: grab; touch-action: none; -webkit-app-region: drag; }
+    pointer-events: auto; cursor: grab; touch-action: none; }
   .sprite:active { cursor: grabbing; }
   canvas { display: block; width: 64px; height: 64px; image-rendering: pixelated; }
   .pills { position: absolute; left: 0; bottom: 72px; display: grid; gap: 5px;
@@ -96,6 +100,7 @@ export function petHtml(): string {
   </div>
 <script>
   const frames = ${frames};
+  const initialSpritePosition = ${initialSprite};
   const actor = document.getElementById("actor");
   const sprite = document.getElementById("sprite");
   const pet = document.getElementById("pet");
@@ -110,11 +115,12 @@ export function petHtml(): string {
   const activityAnimation = () => state.threads[0]?.status === "review" ? "review" : state.threads[0]?.status === "failed" ? "failed" : "idle";
   let frameIndex = 0;
   let frameAt = 0;
-  let x = Math.max(window.innerWidth - 84, 0);
-  let y = Math.max(window.innerHeight - 84, 0);
+  let x = initialSpritePosition ? Math.max(initialSpritePosition.x, 0) : Math.max(window.innerWidth - 84, 0);
+  let y = initialSpritePosition ? Math.max(initialSpritePosition.y, 0) : Math.max(window.innerHeight - 84, 0);
   let wanderUntil = 0;
   let moveUntil = 0;
   let direction = 1;
+  let drag = null;
 
   const clamp = (value, min, max) => Math.min(Math.max(value, min), Math.max(min, max));
   const petFrames = () => frames[state.pet][animation] ?? frames[state.pet].idle;
@@ -184,7 +190,7 @@ export function petHtml(): string {
       frameAt = now;
       draw();
     }
-    if (state.movement === "playful" && !state.threads.some(thread => thread.status === "working" || thread.status === "review" || thread.status === "waiting")) {
+    if (!drag && state.movement === "playful" && !state.threads.some(thread => thread.status === "working" || thread.status === "review" || thread.status === "waiting")) {
       if (moveUntil > now) {
         x = clamp(x + direction * 18 * 0.04, 0, Math.max(window.innerWidth - 64, 0));
         position();
@@ -201,11 +207,36 @@ export function petHtml(): string {
   let interactive = false;
   document.addEventListener("mousemove", (event) => {
     const target = event.target instanceof Element ? event.target : null;
-    const nextInteractive = Boolean(target?.closest("[data-interactive]"));
+    const nextInteractive = Boolean(drag || target?.closest("[data-interactive]"));
     if (nextInteractive === interactive) return;
     interactive = nextInteractive;
     bridge?.setInteractive(interactive);
   });
+  sprite.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    sprite.setPointerCapture(event.pointerId);
+    drag = {
+      id: event.pointerId,
+      offsetX: event.clientX - x,
+      offsetY: event.clientY - y,
+    };
+    setAnimation("wave");
+  });
+  sprite.addEventListener("pointermove", (event) => {
+    if (!drag || drag.id !== event.pointerId) return;
+    x = event.clientX - drag.offsetX;
+    y = event.clientY - drag.offsetY;
+    position();
+  });
+  const endDrag = (event) => {
+    if (!drag || drag.id !== event.pointerId) return;
+    if (sprite.hasPointerCapture(event.pointerId)) sprite.releasePointerCapture(event.pointerId);
+    drag = null;
+    setAnimation(activityAnimation());
+  };
+  sprite.addEventListener("pointerup", endDrag);
+  sprite.addEventListener("pointercancel", endDrag);
   const setMenu = (open) => {
     menuOpen = open;
     menu.classList.toggle("open", menuOpen);
@@ -266,7 +297,10 @@ export function makePetWindow(
   Electron.ipcMain.on(PET_WINDOW_ACTION_CHANNEL, actionListener);
   Electron.ipcMain.on(PET_WINDOW_INPUT_CHANNEL, inputListener);
 
-  const show = (area: Electron.Rectangle) => {
+  const show = (
+    area: Electron.Rectangle,
+    initialSpritePosition?: { readonly x: number; readonly y: number },
+  ) => {
     visible = true;
     if (current !== null && !current.isDestroyed()) {
       current.setBounds(area);
@@ -317,7 +351,7 @@ export function makePetWindow(
       }
     });
     void window
-      .loadURL("data:text/html;charset=utf-8," + encodeURIComponent(petHtml()))
+      .loadURL("data:text/html;charset=utf-8," + encodeURIComponent(petHtml(initialSpritePosition)))
       .catch(() => undefined);
   };
   const update = (state: DesktopPetState) => {

@@ -25,7 +25,18 @@ function sendToOwner(ownerId: number, action: PetWindowAction) {
   contents.send(PET_ACTION_CHANNEL, action);
 }
 
-function workAreaForOwner(ownerId: number): Electron.Rectangle {
+function petWindowBounds(): Electron.Rectangle {
+  const displays = Electron.screen.getAllDisplays();
+  const left = Math.min(...displays.map((display) => display.workArea.x));
+  const top = Math.min(...displays.map((display) => display.workArea.y));
+  const right = Math.max(...displays.map((display) => display.workArea.x + display.workArea.width));
+  const bottom = Math.max(
+    ...displays.map((display) => display.workArea.y + display.workArea.height),
+  );
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function ownerWorkAreaForOwner(ownerId: number): Electron.Rectangle {
   const contents = Electron.webContents.fromId(ownerId);
   const owner = contents ? Electron.BrowserWindow.fromWebContents(contents) : null;
   if (!owner || owner.isDestroyed()) return Electron.screen.getPrimaryDisplay().workArea;
@@ -47,12 +58,13 @@ const make = Effect.gen(function* () {
   });
 
   const refreshWorkArea = () => {
-    if (ownerId !== null) pet.show(workAreaForOwner(ownerId));
+    if (ownerId !== null) pet.show(petWindowBounds());
   };
   let screenListenersRegistered = false;
   const registerScreenListeners = () => {
     Electron.screen.on("display-metrics-changed", refreshWorkArea);
     Electron.screen.on("display-removed", refreshWorkArea);
+    Electron.screen.on("display-added", refreshWorkArea);
     screenListenersRegistered = true;
   };
   // Foundation services are built before DesktopApp waits for Electron readiness.
@@ -66,6 +78,7 @@ const make = Effect.gen(function* () {
       if (screenListenersRegistered) {
         Electron.screen.removeListener("display-metrics-changed", refreshWorkArea);
         Electron.screen.removeListener("display-removed", refreshWorkArea);
+        Electron.screen.removeListener("display-added", refreshWorkArea);
       }
       pet.destroy();
     }),
@@ -77,10 +90,7 @@ const make = Effect.gen(function* () {
         const contents = Electron.webContents.fromId(nextOwnerId);
         if (contents && !watchedOwners.has(contents)) {
           watchedOwners.add(contents);
-          const owner = Electron.BrowserWindow.fromWebContents(contents);
-          owner?.on("move", refreshWorkArea);
           contents.once("destroyed", () => {
-            owner?.removeListener("move", refreshWorkArea);
             if (ownerId !== nextOwnerId) return;
             ownerId = null;
             pet.hide();
@@ -88,7 +98,12 @@ const make = Effect.gen(function* () {
         }
       }
       ownerId = nextOwnerId;
-      pet.show(workAreaForOwner(nextOwnerId));
+      const bounds = petWindowBounds();
+      const ownerArea = ownerWorkAreaForOwner(nextOwnerId);
+      pet.show(bounds, {
+        x: ownerArea.x + ownerArea.width - 84 - bounds.x,
+        y: ownerArea.y + ownerArea.height - 84 - bounds.y,
+      });
     }),
     close: Effect.fn("DesktopPet.close")(function* () {
       // Renderer teardown calls close on reload. Do not echo a user-style

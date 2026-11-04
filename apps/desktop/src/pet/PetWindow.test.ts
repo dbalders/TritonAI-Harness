@@ -27,9 +27,19 @@ class TestElement {
       this.open = value;
     },
   };
+  capturedPointers: number[] = [];
   readonly id: string;
   constructor(id: string) {
     this.id = id;
+  }
+  setPointerCapture(pointerId: number) {
+    this.capturedPointers.push(pointerId);
+  }
+  hasPointerCapture(pointerId: number) {
+    return this.capturedPointers.includes(pointerId);
+  }
+  releasePointerCapture(pointerId: number) {
+    this.capturedPointers = this.capturedPointers.filter((id) => id !== pointerId);
   }
   addEventListener(name: string, fn: (event: Input) => void) {
     this.listeners[name] = fn;
@@ -56,7 +66,7 @@ class TestElement {
     return { clearRect() {}, fillRect() {}, fillStyle: "" };
   }
 }
-function page() {
+function page(initialSpritePosition?: { readonly x: number; readonly y: number }) {
   const elements = Object.fromEntries(
     ["actor", "sprite", "pet", "pills", "menu", "movement"].map((id) => [id, new TestElement(id)]),
   );
@@ -75,7 +85,7 @@ function page() {
     },
     __updatePet: (_state: unknown) => {},
   };
-  const script = petHtml().split("<script>")[1]!.split("</script>")[0]!;
+  const script = petHtml(initialSpritePosition).split("<script>")[1]!.split("</script>")[0]!;
   NodeVM.runInNewContext(script, {
     window: win,
     document: {
@@ -140,10 +150,20 @@ describe("pet page behavior", () => {
     p.elements.menu!.fire("click", { target: button });
     expect(p.actions).toEqual([{ kind: "set-movement", movement: "playful" }, { kind: "close" }]);
   });
-  it("makes the sprite a native drag region", () => {
-    const css = petHtml().split("<style>")[1] ?? "";
-    const rule = css.split(".sprite")[1] ?? "";
-    expect(rule).toContain("-webkit-app-region: drag");
+  it("uses the provided initial sprite position", () => {
+    const p = page({ x: 100, y: 200 });
+    expect(p.elements.actor!.style.transform).toBe("translate(100px,200px)");
+  });
+  it("drags the sprite with pointer capture", () => {
+    const p = page();
+    const sprite = p.elements.sprite!;
+    expect(p.elements.actor!.style.transform).toBe("translate(1836px,996px)");
+    sprite.fire("pointerdown", { button: 0, pointerId: 1, clientX: 1836, clientY: 996 });
+    expect(sprite.capturedPointers).toEqual([1]);
+    sprite.fire("pointermove", { pointerId: 1, clientX: 1800, clientY: 900 });
+    expect(p.elements.actor!.style.transform).toBe("translate(1800px,900px)");
+    sprite.fire("pointerup", { pointerId: 1 });
+    expect(sprite.capturedPointers).toEqual([]);
   });
   it("keeps static position and releases input away from controls", () => {
     const p = page();

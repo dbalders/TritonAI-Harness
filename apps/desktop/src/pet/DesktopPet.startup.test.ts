@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   on: vi.fn(),
   remove: vi.fn(),
   removeReady: vi.fn(),
+  getAllDisplays: vi.fn(),
+  getPrimaryDisplay: vi.fn(),
   getDisplayMatching: vi.fn(),
   fromId: vi.fn(),
   fromWebContents: vi.fn(),
@@ -40,6 +42,8 @@ vi.mock("electron", () => ({
     return {
       on: state.on,
       removeListener: state.remove,
+      getAllDisplays: state.getAllDisplays,
+      getPrimaryDisplay: state.getPrimaryDisplay,
       getDisplayMatching: state.getDisplayMatching,
     };
   },
@@ -78,10 +82,11 @@ it.effect("builds before ready without touching screen, then registers and clean
         expect(state.on.mock.calls.map(([name]) => name)).toEqual([
           "display-metrics-changed",
           "display-removed",
+          "display-added",
         ]);
       }),
     );
-    expect(state.remove).toHaveBeenCalledTimes(2);
+    expect(state.remove).toHaveBeenCalledTimes(3);
     expect(state.removeReady).toHaveBeenCalledOnce();
     expect(state.petWindow.destroy).toHaveBeenCalledOnce();
   }),
@@ -102,10 +107,10 @@ it.effect("registers immediately when Electron is already ready", () =>
     yield* Effect.scoped(
       Effect.gen(function* () {
         yield* Layer.build(runtime);
-        expect(state.on).toHaveBeenCalledTimes(2);
+        expect(state.on).toHaveBeenCalledTimes(3);
       }),
     );
-    expect(state.remove).toHaveBeenCalledTimes(2);
+    expect(state.remove).toHaveBeenCalledTimes(3);
   }),
 );
 
@@ -113,20 +118,24 @@ it.effect("hides on close without notifying the renderer", () =>
   Effect.gen(function* () {
     state.ready = true;
     const send = vi.fn();
+    const ownerBounds = { x: 2560, y: 100, width: 1920, height: 1080 };
     state.fromId.mockReturnValue({
       id: 7,
       isDestroyed: () => false,
+      getBounds: () => ownerBounds,
       send,
       once: vi.fn(),
     });
     state.fromWebContents.mockReturnValue({
       isDestroyed: () => false,
-      getBounds: () => ({ x: 0, y: 0, width: 1200, height: 800 }),
-      on: vi.fn(),
+      getBounds: () => ownerBounds,
     });
-    state.getDisplayMatching.mockReturnValue({
-      workArea: { x: 0, y: 0, width: 1200, height: 800 },
-    });
+    state.getAllDisplays.mockReturnValue([
+      { workArea: { x: -1920, y: 0, width: 1920, height: 1080 } },
+      { workArea: { x: 0, y: 0, width: 2560, height: 1440 } },
+      { workArea: ownerBounds },
+    ]);
+    state.getDisplayMatching.mockReturnValue({ workArea: ownerBounds });
     yield* Effect.scoped(
       Effect.gen(function* () {
         const context = yield* Layer.build(runtime);
@@ -135,7 +144,10 @@ it.effect("hides on close without notifying the renderer", () =>
         yield* pet.close();
       }),
     );
-    expect(state.petWindow.show).toHaveBeenCalledOnce();
+    expect(state.petWindow.show).toHaveBeenCalledWith(
+      { x: -1920, y: 0, width: 6400, height: 1440 },
+      { x: 6316, y: 1096 },
+    );
     expect(state.petWindow.hide).toHaveBeenCalledOnce();
     expect(send).not.toHaveBeenCalled();
   }),
