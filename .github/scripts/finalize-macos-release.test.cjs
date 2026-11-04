@@ -23,6 +23,7 @@ const {
   verifyPackagedBoot,
   finalizeMacRelease,
   trackBootProcesses,
+  validateAccepted,
 } = require("./finalize-macos-release.cjs");
 const verifyPluginPayload = (...args) => verifyPluginPayloadWithImports(...args, parseImports);
 
@@ -763,6 +764,189 @@ test("finalization recovers a lost stapling connection on the accepted app and D
   assert.deepEqual(report.notarization, { status: "Accepted", id: "notary-job" });
 });
 
+function staplerFailure(status, stderr, extra = {}) {
+  return Object.assign(new Error(`Stapler failed (exit ${status}).`), {
+    result: { status, stderr, ...extra },
+  });
+}
+
+const lostConnection = () =>
+  staplerFailure(68, 'Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."');
+
+for (const [status, diagnostic] of [
+  ...[1001, 1003, 1004, 1005, 1006, 1009].map((code) => [
+    68,
+    `Error Domain=NSURLErrorDomain Code=-${code}`,
+  ]),
+  ...[65, 68].map((status) => [
+    status,
+    'CloudKit query for ticket failed due to "Record not found".',
+  ]),
+]) {
+  test(`validation recovers explicit transient ${status}: ${diagnostic}`, async () => {
+    const calls = [];
+    const waits = [];
+    await validateAccepted(
+      "accepted.dmg",
+      { status: "Accepted" },
+      "Validate fixture",
+      (program, args, options) => {
+        calls.push({ program, args, options });
+        if (calls.length === 1) throw staplerFailure(status, "", { stdout: diagnostic });
+        return { stdout: "The validate action worked!" };
+      },
+      async (ms) => waits.push(ms),
+    );
+    assert.equal(calls.length, 2);
+    for (const call of calls) {
+      assert.equal(call.program, "xcrun");
+      assert.deepEqual(call.args, ["stapler", "validate", "accepted.dmg"]);
+      assert.equal(call.options.capture, true);
+      assert.equal(call.options.timeout, 60000);
+      assert.equal(call.options.killSignal, "SIGKILL");
+    }
+    assert.deepEqual(waits, [10000]);
+  });
+}
+
+for (const label of [
+  "Validate stapled app notarization",
+  "Validate stapled notarization",
+  "Validate stapled app inside final DMG",
+  "Validate stapled app inside final updater ZIP",
+]) {
+  for (const outcome of ["recovery", "exhaustion", "permanent failure"]) {
+    test(`${label}: ${outcome} preserves the accepted artifact and publication gate`, async (t) => {
+      const f = fixture(t, "0.4.2-nightly.20261103.125");
+      const mock = packagingMocks(f);
+      const attempts = [];
+      const waits = [];
+      const failure =
+        outcome === "permanent failure"
+          ? staplerFailure(65, "The stapled ticket is invalid.")
+          : lostConnection();
+      let originalBytes;
+      const finalization = finalizeMacRelease({
+        harnessRoot: f.root,
+        stageRoot: f.stageRoot,
+        version: f.version,
+        outputDir: f.release,
+        env: f.env,
+        platform: "darwin",
+        packagingTools: mock.tools,
+        wait: async (ms) => waits.push(ms),
+        verifyBoot: async () => ({ healthyForMs: 5000 }),
+        runCommand: (program, args, options) => {
+          if (options.label === label) {
+            assert.equal(program, "xcrun");
+            assert.deepEqual(args.slice(0, 2), ["stapler", "validate"]);
+            const target = args[2];
+            attempts.push(target);
+            const isApp = target.endsWith(".app");
+            const receipt = path.join(
+              f.stageRoot,
+              isApp ? "notarization-app.json" : "notarization-dmg.json",
+            );
+            assert.equal(JSON.parse(fs.readFileSync(receipt, "utf8")).status, "Accepted");
+            const bytes = isApp
+              ? ["CodeResources", "Resources/app.asar"].map((entry) =>
+                  fs.readFileSync(path.join(target, "Contents", entry)),
+                )
+              : fs.readFileSync(target);
+            originalBytes ??= bytes;
+            assert.deepEqual(bytes, originalBytes);
+            if (outcome !== "recovery" || attempts.length === 1) throw failure;
+            if (attempts.length === 2)
+              throw staplerFailure(
+                65,
+                'CloudKit query for ticket failed due to "Record not found".',
+              );
+          }
+          return mock.command(program, args, options);
+        },
+      });
+      if (outcome === "recovery") {
+        const report = await finalization;
+        assert.equal(report.notarization.status, "Accepted");
+        assert(fs.existsSync(path.join(f.release, "nightly-mac.yml")));
+      } else {
+        await assert.rejects(finalization, (error) => error === failure);
+        for (const name of ["nightly-mac.yml", "harness-mac-verification.json"])
+          assert(!fs.existsSync(path.join(f.release, name)));
+        assert(!mock.calls.some((call) => call.args.includes("--artifact")));
+      }
+      assert.equal(attempts.length, outcome === "recovery" ? 3 : outcome === "exhaustion" ? 4 : 1);
+      assert.equal(new Set(attempts).size, 1, "every attempt must validate the identical path");
+      assert.deepEqual(
+        waits,
+        outcome === "recovery"
+          ? [10000, 30000]
+          : outcome === "exhaustion"
+            ? [10000, 30000, 60000]
+            : [],
+      );
+      assert.equal(mock.calls.filter((call) => call.program === "vp").length, 1);
+      const submissions = mock.calls.filter((call) => call.args[0] === "notarytool");
+      assert.equal(
+        submissions.length,
+        label === "Validate stapled app notarization" && outcome !== "recovery" ? 1 : 2,
+      );
+      assert.equal(new Set(submissions.map((call) => call.args[2])).size, submissions.length);
+      const staples = mock.calls.filter((call) => call.args[1] === "staple");
+      assert.equal(staples.length, submissions.length, "validation must not re-staple");
+      if (label === "Validate stapled app inside final DMG" && outcome !== "recovery")
+        assert.equal(mock.calls.filter((call) => call.args[0] === "detach").length, 2);
+    });
+  }
+}
+
+for (const [name, failure] of [
+  ["bare EX_NOHOST", staplerFailure(68, "The validate action failed! Error 68.")],
+  ["invalid signature", staplerFailure(65, "The code signature is invalid.")],
+  ["missing file", staplerFailure(66, "The file could not be found.")],
+  ["malformed arguments", staplerFailure(64, "Usage: stapler validate path")],
+  ["TLS trust failure", staplerFailure(68, "Error Domain=NSURLErrorDomain Code=-1200")],
+  ["unclassified URL error", staplerFailure(68, "Error Domain=NSURLErrorDomain Code=-1000")],
+  ["wrong exit status", staplerFailure(65, "Error Domain=NSURLErrorDomain Code=-1005")],
+  [
+    "spawn error",
+    staplerFailure(68, "Error Domain=NSURLErrorDomain Code=-1005", {
+      error: new Error("spawn failed"),
+    }),
+  ],
+]) {
+  test(`validation does not retry ${name}`, async () => {
+    let attempts = 0;
+    const waits = [];
+    await assert.rejects(
+      validateAccepted(
+        "accepted.dmg",
+        { status: "Accepted" },
+        "Validate fixture",
+        () => {
+          attempts++;
+          throw failure;
+        },
+        async (ms) => waits.push(ms),
+      ),
+      (error) => error === failure,
+    );
+    assert.equal(attempts, 1);
+    assert.deepEqual(waits, []);
+  });
+}
+
+test("validation requires an Accepted receipt before invoking Apple", async () => {
+  for (const receipt of [undefined, {}, { status: "Invalid" }, { status: "In Progress" }]) {
+    await assert.rejects(
+      validateAccepted("candidate.dmg", receipt, "Validate fixture", () =>
+        assert.fail("must not run"),
+      ),
+      /Accepted notarization receipt/,
+    );
+  }
+});
+
 test("successful staple recovery still requires strict ticket validation before packaging", async (t) => {
   const f = fixture(t),
     mock = packagingMocks(f);
@@ -797,7 +981,7 @@ test("successful staple recovery still requires strict ticket validation before 
     /ticket validation failed/,
   );
   assert.equal(attempts, 2);
-  assert.equal(validations, 1, "must not retry a validation failure");
+  assert.equal(validations, 1, "must not retry an unclassified validation failure");
   assert(!mock.calls.some((call) => call.program === "archive"));
   assert(!fs.existsSync(path.join(f.release, "harness-mac-verification.json")));
 });
@@ -805,6 +989,7 @@ test("successful staple recovery still requires strict ticket validation before 
 test("rejected notarization cannot emit successful proof or updater metadata", async (t) => {
   const f = fixture(t);
   const mock = packagingMocks(f, "Invalid");
+  const waits = [];
   await assert.rejects(
     finalizeMacRelease({
       harnessRoot: f.root,
@@ -815,12 +1000,54 @@ test("rejected notarization cannot emit successful proof or updater metadata", a
       platform: "darwin",
       runCommand: mock.command,
       packagingTools: mock.tools,
+      wait: async (ms) => waits.push(ms),
     }),
     /did not accept/,
   );
+  assert.deepEqual(waits, []);
+  assert(!mock.calls.some((call) => call.args[0] === "stapler"));
+  assert(!fs.existsSync(path.join(f.release, "latest-mac.yml")));
   assert(!fs.existsSync(path.join(f.release, "harness-mac-verification.json")));
   assert(!mock.calls.some((call) => call.args.includes("--artifact")));
 });
+
+for (const failure of ["malformed configuration", "invalid signature"]) {
+  test(`${failure} stops before notarization without retries or success metadata`, async (t) => {
+    const f = fixture(t);
+    const mock = packagingMocks(f);
+    const configPath = path.join(f.root, "invalid-config.json");
+    fs.writeFileSync(configPath, "{");
+    const waits = [];
+    await assert.rejects(
+      finalizeMacRelease({
+        harnessRoot: f.root,
+        stageRoot: f.stageRoot,
+        version: f.version,
+        outputDir: f.release,
+        env:
+          failure === "malformed configuration"
+            ? { DEVELOPER_ID_APPLICATION: f.env.DEVELOPER_ID_APPLICATION }
+            : f.env,
+        configPath,
+        platform: "darwin",
+        packagingTools: mock.tools,
+        wait: async (ms) => waits.push(ms),
+        runCommand: (program, args, options) => {
+          if (program === "codesign" && args[0] === "--verify")
+            throw new Error("The code signature is invalid.");
+          return mock.command(program, args, options);
+        },
+      }),
+      failure === "malformed configuration"
+        ? /configuration is invalid JSON/
+        : /signature is invalid/,
+    );
+    assert.deepEqual(waits, []);
+    assert(!mock.calls.some((call) => call.args[0] === "notarytool"));
+    for (const name of ["latest-mac.yml", "harness-mac-verification.json"])
+      assert(!fs.existsSync(path.join(f.release, name)));
+  });
+}
 
 for (const version of ["0.3.4", "0.3.4-nightly.20260912.42"]) {
   for (const failure of ["command", "binding"]) {
