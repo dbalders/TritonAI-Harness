@@ -76,6 +76,7 @@ function page(initialSpritePosition?: { readonly x: number; readonly y: number }
   const modes: boolean[] = [];
   let tick = () => {};
   let now = 0;
+  let moveHandler: ((x: number, y: number) => void) | null = null;
   const win = {
     innerWidth: 1920,
     innerHeight: 1080,
@@ -84,6 +85,9 @@ function page(initialSpritePosition?: { readonly x: number; readonly y: number }
       send: (action: unknown) => actions.push(action),
       sendDrag: (event: unknown) => drags.push(event),
       setInteractive: (value: boolean) => modes.push(value),
+      onMove: (handler: (x: number, y: number) => void) => {
+        moveHandler = handler;
+      },
     },
     __updatePet: (_state: unknown) => {},
     __movePet: (_x: number, _y: number) => {},
@@ -113,6 +117,7 @@ function page(initialSpritePosition?: { readonly x: number; readonly y: number }
     drags,
     modes,
     win,
+    moveHandler: () => moveHandler,
     tick: (time: number) => {
       now = time;
       tick();
@@ -173,6 +178,18 @@ describe("pet page behavior", () => {
     sprite.fire("pointerup", { pointerId: 1 });
     expect(sprite.capturedPointers).toEqual([]);
     expect(p.drags[2]).toEqual({ kind: "end" });
+  });
+  it("keeps an offscreen sprite hidden across state updates", () => {
+    const p = page();
+    expect(p.moveHandler()).toBeTypeOf("function");
+    p.win.__movePet(-64, -64);
+    expect(p.elements.actor!.style.transform).toBe("translate(-64px,-64px)");
+    p.win.__updatePet({ pet: "triton", movement: "playful", threads: [summary] });
+    expect(p.elements.actor!.style.transform).toBe("translate(-64px,-64px)");
+    p.moveHandler()!(100, 100);
+    expect(p.elements.actor!.style.transform).toBe("translate(100px,100px)");
+    p.win.__updatePet({ pet: "triton", movement: "static", threads: [] });
+    expect(p.elements.actor!.style.transform).toBe("translate(100px,100px)");
   });
   it("keeps static position and releases input away from controls", () => {
     const p = page();

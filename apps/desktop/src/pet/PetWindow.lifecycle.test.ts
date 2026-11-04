@@ -16,6 +16,7 @@ it("keeps a late-loading pet hidden after Off and allows reopening", () => {
       on: noop,
       setWindowOpenHandler: noop,
       executeJavaScript: async () => {},
+      send: noop,
     },
     isDestroyed: () => false,
     setBounds: noop,

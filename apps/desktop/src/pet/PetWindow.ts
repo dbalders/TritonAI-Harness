@@ -1,6 +1,3 @@
-import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
-import * as Schedule from "effect/Schedule";
 import * as Electron from "electron";
 import {
   composePetFrame,
@@ -14,6 +11,7 @@ import {
   PET_WINDOW_ACTION_CHANNEL,
   PET_WINDOW_DRAG_CHANNEL,
   PET_WINDOW_INPUT_CHANNEL,
+  PET_WINDOW_MOVE_CHANNEL,
 } from "../ipc/channels.ts";
 import { isPetWindowAction, type PetWindowAction } from "./petWindowAction.ts";
 
@@ -128,6 +126,7 @@ export function petHtml(initialSpritePosition?: {
   let moveUntil = 0;
   let direction = 1;
   let drag = null;
+  let onScreen = x > -64 && y > -64 && x < window.innerWidth && y < window.innerHeight;
 
   const clamp = (value, min, max) => Math.min(Math.max(value, min), Math.max(min, max));
   const petFrames = () => frames[state.pet][animation] ?? frames[state.pet].idle;
@@ -150,7 +149,7 @@ export function petHtml(initialSpritePosition?: {
   };
   let menuOpen = false;
   const position = (bounded = true) => {
-    if (bounded) {
+    if (bounded && onScreen) {
       x = clamp(x, 0, Math.max(window.innerWidth - 64, 0));
       y = clamp(y, 0, Math.max(window.innerHeight - 64, 0));
     }
@@ -199,7 +198,7 @@ export function petHtml(initialSpritePosition?: {
       frameAt = now;
       draw();
     }
-    if (!drag && state.movement === "playful" && !state.threads.some(thread => thread.status === "working" || thread.status === "review" || thread.status === "waiting")) {
+    if (!drag && onScreen && state.movement === "playful" && !state.threads.some(thread => thread.status === "working" || thread.status === "review" || thread.status === "waiting")) {
       if (moveUntil > now) {
         x = clamp(x + direction * 18 * 0.04, 0, Math.max(window.innerWidth - 64, 0));
         position();
@@ -268,11 +267,14 @@ export function petHtml(initialSpritePosition?: {
     if (button.dataset.action === "set-pet") bridge?.send({ kind: "set-pet", pet: button.dataset.value });
   });
   window.addEventListener("resize", position);
-  window.__movePet = (nextX, nextY) => {
+  const movePet = (nextX, nextY) => {
     x = nextX;
     y = nextY;
+    onScreen = nextX > -64 && nextY > -64 && nextX < window.innerWidth && nextY < window.innerHeight;
     position(false);
   };
+  bridge?.onMove?.(movePet);
+  window.__movePet = movePet;
   window.__suspendPet = () => { clearInterval(timer); timer = 0; };
   window.__updatePet = (next) => {
     state = next;
@@ -326,15 +328,12 @@ export function makePetWindow(
   let visible = false;
   let spritePosition: { x: number; y: number } | null = null;
   let dragOffset: { x: number; y: number } | null = null;
-  let dragFiber: Fiber.Fiber<void, never> | null = null;
 
   const entryForSender = (sender: Electron.WebContents) =>
     entries.find(
       (entry) => !entry.window.isDestroyed() && entry.window.webContents.id === sender.id,
     );
   const stopDrag = () => {
-    if (dragFiber !== null) void Effect.runFork(Fiber.interrupt(dragFiber));
-    dragFiber = null;
     dragOffset = null;
   };
   const setSpritePosition = (next: { x: number; y: number }) => {
@@ -349,9 +348,7 @@ export function makePetWindow(
       if (!overlaps && !entry.spriteVisible) continue;
       const x = overlaps ? Math.round(next.x - entry.area.x) : -PET_SIZE;
       const y = overlaps ? Math.round(next.y - entry.area.y) : -PET_SIZE;
-      void entry.window.webContents
-        .executeJavaScript(`window.__movePet(${x},${y})`, true)
-        .catch(() => undefined);
+      entry.window.webContents.send(PET_WINDOW_MOVE_CHANNEL, x, y);
       entry.spriteVisible = overlaps;
     }
   };
@@ -504,16 +501,9 @@ export function makePetWindow(
       return;
     }
     dragOffset = { x: value.offsetX!, y: value.offsetY! };
-    if (dragFiber === null) {
-      dragFiber = Effect.runFork(
-        Effect.sync(movePetToCursor).pipe(
-          Effect.repeat({
-            while: () => dragOffset !== null,
-            schedule: Schedule.spaced(8),
-          }),
-        ),
-      );
-    }
+    // Renderer pointer events drive each update, so movement follows the
+    // input cadence instead of a polling timer.
+    movePetToCursor();
   };
   Electron.ipcMain.on(PET_WINDOW_ACTION_CHANNEL, actionListener);
   Electron.ipcMain.on(PET_WINDOW_INPUT_CHANNEL, inputListener);
