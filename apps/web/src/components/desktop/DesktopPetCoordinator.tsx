@@ -20,10 +20,12 @@ export function DesktopPetCoordinator() {
   const seenRef = useRef(new Set<string>());
   const selectionRef = useRef(selection);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- keep latest selection available to the IPC callback without resubscribing
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- serialize renderer state changes into the desktop pet
   useEffect(() => {
     if (!pet) return;
     if (selection === "off") seenRef.current.clear();
@@ -56,6 +58,7 @@ export function DesktopPetCoordinator() {
     };
   }, [movement, pet, selection, threads]);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- subscribe to pet IPC actions for the component lifetime
   useEffect(() => {
     if (!pet) return;
     return pet.onAction((action) => {
@@ -78,6 +81,7 @@ export function DesktopPetCoordinator() {
     });
   }, [navigate, pet]);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- close the desktop pet once when the bridge goes away
   useEffect(() => {
     if (!pet) return;
     return () => {

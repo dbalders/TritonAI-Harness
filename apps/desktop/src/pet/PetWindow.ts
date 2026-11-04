@@ -459,7 +459,7 @@ export function makePetWindow(
       spritePosition = { x: area.x + area.width - 84, y: area.y + area.height - 84 };
     }
     const nextAreas = new Map(areas.map((display) => [display.id, display]));
-    for (const entry of [...entries]) {
+    for (const entry of entries) {
       if (!nextAreas.has(entry.id)) removeEntry(entry);
     }
     for (const display of areas) {
@@ -527,7 +527,7 @@ export function makePetWindow(
   const destroy = () => {
     visible = false;
     stopDrag();
-    for (const entry of [...entries]) removeEntry(entry);
+    for (const entry of entries) removeEntry(entry);
     Electron.ipcMain.removeListener(PET_WINDOW_ACTION_CHANNEL, actionListener);
     Electron.ipcMain.removeListener(PET_WINDOW_INPUT_CHANNEL, inputListener);
     Electron.ipcMain.removeListener(PET_WINDOW_DRAG_CHANNEL, dragListener);

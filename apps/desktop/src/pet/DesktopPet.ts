@@ -82,41 +82,47 @@ const make = Effect.gen(function* () {
 
   return DesktopPet.of({
     open: Effect.fn("DesktopPet.open")(function* (nextOwnerId) {
-      if (ownerId !== nextOwnerId) {
-        const contents = Electron.webContents.fromId(nextOwnerId);
-        if (contents && !watchedOwners.has(contents)) {
-          watchedOwners.add(contents);
-          contents.once("destroyed", () => {
-            if (ownerId !== nextOwnerId) return;
-            ownerId = null;
-            pet.hide();
-          });
+      yield* Effect.sync(() => {
+        if (ownerId !== nextOwnerId) {
+          const contents = Electron.webContents.fromId(nextOwnerId);
+          if (contents && !watchedOwners.has(contents)) {
+            watchedOwners.add(contents);
+            contents.once("destroyed", () => {
+              if (ownerId !== nextOwnerId) return;
+              ownerId = null;
+              pet.hide();
+            });
+          }
         }
-      }
-      ownerId = nextOwnerId;
-      const areas = petWindowAreas();
-      const ownerArea = ownerWorkAreaForOwner(nextOwnerId);
-      pet.show(areas, {
-        x: ownerArea.x + ownerArea.width - 84,
-        y: ownerArea.y + ownerArea.height - 84,
+        ownerId = nextOwnerId;
+        const areas = petWindowAreas();
+        const ownerArea = ownerWorkAreaForOwner(nextOwnerId);
+        pet.show(areas, {
+          x: ownerArea.x + ownerArea.width - 84,
+          y: ownerArea.y + ownerArea.height - 84,
+        });
       });
     }),
     close: Effect.fn("DesktopPet.close")(function* () {
-      // Renderer teardown calls close on reload. Do not echo a user-style
-      // close action into the same webContents; that would reset a persisted
-      // pet selection after the page has already reloaded.
-      ownerId = null;
-      pet.hide();
-    }),
-    setState: Effect.fn("DesktopPet.setState")(function* (state) {
-      if (state.pet === "off") {
-        const currentOwnerId = ownerId;
+      yield* Effect.sync(() => {
+        // Renderer teardown calls close on reload. Do not echo a user-style
+        // close action into the same webContents; that would reset a persisted
+        // pet selection after the page has already reloaded.
         ownerId = null;
         pet.hide();
-        if (currentOwnerId !== null) sendToOwner(currentOwnerId, { kind: "close" });
-        return;
-      }
-      pet.update(state);
+      });
+    }),
+    setState: Effect.fn("DesktopPet.setState")(function* (state) {
+      yield* Effect.sync(() => {
+        if (state.pet === "off") {
+          const currentOwnerId = ownerId;
+          ownerId = null;
+          pet.hide();
+          if (currentOwnerId !== null) sendToOwner(currentOwnerId, { kind: "close" });
+          return;
+        }
+        pet.update(state);
+      });
     }),
   });
 });

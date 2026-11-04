@@ -125,6 +125,7 @@ const petPreviewClass = "size-7 shrink-0 rounded-(--control-radius) [image-rende
 const PetPreviewCanvas = memo(function PetPreviewCanvas(props: { pet: PetId }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // oxlint-disable-next-line t3code/react-effect-budget -- canvas pixels are imperative and cannot be represented declaratively
   useEffect(() => {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
