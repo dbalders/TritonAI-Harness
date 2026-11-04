@@ -196,7 +196,10 @@ on each selected environment, and reset returns to the environment's shared list
 Settings a repository can also declare in `t3.json`, such as the workspace for new threads,
 resolve in one order: a project override, then the environment setting, then `t3.json`, then the
 built-in default. Leave a setting on **Inherit** to let the next tier decide.
-Browser access changes apply when an agent session next starts.
+Browser access changes apply when an agent session next starts. On the desktop, this also
+controls Codex access to an installed ChatGPT browser extension. The extension must be enabled
+in the browser profile you want to use. Each Codex session receives its own local authorization
+connection; browser access from a standalone server does not grant access to a desktop browser.
 
 New worktrees initialize git submodules recursively. If that step is slow because the repository
 declares many nested submodules, set **Submodules** in **Settings → Worktrees** under Advanced (with the project

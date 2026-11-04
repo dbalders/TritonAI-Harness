@@ -167,6 +167,12 @@ import { mergeCodexProviderEnvironment } from "../../provider/CodexEnvironment.t
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import {
+  deniedBrowserAccessEnvironment,
+  makeCodexBrowserAccessHost,
+} from "../../provider/CodexBrowserAccessHost.ts";
+import * as BrowserServerSettings from "../../serverSettings.ts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import {
   MCP_APP_EXTENSION_ID,
   MCP_APP_MIME_TYPE,
   MCP_APP_OUTPUT_KEY,
@@ -1174,6 +1180,7 @@ function withCodexManagedFailure(
 }
 
 interface ActiveCodexTurnContext {
+  readonly browserMcpCredentialId: string | undefined;
   closedCommandItemIds?: ReadonlySet<string>;
   latestProviderFailure?: {
     readonly nativeMessage: string;
@@ -1858,6 +1865,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
   adapterOptions: CodexAdapterV2Options,
 ) {
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const browserServerSettings = yield* Effect.serviceOption(
+    BrowserServerSettings.ServerSettingsService,
+  );
   const previewBroker = Option.getOrUndefined(
     yield* Effect.serviceOption(PreviewAutomationBroker.PreviewAutomationBroker),
   );
@@ -1953,13 +1963,59 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     }),
                 ),
               );
+        const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
+        const browserAccessEnvironment =
+          serverConfig.mode === "desktop"
+            ? yield* makeCodexBrowserAccessHost(
+                Effect.fn("CodexAdapterV2.authorizeBrowserAccess")(function* (request) {
+                  const context = (yield* Ref.get(activeTurns)).get(request.turnId);
+                  if (
+                    !context ||
+                    context.providerThread.nativeThreadRef?.nativeId !== request.sessionId
+                  )
+                    return false;
+                  const mcp = yield* readMcpSession(context.input.threadId);
+                  if (
+                    !mcp?.browserToolsAvailable ||
+                    (mcp.capabilities !== undefined && !mcp.capabilities.has("preview")) ||
+                    context.browserMcpCredentialId === undefined ||
+                    mcp.providerSessionId !== context.browserMcpCredentialId ||
+                    mcp.providerInstanceId !== adapterOptions.instanceId ||
+                    (mcp.expiresAt !== undefined &&
+                      mcp.expiresAt <= DateTime.toEpochMillis(yield* DateTime.now))
+                  )
+                    return false;
+                  if (Option.isNone(browserServerSettings)) return false;
+                  return yield* browserServerSettings.value.getSettings.pipe(
+                    Effect.map(
+                      (settings) =>
+                        resolveProjectSettings(settings, context.projectionAppThread.projectId)
+                          .settings.enableAgentBrowserAccess,
+                    ),
+                    Effect.orElseSucceed(() => false),
+                  );
+                }),
+              ).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapter.ProviderAdapterOpenSessionError({
+                      driver: CODEX_PROVIDER,
+                      providerSessionId: input.providerSessionId,
+                      cause,
+                    }),
+                ),
+              )
+            : deniedBrowserAccessEnvironment;
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
           providerSessionId: input.providerSessionId,
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          environment: {
+            ...(resolvedRuntime?.environment ?? adapterOptions.environment),
+            ...browserAccessEnvironment,
+          },
           appServerArgs: [
             ...(customModel(input.modelSelection.model) ? ["-c", 'web_search="disabled"'] : []),
             ...(adapterOptions.modelCatalogPath
@@ -2072,7 +2128,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const limitedTurnItems = yield* Ref.make(
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
         );
-        const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
         const turnTokenUsageByThread = new Map<string, CodexTurnTokenUsageState>();
         const usageStateForThread = (nativeThreadId: string) => {
           let state = turnTokenUsageByThread.get(nativeThreadId);
@@ -2291,6 +2346,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             nativeTurnId: input.nativeTurnId,
           });
           const context: ActiveCodexTurnContext = {
+            browserMcpCredentialId: (yield* readMcpSession(input.turnInput.threadId))
+              ?.providerSessionId,
             ...(input.waitForNativeStart ? { nativeStartReady: yield* Deferred.make<void>() } : {}),
             input: input.turnInput,
             projectionAppThread: input.turnInput.appThread,
@@ -2912,6 +2969,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     nativeItemId: `${turn.nativeTurnId}:thread-root`,
                   });
             const activeContext: ActiveCodexTurnContext = {
+              browserMcpCredentialId: subagent.parentContext.browserMcpCredentialId,
               input: subagent.parentContext.input,
               projectionAppThread: subagent.childThread,
               projectionThreadId: subagent.childThreadId,
@@ -6840,6 +6898,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           const now = yield* DateTime.now;
           const nativeId = `goal-command:${turnInput.attemptId}`;
           const context: ActiveCodexTurnContext = {
+            browserMcpCredentialId: undefined,
             input: turnInput,
             projectionAppThread: turnInput.appThread,
             projectionThreadId: turnInput.threadId,
