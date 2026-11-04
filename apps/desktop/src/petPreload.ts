@@ -5,6 +5,7 @@ import {
   PET_WINDOW_ACTION_CHANNEL,
   PET_WINDOW_DRAG_CHANNEL,
   PET_WINDOW_INPUT_CHANNEL,
+  PET_WINDOW_BOUNDS_CHANNEL,
   PET_WINDOW_MOVE_CHANNEL,
 } from "./ipc/channels.ts";
 
@@ -21,6 +22,10 @@ contextBridge.exposeInMainWorld("t3PetBridge", {
   },
   sendDrag: (event: unknown) => {
     ipcRenderer.send(PET_WINDOW_DRAG_CHANNEL, event);
+  },
+  reportBounds: (bounds: unknown) => {
+    if (bounds !== null && typeof bounds !== "object") return;
+    ipcRenderer.send(PET_WINDOW_BOUNDS_CHANNEL, bounds);
   },
   onMove: (handler: (x: number, y: number) => void) => {
     ipcRenderer.on(PET_WINDOW_MOVE_CHANNEL, (_event, x, y) => {

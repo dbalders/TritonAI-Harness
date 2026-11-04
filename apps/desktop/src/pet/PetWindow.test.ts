@@ -74,6 +74,7 @@ function page(initialSpritePosition?: { readonly x: number; readonly y: number }
   const actions: unknown[] = [];
   const drags: unknown[] = [];
   const modes: boolean[] = [];
+  const bounds: unknown[] = [];
   let tick = () => {};
   let now = 0;
   let moveHandler: ((x: number, y: number) => void) | null = null;
@@ -85,6 +86,7 @@ function page(initialSpritePosition?: { readonly x: number; readonly y: number }
       send: (action: unknown) => actions.push(action),
       sendDrag: (event: unknown) => drags.push(event),
       setInteractive: (value: boolean) => modes.push(value),
+      reportBounds: (value: unknown) => bounds.push(value),
       onMove: (handler: (x: number, y: number) => void) => {
         moveHandler = handler;
       },
@@ -116,6 +118,7 @@ function page(initialSpritePosition?: { readonly x: number; readonly y: number }
     actions,
     drags,
     modes,
+    bounds,
     win,
     moveHandler: () => moveHandler,
     tick: (time: number) => {
@@ -142,6 +145,7 @@ describe("pet page behavior", () => {
     expect(p.elements.pills!.children).toHaveLength(4);
     expect(p.elements.actor!.style.transform).toBe("translate(1836px,996px)");
     expect(parseFloat(p.elements.pills!.style.left!)).toBeLessThan(0);
+    expect(p.bounds.at(-1)).toEqual({ x: 1632, y: 868, width: 280, height: 192 });
     p.elements.pills!.children[0]!.fire("click");
     expect(p.actions).toEqual([
       { kind: "select-thread", environmentId: "env", threadId: "thread" },
@@ -152,6 +156,7 @@ describe("pet page behavior", () => {
     p.elements.sprite!.fire("contextmenu");
     expect(p.elements.menu!.open).toBe(true);
     expect(parseFloat(p.elements.menu!.style.left!)).toBeLessThan(0);
+    expect(p.bounds.at(-1)).toEqual({ x: 1788, y: 808, width: 124, height: 252 });
     const button = new TestElement("button");
     button.dataset.action = "movement";
     p.elements.menu!.fire("click", { target: button });

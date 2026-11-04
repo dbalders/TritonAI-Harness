@@ -9,6 +9,7 @@ import type { DesktopPetState } from "@t3tools/contracts";
 
 import {
   PET_WINDOW_ACTION_CHANNEL,
+  PET_WINDOW_BOUNDS_CHANNEL,
   PET_WINDOW_DRAG_CHANNEL,
   PET_WINDOW_INPUT_CHANNEL,
   PET_WINDOW_MOVE_CHANNEL,
@@ -148,6 +149,32 @@ export function petHtml(initialSpritePosition?: {
     draw();
   };
   let menuOpen = false;
+  let lastBounds = null;
+  const sameBounds = (a, b) =>
+    a === b || Boolean(a && b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height);
+  // Linux cannot forward ignored mouse events, so the main process needs the
+  // real control bounds to decide where the pet window should accept input.
+  const reportControlBounds = () => {
+    if (!bridge?.reportBounds) return;
+    let next = null;
+    if (onScreen) {
+      let left = x, top = y, right = x + 64, bottom = y + 64;
+      for (const panel of [pills, menu]) {
+        const box = panel.getBoundingClientRect();
+        if (box.width <= 0 || box.height <= 0) continue;
+        const panelLeft = x + (parseFloat(panel.style.left) || 0);
+        const panelTop = y + (parseFloat(panel.style.top) || 0);
+        left = Math.min(left, panelLeft);
+        top = Math.min(top, panelTop);
+        right = Math.max(right, panelLeft + box.width);
+        bottom = Math.max(bottom, panelTop + box.height);
+      }
+      next = { x: left, y: top, width: right - left, height: bottom - top };
+    }
+    if (sameBounds(lastBounds, next)) return;
+    lastBounds = next;
+    bridge.reportBounds(next);
+  };
   const position = (bounded = true) => {
     if (bounded && onScreen) {
       x = clamp(x, 0, Math.max(window.innerWidth - 64, 0));
@@ -167,6 +194,7 @@ export function petHtml(initialSpritePosition?: {
       panel.style.top = clamp(top, 8, window.innerHeight - box.height - 8) - y + "px";
     }
     menu.classList.toggle("open", menuOpen);
+    reportControlBounds();
   };
   const renderThreads = () => {
     const items = state.threads.slice(0, 3).map((thread) => {
@@ -305,11 +333,19 @@ export type PetWindowArea = {
   readonly area: Electron.Rectangle;
 };
 
+type PetWindowBounds = {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+};
+
 type PetWindowEntry = {
   id: number;
   area: Electron.Rectangle;
   window: Electron.BrowserWindow;
   spriteVisible: boolean;
+  controlBounds: PetWindowBounds | null;
 };
 
 type PetWindowDragEvent = {
@@ -403,6 +439,7 @@ export function makePetWindow(
       area: display.area,
       window,
       spriteVisible: false,
+      controlBounds: null,
     };
     window.setAlwaysOnTop(true, "floating");
     window.setVisibleOnAllWorkspaces(true, {
@@ -490,6 +527,16 @@ export function makePetWindow(
 
   const interactiveRegion = (entry: PetWindowEntry) => {
     if (spritePosition === null || !entry.spriteVisible) return null;
+    if (entry.controlBounds !== null) {
+      return {
+        x: entry.area.x + entry.controlBounds.x,
+        y: entry.area.y + entry.controlBounds.y,
+        width: entry.controlBounds.width,
+        height: entry.controlBounds.height,
+      };
+    }
+    // Before the renderer reports control bounds, stay generous enough for
+    // the sprite plus its default control layout.
     return {
       x: spritePosition.x - 16,
       y: spritePosition.y - 208,
@@ -505,12 +552,15 @@ export function makePetWindow(
     for (const entry of entries) {
       if (entry.window.isDestroyed()) continue;
       const region = interactiveRegion(entry);
+      // A captured drag must keep receiving pointer events even between
+      // bounds reports, or Linux would drop the pointerup mid-drag.
       const interactive =
-        region !== null &&
-        point.x >= region.x &&
-        point.x <= region.x + region.width &&
-        point.y >= region.y &&
-        point.y <= region.y + region.height;
+        dragOffset !== null ||
+        (region !== null &&
+          point.x >= region.x &&
+          point.x <= region.x + region.width &&
+          point.y >= region.y &&
+          point.y <= region.y + region.height);
       entry.window.setIgnoreMouseEvents(!interactive);
     }
   };
@@ -527,6 +577,29 @@ export function makePetWindow(
     if (!entry.window.isDestroyed()) {
       entry.window.setIgnoreMouseEvents(!interactive, { forward: !interactive });
     }
+  };
+  const boundsListener = (event: Electron.IpcMainEvent, bounds: unknown) => {
+    const entry = entryForSender(event.sender);
+    if (entry === undefined) return;
+    if (bounds === null) {
+      entry.controlBounds = null;
+      return;
+    }
+    if (typeof bounds !== "object" || bounds === null) return;
+    const { x, y, width, height } = bounds as Record<string, unknown>;
+    if (
+      typeof x !== "number" ||
+      typeof y !== "number" ||
+      typeof width !== "number" ||
+      typeof height !== "number" ||
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      !Number.isFinite(width) ||
+      !Number.isFinite(height)
+    ) {
+      return;
+    }
+    entry.controlBounds = { x, y, width, height };
   };
   const movePetToCursor = () => {
     if (dragOffset === null) return;
@@ -547,6 +620,7 @@ export function makePetWindow(
   Electron.ipcMain.on(PET_WINDOW_ACTION_CHANNEL, actionListener);
   Electron.ipcMain.on(PET_WINDOW_INPUT_CHANNEL, inputListener);
   Electron.ipcMain.on(PET_WINDOW_DRAG_CHANNEL, dragListener);
+  Electron.ipcMain.on(PET_WINDOW_BOUNDS_CHANNEL, boundsListener);
 
   const update = (state: DesktopPetState) => {
     latestState = state;
@@ -571,6 +645,7 @@ export function makePetWindow(
     Electron.ipcMain.removeListener(PET_WINDOW_ACTION_CHANNEL, actionListener);
     Electron.ipcMain.removeListener(PET_WINDOW_INPUT_CHANNEL, inputListener);
     Electron.ipcMain.removeListener(PET_WINDOW_DRAG_CHANNEL, dragListener);
+    Electron.ipcMain.removeListener(PET_WINDOW_BOUNDS_CHANNEL, boundsListener);
   };
   return { show, update, hide, destroy };
 }

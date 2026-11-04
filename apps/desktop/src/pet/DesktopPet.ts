@@ -51,6 +51,12 @@ const make = Effect.gen(function* () {
   const petPreloadPath = environment.path.join(environment.dirname, "petPreload.cjs");
   const pet = makePetWindow(environment.platform, petPreloadPath, (action) => {
     if (ownerIds.size === 0) return;
+    // Thread navigation is window-local: sending it to every renderer would
+    // change the active conversation in unrelated Harness windows.
+    if (action.kind === "select-thread") {
+      if (currentOwnerId !== null) sendToOwner(currentOwnerId, action);
+      return;
+    }
     sendToOwners(ownerIds, action);
     if (action.kind === "close" || (action.kind === "set-pet" && action.pet === "off")) {
       ownerIds.clear();

@@ -224,6 +224,43 @@ it.effect("hands the pet to another owner when the current owner closes", () =>
   }),
 );
 
+it.effect("routes thread selection to the current owner only", () =>
+  Effect.gen(function* () {
+    state.ready = true;
+    const { send7, send8 } = setupTwoOwners();
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(runtime);
+        const pet = Context.get(context, DesktopPet);
+        yield* pet.open(7);
+        yield* pet.open(8);
+        state.onAction({ kind: "select-thread", environmentId: "env", threadId: "thread" });
+        state.onAction({ kind: "set-pet", pet: "triton", movement: "static" });
+      }),
+    );
+    expect(send8).toHaveBeenCalledWith(PET_ACTION_CHANNEL, {
+      kind: "select-thread",
+      environmentId: "env",
+      threadId: "thread",
+    });
+    expect(send7).not.toHaveBeenCalledWith(PET_ACTION_CHANNEL, {
+      kind: "select-thread",
+      environmentId: "env",
+      threadId: "thread",
+    });
+    expect(send7).toHaveBeenCalledWith(PET_ACTION_CHANNEL, {
+      kind: "set-pet",
+      pet: "triton",
+      movement: "static",
+    });
+    expect(send8).toHaveBeenCalledWith(PET_ACTION_CHANNEL, {
+      kind: "set-pet",
+      pet: "triton",
+      movement: "static",
+    });
+  }),
+);
+
 it.effect("explicit off clears every owner and syncs all renderers", () =>
   Effect.gen(function* () {
     state.ready = true;
