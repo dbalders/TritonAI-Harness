@@ -115,6 +115,26 @@ describe("CodexBrowserAccessHost", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.live("creates a fresh identity after restart and isolates concurrent providers", () =>
+    Effect.gen(function* () {
+      const first = yield* Effect.scoped(makeCodexBrowserAccessHost(() => Effect.succeed(true)));
+      const restarted = yield* makeCodexBrowserAccessHost(() => Effect.succeed(true));
+      const concurrent = yield* makeCodexBrowserAccessHost(() => Effect.succeed(true));
+      assert.notEqual(first.BROWSER_USE_ACCESS_PIPE_PATH, restarted.BROWSER_USE_ACCESS_PIPE_PATH);
+      assert.notEqual(
+        first.BROWSER_USE_ACCESS_VERIFYING_IDENTITY,
+        restarted.BROWSER_USE_ACCESS_VERIFYING_IDENTITY,
+      );
+      assert.equal((yield* call(first, params(first)).pipe(Effect.result))._tag, "Failure");
+      assert.isTrue(JSON.parse((yield* call(restarted, params(restarted))).payload).allowed);
+      assert.isTrue(JSON.parse((yield* call(concurrent, params(concurrent))).payload).allowed);
+      for (const other of [first, concurrent]) {
+        assert.isFalse(JSON.parse((yield* call(restarted, params(other))).payload).allowed);
+      }
+      assert.isFalse(JSON.parse((yield* call(concurrent, params(restarted))).payload).allowed);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("interrupts an unfinished authorization when the provider closes", () =>
     Effect.gen(function* () {
       const pending = yield* Deferred.make<void>();
