@@ -120,8 +120,8 @@ export function petHtml(initialSpritePosition?: {
   const activityAnimation = () => state.threads[0]?.status === "review" ? "review" : state.threads[0]?.status === "failed" ? "failed" : "idle";
   let frameIndex = 0;
   let frameAt = 0;
-  let x = initialSpritePosition ? Math.max(initialSpritePosition.x, 0) : Math.max(window.innerWidth - 84, 0);
-  let y = initialSpritePosition ? Math.max(initialSpritePosition.y, 0) : Math.max(window.innerHeight - 84, 0);
+  let x = initialSpritePosition ? initialSpritePosition.x : Math.max(window.innerWidth - 84, 0);
+  let y = initialSpritePosition ? initialSpritePosition.y : Math.max(window.innerHeight - 84, 0);
   let wanderUntil = 0;
   let moveUntil = 0;
   let direction = 1;
@@ -155,6 +155,11 @@ export function petHtml(initialSpritePosition?: {
     }
     actor.style.transform = "translate(" + Math.round(x) + "px," + Math.round(y) + "px)";
     for (const panel of [pills, menu]) {
+      if (!onScreen) {
+        panel.style.visibility = "hidden";
+        continue;
+      }
+      panel.style.visibility = "visible";
       const box = panel.getBoundingClientRect();
       panel.style.left = clamp(x, 8, window.innerWidth - box.width - 8) - x + "px";
       panel.style.bottom = "auto";
@@ -270,7 +275,12 @@ export function petHtml(initialSpritePosition?: {
   const movePet = (nextX, nextY) => {
     x = nextX;
     y = nextY;
-    onScreen = nextX > -64 && nextY > -64 && nextX < window.innerWidth && nextY < window.innerHeight;
+    const nextOnScreen = nextX > -64 && nextY > -64 && nextX < window.innerWidth && nextY < window.innerHeight;
+    if (!nextOnScreen && menuOpen) {
+      menuOpen = false;
+      menu.classList.toggle("open", false);
+    }
+    onScreen = nextOnScreen;
     position(false);
   };
   bridge?.onMove?.(movePet);
@@ -399,7 +409,7 @@ export function makePetWindow(
       visibleOnFullScreen: true,
       skipTransformProcessType: true,
     });
-    window.setIgnoreMouseEvents(true, { forward: true });
+    window.setIgnoreMouseEvents(true, platform === "linux" ? undefined : { forward: true });
     window.on("closed", () => {
       entries = entries.filter((item) => item !== entry);
     });
@@ -478,11 +488,40 @@ export function makePetWindow(
     if (spritePosition !== null) setSpritePosition(spritePosition);
   };
 
+  const interactiveRegion = (entry: PetWindowEntry) => {
+    if (spritePosition === null || !entry.spriteVisible) return null;
+    return {
+      x: spritePosition.x - 16,
+      y: spritePosition.y - 208,
+      width: PET_SIZE + 312,
+      height: PET_SIZE + 424,
+    };
+  };
+  // Electron only forwards ignored mouse events on macOS and Windows. On
+  // Linux, poll the cursor and enable input only around the pet controls.
+  const updateLinuxInput = () => {
+    if (!visible) return;
+    const point = Electron.screen.getCursorScreenPoint();
+    for (const entry of entries) {
+      if (entry.window.isDestroyed()) continue;
+      const region = interactiveRegion(entry);
+      const interactive =
+        region !== null &&
+        point.x >= region.x &&
+        point.x <= region.x + region.width &&
+        point.y >= region.y &&
+        point.y <= region.y + region.height;
+      entry.window.setIgnoreMouseEvents(!interactive);
+    }
+  };
+  // @effect-diagnostics-next-line globalTimers:off -- Electron cursor polling runs at a native callback boundary outside any Effect fiber.
+  const linuxInputTimer = platform === "linux" ? setInterval(updateLinuxInput, 50) : null;
   const actionListener = (event: Electron.IpcMainEvent, action: unknown) => {
     if (entryForSender(event.sender) === undefined || !isPetWindowAction(action)) return;
     onAction(action);
   };
   const inputListener = (event: Electron.IpcMainEvent, interactive: unknown) => {
+    if (platform === "linux") return;
     const entry = entryForSender(event.sender);
     if (entry === undefined || typeof interactive !== "boolean") return;
     if (!entry.window.isDestroyed()) {
@@ -527,6 +566,7 @@ export function makePetWindow(
   const destroy = () => {
     visible = false;
     stopDrag();
+    if (linuxInputTimer !== null) clearInterval(linuxInputTimer);
     for (const entry of entries) removeEntry(entry);
     Electron.ipcMain.removeListener(PET_WINDOW_ACTION_CHANNEL, actionListener);
     Electron.ipcMain.removeListener(PET_WINDOW_INPUT_CHANNEL, inputListener);

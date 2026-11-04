@@ -163,6 +163,11 @@ describe("pet page behavior", () => {
     const p = page({ x: 100, y: 200 });
     expect(p.elements.actor!.style.transform).toBe("translate(100px,200px)");
   });
+  it("keeps a non-overlapping initial position offscreen", () => {
+    const p = page({ x: -100, y: 40 });
+    expect(p.elements.actor!.style.transform).toBe("translate(-100px,40px)");
+    expect(p.elements.pills!.style.visibility).toBe("hidden");
+  });
   it("drags the sprite with pointer capture", () => {
     const p = page();
     const sprite = p.elements.sprite!;
@@ -184,10 +189,13 @@ describe("pet page behavior", () => {
     expect(p.moveHandler()).toBeTypeOf("function");
     p.win.__movePet(-64, -64);
     expect(p.elements.actor!.style.transform).toBe("translate(-64px,-64px)");
+    expect(p.elements.pills!.style.visibility).toBe("hidden");
     p.win.__updatePet({ pet: "triton", movement: "playful", threads: [summary] });
     expect(p.elements.actor!.style.transform).toBe("translate(-64px,-64px)");
+    expect(p.elements.pills!.style.visibility).toBe("hidden");
     p.moveHandler()!(100, 100);
     expect(p.elements.actor!.style.transform).toBe("translate(100px,100px)");
+    expect(p.elements.pills!.style.visibility).toBe("visible");
     p.win.__updatePet({ pet: "triton", movement: "static", threads: [] });
     expect(p.elements.actor!.style.transform).toBe("translate(100px,100px)");
   });
