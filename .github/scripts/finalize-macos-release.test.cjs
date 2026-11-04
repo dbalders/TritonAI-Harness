@@ -763,6 +763,88 @@ test("finalization recovers a lost stapling connection on the accepted app and D
   assert.deepEqual(report.notarization, { status: "Accepted", id: "notary-job" });
 });
 
+test("accepted artifact validation recovers transient connections and fails closed at every release gate", async (t) => {
+  const labels = [
+    "Validate stapled app notarization",
+    "Validate stapled notarization",
+    "Validate stapled app inside final DMG",
+    "Validate stapled app inside final updater ZIP",
+  ];
+  for (const label of labels) {
+    for (const mode of ["recover", "permanent", "exhausted", "signal"]) {
+      const f = fixture(t, "0.4.2-nightly.20261103.125");
+      const mock = packagingMocks(f);
+      const waits = [];
+      const validations = [];
+      const failure = Object.assign(new Error(`Validation ${mode}`), {
+        result: {
+          status: mode === "permanent" ? 65 : mode === "signal" ? null : 68,
+          signal: mode === "signal" ? "SIGTERM" : null,
+          stderr:
+            mode === "permanent"
+              ? "The stapled ticket is invalid."
+              : 'Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."',
+        },
+      });
+      const result = finalizeMacRelease({
+        harnessRoot: f.root,
+        stageRoot: f.stageRoot,
+        version: f.version,
+        outputDir: f.release,
+        env: f.env,
+        platform: "darwin",
+        packagingTools: mock.tools,
+        wait: async (ms) => waits.push(ms),
+        verifyBoot: async () => ({ healthyForMs: 5000 }),
+        runCommand: (program, args, options) => {
+          if (program === "xcrun" && args[1] === "validate" && options.label === label) {
+            const file = args[2];
+            const bytes = fs.readFileSync(
+              file.endsWith(".app") ? path.join(file, "Contents", "CodeResources") : file,
+            );
+            validations.push({ file, bytes });
+            if (mode !== "recover" || validations.length === 1) throw failure;
+            assert.equal(options.capture, true);
+            assert.equal(options.timeout, 60000);
+            assert.equal(options.killSignal, "SIGKILL");
+          }
+          return mock.command(program, args, options);
+        },
+      });
+      if (mode === "recover") {
+        const report = await result;
+        assert.equal(report.version, "0.4.2-nightly.20261103.125");
+        assert.equal(report.notarization.status, "Accepted");
+        assert.equal(mock.calls.filter((call) => call.program === "vp").length, 1);
+        assert.equal(
+          mock.calls.filter((call) => call.program === "xcrun" && call.args[0] === "notarytool")
+            .length,
+          2,
+        );
+        assert.equal(
+          mock.calls.filter((call) => call.program === "xcrun" && call.args[1] === "staple").length,
+          2,
+        );
+        assert.equal(
+          JSON.parse(fs.readFileSync(path.join(f.release, "harness-mac-verification.json")))
+            .version,
+          report.version,
+        );
+      } else {
+        await assert.rejects(result, (error) => error === failure);
+        assert.equal(fs.existsSync(path.join(f.release, "harness-mac-verification.json")), false);
+        assert.equal(fs.existsSync(path.join(f.release, "nightly-mac.yml")), false);
+      }
+      assert.equal(validations.length, mode === "recover" ? 2 : mode === "exhausted" ? 4 : 1);
+      assert.deepEqual(
+        waits,
+        mode === "recover" ? [10000] : mode === "exhausted" ? [10000, 30000, 60000] : [],
+      );
+      for (const validation of validations) assert.deepEqual(validation, validations[0]);
+    }
+  }
+});
+
 test("successful staple recovery still requires strict ticket validation before packaging", async (t) => {
   const f = fixture(t),
     mock = packagingMocks(f);
