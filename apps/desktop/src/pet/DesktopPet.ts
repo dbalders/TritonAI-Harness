@@ -6,7 +6,7 @@ import * as Electron from "electron";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { PET_ACTION_CHANNEL } from "../ipc/channels.ts";
-import { makePetWindow } from "./PetWindow.ts";
+import { makePetWindow, type PetWindowArea } from "./PetWindow.ts";
 import type { PetWindowAction } from "./petWindowAction.ts";
 
 /** Owns the floating pet and forwards actions to the chat renderer. */
@@ -25,15 +25,11 @@ function sendToOwner(ownerId: number, action: PetWindowAction) {
   contents.send(PET_ACTION_CHANNEL, action);
 }
 
-function petWindowBounds(): Electron.Rectangle {
-  const displays = Electron.screen.getAllDisplays();
-  const left = Math.min(...displays.map((display) => display.workArea.x));
-  const top = Math.min(...displays.map((display) => display.workArea.y));
-  const right = Math.max(...displays.map((display) => display.workArea.x + display.workArea.width));
-  const bottom = Math.max(
-    ...displays.map((display) => display.workArea.y + display.workArea.height),
-  );
-  return { x: left, y: top, width: right - left, height: bottom - top };
+function petWindowAreas(): PetWindowArea[] {
+  return Electron.screen.getAllDisplays().map((display) => ({
+    id: display.id,
+    area: display.workArea,
+  }));
 }
 
 function ownerWorkAreaForOwner(ownerId: number): Electron.Rectangle {
@@ -58,7 +54,7 @@ const make = Effect.gen(function* () {
   });
 
   const refreshWorkArea = () => {
-    if (ownerId !== null) pet.show(petWindowBounds());
+    if (ownerId !== null) pet.show(petWindowAreas());
   };
   let screenListenersRegistered = false;
   const registerScreenListeners = () => {
@@ -98,11 +94,11 @@ const make = Effect.gen(function* () {
         }
       }
       ownerId = nextOwnerId;
-      const bounds = petWindowBounds();
+      const areas = petWindowAreas();
       const ownerArea = ownerWorkAreaForOwner(nextOwnerId);
-      pet.show(bounds, {
-        x: ownerArea.x + ownerArea.width - 84 - bounds.x,
-        y: ownerArea.y + ownerArea.height - 84 - bounds.y,
+      pet.show(areas, {
+        x: ownerArea.x + ownerArea.width - 84,
+        y: ownerArea.y + ownerArea.height - 84,
       });
     }),
     close: Effect.fn("DesktopPet.close")(function* () {

@@ -1,3 +1,6 @@
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Schedule from "effect/Schedule";
 import * as Electron from "electron";
 import {
   composePetFrame,
@@ -7,7 +10,11 @@ import {
 } from "@t3tools/shared/petCompanionSprites";
 import type { DesktopPetState } from "@t3tools/contracts";
 
-import { PET_WINDOW_ACTION_CHANNEL, PET_WINDOW_INPUT_CHANNEL } from "../ipc/channels.ts";
+import {
+  PET_WINDOW_ACTION_CHANNEL,
+  PET_WINDOW_DRAG_CHANNEL,
+  PET_WINDOW_INPUT_CHANNEL,
+} from "../ipc/channels.ts";
 import { isPetWindowAction, type PetWindowAction } from "./petWindowAction.ts";
 
 type PetFrameData = {
@@ -142,9 +149,11 @@ export function petHtml(initialSpritePosition?: {
     draw();
   };
   let menuOpen = false;
-  const position = () => {
-    x = clamp(x, 0, Math.max(window.innerWidth - 64, 0));
-    y = clamp(y, 0, Math.max(window.innerHeight - 64, 0));
+  const position = (bounded = true) => {
+    if (bounded) {
+      x = clamp(x, 0, Math.max(window.innerWidth - 64, 0));
+      y = clamp(y, 0, Math.max(window.innerHeight - 64, 0));
+    }
     actor.style.transform = "translate(" + Math.round(x) + "px," + Math.round(y) + "px)";
     for (const panel of [pills, menu]) {
       const box = panel.getBoundingClientRect();
@@ -221,17 +230,19 @@ export function petHtml(initialSpritePosition?: {
       offsetX: event.clientX - x,
       offsetY: event.clientY - y,
     };
+    bridge?.sendDrag({ kind: "start", offsetX: drag.offsetX, offsetY: drag.offsetY });
     setAnimation("wave");
   });
   sprite.addEventListener("pointermove", (event) => {
     if (!drag || drag.id !== event.pointerId) return;
-    x = event.clientX - drag.offsetX;
-    y = event.clientY - drag.offsetY;
-    position();
+    // The main process owns drag position. Local pointer coordinates disagree
+    // with screen coordinates when a captured pointer crosses a scaled display.
+    bridge?.sendDrag({ kind: "move", offsetX: drag.offsetX, offsetY: drag.offsetY });
   });
   const endDrag = (event) => {
     if (!drag || drag.id !== event.pointerId) return;
     if (sprite.hasPointerCapture(event.pointerId)) sprite.releasePointerCapture(event.pointerId);
+    bridge?.sendDrag({ kind: "end" });
     drag = null;
     setAnimation(activityAnimation());
   };
@@ -257,6 +268,11 @@ export function petHtml(initialSpritePosition?: {
     if (button.dataset.action === "set-pet") bridge?.send({ kind: "set-pet", pet: button.dataset.value });
   });
   window.addEventListener("resize", position);
+  window.__movePet = (nextX, nextY) => {
+    x = nextX;
+    y = nextY;
+    position(false);
+  };
   window.__suspendPet = () => { clearInterval(timer); timer = 0; };
   window.__updatePet = (next) => {
     state = next;
@@ -272,43 +288,86 @@ export function petHtml(initialSpritePosition?: {
 </script></body></html>`;
 }
 
+export type PetWindowArea = {
+  readonly id: number;
+  readonly area: Electron.Rectangle;
+};
+
+type PetWindowEntry = {
+  id: number;
+  area: Electron.Rectangle;
+  window: Electron.BrowserWindow;
+  spriteVisible: boolean;
+};
+
+type PetWindowDragEvent = {
+  readonly kind: "start" | "move" | "end";
+  readonly offsetX?: number;
+  readonly offsetY?: number;
+};
+
+const PET_SIZE = 64;
+
+function isPetWindowDragEvent(value: unknown): value is PetWindowDragEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const event = value as { kind?: unknown; offsetX?: unknown; offsetY?: unknown };
+  if (event.kind === "end") return true;
+  if (event.kind !== "start" && event.kind !== "move") return false;
+  return typeof event.offsetX === "number" && typeof event.offsetY === "number";
+}
+
 export function makePetWindow(
   platform: NodeJS.Platform,
   preloadPath: string,
   onAction: (action: PetWindowAction) => void,
 ) {
-  let current: Electron.BrowserWindow | null = null;
+  let entries: PetWindowEntry[] = [];
   let latestState: DesktopPetState = DEFAULT_STATE;
   let visible = false;
+  let spritePosition: { x: number; y: number } | null = null;
+  let dragOffset: { x: number; y: number } | null = null;
+  let dragFiber: Fiber.Fiber<void, never> | null = null;
 
-  const isPetSender = (sender: Electron.WebContents) =>
-    current !== null && !current.isDestroyed() && sender.id === current.webContents.id;
-  const actionListener = (event: Electron.IpcMainEvent, action: unknown) => {
-    if (!isPetSender(event.sender) || !isPetWindowAction(action)) return;
-    onAction(action);
+  const entryForSender = (sender: Electron.WebContents) =>
+    entries.find(
+      (entry) => !entry.window.isDestroyed() && entry.window.webContents.id === sender.id,
+    );
+  const stopDrag = () => {
+    if (dragFiber !== null) void Effect.runFork(Fiber.interrupt(dragFiber));
+    dragFiber = null;
+    dragOffset = null;
   };
-  const inputListener = (event: Electron.IpcMainEvent, interactive: unknown) => {
-    if (!isPetSender(event.sender) || typeof interactive !== "boolean") return;
-    const window = current;
-    if (window === null) return;
-    const options = { forward: !interactive };
-    window.setIgnoreMouseEvents(!interactive, options);
-  };
-  Electron.ipcMain.on(PET_WINDOW_ACTION_CHANNEL, actionListener);
-  Electron.ipcMain.on(PET_WINDOW_INPUT_CHANNEL, inputListener);
-
-  const show = (
-    area: Electron.Rectangle,
-    initialSpritePosition?: { readonly x: number; readonly y: number },
-  ) => {
-    visible = true;
-    if (current !== null && !current.isDestroyed()) {
-      current.setBounds(area);
-      current.showInactive();
-      return;
+  const setSpritePosition = (next: { x: number; y: number }) => {
+    spritePosition = next;
+    for (const entry of entries) {
+      if (entry.window.isDestroyed()) continue;
+      const overlaps =
+        next.x < entry.area.x + entry.area.width &&
+        next.x + PET_SIZE > entry.area.x &&
+        next.y < entry.area.y + entry.area.height &&
+        next.y + PET_SIZE > entry.area.y;
+      if (!overlaps && !entry.spriteVisible) continue;
+      const x = overlaps ? Math.round(next.x - entry.area.x) : -PET_SIZE;
+      const y = overlaps ? Math.round(next.y - entry.area.y) : -PET_SIZE;
+      void entry.window.webContents
+        .executeJavaScript(`window.__movePet(${x},${y})`, true)
+        .catch(() => undefined);
+      entry.spriteVisible = overlaps;
     }
+  };
+  const sendState = (entry: PetWindowEntry) => {
+    if (entry.window.isDestroyed()) return;
+    void entry.window.webContents
+      .executeJavaScript(`window.__updatePet(${JSON.stringify(latestState)})`, true)
+      .catch(() => undefined);
+  };
+  const createEntry = (display: PetWindowArea) => {
+    const initial = spritePosition ?? {
+      x: display.area.x + display.area.width - 84,
+      y: display.area.y + display.area.height - 84,
+    };
     const window = new Electron.BrowserWindow({
-      ...area,
+      ...display.area,
       acceptFirstMouse: true,
       alwaysOnTop: true,
       backgroundColor: "#00000000",
@@ -332,7 +391,12 @@ export function makePetWindow(
         sandbox: true,
       },
     });
-    current = window;
+    const entry: PetWindowEntry = {
+      id: display.id,
+      area: display.area,
+      window,
+      spriteVisible: false,
+    };
     window.setAlwaysOnTop(true, "floating");
     window.setVisibleOnAllWorkspaces(true, {
       visibleOnFullScreen: true,
@@ -340,42 +404,143 @@ export function makePetWindow(
     });
     window.setIgnoreMouseEvents(true, { forward: true });
     window.on("closed", () => {
-      if (current === window) current = null;
+      entries = entries.filter((item) => item !== entry);
     });
+
     window.webContents.on("will-navigate", (event) => event.preventDefault());
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     window.once("ready-to-show", () => {
-      if (visible && current === window && !window.isDestroyed()) {
-        window.showInactive();
-        update(latestState);
-      }
+      if (!visible || window.isDestroyed()) return;
+      window.showInactive();
+      sendState(entry);
+      if (spritePosition !== null) setSpritePosition(spritePosition);
     });
     void window
-      .loadURL("data:text/html;charset=utf-8," + encodeURIComponent(petHtml(initialSpritePosition)))
+      .loadURL(
+        "data:text/html;charset=utf-8," +
+          encodeURIComponent(
+            petHtml({ x: initial.x - display.area.x, y: initial.y - display.area.y }),
+          ),
+      )
       .catch(() => undefined);
+    entries.push(entry);
+    return entry;
   };
+
+  const removeEntry = (entry: PetWindowEntry) => {
+    if (!entry.window.isDestroyed()) entry.window.destroy();
+    entries = entries.filter((item) => item !== entry);
+  };
+  const clampNumber = (value: number, min: number, max: number) =>
+    Math.min(Math.max(value, min), Math.max(min, max));
+  const normalizeSpritePosition = (areas: readonly PetWindowArea[]) => {
+    if (spritePosition === null || areas.length === 0) return;
+    const intersects = areas.some(
+      ({ area }) =>
+        spritePosition !== null &&
+        spritePosition.x < area.x + area.width &&
+        spritePosition.x + PET_SIZE > area.x &&
+        spritePosition.y < area.y + area.height &&
+        spritePosition.y + PET_SIZE > area.y,
+    );
+    if (intersects) return;
+    const area = areas[0]!.area;
+    spritePosition = {
+      x: clampNumber(spritePosition.x, area.x, area.x + area.width - PET_SIZE),
+      y: clampNumber(spritePosition.y, area.y, area.y + area.height - PET_SIZE),
+    };
+  };
+
+  const show = (
+    areas: readonly PetWindowArea[],
+    initialSpritePosition?: { readonly x: number; readonly y: number },
+  ) => {
+    visible = true;
+    if (initialSpritePosition) spritePosition = { ...initialSpritePosition };
+    if (spritePosition === null && areas.length > 0) {
+      const area = areas[0]!.area;
+      spritePosition = { x: area.x + area.width - 84, y: area.y + area.height - 84 };
+    }
+    const nextAreas = new Map(areas.map((display) => [display.id, display]));
+    for (const entry of [...entries]) {
+      if (!nextAreas.has(entry.id)) removeEntry(entry);
+    }
+    for (const display of areas) {
+      const entry = entries.find((item) => item.id === display.id);
+      if (entry) {
+        entry.area = display.area;
+        if (!entry.window.isDestroyed()) {
+          entry.window.setBounds(display.area);
+          entry.window.showInactive();
+        }
+        continue;
+      }
+      createEntry(display);
+    }
+    normalizeSpritePosition(areas);
+    if (spritePosition !== null) setSpritePosition(spritePosition);
+  };
+
+  const actionListener = (event: Electron.IpcMainEvent, action: unknown) => {
+    if (entryForSender(event.sender) === undefined || !isPetWindowAction(action)) return;
+    onAction(action);
+  };
+  const inputListener = (event: Electron.IpcMainEvent, interactive: unknown) => {
+    const entry = entryForSender(event.sender);
+    if (entry === undefined || typeof interactive !== "boolean") return;
+    if (!entry.window.isDestroyed()) {
+      entry.window.setIgnoreMouseEvents(!interactive, { forward: !interactive });
+    }
+  };
+  const movePetToCursor = () => {
+    if (dragOffset === null) return;
+    const point = Electron.screen.getCursorScreenPoint();
+    setSpritePosition({ x: point.x - dragOffset.x, y: point.y - dragOffset.y });
+  };
+  const dragListener = (event: Electron.IpcMainEvent, value: unknown) => {
+    if (entryForSender(event.sender) === undefined || !isPetWindowDragEvent(value)) return;
+    if (value.kind === "end") {
+      stopDrag();
+      return;
+    }
+    dragOffset = { x: value.offsetX!, y: value.offsetY! };
+    if (dragFiber === null) {
+      dragFiber = Effect.runFork(
+        Effect.sync(movePetToCursor).pipe(
+          Effect.repeat({
+            while: () => dragOffset !== null,
+            schedule: Schedule.spaced(8),
+          }),
+        ),
+      );
+    }
+  };
+  Electron.ipcMain.on(PET_WINDOW_ACTION_CHANNEL, actionListener);
+  Electron.ipcMain.on(PET_WINDOW_INPUT_CHANNEL, inputListener);
+  Electron.ipcMain.on(PET_WINDOW_DRAG_CHANNEL, dragListener);
+
   const update = (state: DesktopPetState) => {
     latestState = state;
-    const window = current;
-    if (window === null || window.isDestroyed()) return;
-    void window.webContents
-      .executeJavaScript(`window.__updatePet(${JSON.stringify(state)})`, true)
-      .catch(() => undefined);
+    for (const entry of entries) sendState(entry);
   };
   const hide = () => {
     visible = false;
-    const window = current;
-    if (window === null || window.isDestroyed()) return;
-    window.hide();
-    void window.webContents.executeJavaScript("window.__suspendPet?.()").catch(() => undefined);
+    stopDrag();
+    for (const entry of entries) {
+      if (entry.window.isDestroyed()) continue;
+      entry.window.hide();
+      void entry.window.webContents
+        .executeJavaScript("window.__suspendPet?.()")
+        .catch(() => undefined);
+    }
   };
   const destroy = () => {
     visible = false;
-    const window = current;
-    current = null;
-    if (window !== null && !window.isDestroyed()) window.destroy();
+    stopDrag();
+    for (const entry of [...entries]) removeEntry(entry);
     Electron.ipcMain.removeListener(PET_WINDOW_ACTION_CHANNEL, actionListener);
     Electron.ipcMain.removeListener(PET_WINDOW_INPUT_CHANNEL, inputListener);
+    Electron.ipcMain.removeListener(PET_WINDOW_DRAG_CHANNEL, dragListener);
   };
   return { show, update, hide, destroy };
 }

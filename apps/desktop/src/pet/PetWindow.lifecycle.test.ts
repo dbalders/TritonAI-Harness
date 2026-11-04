@@ -35,12 +35,12 @@ it("keeps a late-loading pet hidden after Off and allows reopening", () => {
     return w as unknown as E.BrowserWindow;
   });
   const pet = makePetWindow("win32", "petPreload.cjs", noop);
-  const area = { x: 0, y: 0, width: 1920, height: 1080 };
-  pet.show(area);
+  const areas = [{ id: 1, area: { x: 0, y: 0, width: 1920, height: 1080 } }];
+  pet.show(areas);
   pet.hide();
   ready();
   expect(w.showInactive).not.toHaveBeenCalled();
-  pet.show(area);
+  pet.show(areas);
   expect(w.showInactive).toHaveBeenCalledOnce();
   pet.destroy();
   expect(w.destroy).toHaveBeenCalledOnce();

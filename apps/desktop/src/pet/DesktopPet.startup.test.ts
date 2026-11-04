@@ -131,9 +131,9 @@ it.effect("hides on close without notifying the renderer", () =>
       getBounds: () => ownerBounds,
     });
     state.getAllDisplays.mockReturnValue([
-      { workArea: { x: -1920, y: 0, width: 1920, height: 1080 } },
-      { workArea: { x: 0, y: 0, width: 2560, height: 1440 } },
-      { workArea: ownerBounds },
+      { id: 1, workArea: { x: -1920, y: 0, width: 1920, height: 1080 } },
+      { id: 2, workArea: { x: 0, y: 0, width: 2560, height: 1440 } },
+      { id: 3, workArea: ownerBounds },
     ]);
     state.getDisplayMatching.mockReturnValue({ workArea: ownerBounds });
     yield* Effect.scoped(
@@ -145,8 +145,12 @@ it.effect("hides on close without notifying the renderer", () =>
       }),
     );
     expect(state.petWindow.show).toHaveBeenCalledWith(
-      { x: -1920, y: 0, width: 6400, height: 1440 },
-      { x: 6316, y: 1096 },
+      [
+        { id: 1, area: { x: -1920, y: 0, width: 1920, height: 1080 } },
+        { id: 2, area: { x: 0, y: 0, width: 2560, height: 1440 } },
+        { id: 3, area: ownerBounds },
+      ],
+      { x: 4396, y: 1096 },
     );
     expect(state.petWindow.hide).toHaveBeenCalledOnce();
     expect(send).not.toHaveBeenCalled();

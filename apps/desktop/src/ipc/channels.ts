@@ -146,5 +146,6 @@ export const PET_STATE_CHANNEL = "desktop:pet-state";
 export const PET_ACTION_CHANNEL = "desktop:pet-action";
 export const PET_WINDOW_ACTION_CHANNEL = "desktop:pet-window-action";
 export const PET_WINDOW_INPUT_CHANNEL = "desktop:pet-window-input";
+export const PET_WINDOW_DRAG_CHANNEL = "desktop:pet-window-drag";
 export const TAKE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:take-legacy-local-storage";
 export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-local-storage";

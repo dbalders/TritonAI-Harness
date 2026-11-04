@@ -72,6 +72,7 @@ function page(initialSpritePosition?: { readonly x: number; readonly y: number }
   );
   const events: Record<string, (event: Input) => void> = {};
   const actions: unknown[] = [];
+  const drags: unknown[] = [];
   const modes: boolean[] = [];
   let tick = () => {};
   let now = 0;
@@ -81,9 +82,11 @@ function page(initialSpritePosition?: { readonly x: number; readonly y: number }
     addEventListener() {},
     t3PetBridge: {
       send: (action: unknown) => actions.push(action),
+      sendDrag: (event: unknown) => drags.push(event),
       setInteractive: (value: boolean) => modes.push(value),
     },
     __updatePet: (_state: unknown) => {},
+    __movePet: (_x: number, _y: number) => {},
   };
   const script = petHtml(initialSpritePosition).split("<script>")[1]!.split("</script>")[0]!;
   NodeVM.runInNewContext(script, {
@@ -107,6 +110,7 @@ function page(initialSpritePosition?: { readonly x: number; readonly y: number }
     elements,
     events,
     actions,
+    drags,
     modes,
     win,
     tick: (time: number) => {
@@ -160,10 +164,15 @@ describe("pet page behavior", () => {
     expect(p.elements.actor!.style.transform).toBe("translate(1836px,996px)");
     sprite.fire("pointerdown", { button: 0, pointerId: 1, clientX: 1836, clientY: 996 });
     expect(sprite.capturedPointers).toEqual([1]);
+    expect(p.drags).toEqual([{ kind: "start", offsetX: 0, offsetY: 0 }]);
     sprite.fire("pointermove", { pointerId: 1, clientX: 1800, clientY: 900 });
+    expect(p.elements.actor!.style.transform).toBe("translate(1836px,996px)");
+    expect(p.drags[1]).toEqual({ kind: "move", offsetX: 0, offsetY: 0 });
+    p.win.__movePet(1800, 900);
     expect(p.elements.actor!.style.transform).toBe("translate(1800px,900px)");
     sprite.fire("pointerup", { pointerId: 1 });
     expect(sprite.capturedPointers).toEqual([]);
+    expect(p.drags[2]).toEqual({ kind: "end" });
   });
   it("keeps static position and releases input away from controls", () => {
     const p = page();
