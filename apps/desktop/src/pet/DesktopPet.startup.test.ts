@@ -224,6 +224,51 @@ it.effect("hands the pet to another owner when the current owner closes", () =>
   }),
 );
 
+it.effect("keeps a non-current owner's state off the shared pet", () =>
+  Effect.gen(function* () {
+    state.ready = true;
+    setupTwoOwners();
+    const owner7State = { pet: "trident", movement: "static", threads: [] } as const;
+    const owner8State = { pet: "triton", movement: "static", threads: [] } as const;
+    const staleOwner7State = { pet: "raccoon", movement: "static", threads: [] } as const;
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(runtime);
+        const pet = Context.get(context, DesktopPet);
+        yield* pet.open(7);
+        yield* pet.open(8);
+        yield* pet.setState(7, owner7State);
+        yield* pet.setState(8, owner8State);
+        yield* pet.setState(7, staleOwner7State);
+      }),
+    );
+    expect(state.petWindow.update).toHaveBeenCalledTimes(1);
+    expect(state.petWindow.update).toHaveBeenLastCalledWith(owner8State);
+  }),
+);
+
+it.effect("restores the fallback owner's cached state", () =>
+  Effect.gen(function* () {
+    state.ready = true;
+    setupTwoOwners();
+    const owner7State = { pet: "trident", movement: "static", threads: [] } as const;
+    const owner8State = { pet: "triton", movement: "static", threads: [] } as const;
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(runtime);
+        const pet = Context.get(context, DesktopPet);
+        yield* pet.open(7);
+        yield* pet.open(8);
+        yield* pet.setState(7, owner7State);
+        yield* pet.setState(8, owner8State);
+        yield* pet.close(8);
+      }),
+    );
+    expect(state.petWindow.update).toHaveBeenCalledTimes(2);
+    expect(state.petWindow.update).toHaveBeenLastCalledWith(owner7State);
+  }),
+);
+
 it.effect("routes thread selection to the current owner only", () =>
   Effect.gen(function* () {
     state.ready = true;
@@ -271,7 +316,7 @@ it.effect("explicit off clears every owner and syncs all renderers", () =>
         const pet = Context.get(context, DesktopPet);
         yield* pet.open(7);
         yield* pet.open(8);
-        yield* pet.setState({ pet: "off", movement: "static", threads: [] });
+        yield* pet.setState(7, { pet: "off", movement: "static", threads: [] });
       }),
     );
     expect(state.petWindow.hide).toHaveBeenCalledOnce();

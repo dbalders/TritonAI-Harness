@@ -34,8 +34,8 @@ export const setPetState = makeIpcMethod({
   channel: IpcChannels.PET_STATE_CHANNEL,
   payload: DesktopPetStateSchema,
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.pet.setState")(function* (state) {
+  handler: Effect.fn("desktop.ipc.pet.setState")(function* (state, event) {
     const pet = yield* DesktopPet.DesktopPet;
-    yield* pet.setState(state);
+    yield* pet.setState(ownerOf(event), state);
   }),
 });

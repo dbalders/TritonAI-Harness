@@ -15,7 +15,7 @@ export class DesktopPet extends Context.Service<
   {
     readonly open: (ownerId: number) => Effect.Effect<void>;
     readonly close: (ownerId?: number) => Effect.Effect<void>;
-    readonly setState: (state: DesktopPetState) => Effect.Effect<void>;
+    readonly setState: (ownerId: number, state: DesktopPetState) => Effect.Effect<void>;
   }
 >()("@t3tools/desktop/pet/DesktopPet") {}
 
@@ -47,6 +47,7 @@ const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const ownerIds = new Set<number>();
   let currentOwnerId: number | null = null;
+  const ownerStates = new Map<number, DesktopPetState>();
   const watchedOwners = new WeakSet();
   const petPreloadPath = environment.path.join(environment.dirname, "petPreload.cjs");
   const pet = makePetWindow(environment.platform, petPreloadPath, (action) => {
@@ -60,10 +61,17 @@ const make = Effect.gen(function* () {
     sendToOwners(ownerIds, action);
     if (action.kind === "close" || (action.kind === "set-pet" && action.pet === "off")) {
       ownerIds.clear();
+      ownerStates.clear();
       currentOwnerId = null;
       pet.hide();
     }
   });
+
+  const applyCurrentOwnerState = () => {
+    if (currentOwnerId === null) return;
+    const ownerState = ownerStates.get(currentOwnerId);
+    if (ownerState) pet.update(ownerState);
+  };
 
   const refreshWorkArea = () => {
     if (currentOwnerId !== null) pet.show(petWindowAreas());
@@ -82,6 +90,7 @@ const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       ownerIds.clear();
+      ownerStates.clear();
       currentOwnerId = null;
       Electron.app.removeListener("ready", registerScreenListeners);
       if (screenListenersRegistered) {
@@ -103,9 +112,11 @@ const make = Effect.gen(function* () {
           watchedOwners.add(contents);
           contents.once("destroyed", () => {
             ownerIds.delete(nextOwnerId);
+            ownerStates.delete(nextOwnerId);
             if (currentOwnerId !== nextOwnerId) return;
             currentOwnerId = ownerIds.size > 0 ? ([...ownerIds][0] ?? null) : null;
             if (currentOwnerId === null) pet.hide();
+            else applyCurrentOwnerState();
           });
         }
         const areas = petWindowAreas();
@@ -114,6 +125,7 @@ const make = Effect.gen(function* () {
           x: ownerArea.x + ownerArea.width - 84,
           y: ownerArea.y + ownerArea.height - 84,
         });
+        applyCurrentOwnerState();
       });
     }),
     close: Effect.fn("DesktopPet.close")(function* (requesterId) {
@@ -123,22 +135,27 @@ const make = Effect.gen(function* () {
         const ownerId = requesterId ?? currentOwnerId;
         if (ownerId === null || !ownerIds.has(ownerId)) return;
         ownerIds.delete(ownerId);
+        ownerStates.delete(ownerId);
         if (currentOwnerId !== ownerId) return;
         currentOwnerId = ownerIds.size > 0 ? ([...ownerIds][0] ?? null) : null;
         if (currentOwnerId === null) pet.hide();
+        else applyCurrentOwnerState();
       });
     }),
-    setState: Effect.fn("DesktopPet.setState")(function* (state) {
+    setState: Effect.fn("DesktopPet.setState")(function* (ownerId, state) {
       yield* Effect.sync(() => {
         if (state.pet === "off") {
           const previousOwners = new Set(ownerIds);
           ownerIds.clear();
+          ownerStates.clear();
           currentOwnerId = null;
           pet.hide();
           sendToOwners(previousOwners, { kind: "close" });
           return;
         }
-        pet.update(state);
+        if (!ownerIds.has(ownerId)) return;
+        ownerStates.set(ownerId, state);
+        if (currentOwnerId === ownerId) pet.update(state);
       });
     }),
   });

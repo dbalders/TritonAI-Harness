@@ -120,6 +120,26 @@ export function usePetCompanionMovement(): PetCompanionMovement {
   return useSyncExternalStore(subscribePetMovement, currentPetMovement);
 }
 
+// The writing window does not receive its own storage events, so setters still
+// notify locally; this keeps every other open window from saving stale choices.
+window.addEventListener("storage", (event) => {
+  if (event.key === PET_STORAGE_KEY && event.newValue !== null && isPetSelection(event.newValue)) {
+    petSelectionValue = event.newValue;
+    petSelectionInitialized = true;
+    for (const listener of petSelectionListeners) listener();
+    return;
+  }
+  if (
+    event.key === PET_MOVEMENT_STORAGE_KEY &&
+    event.newValue !== null &&
+    isPetMovement(event.newValue)
+  ) {
+    petMovementValue = event.newValue;
+    petMovementInitialized = true;
+    for (const listener of petMovementListeners) listener();
+  }
+});
+
 const petPreviewClass = "size-7 shrink-0 rounded-(--control-radius) [image-rendering:pixelated]";
 
 const PetPreviewCanvas = memo(function PetPreviewCanvas(props: { pet: PetId }) {
