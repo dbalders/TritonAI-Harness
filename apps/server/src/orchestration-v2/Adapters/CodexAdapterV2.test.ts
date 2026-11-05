@@ -1458,7 +1458,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       for (const revoked of [
         { ...config, providerSessionId: "replacement-session" },
         { ...config, expiresAt: 0 },
-        { ...config, capabilities: new Set() },
+        { ...config, capabilities: new Set<string>() },
         undefined,
       ]) {
         yield* sessions.set(config);
