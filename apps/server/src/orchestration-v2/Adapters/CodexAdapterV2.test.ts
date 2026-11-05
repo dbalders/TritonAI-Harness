@@ -1365,6 +1365,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const threadId = ThreadId.make(`thread-${scenario}`);
       const sessions = yield* McpProviderSessions.McpProviderSessions;
       const settings = yield* ServerSettings.ServerSettingsService;
+      const settingsRead = yield* Ref.make<
+        { entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> } | undefined
+      >(undefined);
+      const gatedSettings = {
+        ...settings,
+        getSettings: Effect.gen(function* () {
+          const value = yield* settings.getSettings;
+          const pending = yield* Ref.get(settingsRead);
+          if (pending) {
+            yield* Deferred.succeed(pending.entered, undefined);
+            yield* Deferred.await(pending.release);
+          }
+          return value;
+        }),
+      };
       const config = {
         environmentId: EnvironmentId.make("browser-environment"),
         threadId,
@@ -1410,7 +1425,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         (value) => {
           environment = value;
         },
-      );
+      ).pipe(Effect.provideService(ServerSettings.ServerSettingsService, gatedSettings));
       assert.isFalse(yield* request());
       yield* harness.runtime.startTurn(
         makeCodexTestTurnInput({
@@ -1440,6 +1455,26 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       assert.isFalse(yield* request());
       yield* sessions.clear(threadId);
       assert.isFalse(yield* request());
+      for (const revoked of [
+        { ...config, providerSessionId: "replacement-session" },
+        { ...config, expiresAt: 0 },
+        { ...config, capabilities: new Set() },
+        undefined,
+      ]) {
+        yield* sessions.set(config);
+        const pending = {
+          entered: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        };
+        yield* Ref.set(settingsRead, pending);
+        const checking = yield* request().pipe(Effect.forkChild);
+        yield* Deferred.await(pending.entered);
+        if (revoked) yield* sessions.set(revoked);
+        else yield* sessions.clear(threadId);
+        yield* Deferred.succeed(pending.release, undefined);
+        assert.isFalse(yield* Fiber.join(checking));
+        yield* Ref.set(settingsRead, undefined);
+      }
     }).pipe(
       Effect.scoped,
       Effect.provide(

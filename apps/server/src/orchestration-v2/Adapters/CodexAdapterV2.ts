@@ -1968,6 +1968,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           serverConfig.mode === "desktop"
             ? yield* makeCodexBrowserAccessHost(
                 Effect.fn("CodexAdapterV2.authorizeBrowserAccess")(function* (request) {
+                  if (Option.isNone(browserServerSettings)) return false;
+                  const settings = yield* browserServerSettings.value.getSettings.pipe(
+                    Effect.option,
+                  );
+                  if (Option.isNone(settings)) return false;
                   const context = (yield* Ref.get(activeTurns)).get(request.turnId);
                   if (
                     !context ||
@@ -1985,15 +1990,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       mcp.expiresAt <= DateTime.toEpochMillis(yield* DateTime.now))
                   )
                     return false;
-                  if (Option.isNone(browserServerSettings)) return false;
-                  return yield* browserServerSettings.value.getSettings.pipe(
-                    Effect.map(
-                      (settings) =>
-                        resolveProjectSettings(settings, context.projectionAppThread.projectId)
-                          .settings.enableAgentBrowserAccess,
-                    ),
-                    Effect.orElseSucceed(() => false),
-                  );
+                  return resolveProjectSettings(
+                    settings.value,
+                    context.projectionAppThread.projectId,
+                  ).settings.enableAgentBrowserAccess;
                 }),
               ).pipe(
                 Effect.catch(() =>
