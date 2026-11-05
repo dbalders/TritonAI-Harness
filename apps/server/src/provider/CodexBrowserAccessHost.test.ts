@@ -10,6 +10,7 @@ import * as Fiber from "effect/Fiber";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+import { TestClock } from "effect/testing";
 import { makeCodexBrowserAccessHost } from "./CodexBrowserAccessHost.ts";
 
 import { requestBrowserAccess as call } from "./testFixtures/browserAccessClient.ts";
@@ -22,6 +23,24 @@ const params = (environment: Readonly<Record<string, string>>) => ({
 });
 
 describe("CodexBrowserAccessHost", () => {
+  it.effect("denies a stalled authorization and interrupts its work at the deadline", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const interrupted = yield* Deferred.make<void>();
+      const environment = yield* makeCodexBrowserAccessHost(() =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(Deferred.succeed(interrupted, undefined)),
+        ),
+      );
+      const request = yield* call(environment, params(environment)).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("5 seconds");
+      assert.isTrue(yield* Deferred.isDone(interrupted));
+      assert.isFalse(JSON.parse((yield* Fiber.join(request)).payload).allowed);
+    }).pipe(Effect.scoped),
+  );
+
   it.live("signs an exact live decision, rejects another executor, and honors revocation", () =>
     Effect.gen(function* () {
       const allowed = yield* Ref.make(true);

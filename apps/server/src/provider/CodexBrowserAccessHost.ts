@@ -156,7 +156,10 @@ export const makeCodexBrowserAccessHost = Effect.fn("CodexBrowserAccessHost.open
         const allowed =
           request.params.executorId === executorId &&
           !closing &&
-          (yield* isAllowed(request.params));
+          (yield* isAllowed(request.params).pipe(
+            Effect.timeout("5 seconds"),
+            Effect.orElseSucceed(() => false),
+          ));
         const payload = encodeJson({
           domain: "codex.browserAccess.v1",
           request: request.params,
