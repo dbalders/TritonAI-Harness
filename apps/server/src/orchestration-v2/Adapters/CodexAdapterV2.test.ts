@@ -39,6 +39,7 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as FileSystem from "effect/FileSystem";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@t3tools/shared/mcpApp";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveAttachmentPathById } from "../../attachmentStore.ts";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -828,7 +829,11 @@ function withReplayRequestId(
 describe("CodexAdapterV2 session initialize", () => {
   it.live("supplies a private browser authorization host only to desktop sessions", () =>
     Effect.gen(function* () {
-      for (const mode of ["desktop", "web"] as const) {
+      for (const { mode, failHost } of [
+        { mode: "desktop", failHost: false },
+        { mode: "desktop", failHost: true },
+        { mode: "web", failHost: false },
+      ] as const) {
         let launchedEnvironment: NodeJS.ProcessEnv | undefined;
         const serverConfig = yield* makeReplayServerConfig("browser-access-host").pipe(
           Effect.orDie,
@@ -861,14 +866,20 @@ describe("CodexAdapterV2 session initialize", () => {
           idAllocator: yield* IdAllocator.IdAllocatorV2,
           serverConfig: { ...serverConfig, mode },
         });
-        yield* adapter.openSession({
+        const opening = adapter.openSession({
           threadId: ThreadId.make("browser-access-host-thread"),
           providerSessionId: ProviderSessionId.make("browser-access-host-session"),
           modelSelection: CODEX_TEST_MODEL_SELECTION,
           runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
         });
+        yield* failHost
+          ? opening.pipe(
+              Effect.provideService(HostProcess.Platform, "linux"),
+              Effect.provideService(HostProcess.UserId, undefined),
+            )
+          : opening;
         assert.isDefined(launchedEnvironment);
-        if (mode === "desktop") {
+        if (mode === "desktop" && !failHost) {
           assert.isNotEmpty(launchedEnvironment!.BROWSER_USE_ACCESS_PIPE_PATH);
           assert.notEqual(launchedEnvironment!.BROWSER_USE_ACCESS_PIPE_PATH, "/other-app/socket");
           assert.isNotEmpty(launchedEnvironment!.BROWSER_USE_ACCESS_VERIFYING_IDENTITY);

@@ -1996,13 +1996,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   );
                 }),
               ).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderAdapter.ProviderAdapterOpenSessionError({
-                      driver: CODEX_PROVIDER,
-                      providerSessionId: input.providerSessionId,
-                      cause,
-                    }),
+                Effect.catch(() =>
+                  Effect.logWarning(
+                    "Chrome extension access is unavailable because its authorization host could not start.",
+                  ).pipe(Effect.as(deniedBrowserAccessEnvironment)),
                 ),
               )
             : deniedBrowserAccessEnvironment;
