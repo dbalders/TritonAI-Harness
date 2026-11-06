@@ -295,7 +295,7 @@ export function petHtml(initialSpritePosition?: {
   const setMenu = (open) => {
     menuOpen = open;
     menu.classList.toggle("open", menuOpen);
-    position();
+    position(false);
   };
   sprite.addEventListener("contextmenu", (event) => {
     event.preventDefault();
@@ -311,7 +311,7 @@ export function petHtml(initialSpritePosition?: {
     }
     if (button.dataset.action === "set-pet") bridge?.send({ kind: "set-pet", pet: button.dataset.value });
   });
-  window.addEventListener("resize", position);
+  window.addEventListener("resize", () => position(false));
   const movePet = (nextX, nextY) => {
     x = nextX;
     y = nextY;
@@ -333,7 +333,10 @@ export function petHtml(initialSpritePosition?: {
     setAnimation(activityAnimation());
     if (state.movement === "static") moveUntil = 0;
     if (!timer) timer = setInterval(update, 40);
-    position();
+    // The main process owns sprite coordinates. An overlay may sit partially
+    // offscreen when the pet straddles displays, so state updates must not
+    // clamp it onto its own display and duplicate the sprite.
+    position(false);
     draw();
   };
   window.__updatePet(${JSON.stringify(DEFAULT_STATE)});

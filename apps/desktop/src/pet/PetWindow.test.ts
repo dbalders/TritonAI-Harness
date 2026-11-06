@@ -225,6 +225,16 @@ describe("pet page behavior", () => {
     p.win.__updatePet({ pet: "triton", movement: "static", threads: [] });
     expect(p.elements.actor!.style.transform).toBe("translate(100px,100px)");
   });
+  it("preserves straddling sprite coordinates during state updates", () => {
+    const p = page();
+    p.win.__movePet(-20, 980);
+    expect(p.elements.actor!.style.transform).toBe("translate(-20px,980px)");
+    p.win.__updatePet({ pet: "triton", movement: "static", threads: [] });
+    expect(p.elements.actor!.style.transform).toBe("translate(-20px,980px)");
+    p.elements.sprite!.fire("contextmenu");
+    expect(p.elements.menu!.open).toBe(true);
+    expect(p.elements.actor!.style.transform).toBe("translate(-20px,980px)");
+  });
   it("keeps static position and releases input away from controls", () => {
     const p = page();
     const before = p.elements.actor!.style.transform;
