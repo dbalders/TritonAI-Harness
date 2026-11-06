@@ -177,12 +177,33 @@ describe("pet page behavior", () => {
     const p = page();
     const sprite = p.elements.sprite!;
     expect(p.elements.actor!.style.transform).toBe("translate(1836px,996px)");
-    sprite.fire("pointerdown", { button: 0, pointerId: 1, clientX: 1836, clientY: 996 });
+    sprite.fire("pointerdown", {
+      button: 0,
+      pointerId: 1,
+      clientX: 1836,
+      clientY: 996,
+      screenX: 1836,
+      screenY: 996,
+    });
     expect(sprite.capturedPointers).toEqual([1]);
-    expect(p.drags).toEqual([{ kind: "start", offsetX: 0, offsetY: 0 }]);
-    sprite.fire("pointermove", { pointerId: 1, clientX: 1800, clientY: 900 });
+    expect(p.drags).toEqual([
+      { kind: "start", offsetX: 0, offsetY: 0, screenX: 1836, screenY: 996 },
+    ]);
+    sprite.fire("pointermove", {
+      pointerId: 1,
+      clientX: 1800,
+      clientY: 900,
+      screenX: 1800,
+      screenY: 900,
+    });
     expect(p.elements.actor!.style.transform).toBe("translate(1836px,996px)");
-    expect(p.drags[1]).toEqual({ kind: "move", offsetX: 0, offsetY: 0 });
+    expect(p.drags[1]).toEqual({
+      kind: "move",
+      offsetX: 0,
+      offsetY: 0,
+      screenX: 1800,
+      screenY: 900,
+    });
     p.win.__movePet(1800, 900);
     expect(p.elements.actor!.style.transform).toBe("translate(1800px,900px)");
     sprite.fire("pointerup", { pointerId: 1 });

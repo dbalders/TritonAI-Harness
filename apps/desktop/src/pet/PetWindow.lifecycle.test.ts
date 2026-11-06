@@ -93,10 +93,11 @@ it("enables Linux input only near the pet", () => {
   vi.useRealTimers();
 });
 
-it("does not poll Linux cursor input on Wayland", () => {
+it("keeps Linux Wayland input interactive through window shapes", () => {
   vi.useFakeTimers();
   const noop = () => {};
   const setIgnoreMouseEvents = vi.fn();
+  const setShape = vi.fn();
   const w = {
     webContents: {
       id: 99,
@@ -110,6 +111,7 @@ it("does not poll Linux cursor input on Wayland", () => {
     setAlwaysOnTop: noop,
     setVisibleOnAllWorkspaces: noop,
     setIgnoreMouseEvents,
+    setShape,
     showInactive: vi.fn(),
     hide: vi.fn(),
     destroy: vi.fn(),
@@ -128,6 +130,71 @@ it("does not poll Linux cursor input on Wayland", () => {
   vi.advanceTimersByTime(100);
   expect(cursor).not.toHaveBeenCalled();
   expect(setIgnoreMouseEvents).not.toHaveBeenCalled();
+  expect(setShape).toHaveBeenLastCalledWith([{ x: 1820, y: 788, width: 100, height: 292 }]);
+  const calls = vi.mocked(E.ipcMain.on).mock.calls;
+  const boundsCall = calls.filter(([channel]) => channel === PET_WINDOW_BOUNDS_CHANNEL).at(-1);
+  const dragCall = calls.filter(([channel]) => channel === PET_WINDOW_DRAG_CHANNEL).at(-1);
+  const boundsListener = boundsCall![1];
+  const dragListener = dragCall![1];
+  boundsListener({ sender: w.webContents } as never, { x: 1632, y: 868, width: 280, height: 192 });
+  expect(setShape).toHaveBeenLastCalledWith([{ x: 1632, y: 868, width: 280, height: 192 }]);
+  dragListener({ sender: w.webContents } as never, {
+    kind: "start",
+    offsetX: 0,
+    offsetY: 0,
+    screenX: 1836,
+    screenY: 996,
+  });
+  expect(setShape).toHaveBeenLastCalledWith([{ x: 0, y: 0, width: 1920, height: 1080 }]);
+  dragListener({ sender: w.webContents } as never, {
+    kind: "move",
+    offsetX: 0,
+    offsetY: 0,
+    screenX: 500,
+    screenY: 500,
+  });
+  expect(setShape).toHaveBeenLastCalledWith([{ x: 0, y: 0, width: 1920, height: 1080 }]);
+  dragListener({ sender: w.webContents } as never, { kind: "end" });
+  expect(setShape).toHaveBeenLastCalledWith([{ x: 484, y: 292, width: 376, height: 488 }]);
+  pet.destroy();
+  vi.useRealTimers();
+});
+
+it("uses shape input when the Linux session type is unset", () => {
+  vi.useFakeTimers();
+  const noop = () => {};
+  const setShape = vi.fn();
+  const w = {
+    webContents: {
+      id: 99,
+      on: noop,
+      setWindowOpenHandler: noop,
+      executeJavaScript: async () => {},
+      send: noop,
+    },
+    isDestroyed: () => false,
+    setBounds: noop,
+    setAlwaysOnTop: noop,
+    setVisibleOnAllWorkspaces: noop,
+    setIgnoreMouseEvents: vi.fn(),
+    setShape,
+    showInactive: vi.fn(),
+    hide: vi.fn(),
+    destroy: vi.fn(),
+    on: noop,
+    once: noop,
+    loadURL: async () => {},
+  };
+  vi.mocked(E.BrowserWindow).mockImplementation(function () {
+    return w as unknown as E.BrowserWindow;
+  });
+  const pet = makePetWindow("linux", "petPreload.cjs", noop, {});
+  pet.show([{ id: 1, area: { x: 0, y: 0, width: 1920, height: 1080 } }]);
+  const cursor = vi.mocked(E.screen.getCursorScreenPoint);
+  cursor.mockClear();
+  vi.advanceTimersByTime(100);
+  expect(cursor).not.toHaveBeenCalled();
+  expect(setShape).toHaveBeenLastCalledWith([{ x: 1820, y: 788, width: 100, height: 292 }]);
   pet.destroy();
   vi.useRealTimers();
 });
@@ -183,6 +250,7 @@ it("uses reported Linux control bounds and keeps drags interactive", () => {
   vi.advanceTimersByTime(50);
   expect(setIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
   dragListener({ sender: w.webContents } as never, { kind: "end" });
+  cursor.mockReturnValue({ x: 10, y: 10 });
   vi.advanceTimersByTime(50);
   expect(setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
   pet.destroy();

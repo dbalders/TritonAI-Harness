@@ -262,14 +262,26 @@ export function petHtml(initialSpritePosition?: {
       offsetX: event.clientX - x,
       offsetY: event.clientY - y,
     };
-    bridge?.sendDrag({ kind: "start", offsetX: drag.offsetX, offsetY: drag.offsetY });
+    bridge?.sendDrag({
+      kind: "start",
+      offsetX: drag.offsetX,
+      offsetY: drag.offsetY,
+      screenX: event.screenX,
+      screenY: event.screenY,
+    });
     setAnimation("wave");
   });
   sprite.addEventListener("pointermove", (event) => {
     if (!drag || drag.id !== event.pointerId) return;
     // The main process owns drag position. Local pointer coordinates disagree
     // with screen coordinates when a captured pointer crosses a scaled display.
-    bridge?.sendDrag({ kind: "move", offsetX: drag.offsetX, offsetY: drag.offsetY });
+    bridge?.sendDrag({
+      kind: "move",
+      offsetX: drag.offsetX,
+      offsetY: drag.offsetY,
+      screenX: event.screenX,
+      screenY: event.screenY,
+    });
   });
   const endDrag = (event) => {
     if (!drag || drag.id !== event.pointerId) return;
@@ -352,16 +364,27 @@ type PetWindowDragEvent = {
   readonly kind: "start" | "move" | "end";
   readonly offsetX?: number;
   readonly offsetY?: number;
+  readonly screenX?: number;
+  readonly screenY?: number;
 };
 
 const PET_SIZE = 64;
 
 function isPetWindowDragEvent(value: unknown): value is PetWindowDragEvent {
   if (typeof value !== "object" || value === null) return false;
-  const event = value as { kind?: unknown; offsetX?: unknown; offsetY?: unknown };
+  const event = value as {
+    kind?: unknown;
+    offsetX?: unknown;
+    offsetY?: unknown;
+    screenX?: unknown;
+    screenY?: unknown;
+  };
   if (event.kind === "end") return true;
   if (event.kind !== "start" && event.kind !== "move") return false;
-  return typeof event.offsetX === "number" && typeof event.offsetY === "number";
+  if (typeof event.offsetX !== "number" || typeof event.offsetY !== "number") return false;
+  if (event.screenX !== undefined && typeof event.screenX !== "number") return false;
+  if (event.screenY !== undefined && typeof event.screenY !== "number") return false;
+  return true;
 }
 
 export function makePetWindow(
@@ -375,6 +398,12 @@ export function makePetWindow(
   let visible = false;
   let spritePosition: { x: number; y: number } | null = null;
   let dragOffset: { x: number; y: number } | null = null;
+  // Linux has no cross-platform mouse-event forwarding. X11 sessions poll the
+  // cursor; every other Linux session (native Wayland, unset session type)
+  // uses BrowserWindow.setShape so only the pet region receives input.
+  const linuxX11Input =
+    platform === "linux" && environment.XDG_SESSION_TYPE?.toLowerCase() === "x11";
+  const linuxShapeInput = platform === "linux" && !linuxX11Input;
 
   const entryForSender = (sender: Electron.WebContents) =>
     entries.find(
@@ -384,8 +413,13 @@ export function makePetWindow(
     dragOffset = null;
   };
   const setSpritePosition = (next: { x: number; y: number }) => {
+    const moved =
+      spritePosition === null || spritePosition.x !== next.x || spritePosition.y !== next.y;
     spritePosition = next;
     for (const entry of entries) {
+      // Renderer control bounds describe the previous sprite position; drop
+      // them on movement so input follows the pet until fresh bounds arrive.
+      if (moved) entry.controlBounds = null;
       if (entry.window.isDestroyed()) continue;
       const overlaps =
         next.x < entry.area.x + entry.area.width &&
@@ -398,6 +432,7 @@ export function makePetWindow(
       entry.window.webContents.send(PET_WINDOW_MOVE_CHANNEL, x, y);
       entry.spriteVisible = overlaps;
     }
+    applyLinuxShapes();
   };
   const sendState = (entry: PetWindowEntry) => {
     if (entry.window.isDestroyed()) return;
@@ -447,7 +482,13 @@ export function makePetWindow(
       visibleOnFullScreen: true,
       skipTransformProcessType: true,
     });
-    window.setIgnoreMouseEvents(true, platform === "linux" ? undefined : { forward: true });
+    if (linuxShapeInput) {
+      // setShape is authoritative for input here: an empty shape starts the
+      // overlay fully click-through without cursor polling.
+      window.setShape([]);
+    } else {
+      window.setIgnoreMouseEvents(true, platform === "linux" ? undefined : { forward: true });
+    }
     window.on("closed", () => {
       entries = entries.filter((item) => item !== entry);
     });
@@ -545,8 +586,46 @@ export function makePetWindow(
       height: PET_SIZE + 424,
     };
   };
+  const applyLinuxShape = (entry: PetWindowEntry) => {
+    if (entry.window.isDestroyed()) return;
+    if (!visible || !entry.spriteVisible) {
+      entry.window.setShape([]);
+      return;
+    }
+    // A captured drag must keep receiving pointer events even while the
+    // sprite crosses display boundaries, so the whole overlay stays active.
+    if (dragOffset !== null) {
+      entry.window.setShape([{ x: 0, y: 0, width: entry.area.width, height: entry.area.height }]);
+      return;
+    }
+    const region = interactiveRegion(entry);
+    if (region === null) {
+      entry.window.setShape([]);
+      return;
+    }
+    const left = Math.max(region.x, entry.area.x);
+    const top = Math.max(region.y, entry.area.y);
+    const right = Math.min(region.x + region.width, entry.area.x + entry.area.width);
+    const bottom = Math.min(region.y + region.height, entry.area.y + entry.area.height);
+    if (right <= left || bottom <= top) {
+      entry.window.setShape([]);
+      return;
+    }
+    entry.window.setShape([
+      {
+        x: Math.round(left - entry.area.x),
+        y: Math.round(top - entry.area.y),
+        width: Math.round(right - left),
+        height: Math.round(bottom - top),
+      },
+    ]);
+  };
+  const applyLinuxShapes = () => {
+    if (!linuxShapeInput) return;
+    for (const entry of entries) applyLinuxShape(entry);
+  };
   // Electron only forwards ignored mouse events on macOS and Windows. On
-  // Linux, poll the cursor and enable input only around the pet controls.
+  // Linux X11, poll the cursor and enable input only around the pet controls.
   const updateLinuxInput = () => {
     if (!visible) return;
     const point = Electron.screen.getCursorScreenPoint();
@@ -565,12 +644,8 @@ export function makePetWindow(
       entry.window.setIgnoreMouseEvents(!interactive);
     }
   };
-  // Electron's getCursorScreenPoint is unsupported on native Wayland, so the
-  // polling input path is explicitly constrained to X11 sessions.
-  const linuxInputSupported =
-    platform === "linux" && environment.XDG_SESSION_TYPE?.toLowerCase() === "x11";
   // @effect-diagnostics-next-line globalTimers:off -- Electron cursor polling runs at a native callback boundary outside any Effect fiber.
-  const linuxInputTimer = linuxInputSupported ? setInterval(updateLinuxInput, 50) : null;
+  const linuxInputTimer = linuxX11Input ? setInterval(updateLinuxInput, 50) : null;
   const actionListener = (event: Electron.IpcMainEvent, action: unknown) => {
     if (entryForSender(event.sender) === undefined || !isPetWindowAction(action)) return;
     onAction(action);
@@ -588,6 +663,7 @@ export function makePetWindow(
     if (entry === undefined) return;
     if (bounds === null) {
       entry.controlBounds = null;
+      applyLinuxShapes();
       return;
     }
     if (typeof bounds !== "object" || bounds === null) return;
@@ -605,6 +681,7 @@ export function makePetWindow(
       return;
     }
     entry.controlBounds = { x, y, width, height };
+    applyLinuxShapes();
   };
   const movePetToCursor = () => {
     if (dragOffset === null) return;
@@ -617,9 +694,24 @@ export function makePetWindow(
       stopDrag();
       normalizeSpritePosition(entries.map((entry) => ({ id: entry.id, area: entry.area })));
       if (spritePosition !== null) setSpritePosition(spritePosition);
+      applyLinuxShapes();
       return;
     }
     dragOffset = { x: value.offsetX!, y: value.offsetY! };
+    if (linuxShapeInput) {
+      // getCursorScreenPoint is unavailable outside X11, so the renderer
+      // reports its own screen coordinates with every drag event.
+      if (
+        value.screenX !== undefined &&
+        value.screenY !== undefined &&
+        Number.isFinite(value.screenX) &&
+        Number.isFinite(value.screenY)
+      ) {
+        setSpritePosition({ x: value.screenX - dragOffset.x, y: value.screenY - dragOffset.y });
+      }
+      applyLinuxShapes();
+      return;
+    }
     // Renderer pointer events drive each update, so movement follows the
     // input cadence instead of a polling timer.
     movePetToCursor();
@@ -636,6 +728,7 @@ export function makePetWindow(
   const hide = () => {
     visible = false;
     stopDrag();
+    applyLinuxShapes();
     for (const entry of entries) {
       if (entry.window.isDestroyed()) continue;
       entry.window.hide();
