@@ -29,6 +29,15 @@ function sendToOwner(ownerId: number, action: PetWindowAction) {
   contents.send(PET_ACTION_CHANNEL, action);
 }
 
+function focusOwnerWindow(ownerId: number) {
+  const contents = Electron.webContents.fromId(ownerId);
+  const owner = contents ? Electron.BrowserWindow.fromWebContents(contents) : null;
+  if (!owner || owner.isDestroyed()) return;
+  if (owner.isMinimized()) owner.restore();
+  owner.show();
+  owner.focus();
+}
+
 function petWindowAreas(): PetWindowArea[] {
   return Electron.screen.getAllDisplays().map((display) => ({
     id: display.id,
@@ -55,7 +64,10 @@ const make = Effect.gen(function* () {
     // Thread navigation is window-local: sending it to every renderer would
     // change the active conversation in unrelated Harness windows.
     if (action.kind === "select-thread") {
-      if (currentOwnerId !== null) sendToOwner(currentOwnerId, action);
+      if (currentOwnerId === null) return;
+      // Restore and focus the owner so the selected conversation is visible.
+      focusOwnerWindow(currentOwnerId);
+      sendToOwner(currentOwnerId, action);
       return;
     }
     sendToOwners(ownerIds, action);

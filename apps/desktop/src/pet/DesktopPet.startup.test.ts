@@ -90,13 +90,18 @@ function setupTwoOwners() {
     once: vi.fn(),
   };
   state.fromId.mockImplementation((id: number) => (id === 7 ? contents7 : contents8));
-  state.fromWebContents.mockReturnValue({
+  const ownerWindow = {
     isDestroyed: () => false,
     getBounds: () => ownerBounds,
-  });
+    isMinimized: () => true,
+    restore: vi.fn(),
+    show: vi.fn(),
+    focus: vi.fn(),
+  };
+  state.fromWebContents.mockReturnValue(ownerWindow);
   state.getAllDisplays.mockReturnValue([{ id: 3, workArea: ownerBounds }]);
   state.getDisplayMatching.mockReturnValue({ workArea: ownerBounds });
-  return { send7, send8 };
+  return { send7, send8, ownerWindow };
 }
 
 it.effect("builds before ready without touching screen, then registers and cleans up", () =>
@@ -272,7 +277,7 @@ it.effect("restores the fallback owner's cached state", () =>
 it.effect("routes thread selection to the current owner only", () =>
   Effect.gen(function* () {
     state.ready = true;
-    const { send7, send8 } = setupTwoOwners();
+    const { send7, send8, ownerWindow } = setupTwoOwners();
     yield* Effect.scoped(
       Effect.gen(function* () {
         const context = yield* Layer.build(runtime);
@@ -280,6 +285,9 @@ it.effect("routes thread selection to the current owner only", () =>
         yield* pet.open(7);
         yield* pet.open(8);
         state.onAction({ kind: "select-thread", environmentId: "env", threadId: "thread" });
+        expect(ownerWindow.restore).toHaveBeenCalledOnce();
+        expect(ownerWindow.show).toHaveBeenCalledOnce();
+        expect(ownerWindow.focus).toHaveBeenCalledOnce();
         state.onAction({ kind: "set-pet", pet: "triton", movement: "static" });
       }),
     );
