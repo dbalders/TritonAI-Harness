@@ -123,9 +123,8 @@ export function petHtml(initialSpritePosition?: {
   let frameAt = 0;
   let x = initialSpritePosition ? initialSpritePosition.x : Math.max(window.innerWidth - 84, 0);
   let y = initialSpritePosition ? initialSpritePosition.y : Math.max(window.innerHeight - 84, 0);
-  let wanderUntil = 0;
-  let moveUntil = 0;
-  let direction = 1;
+  let previousMoveX = null;
+  let lastMoveAt = -Infinity;
   let drag = null;
   let onScreen = x > -64 && y > -64 && x < window.innerWidth && y < window.innerHeight;
 
@@ -231,18 +230,8 @@ export function petHtml(initialSpritePosition?: {
       frameAt = now;
       draw();
     }
-    if (!drag && onScreen && state.movement === "playful" && !state.threads.some(thread => thread.status === "working" || thread.status === "review" || thread.status === "waiting")) {
-      if (moveUntil > now) {
-        x = clamp(x + direction * 18 * 0.04, 0, Math.max(window.innerWidth - 64, 0));
-        position();
-      } else if (now >= wanderUntil) {
-        direction = Math.random() < 0.5 ? 1 : -1;
-        setAnimation(direction > 0 ? "running_right" : "running_left");
-        moveUntil = now + 1.5;
-        wanderUntil = now + 20 + Math.random() * 15;
-      } else if (animation.startsWith("running")) {
-        setAnimation("idle");
-      }
+    if (!drag && animation.startsWith("running") && now - lastMoveAt > 0.25) {
+      setAnimation(activityAnimation());
     }
   };
   let interactive = false;
@@ -313,6 +302,17 @@ export function petHtml(initialSpritePosition?: {
   });
   window.addEventListener("resize", () => position(false));
   const movePet = (nextX, nextY) => {
+    const deltaX = previousMoveX === null ? 0 : nextX - previousMoveX;
+    previousMoveX = nextX;
+    if (
+      !drag &&
+      state.movement === "playful" &&
+      !state.threads.some((thread) => thread.status === "working" || thread.status === "review" || thread.status === "waiting") &&
+      deltaX !== 0
+    ) {
+      lastMoveAt = performance.now() / 1000;
+      setAnimation(deltaX > 0 ? "running_right" : "running_left");
+    }
     x = nextX;
     y = nextY;
     const nextOnScreen = nextX > -64 && nextY > -64 && nextX < window.innerWidth && nextY < window.innerHeight;
@@ -331,7 +331,6 @@ export function petHtml(initialSpritePosition?: {
     movementButton.textContent = state.movement === "static" ? "Playful" : "Static";
     renderThreads();
     setAnimation(activityAnimation());
-    if (state.movement === "static") moveUntil = 0;
     if (!timer) timer = setInterval(update, 40);
     // The main process owns sprite coordinates. An overlay may sit partially
     // offscreen when the pet straddles displays, so state updates must not
@@ -401,6 +400,9 @@ export function makePetWindow(
   let visible = false;
   let spritePosition: { x: number; y: number } | null = null;
   let dragOffset: { x: number; y: number } | null = null;
+  let playfulDirection = 1;
+  let playfulMoveUntil = 0;
+  let playfulWanderUntil = 0;
   // Linux has no cross-platform mouse-event forwarding. X11 sessions poll the
   // cursor; every other Linux session (native Wayland, unset session type)
   // uses BrowserWindow.setShape so only the pet region receives input.
@@ -415,6 +417,16 @@ export function makePetWindow(
   const stopDrag = () => {
     dragOffset = null;
   };
+  const spriteIntersectsArea = (
+    position: { readonly x: number; readonly y: number },
+    area: Electron.Rectangle,
+  ) =>
+    position.x < area.x + area.width &&
+    position.x + PET_SIZE > area.x &&
+    position.y < area.y + area.height &&
+    position.y + PET_SIZE > area.y;
+  const spriteIntersectsAnyArea = (position: { readonly x: number; readonly y: number }) =>
+    entries.some((entry) => spriteIntersectsArea(position, entry.area));
   const setSpritePosition = (next: { x: number; y: number }) => {
     const moved =
       spritePosition === null || spritePosition.x !== next.x || spritePosition.y !== next.y;
@@ -424,11 +436,7 @@ export function makePetWindow(
       // them on movement so input follows the pet until fresh bounds arrive.
       if (moved) entry.controlBounds = null;
       if (entry.window.isDestroyed()) continue;
-      const overlaps =
-        next.x < entry.area.x + entry.area.width &&
-        next.x + PET_SIZE > entry.area.x &&
-        next.y < entry.area.y + entry.area.height &&
-        next.y + PET_SIZE > entry.area.y;
+      const overlaps = spriteIntersectsArea(next, entry.area);
       if (!overlaps && !entry.spriteVisible) continue;
       const x = overlaps ? Math.round(next.x - entry.area.x) : -PET_SIZE;
       const y = overlaps ? Math.round(next.y - entry.area.y) : -PET_SIZE;
@@ -524,20 +532,13 @@ export function makePetWindow(
   const clampNumber = (value: number, min: number, max: number) =>
     Math.min(Math.max(value, min), Math.max(min, max));
   const normalizeSpritePosition = (areas: readonly PetWindowArea[]) => {
-    if (spritePosition === null || areas.length === 0) return;
-    const intersects = areas.some(
-      ({ area }) =>
-        spritePosition !== null &&
-        spritePosition.x < area.x + area.width &&
-        spritePosition.x + PET_SIZE > area.x &&
-        spritePosition.y < area.y + area.height &&
-        spritePosition.y + PET_SIZE > area.y,
-    );
-    if (intersects) return;
+    const current = spritePosition;
+    if (current === null || areas.length === 0) return;
+    if (areas.some(({ area }) => spriteIntersectsArea(current, area))) return;
     const area = areas[0]!.area;
     spritePosition = {
-      x: clampNumber(spritePosition.x, area.x, area.x + area.width - PET_SIZE),
-      y: clampNumber(spritePosition.y, area.y, area.y + area.height - PET_SIZE),
+      x: clampNumber(current.x, area.x, area.x + area.width - PET_SIZE),
+      y: clampNumber(current.y, area.y, area.y + area.height - PET_SIZE),
     };
   };
 
@@ -652,6 +653,37 @@ export function makePetWindow(
   };
   // @effect-diagnostics-next-line globalTimers:off -- Electron cursor polling runs at a native callback boundary outside any Effect fiber.
   const linuxInputTimer = linuxX11Input ? setInterval(updateLinuxInput, 50) : null;
+  const updatePlayfulPosition = () => {
+    const current = spritePosition;
+    if (!visible || current === null || dragOffset !== null) return;
+    if (latestState.movement !== "playful") return;
+    if (
+      latestState.threads.some(
+        ({ status }) => status === "working" || status === "review" || status === "waiting",
+      )
+    ) {
+      return;
+    }
+    // @effect-diagnostics-next-line globalDate:off -- Electron timer callbacks run outside any Effect runtime.
+    const now = Date.now();
+    if (now >= playfulMoveUntil) {
+      if (now < playfulWanderUntil) return;
+      // @effect-diagnostics-next-line globalRandom:off -- Decorative wander direction is outside any Effect runtime.
+      if (playfulWanderUntil !== 0) playfulDirection = Math.random() < 0.5 ? -1 : 1;
+      playfulMoveUntil = now + 1_500;
+      // @effect-diagnostics-next-line globalRandom:off -- Decorative wander spacing is outside any Effect runtime.
+      playfulWanderUntil = playfulMoveUntil + 18_500 + Math.floor(Math.random() * 15_000);
+    }
+    const candidate = { x: current.x + playfulDirection * 0.72, y: current.y };
+    if (!spriteIntersectsAnyArea(candidate)) {
+      playfulDirection = -playfulDirection;
+      candidate.x = current.x + playfulDirection * 0.72;
+      if (!spriteIntersectsAnyArea(candidate)) return;
+    }
+    setSpritePosition(candidate);
+  };
+  // @effect-diagnostics-next-line globalTimers:off -- Electron playful movement runs at a native callback boundary outside any Effect fiber.
+  const playfulTimer = setInterval(updatePlayfulPosition, 40);
   const actionListener = (event: Electron.IpcMainEvent, action: unknown) => {
     if (entryForSender(event.sender) === undefined || !isPetWindowAction(action)) return;
     onAction(action);
@@ -747,6 +779,7 @@ export function makePetWindow(
     visible = false;
     stopDrag();
     if (linuxInputTimer !== null) clearInterval(linuxInputTimer);
+    clearInterval(playfulTimer);
     for (const entry of entries) removeEntry(entry);
     Electron.ipcMain.removeListener(PET_WINDOW_ACTION_CHANNEL, actionListener);
     Electron.ipcMain.removeListener(PET_WINDOW_INPUT_CHANNEL, inputListener);

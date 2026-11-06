@@ -300,3 +300,49 @@ it("restores an offscreen sprite when a drag ends", () => {
   expect(send).toHaveBeenLastCalledWith(PET_WINDOW_MOVE_CHANNEL, 500, 976);
   pet.destroy();
 });
+
+it("moves one playful pet across adjacent displays", () => {
+  vi.useFakeTimers();
+  const noop = () => {};
+  const makeWindow = (id: number, send: ReturnType<typeof vi.fn>) => ({
+    webContents: {
+      id,
+      on: noop,
+      setWindowOpenHandler: noop,
+      executeJavaScript: async () => {},
+      send,
+    },
+    isDestroyed: () => false,
+    setBounds: noop,
+    setAlwaysOnTop: noop,
+    setVisibleOnAllWorkspaces: noop,
+    setIgnoreMouseEvents: noop,
+    showInactive: vi.fn(),
+    hide: vi.fn(),
+    destroy: vi.fn(),
+    on: noop,
+    once: noop,
+    loadURL: async () => {},
+  });
+  const first = makeWindow(101, vi.fn());
+  const second = makeWindow(102, vi.fn());
+  const windows = [first, second];
+  vi.mocked(E.BrowserWindow).mockImplementation(function () {
+    return windows.shift() as unknown as E.BrowserWindow;
+  });
+  const pet = makePetWindow("win32", "petPreload.cjs", noop);
+  pet.show(
+    [
+      { id: 1, area: { x: 0, y: 0, width: 1920, height: 1080 } },
+      { id: 2, area: { x: 1920, y: 0, width: 1920, height: 1080 } },
+    ],
+    { x: 1900, y: 500 },
+  );
+  pet.update({ pet: "triton", movement: "playful", threads: [] });
+  vi.advanceTimersByTime(40);
+  vi.advanceTimersByTime(40);
+  expect(first.webContents.send).toHaveBeenLastCalledWith(PET_WINDOW_MOVE_CHANNEL, 1901, 500);
+  expect(second.webContents.send).toHaveBeenLastCalledWith(PET_WINDOW_MOVE_CHANNEL, -19, 500);
+  pet.destroy();
+  vi.useRealTimers();
+});
