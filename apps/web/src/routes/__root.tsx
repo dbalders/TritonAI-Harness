@@ -30,6 +30,7 @@ import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstall
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
+import { DesktopPetCoordinator } from "../components/desktop/DesktopPetCoordinator";
 import { DesktopWebLinkCoordinator } from "../components/desktop/DesktopWebLinkCoordinator";
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
 import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
@@ -200,6 +201,7 @@ function RootRouteBranch() {
       >
         {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopWebLinkCoordinator /> : null}
+        {primaryEnvironmentAuthenticated && isElectron ? <DesktopPetCoordinator /> : null}
         {isElectron ? <RunningThreadKeepAlive /> : null}
         <RelayClientInstallDialog />
         <ConnectOnboardingDialog />

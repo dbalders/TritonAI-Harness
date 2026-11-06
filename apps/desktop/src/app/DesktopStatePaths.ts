@@ -1,4 +1,8 @@
-import { isTritonAiNightlyVersion, resolveTritonAiDesktopIdentity } from "@t3tools/contracts";
+import {
+  isTritonAiDevVersion,
+  isTritonAiNightlyVersion,
+  resolveTritonAiDesktopIdentity,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 
 export type JoinPath = (first: string, ...segments: string[]) => string;
@@ -23,7 +27,9 @@ export function resolveDesktopBaseDir(input: {
   if (Option.isSome(configured)) {
     return isTritonAiNightlyVersion(version)
       ? input.joinPath(configured.value, "nightly")
-      : configured.value;
+      : isTritonAiDevVersion(version)
+        ? input.joinPath(configured.value, "dev")
+        : configured.value;
   }
   return input.joinPath(input.homeDirectory, resolveTritonAiDesktopIdentity(version).homeDirName);
 }
