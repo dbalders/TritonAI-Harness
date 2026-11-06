@@ -125,6 +125,7 @@ it("keeps Linux Wayland input interactive through window shapes", () => {
   const pet = makePetWindow("linux", "petPreload.cjs", noop, { XDG_SESSION_TYPE: "wayland" });
   pet.show([{ id: 1, area: { x: 0, y: 0, width: 1920, height: 1080 } }]);
   const cursor = vi.mocked(E.screen.getCursorScreenPoint);
+  expect(setIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
   cursor.mockClear();
   setIgnoreMouseEvents.mockClear();
   vi.advanceTimersByTime(100);

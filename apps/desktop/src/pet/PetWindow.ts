@@ -483,8 +483,9 @@ export function makePetWindow(
       skipTransformProcessType: true,
     });
     if (linuxShapeInput) {
-      // setShape is authoritative for input here: an empty shape starts the
-      // overlay fully click-through without cursor polling.
+      // Electron restores the full input region for an empty shape on some
+      // Linux platforms, so make ignored input explicit alongside setShape.
+      window.setIgnoreMouseEvents(true);
       window.setShape([]);
     } else {
       window.setIgnoreMouseEvents(true, platform === "linux" ? undefined : { forward: true });
@@ -588,14 +589,16 @@ export function makePetWindow(
   };
   const applyLinuxShape = (entry: PetWindowEntry) => {
     if (entry.window.isDestroyed()) return;
-    if (!visible || !entry.spriteVisible) {
-      entry.window.setShape([]);
-      return;
-    }
+    const active = visible && entry.spriteVisible;
+    entry.window.setIgnoreMouseEvents(!(active || dragOffset !== null));
     // A captured drag must keep receiving pointer events even while the
     // sprite crosses display boundaries, so the whole overlay stays active.
     if (dragOffset !== null) {
       entry.window.setShape([{ x: 0, y: 0, width: entry.area.width, height: entry.area.height }]);
+      return;
+    }
+    if (!active) {
+      entry.window.setShape([]);
       return;
     }
     const region = interactiveRegion(entry);
