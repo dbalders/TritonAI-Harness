@@ -1,6 +1,10 @@
 import * as E from "electron";
 import { expect, it, vi } from "vite-plus/test";
-import { PET_WINDOW_BOUNDS_CHANNEL, PET_WINDOW_DRAG_CHANNEL } from "../ipc/channels.ts";
+import {
+  PET_WINDOW_BOUNDS_CHANNEL,
+  PET_WINDOW_DRAG_CHANNEL,
+  PET_WINDOW_MOVE_CHANNEL,
+} from "../ipc/channels.ts";
 import { makePetWindow } from "./PetWindow.ts";
 
 vi.mock("electron", () => ({
@@ -76,7 +80,7 @@ it("enables Linux input only near the pet", () => {
   vi.mocked(E.BrowserWindow).mockImplementation(function () {
     return w as unknown as E.BrowserWindow;
   });
-  const pet = makePetWindow("linux", "petPreload.cjs", noop);
+  const pet = makePetWindow("linux", "petPreload.cjs", noop, { XDG_SESSION_TYPE: "x11" });
   pet.show([{ id: 1, area: { x: 0, y: 0, width: 1920, height: 1080 } }]);
   const cursor = vi.mocked(E.screen.getCursorScreenPoint);
   cursor.mockReturnValue({ x: 100, y: 100 });
@@ -85,6 +89,45 @@ it("enables Linux input only near the pet", () => {
   cursor.mockReturnValue({ x: 1850, y: 1000 });
   vi.advanceTimersByTime(50);
   expect(setIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+  pet.destroy();
+  vi.useRealTimers();
+});
+
+it("does not poll Linux cursor input on Wayland", () => {
+  vi.useFakeTimers();
+  const noop = () => {};
+  const setIgnoreMouseEvents = vi.fn();
+  const w = {
+    webContents: {
+      id: 99,
+      on: noop,
+      setWindowOpenHandler: noop,
+      executeJavaScript: async () => {},
+      send: noop,
+    },
+    isDestroyed: () => false,
+    setBounds: noop,
+    setAlwaysOnTop: noop,
+    setVisibleOnAllWorkspaces: noop,
+    setIgnoreMouseEvents,
+    showInactive: vi.fn(),
+    hide: vi.fn(),
+    destroy: vi.fn(),
+    on: noop,
+    once: noop,
+    loadURL: async () => {},
+  };
+  vi.mocked(E.BrowserWindow).mockImplementation(function () {
+    return w as unknown as E.BrowserWindow;
+  });
+  const pet = makePetWindow("linux", "petPreload.cjs", noop, { XDG_SESSION_TYPE: "wayland" });
+  pet.show([{ id: 1, area: { x: 0, y: 0, width: 1920, height: 1080 } }]);
+  const cursor = vi.mocked(E.screen.getCursorScreenPoint);
+  cursor.mockClear();
+  setIgnoreMouseEvents.mockClear();
+  vi.advanceTimersByTime(100);
+  expect(cursor).not.toHaveBeenCalled();
+  expect(setIgnoreMouseEvents).not.toHaveBeenCalled();
   pet.destroy();
   vi.useRealTimers();
 });
@@ -116,7 +159,7 @@ it("uses reported Linux control bounds and keeps drags interactive", () => {
   vi.mocked(E.BrowserWindow).mockImplementation(function () {
     return w as unknown as E.BrowserWindow;
   });
-  const pet = makePetWindow("linux", "petPreload.cjs", noop);
+  const pet = makePetWindow("linux", "petPreload.cjs", noop, { XDG_SESSION_TYPE: "x11" });
   pet.show([{ id: 1, area: { x: 0, y: 0, width: 1920, height: 1080 } }]);
   const calls = vi.mocked(E.ipcMain.on).mock.calls;
   const boundsCall = calls.filter(([channel]) => channel === PET_WINDOW_BOUNDS_CHANNEL).at(-1);
@@ -144,4 +187,47 @@ it("uses reported Linux control bounds and keeps drags interactive", () => {
   expect(setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
   pet.destroy();
   vi.useRealTimers();
+});
+
+it("restores an offscreen sprite when a drag ends", () => {
+  const noop = () => {};
+  const send = vi.fn();
+  const w = {
+    webContents: {
+      id: 99,
+      on: noop,
+      setWindowOpenHandler: noop,
+      executeJavaScript: async () => {},
+      send,
+    },
+    isDestroyed: () => false,
+    setBounds: noop,
+    setAlwaysOnTop: noop,
+    setVisibleOnAllWorkspaces: noop,
+    setIgnoreMouseEvents: noop,
+    showInactive: vi.fn(),
+    hide: vi.fn(),
+    destroy: vi.fn(),
+    on: noop,
+    once: noop,
+    loadURL: async () => {},
+  };
+  vi.mocked(E.BrowserWindow).mockImplementation(function () {
+    return w as unknown as E.BrowserWindow;
+  });
+  const pet = makePetWindow("win32", "petPreload.cjs", noop);
+  pet.show([{ id: 1, area: { x: 0, y: 0, width: 1920, height: 1040 } }]);
+  send.mockClear();
+  const dragCall = vi
+    .mocked(E.ipcMain.on)
+    .mock.calls.filter(([channel]) => channel === PET_WINDOW_DRAG_CHANNEL)
+    .at(-1);
+  const dragListener = dragCall![1];
+  vi.mocked(E.screen.getCursorScreenPoint).mockReturnValue({ x: 500, y: 1079 });
+  dragListener({ sender: w.webContents } as never, { kind: "start", offsetX: 0, offsetY: 0 });
+  dragListener({ sender: w.webContents } as never, { kind: "move", offsetX: 0, offsetY: 0 });
+  expect(send).toHaveBeenLastCalledWith(PET_WINDOW_MOVE_CHANNEL, -64, -64);
+  dragListener({ sender: w.webContents } as never, { kind: "end" });
+  expect(send).toHaveBeenLastCalledWith(PET_WINDOW_MOVE_CHANNEL, 500, 976);
+  pet.destroy();
 });

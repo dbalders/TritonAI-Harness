@@ -368,6 +368,7 @@ export function makePetWindow(
   platform: NodeJS.Platform,
   preloadPath: string,
   onAction: (action: PetWindowAction) => void,
+  environment: NodeJS.ProcessEnv = process.env,
 ) {
   let entries: PetWindowEntry[] = [];
   let latestState: DesktopPetState = DEFAULT_STATE;
@@ -564,8 +565,12 @@ export function makePetWindow(
       entry.window.setIgnoreMouseEvents(!interactive);
     }
   };
+  // Electron's getCursorScreenPoint is unsupported on native Wayland, so the
+  // polling input path is explicitly constrained to X11 sessions.
+  const linuxInputSupported =
+    platform === "linux" && environment.XDG_SESSION_TYPE?.toLowerCase() === "x11";
   // @effect-diagnostics-next-line globalTimers:off -- Electron cursor polling runs at a native callback boundary outside any Effect fiber.
-  const linuxInputTimer = platform === "linux" ? setInterval(updateLinuxInput, 50) : null;
+  const linuxInputTimer = linuxInputSupported ? setInterval(updateLinuxInput, 50) : null;
   const actionListener = (event: Electron.IpcMainEvent, action: unknown) => {
     if (entryForSender(event.sender) === undefined || !isPetWindowAction(action)) return;
     onAction(action);
@@ -610,6 +615,8 @@ export function makePetWindow(
     if (entryForSender(event.sender) === undefined || !isPetWindowDragEvent(value)) return;
     if (value.kind === "end") {
       stopDrag();
+      normalizeSpritePosition(entries.map((entry) => ({ id: entry.id, area: entry.area })));
+      if (spritePosition !== null) setSpritePosition(spritePosition);
       return;
     }
     dragOffset = { x: value.offsetX!, y: value.offsetY! };
