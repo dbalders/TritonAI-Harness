@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: automation
-          ref: main
+          ref: fix/stable-ios-testflight-20261107
           persist-credentials: false
 
       - name: Resolve stable release or initial main source
@@ -127,7 +127,7 @@ jobs:
           const fs = require('node:fs');
           const { nextMarketingVersion } = require('../automation/.github/scripts/stable-ios-review.cjs');
           const config = fs.readFileSync('apps/mobile/app.config.ts', 'utf8');
-          const configuredVersion = config.match(/version:\s*"(\d+\.\d+\.\d+)"/)?.[1];
+          const configuredVersion = config.match(/version:\s*(?:repoEnv\.T3CODE_MOBILE_VERSION\s*\?\?\s*)?"(\d+\.\d+\.\d+)"/)?.[1];
           if (!configuredVersion) throw new Error('Cannot resolve mobile marketing version');
           console.log(nextMarketingVersion({
             tag: process.env.RELEASE_TAG, sourceSha: process.env.SOURCE_SHA,
