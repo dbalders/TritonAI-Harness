@@ -56,7 +56,7 @@ if receipt.get('marketingVersion'):
         raise ValueError('Invalid stable marketing version')
     # Expo embeds this configuration in the JS bundle used by About and diagnostics.
     config = Path('../app.config.ts')
-    contents, count = re.subn(r'(version:\s*")\d+\.\d+\.\d+(")', lambda match: match[1] + receipt['marketingVersion'] + match[2], config.read_text())
+    contents, count = re.subn(r'(version:\s*(?:repoEnv\.T3CODE_MOBILE_VERSION\s*\?\?\s*)?")\d+\.\d+\.\d+(")', lambda match: match[1] + receipt['marketingVersion'] + match[2], config.read_text())
     if count != 1:
         raise ValueError('Expected one mobile marketing version in app.config.ts')
     config.write_text(contents)
