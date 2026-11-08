@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: automation
-          ref: fix/stable-ios-testflight-20261107
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || 'main' }}
           persist-credentials: false
 
       - name: Resolve stable release or initial main source
