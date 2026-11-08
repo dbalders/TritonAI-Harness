@@ -300,7 +300,10 @@ export interface RegistryRuntimeOptions {
 const DEFAULT_PROVIDER_STATUS_TIMEOUT_MS = 5_000;
 const DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS = 30_000;
 
-/** Maximum UTF-8 bytes in normalized JSON returned to a model-facing tool surface. */
+/**
+ * Maximum UTF-8 bytes in normalized model-facing JSON. A 256 KiB ceiling rejects compatibility
+ * payloads that repeat a 50,000-character, three-byte UTF-8 field.
+ */
 export const MAX_INTEGRATION_TOOL_RESULT_BYTES = 512 * 1024;
 
 export const INTEGRATION_TOOL_RESULT_OMITTED = Object.freeze({
@@ -313,11 +316,35 @@ function isBinaryIntegrationToolResultValue(value: unknown): boolean {
   return Buffer.isBuffer(value) || value instanceof ArrayBuffer || ArrayBuffer.isView(value);
 }
 
-/**
- * Normalize provider output once at the shared registry boundary. The 512 KiB ceiling preserves
- * the ordinary compatibility shape that repeats a 50,000-code-unit, unescaped three-byte UTF-8
- * field plus JSON metadata; 256 KiB would reject it. Larger JSON escape expansion fails closed.
- */
+function withoutDuplicateMcpText(result: Record<string, unknown>): Record<string, unknown> {
+  const structured = result.structuredContent;
+  if (structured === null || typeof structured !== "object" || Array.isArray(structured))
+    return result;
+  if (!Array.isArray(result.content)) return result;
+  const structuredJson = JSON.stringify(structured);
+  const content = result.content.filter((item: unknown) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return true;
+    const block = item as Record<string, unknown>;
+    if (block.type !== "text" || typeof block.text !== "string" || Object.keys(block).length !== 2)
+      return true;
+    try {
+      JSON.parse(block.text);
+    } catch {
+      return true;
+    }
+    // Compare JSON spelling, not parsed values: rounding and duplicate keys must not lose text.
+    const compact = block.text.replace(
+      /("(?:\\.|[^"\\])*")|[\t\n\r ]+/gu,
+      (_match, token: string | undefined) => token ?? "",
+    );
+    return compact !== structuredJson;
+  });
+  if (content.length === result.content.length) return result;
+  const { content: _content, ...rest } = result;
+  return content.length === 0 ? rest : { ...rest, content };
+}
+
+/** Snapshot provider JSON once, remove redundant MCP text, then enforce the encoded-byte limit. */
 export function normalizeIntegrationToolResult(value: unknown): Record<string, unknown> {
   if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol") {
     throw new Error("Integration tool results must be JSON-serializable.");
@@ -345,15 +372,13 @@ export function normalizeIntegrationToolResult(value: unknown): Record<string, u
   }
   if (containsBinary) return INTEGRATION_TOOL_RESULT_OMITTED;
   if (!serialized) throw new Error("Integration tool results must be JSON-serializable.");
-  if (Buffer.byteLength(serialized, "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
-    return INTEGRATION_TOOL_RESULT_OMITTED;
-  }
   const parsed: unknown = JSON.parse(serialized);
-  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return parsed as Record<string, unknown>;
-  }
-  const normalized = { result: parsed };
-  if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
+  const normalized =
+    parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? withoutDuplicateMcpText(parsed as Record<string, unknown>)
+      : { result: parsed };
+  const normalizedJson = normalized === parsed ? serialized : JSON.stringify(normalized);
+  if (Buffer.byteLength(normalizedJson, "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
     return INTEGRATION_TOOL_RESULT_OMITTED;
   }
   return normalized;

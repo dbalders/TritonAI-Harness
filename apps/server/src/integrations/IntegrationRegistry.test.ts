@@ -6,6 +6,9 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { ThreadId } from "@t3tools/contracts";
+
+import { invokeAdmittedDynamicTool } from "../provider/CodexDynamicTools.ts";
 
 import { type IntegrationManifest, validateIntegrationManifest } from "./manifest.ts";
 import {
@@ -182,6 +185,124 @@ async function packagedFromRoot(packageRoot: string, implementation: Integration
 }
 
 describe("integration tool result normalization", () => {
+  it("removes duplicate remote MCP text while preserving structured data and envelope fields", () => {
+    const structuredContent = { workflow: { id: "wf-1", name: "Import", active: false } };
+    const result = {
+      content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }],
+      structuredContent,
+      resultType: "complete",
+      _meta: { requestId: "request-1" },
+    };
+
+    expect(normalizeIntegrationToolResult(result)).toEqual({
+      structuredContent,
+      resultType: "complete",
+      _meta: { requestId: "request-1" },
+    });
+    expect(result.content).toHaveLength(1);
+  });
+
+  it("preserves errors, write notes and media in their original order", () => {
+    const structuredContent = { error: "update_failed", workflowId: "wf-1" };
+    const image = { type: "image", data: "AA==", mimeType: "image/png" };
+    const note = { type: "text", text: "The update may have completed. Read the workflow first." };
+    const resource = {
+      type: "resource_link",
+      uri: "https://fixture.invalid/wf-1",
+      name: "Workflow",
+    };
+    expect(
+      normalizeIntegrationToolResult({
+        isError: true,
+        content: [image, { type: "text", text: JSON.stringify(structuredContent) }, note, resource],
+        structuredContent,
+      }),
+    ).toEqual({ isError: true, content: [image, note, resource], structuredContent });
+  });
+
+  it("keeps distinct text, metadata-bearing blocks and non-MCP results", () => {
+    const structuredContent = { id: "wf-1", label: "two  spaces" };
+    for (const text of [
+      "https://fixture.invalid/wf-1",
+      "not JSON",
+      '{"id":"wf-2"}',
+      '{"id":"wf-1","label":"two spaces"}',
+    ]) {
+      const result = { structuredContent, content: [{ type: "text", text }] };
+      expect(normalizeIntegrationToolResult(result)).toEqual(result);
+    }
+    for (const result of [
+      { content: [{ type: "text", text: "hello" }] },
+      { content: "hello", structuredContent },
+      { content: [{ type: "text", text: "null" }], structuredContent: null },
+      { content: [{ type: "text", text: "[1,2]" }], structuredContent: [1, 2] },
+      {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(structuredContent),
+            annotations: { audience: ["user"] },
+          },
+        ],
+        structuredContent,
+      },
+      {
+        nested: {
+          content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+          structuredContent,
+        },
+      },
+    ])
+      expect(normalizeIntegrationToolResult(result)).toEqual(result);
+  });
+
+  it("keeps numeric precision, duplicate keys and alternative JSON spellings", () => {
+    for (const [text, structuredContent] of [
+      ['{"id":9007199254740993}', { id: 9007199254740992 }],
+      ['{"value":0.10000000000000001}', { value: 0.1 }],
+      ['{"value":1e400}', { value: null }],
+      ['{"value":-0}', { value: 0 }],
+      ['{"id":"old","id":"new"}', { id: "new" }],
+      ['{"b":2,"a":1}', { a: 1, b: 2 }],
+      ['{"value":1 2}', { value: 12 }],
+    ] as const) {
+      const result = { content: [{ type: "text", text }], structuredContent };
+      expect(normalizeIntegrationToolResult(result)).toEqual(result);
+    }
+  });
+
+  it("applies the encoded-byte limit after removing redundant remote MCP text", () => {
+    const structuredContent = { id: "wf-1", body: "x".repeat(280_000) };
+    const result = {
+      content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+      structuredContent,
+    };
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeGreaterThan(
+      MAX_INTEGRATION_TOOL_RESULT_BYTES,
+    );
+    const normalized = normalizeIntegrationToolResult(result);
+    expect(normalized.resultOmitted).toBeUndefined();
+    expect(Object.keys(normalized)).toEqual(["structuredContent"]);
+    expect(JSON.stringify(normalized.structuredContent) === JSON.stringify(structuredContent)).toBe(
+      true,
+    );
+
+    const tooLarge = { body: "x".repeat(MAX_INTEGRATION_TOOL_RESULT_BYTES) };
+    expect(
+      normalizeIntegrationToolResult({
+        content: [{ type: "text", text: JSON.stringify(tooLarge) }],
+        structuredContent: tooLarge,
+      }),
+    ).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
+    expect(
+      normalizeIntegrationToolResult({
+        content: [{ type: "text", text: "{}" }],
+        structuredContent: {},
+        binary: Buffer.from([1]),
+      }),
+    ).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
+  });
+
   // regression: fc95a4c143 fix(server): bound model-facing integration results
   it("preserves structured results and normalizes other JSON values into objects", () => {
     expect(normalizeIntegrationToolResult("ready")).toEqual({ result: "ready" });
@@ -268,6 +389,64 @@ describe("integration tool result normalization", () => {
 });
 
 describe("IntegrationRegistry lifecycle", () => {
+  it.effect(
+    "delivers one copy of remote MCP data through the registry and native Codex response",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* Effect.promise(() =>
+          NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-result-context-")),
+        );
+        const structuredContent = {
+          records: [{ id: "record-1", name: 'Quoted "name"\nnext line' }],
+          nextCursor: "page-2",
+        };
+        const raw = {
+          content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+          structuredContent,
+          resultType: "complete",
+        };
+        const state: ProviderState = {
+          status: {
+            state: "connected",
+            accountLabel: "Fixture",
+            grantedCapabilities: ["fixture.read"],
+            message: null,
+          },
+          credential: "present",
+          disconnectFails: false,
+        };
+        const implementation = provider("test-fixture-provider", state);
+        implementation.invoke = async () => raw;
+        const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+        yield* Effect.gen(function* () {
+          yield* Effect.promise(() => registry.install(fixtureManifest.id));
+          const response = yield* invokeAdmittedDynamicTool({
+            options: {
+              threadId: ThreadId.make("thread-result-context"),
+              invokeDynamicTool: ({ arguments: args, signal }) =>
+                registry.invokeTool("test.fixture.read", args, { signal }),
+            },
+            invocation: { name: "test_fixture_read", arguments: {} },
+          });
+          expect(response.success).toBe(true);
+          expect(response.contentItems).toEqual([
+            {
+              type: "inputText",
+              text: JSON.stringify({ structuredContent, resultType: "complete" }),
+            },
+          ]);
+          expect(raw.content).toHaveLength(1);
+        }).pipe(
+          Effect.ensuring(
+            Effect.promise(async () => {
+              await registry.close();
+              await NodeFSP.rm(root, { recursive: true, force: true });
+            }),
+          ),
+        );
+      }),
+  );
+
   it("publishes only stable effective availability changes across the full lifecycle", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-availability-generation-"),

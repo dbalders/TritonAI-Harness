@@ -248,6 +248,36 @@ it.effect("preserves bounded results and reports omitted results as completed MC
   ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
 });
 
+it.effect("preserves both outer MCP channels for a deduplicated remote MCP result", () => {
+  const structuredContent = { records: [{ id: "record-1" }], nextCursor: "page-2" };
+  const normalized = Integrations.normalizeIntegrationToolResult({
+    content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+    structuredContent,
+    resultType: "complete",
+  });
+  const registrySpy = vi.spyOn(Integrations, "getIntegrationRegistry").mockReturnValue({
+    invokeTool: async () => normalized,
+  } as unknown as Integrations.RegistryRuntime);
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({ name: "fixture.read", arguments: {} })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            invocation(new Set(["integrations.invoke"])),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      const expected = { structuredContent, resultType: "complete" };
+      expect(result.isError).toBe(false);
+      expect(result.structuredContent).toEqual(expected);
+      expect(result.content).toEqual([{ type: "text", text: JSON.stringify(expected) }]);
+    }).pipe(Effect.provide(testLayer)),
+  ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
+});
+
 // regression: #304 fix(server): show agents why integration tool calls fail
 it.effect("tells MCP agents why a call failed only through safe errors", () => {
   const invokeTool = vi
