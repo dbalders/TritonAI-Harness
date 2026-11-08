@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off cryptoRandomUUID:off
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -185,6 +185,17 @@ async function packagedFromRoot(packageRoot: string, implementation: Integration
 }
 
 describe("integration tool result normalization", () => {
+  it("omits oversized remote MCP results before parsing their compatibility copies", () => {
+    const structuredContent = { body: "x".repeat(2_000_000) };
+    const result = {
+      content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+      structuredContent,
+    };
+    using parse = vi.spyOn(JSON, "parse");
+    expect(normalizeIntegrationToolResult(result)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
+    expect(parse).not.toHaveBeenCalled();
+  });
+
   it("removes duplicate remote MCP text while preserving structured data and envelope fields", () => {
     const structuredContent = { workflow: { id: "wf-1", name: "Import", active: false } };
     const result = {
@@ -264,6 +275,8 @@ describe("integration tool result normalization", () => {
       ['{"value":-0}', { value: 0 }],
       ['{"id":"old","id":"new"}', { id: "new" }],
       ['{"b":2,"a":1}', { a: 1, b: 2 }],
+      ['{"value":"\\u0061"}', { value: "a" }],
+      ['{"value":"https:\\/\\/fixture.invalid"}', { value: "https://fixture.invalid" }],
       ['{"value":1 2}', { value: 12 }],
     ] as const) {
       const result = { content: [{ type: "text", text }], structuredContent };

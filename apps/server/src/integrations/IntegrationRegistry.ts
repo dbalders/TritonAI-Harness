@@ -372,6 +372,10 @@ export function normalizeIntegrationToolResult(value: unknown): Record<string, u
   }
   if (containsBinary) return INTEGRATION_TOOL_RESULT_OMITTED;
   if (!serialized) throw new Error("Integration tool results must be JSON-serializable.");
+  // Budget extra parsing for the structured object plus its escaped MCP compatibility copy.
+  if (Buffer.byteLength(serialized, "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES * 3) {
+    return INTEGRATION_TOOL_RESULT_OMITTED;
+  }
   const parsed: unknown = JSON.parse(serialized);
   const normalized =
     parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
