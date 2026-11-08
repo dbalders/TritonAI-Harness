@@ -109,8 +109,12 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
     registry && integrationAccess
       ? registry.toolDefinitions().flatMap((definition) => {
           const dynamicName = Integrations.codexDynamicIntegrationToolName(definition.name);
+          // Deferred tools cost nothing until loaded, so keep disabled writes: enabling one later
+          // works in this thread, and a call before then gets the reason. The campus gateway turns
+          // a call to an unlisted tool into a listed one (a reply draft became a mail read).
           if (
             input.disclosedToolNames === undefined &&
+            input.deferPluginTools !== true &&
             !definition.readOnly &&
             !registry.isToolAvailableSync(definition.name)
           )

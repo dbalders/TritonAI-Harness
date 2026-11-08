@@ -1,6 +1,44 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, expect, it } from "@effect/vitest";
-import { deferredPluginTool } from "./CodexFlatTools.ts";
+import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import { vi } from "vite-plus/test";
+
+import * as ServerConfig from "../config.ts";
+import { gateDynamicToolCall } from "./CodexDynamicTools.ts";
+import { deferredPluginTool, makeCodexFlatToolCatalog } from "./CodexFlatTools.ts";
 import { makePluginToolBrowser } from "./CodexPluginToolDiscovery.ts";
+
+const plugins = vi.hoisted(() => ({ draftsEnabled: false }));
+
+vi.mock("../integrations/IntegrationRegistry.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../integrations/IntegrationRegistry.ts")>()),
+  getIntegrationRegistryOptional: () => ({
+    prepareSkillRuntime: async () => null,
+    toolDefinitions: () => [
+      {
+        name: "microsoft365.mail.draft.reply",
+        description: "Create one unsent reply draft.",
+        input: Schema.Struct({ messageId: Schema.String, body: Schema.String }),
+        readOnly: false,
+        openWorld: true,
+      },
+    ],
+    isToolAvailableSync: () => plugins.draftsEnabled,
+    toolAvailabilitySync: () =>
+      plugins.draftsEnabled
+        ? { available: true }
+        : {
+            available: false,
+            reason: "capability_not_selected",
+            detail: "the Create mail drafts capability is not enabled.",
+          },
+    toolRequiresApprovalSync: () => true,
+  }),
+}));
 
 describe("deferredPluginTool", () => {
   it("groups a plugin tool under its plugin so Codex tool search can defer it", () => {
@@ -83,4 +121,53 @@ describe("plugin operation browsing", () => {
     });
     assert.throws(() => browser.browse({ namespace: "github", offset: -1 }));
   });
+});
+
+describe("deferred plugin catalog", () => {
+  const threadId = ThreadId.make("deferred-write-thread");
+  const instanceId = ProviderInstanceId.make("codex");
+
+  it.effect("keeps a disabled write in the thread so enabling it later works", () =>
+    Effect.gen(function* () {
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      yield* sessions.set({
+        environmentId: EnvironmentId.make("environment:deferred-write"),
+        threadId,
+        providerSessionId: "mcp:deferred-write",
+        providerInstanceId: instanceId,
+        endpoint: "http://127.0.0.1:3773/mcp",
+        authorizationHeader: "Bearer thread-credential",
+        browserToolsAvailable: false,
+        capabilities: new Set(["integrations.invoke"]),
+      });
+      plugins.draftsEnabled = false;
+      const catalog = yield* makeCodexFlatToolCatalog({
+        threadId,
+        instanceId,
+        deferPluginTools: true,
+      });
+      const payload = { tool: "microsoft365_mail_draft_reply", namespace: "microsoft365" };
+
+      const refused = yield* gateDynamicToolCall({ options: catalog.options, payload });
+      assert.isFalse(refused.allowed);
+      if (!refused.allowed)
+        expect(JSON.stringify(refused.response)).toContain(
+          "Create mail drafts capability is not enabled",
+        );
+
+      plugins.draftsEnabled = true;
+      const admitted = yield* gateDynamicToolCall({ options: catalog.options, payload });
+      assert.isTrue(admitted.allowed);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          ServerConfig.layerTest(process.cwd(), { prefix: "codex-flat-tools-test-" }).pipe(
+            Layer.provide(NodeServices.layer),
+          ),
+        ),
+      ),
+    ),
+  );
 });
