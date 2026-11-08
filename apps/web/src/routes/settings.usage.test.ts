@@ -1,6 +1,5 @@
 import { isRedirect } from "@tanstack/react-router";
 import { describe, expect, it } from "vite-plus/test";
-
 import { Route } from "./settings.usage";
 
 describe("legacy settings usage route", () => {

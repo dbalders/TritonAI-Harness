@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import type { ServerProviderModel } from "@t3tools/contracts";
-
 import { groupModelsForDisplay, nextHiddenModelsForBulkToggle } from "./ProviderModelsSection";
 
 function model(slug: string, isCustom = false): ServerProviderModel {
@@ -17,7 +16,6 @@ describe("groupModelsForDisplay", () => {
       modelOrder: ["d", "b"],
     });
 
-    // A custom model is never hidden, even if its slug is in the hidden set.
     expect(display.map((entry) => entry.slug)).toEqual(["c", "d", "b", "custom", "a"]);
   });
 });

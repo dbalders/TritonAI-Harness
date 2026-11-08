@@ -43,6 +43,8 @@ vi.mock("./thread-outbox", async () => {
 
 import { appAtomRegistry } from "./atom-registry";
 import {
+  beginPendingTaskEditor,
+  releasePendingTaskEditor,
   capturePendingTaskEditorWriteBaseline,
   flushPendingTaskEditorWrite,
 } from "./pending-task-editor-writes";
@@ -109,6 +111,36 @@ beforeEach(() => {
 });
 
 describe("pending task editor writes", () => {
+  it("releases a saved task when a different task editor opens during its write", async () => {
+    const first = queuedMessage("ownership-task-a", "saved task A");
+    const second = queuedMessage("ownership-task-b", "task B");
+    await harness.manager.enqueue(first);
+    const firstGeneration = beginPendingTaskEditor(first.messageId);
+    const draftKey = "pending-task:ownership-task-a";
+    setDraft(draftKey, draft(first.text));
+    const gate = blockNextWrite();
+    const saving = flushPendingTaskEditorWrite({
+      message: first,
+      baseline: capturePendingTaskEditorWriteBaseline(first.messageId),
+      draftKey,
+    });
+    await gate.started;
+    const secondGeneration = beginPendingTaskEditor(second.messageId);
+    gate.resolve();
+    expect(await saving).toBe(true);
+    expect(releasePendingTaskEditor(first.messageId, firstGeneration)).toBe(true);
+    expect(releasePendingTaskEditor(second.messageId, secondGeneration)).toBe(true);
+  });
+
+  it("keeps the new editor's ownership when the same task is reopened", () => {
+    const id = "ownership-task-reopened";
+    const first = beginPendingTaskEditor(id);
+    const reopened = beginPendingTaskEditor(id);
+    expect(releasePendingTaskEditor(id, first)).toBe(false);
+    expect(releasePendingTaskEditor(id, reopened)).toBe(true);
+    expect(releasePendingTaskEditor(id, reopened)).toBe(false);
+  });
+
   it("chains a reopened editor that closes before the previous save finishes", async () => {
     const original = queuedMessage("message-close-before-save", "original");
     const firstEdit = queuedMessage("message-close-before-save", "first edit");

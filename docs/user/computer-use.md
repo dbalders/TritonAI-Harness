@@ -1,5 +1,7 @@
 # Computer use
 
+<!-- help-search: mouse, mouse control, control apps, desktop automation, clicking, typing, screen control -->
+
 TritonAI Harness packages [Cua Driver](https://github.com/trycua/cua) as its local computer-use runtime. A separate Codex or ChatGPT desktop installation is not required, and TritonAI does not read or modify the user's normal `~/.codex` configuration.
 
 Computer use is off by default. In the desktop app, open **Settings > General** and turn on **Computer use** to opt in. Turning it off again removes the computer-use tools after TritonAI Harness restarts.

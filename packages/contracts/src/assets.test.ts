@@ -1,16 +1,34 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
-
-import { AssetResource, AttachmentCreateUploadUrlInput } from "./assets.ts";
+import {
+  AssetResource,
+  AssetAccessError,
+  AssetWorkspaceAssetNotFoundError,
+  AttachmentCreateUploadUrlInput,
+} from "./assets.ts";
+import { ThreadId } from "./baseSchemas.ts";
 import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-} from "./orchestration.ts";
+} from "./chatAttachment.ts";
 
 const decodeAssetResource = Schema.decodeUnknownSync(AssetResource);
 const isUploadInput = Schema.is(AttachmentCreateUploadUrlInput);
+const encodeAccessError = Schema.encodeUnknownSync(AssetAccessError);
+const decodeAccessError = Schema.decodeUnknownSync(AssetAccessError);
 
 describe("AssetResource", () => {
+  it("preserves explicit download requests for host and workspace files", () => {
+    for (const resource of [
+      { _tag: "workspace-file", threadId: "thread-1", path: "deck.pptx" },
+      { _tag: "media-file", threadId: "thread-1", path: "/tmp/archive.zip" },
+      { _tag: "draft-workspace-file", cwd: "/repo", path: "workbook.xlsx" },
+    ]) {
+      const download = { ...resource, disposition: "attachment" };
+      expect(decodeAssetResource(download)).toEqual(download);
+    }
+  });
+
   it("accepts legacy attachment URL requests without a thread id", () => {
     expect(
       decodeAssetResource({
@@ -71,5 +89,33 @@ describe("AttachmentCreateUploadUrlInput", () => {
         sizeBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES + 1,
       }),
     ).toBe(false);
+  });
+});
+
+describe("AssetWorkspaceAssetNotFoundError", () => {
+  const resource = {
+    _tag: "media-file" as const,
+    threadId: ThreadId.make("thread-1"),
+    path: "~/Downloads/clip.mp4",
+  };
+
+  it("carries the checked path across the wire", () => {
+    const encoded = encodeAccessError(
+      new AssetWorkspaceAssetNotFoundError({
+        resource,
+        checkedPath: "/Users/graham/Downloads/clip.mp4",
+      }),
+    );
+    const error = decodeAccessError(JSON.parse(JSON.stringify(encoded)));
+
+    expect(error).toBeInstanceOf(AssetWorkspaceAssetNotFoundError);
+    expect(error).toMatchObject({ checkedPath: "/Users/graham/Downloads/clip.mp4" });
+  });
+
+  it("decodes an error from a server that sends no checked path", () => {
+    const error = decodeAccessError({ _tag: "AssetWorkspaceAssetNotFoundError", resource });
+
+    expect(error).toBeInstanceOf(AssetWorkspaceAssetNotFoundError);
+    expect(error).not.toHaveProperty("checkedPath");
   });
 });

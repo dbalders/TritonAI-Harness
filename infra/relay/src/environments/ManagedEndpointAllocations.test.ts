@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
 
 import * as RelayDb from "../db.ts";
 import { relayManagedEndpointAllocations } from "../persistence/schema.ts";
@@ -19,6 +20,7 @@ describe("ManagedEndpointAllocations", () => {
           readonly readyAt: unknown;
           readonly recoveryEnabledAt: unknown;
           readonly recoveryEnvironmentPublicKey: unknown;
+          readonly tunnelReleasedAt: unknown;
         }
       | undefined;
     const fakeDb = {
@@ -30,6 +32,7 @@ describe("ManagedEndpointAllocations", () => {
             readonly readyAt: unknown;
             readonly recoveryEnabledAt: unknown;
             readonly recoveryEnvironmentPublicKey: unknown;
+            readonly tunnelReleasedAt: unknown;
           }) => {
             updated = values;
             return {
@@ -53,6 +56,7 @@ describe("ManagedEndpointAllocations", () => {
         }),
       ).toBe(8);
       expect(updated?.tunnelId).toBe("replacement-tunnel");
+      expect(updated?.tunnelReleasedAt).toBeNull();
       const query = new PgDialect().sqlToQuery(updated?.readyAt as never);
       expect(query.sql).toBe(
         'case when "relay_managed_endpoint_allocations"."tunnel_id" = $1 then "relay_managed_endpoint_allocations"."ready_at" else null end',
@@ -250,16 +254,51 @@ describe("ManagedEndpointAllocations", () => {
     }).pipe(Effect.provide(layerWithDb(fakeDb)));
   });
 
+  it.effect.each([
+    { markReleased: true, released: true },
+    { markReleased: undefined, released: false },
+  ] as const)(
+    "marks the tunnel released only for the claim that deletes it ($markReleased)",
+    ({ markReleased, released }) => {
+      let updated: Record<string, unknown> | undefined;
+      const fakeDb = {
+        update: () => ({
+          set: (values: Record<string, unknown>) => {
+            updated = values;
+            return {
+              where: () => ({ returning: () => Effect.succeed([{ generation: 4 }]) }),
+            };
+          },
+        }),
+      } as unknown as RelayDb.RelayDb["Service"];
+
+      return Effect.gen(function* () {
+        const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
+        yield* allocations.claimRelease({
+          userId: "user-1",
+          environmentId: "environment-1",
+          tunnelId: "tunnel-1",
+          generation: 3,
+          ...(markReleased === undefined ? {} : { markReleased }),
+        });
+        expect(typeof updated?.tunnelReleasedAt === "string").toBe(released);
+      }).pipe(Effect.provide(layerWithDb(fakeDb)));
+    },
+  );
+
   it.effect("returns a claim generation only when deprovision wins the allocation CAS", () => {
+    const conditions: SQL[] = [];
+    const results = [[{ generation: 8 }], []];
     const fakeDb = {
       update: (table: unknown) => {
         expect(table).toBe(relayManagedEndpointAllocations);
         return {
           set: (_values: { readonly updatedAt: string }) => {
             return {
-              where: () => ({
-                returning: () => Effect.succeed([{ generation: 8 }]),
-              }),
+              where: (condition: SQL) => {
+                conditions.push(condition);
+                return { returning: () => Effect.succeed(results.shift() ?? []) };
+              },
             };
           },
         };
@@ -268,14 +307,14 @@ describe("ManagedEndpointAllocations", () => {
 
     return Effect.gen(function* () {
       const allocations = yield* ManagedEndpointAllocations.ManagedEndpointAllocations;
-      const generation = yield* allocations.claimDeprovision({
-        userId: "user-1",
-        environmentId: "environment-1",
-        generation: 7,
-      });
+      const input = { userId: "user-1", environmentId: "environment-1", generation: 7 };
 
-      expect(generation).toBe(8);
-      expect(generation).not.toBeNull();
+      expect(yield* allocations.claimDeprovision(input)).toBe(8);
+      expect(yield* allocations.claimDeprovision(input)).toBeNull();
+      expect(new PgDialect().sqlToQuery(conditions[0]!)).toEqual({
+        sql: '(((("relay_managed_endpoint_allocations"."user_id" = $1) and ("relay_managed_endpoint_allocations"."environment_id" = $2))) and ("relay_managed_endpoint_allocations"."generation" = $3))',
+        params: ["user-1", "environment-1", 7],
+      });
     }).pipe(Effect.provide(layerWithDb(fakeDb)));
   });
 

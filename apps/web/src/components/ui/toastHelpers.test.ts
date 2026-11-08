@@ -1,5 +1,4 @@
 import { assert, describe, it } from "vite-plus/test";
-
 import { hiddenToastActionProps, stackedThreadToast } from "./toastHelpers";
 
 describe("hiddenToastActionProps", () => {

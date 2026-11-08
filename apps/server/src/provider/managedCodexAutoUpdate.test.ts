@@ -18,13 +18,15 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as ManagedCodexAutoUpdate from "./managedCodexAutoUpdate.ts";
-import { makeProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
+import { makeProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   ProviderMaintenanceRunner,
   type ProviderMaintenanceRunnerShape,
 } from "./providerMaintenanceRunner.ts";
-import { ProviderRegistry, type ProviderRegistryShape } from "./Services/ProviderRegistry.ts";
-import { ProviderService, type ProviderServiceShape } from "./Services/ProviderService.ts";
+import { ProviderRegistry } from "./ProviderRegistry.ts";
+type ProviderRegistryShape = ProviderRegistry["Service"];
+import { ProviderSessionManagerV2 } from "../orchestration-v2/ProviderSessionManager.ts";
+import type { ProviderSessionManagerV2Shape } from "../orchestration-v2/ProviderSessionManager.ts";
 
 const CODEX = ProviderDriverKind.make("codex");
 const CURSOR = ProviderDriverKind.make("cursor");
@@ -156,14 +158,21 @@ const makeHarness = Effect.fn("makeHarness")(function* (input: {
         };
       }),
   };
-  const providerService: Partial<ProviderServiceShape> = {
-    listSessions: () => Ref.get(sessionsRef),
+  const providerService: Partial<ProviderSessionManagerV2Shape> = {
+    liveInstances: Ref.get(sessionsRef).pipe(
+      Effect.map((sessions) =>
+        sessions.map((session) => ({
+          instanceId: session.providerInstanceId!,
+          driver: session.provider,
+        })),
+      ),
+    ),
   };
 
   const services = Layer.mergeAll(
     Layer.mock(ProviderRegistry)(registry),
     Layer.succeed(ProviderMaintenanceRunner, runner),
-    Layer.mock(ProviderService)(providerService),
+    Layer.mock(ProviderSessionManagerV2)(providerService),
     ServerConfig.layerTest(
       process.cwd(),
       { prefix: "t3-managed-codex-auto-update-" },

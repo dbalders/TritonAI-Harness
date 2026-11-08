@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
-import { Tool } from "effect/unstable/ai";
+import * as Schema from "effect/Schema";
+import { Tool } from "effect/ai";
 
 import { PreviewToolkit } from "./tools.ts";
 
@@ -60,6 +61,9 @@ it("exports exact object result schemas for preview actions", () => {
   const actionNames = [
     "preview_click",
     "preview_type",
+    "preview_hover",
+    "preview_drag",
+    "preview_upload",
     "preview_press",
     "preview_scroll",
     "preview_wait_for",
@@ -73,5 +77,22 @@ it("exports exact object result schemas for preview actions", () => {
       additionalProperties: true,
       description: "The preview action completed successfully.",
     });
+  }
+});
+
+it("keeps redirect notices in browser navigation results sent to MCP clients", () => {
+  const result = {
+    available: true,
+    visible: true,
+    tabId: null,
+    url: "https://tracker.example.org/p",
+    title: null,
+    loading: false,
+    redirectedFrom: "http://localhost:5173/login",
+    redirectNotice: "The browser was sent from localhost:5173 to a different site.",
+  };
+  for (const name of ["preview_open", "preview_navigate"] as const) {
+    const encoded = Schema.encodeUnknownSync(PreviewToolkit.tools[name].successSchema)(result);
+    expect(encoded, name).toEqual(result);
   }
 });

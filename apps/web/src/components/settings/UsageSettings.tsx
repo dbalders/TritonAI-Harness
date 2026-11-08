@@ -7,7 +7,6 @@ import {
 } from "lucide-react";
 import type { ServerTritonAiUsageSnapshot } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-
 import { cn } from "../../lib/utils";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";

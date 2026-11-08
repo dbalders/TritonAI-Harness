@@ -1,5 +1,4 @@
 import { assert, describe, it } from "@effect/vitest";
-
 import { encodePngIco, readPngDimensions } from "./icon-export.ts";
 
 const pngHeader = (width: number, height: number) => {

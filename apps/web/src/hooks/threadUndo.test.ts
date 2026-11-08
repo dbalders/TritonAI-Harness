@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import * as ThreadUndo from "./threadUndo";
 
 describe("thread action ownership", () => {

@@ -3,7 +3,6 @@ import type {
   DesktopTritonAiCredentialStatus,
 } from "@t3tools/contracts";
 import { useContext, useState } from "react";
-
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -52,30 +51,32 @@ export function TritonAiRouteCredentialControl(props: {
     setIsSaving(true);
     setError(null);
     setMessage(null);
-    try {
-      const result = await (
-        credentialUpdate?.updateCredentials ?? desktopBridge.updateTritonAiCredentials
-      )({
-        route: props.route,
-        apiKey: replacement,
-      });
-      if (result.status === "error") {
-        setError(result.message);
-        return;
+    return await (async () => {
+      try {
+        const result = await (
+          credentialUpdate?.updateCredentials ?? desktopBridge.updateTritonAiCredentials
+        )({
+          route: props.route,
+          apiKey: replacement,
+        });
+        if (result.status === "error") {
+          setError(result.message);
+          return;
+        }
+        props.onStatusChange(result.credentials);
+        setApiKey("");
+        setIsEditing(false);
+        setMessage(`${routeLabel} access key updated. The ${otherRouteLabel} key was kept.`);
+      } catch (cause) {
+        setError(
+          cause instanceof Error
+            ? `Desktop request failed: ${cause.message}`
+            : "The desktop request failed with an unknown error.",
+        );
       }
-      props.onStatusChange(result.credentials);
-      setApiKey("");
-      setIsEditing(false);
-      setMessage(`${routeLabel} access key updated. The ${otherRouteLabel} key was kept.`);
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? `Desktop request failed: ${cause.message}`
-          : "The desktop request failed with an unknown error.",
-      );
-    } finally {
+    })().finally(async () => {
       setIsSaving(false);
-    }
+    });
   };
 
   const remove = async () => {
@@ -84,30 +85,32 @@ export function TritonAiRouteCredentialControl(props: {
     setIsSaving(true);
     setError(null);
     setMessage(null);
-    try {
-      const result = await (
-        credentialUpdate?.updateCredentials ?? desktopBridge.updateTritonAiCredentials
-      )({
-        route: props.route,
-        remove: true,
-      });
-      if (result.status === "error") {
-        setError(result.message);
-        return;
+    return await (async () => {
+      try {
+        const result = await (
+          credentialUpdate?.updateCredentials ?? desktopBridge.updateTritonAiCredentials
+        )({
+          route: props.route,
+          remove: true,
+        });
+        if (result.status === "error") {
+          setError(result.message);
+          return;
+        }
+        props.onStatusChange(result.credentials);
+        setApiKey("");
+        setIsEditing(false);
+        setMessage(`${routeLabel} access key removed. The ${otherRouteLabel} key was kept.`);
+      } catch (cause) {
+        setError(
+          cause instanceof Error
+            ? `Desktop request failed: ${cause.message}`
+            : "The desktop request failed with an unknown error.",
+        );
       }
-      props.onStatusChange(result.credentials);
-      setApiKey("");
-      setIsEditing(false);
-      setMessage(`${routeLabel} access key removed. The ${otherRouteLabel} key was kept.`);
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? `Desktop request failed: ${cause.message}`
-          : "The desktop request failed with an unknown error.",
-      );
-    } finally {
+    })().finally(async () => {
       setIsSaving(false);
-    }
+    });
   };
 
   return (

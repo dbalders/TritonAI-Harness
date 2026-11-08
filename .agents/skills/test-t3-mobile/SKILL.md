@@ -68,6 +68,17 @@ through AgentDevice. For a backend on the device host, use
 `http://127.0.0.1:<server-port>` on iOS or `http://10.0.2.2:<server-port>`
 on Android. For a remote backend, use its reachable origin.
 
+An Electron-hosted backend can return `SecretStoreKeyError` from this CLI because
+Electron supplies its protected encryption key at startup. Create the disposable
+link through desktop Settings → Connections → Create link → Share, with the
+scopes needed for the test. Keep the credential out of tool output. For an iOS
+Simulator, convert a desktop `t3code-dev://app/pair#…` link to
+`http://127.0.0.1:<backend-port>/pair#…`, preserving its fragment, then pass that
+URL as the encoded `pairingUrl` on `t3code-dev://connections/new?autoConnect=1`.
+Open the Metro development-client URL first; a pairing deep link alone does not
+load the development bundle. If initial loading times out while Metro bundles,
+retry the dev client's Reload after Metro reports that bundling completed.
+
 Confirm the intended projects appear, exercise the affected flow, and capture
 evidence. Retain the app and environment while iterating. At teardown, remove
 the disposable connection, close the AgentDevice session, call `device_close`,

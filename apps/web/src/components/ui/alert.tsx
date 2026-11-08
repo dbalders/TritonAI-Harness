@@ -1,7 +1,6 @@
 import { cva, type VariantProps } from "class-variance-authority";
+import * as React from "react";
 import { Children, isValidElement } from "react";
-import type * as React from "react";
-
 import { cn } from "~/lib/utils";
 
 const alertVariants = cva("relative rounded-xl border px-3.5 py-3 text-card-foreground text-sm", {
@@ -10,7 +9,6 @@ const alertVariants = cva("relative rounded-xl border px-3.5 py-3 text-card-fore
     variant: "default",
   },
   variants: {
-    // "glass" floats the alert over content; alert-glass tints from data-variant.
     surface: {
       default: "",
       glass: "alert-glass",

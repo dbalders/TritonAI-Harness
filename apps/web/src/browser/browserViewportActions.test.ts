@@ -1,6 +1,5 @@
 import type { PreviewViewportSetting } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import {
   BROWSER_VIEWPORT_COMMIT_TIMEOUT_MS,
   commitBrowserViewportChange,

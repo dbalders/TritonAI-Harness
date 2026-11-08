@@ -1,7 +1,6 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopAppActivationRequest } from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useRef } from "react";
-
 import { handleDesktopAppActivationRequest } from "../../desktopAppActivation";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { findProjectByPath, inferProjectTitleFromPath } from "../../lib/projectPaths";
@@ -9,8 +8,7 @@ import { newProjectId } from "../../lib/utils";
 import { readProjects, waitForProject } from "../../state/entities";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
-import { useEnvironmentQuery } from "../../state/query";
-import { environmentShell } from "../../state/shell";
+import { useEnvironmentShellHasSnapshot } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
 
 export function DesktopAppActivationCoordinator() {
@@ -19,16 +17,14 @@ export function DesktopAppActivationCoordinator() {
   const openThread = useNewThreadHandler();
   const queueRef = useRef(Promise.resolve());
   const activation = window.desktopBridge?.appActivation;
-  const shell = useEnvironmentQuery(
-    primaryEnvironment === null
-      ? null
-      : environmentShell.stateAtom(primaryEnvironment.environmentId),
+  const shellHasSnapshot = useEnvironmentShellHasSnapshot(
+    primaryEnvironment?.environmentId ?? null,
   );
   const ready =
     activation !== undefined &&
     primaryEnvironment?.connection.phase === "connected" &&
     primaryEnvironment.serverConfig !== null &&
-    shell.data?.snapshot._tag === "Some";
+    shellHasSnapshot;
 
   const processRequest = useEffectEvent(async (request: DesktopAppActivationRequest) =>
     handleDesktopAppActivationRequest(request, {

@@ -1,7 +1,6 @@
 import { UserButton, useAuth } from "@clerk/react";
 import { LogInIcon } from "lucide-react";
 import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
-
 import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { T3_CONNECT_ACCOUNT_PAGES } from "./T3ConnectAccountPages";

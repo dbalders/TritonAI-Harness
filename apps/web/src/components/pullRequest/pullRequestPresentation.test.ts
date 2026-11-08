@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { resolvePullRequestConflict, resolvePullRequestState } from "./pullRequestPresentation";
 import { PullRequestGlyph } from "./pullRequestIcons";
 

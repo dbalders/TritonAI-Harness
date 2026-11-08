@@ -20,7 +20,7 @@ export const APP_BUNDLE_ID = isDevelopment
   ? `edu.ucsd.tritonai.harness.dev.${devBundleIdSuffix || "local"}`
   : "edu.ucsd.tritonai.harness";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
-const LAUNCHER_VERSION = 19;
+const LAUNCHER_VERSION = 20;
 const MICROPHONE_USAGE_DESCRIPTION =
   "TritonAI Harness uses the microphone for voice dictation in the composer.";
 const developmentMacIconPngPath = NodePath.join(
@@ -303,6 +303,8 @@ function patchMainBundleInfoPlist(appBundlePath, iconPath, executableName) {
   for (const [key, value] of Object.entries(resolveMacBundleInfoPlistStrings(executableName))) {
     setPlistString(infoPlistPath, key, value);
   }
+  // macOS 26 offers Messages/Mail codes in every text field unless opted out.
+  setPlistJson(infoPlistPath, "NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac", true);
   setPlistJson(infoPlistPath, "CFBundleURLTypes", [
     {
       CFBundleURLName: APP_BUNDLE_ID,

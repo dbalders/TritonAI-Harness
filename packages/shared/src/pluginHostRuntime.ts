@@ -1,4 +1,7 @@
-export const EFFECT_HOST_PEER_RANGE = ">=4.0.0-beta.78 <4.0.0";
+export const EFFECT_HOST_PEER_RANGE = ">=4.0.0-beta.78 <5.0.0";
+// Packages already released with this exact contract use the same host-supplied runtime.
+const LEGACY_EFFECT_HOST_PEER_RANGE = ">=4.0.0-beta.78 <4.0.0";
+const EFFECT_STABLE_VERSION = /^4\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z.-]+)?$/u;
 
 const MINIMUM_EFFECT_BETA = 78;
 const LEGACY_EFFECT_BUILD_VERSION = "4.0.0-beta.78";
@@ -27,6 +30,9 @@ function dependencyRecord(value: unknown, label: string): Readonly<Record<string
 }
 
 function isSupportedEffectHostVersion(version: string): boolean {
+  const stable = EFFECT_STABLE_VERSION.exec(version);
+  if (stable)
+    return Number.isSafeInteger(Number(stable[1])) && Number.isSafeInteger(Number(stable[2]));
   const match = EFFECT_PRERELEASE_VERSION.exec(version);
   if (!match) return false;
   const revision = Number(match[2]);
@@ -83,7 +89,8 @@ export function resolvePluginHostRuntimeDependencies(
     dependencyNames.length === 0 &&
     peerNames.length === 1 &&
     peerNames[0] === "effect" &&
-    peerDependencies.effect === EFFECT_HOST_PEER_RANGE
+    (peerDependencies.effect === EFFECT_HOST_PEER_RANGE ||
+      peerDependencies.effect === LEGACY_EFFECT_HOST_PEER_RANGE)
   ) {
     return [{ name: "effect", version: hostEffectVersion, declaration: "peer" }];
   }

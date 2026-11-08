@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { DEFAULT_BROWSER_PROFILE_ID, INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
-
 import { ensureClientSettingsHydrated } from "~/hooks/useSettings";
 
 const settings = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
@@ -35,9 +34,6 @@ describe("getBrowserDefaults profile resolution", () => {
   });
 
   it("refuses incognito as the default", () => {
-    // A stored incognito default would open every new tab into storage that is
-    // discarded on close, and the settings list no longer offers it — so the
-    // row badged "Default" must be the one tabs actually open under.
     expect(withDefaultProfile(INCOGNITO_BROWSER_PROFILE_ID).profileId).toBe(
       DEFAULT_BROWSER_PROFILE_ID,
     );

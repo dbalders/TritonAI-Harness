@@ -21,6 +21,19 @@ version per day. Count distinct `aid` values instead; the dashboard cannot, so
 filters need matching custom-event goals in Plausible, and `aid` must be allowed if the site
 restricts custom properties.
 
+Managed gateway requests use this same identity as LiteLLM's end-user ID, prefixed with
+`harness-install:`. Only fixed app/version/purpose tags accompany it; client surfaces and
+conversation identifiers do not belong in a long-lived provider process's static headers.
+Plausible remains the source for app events that make no model request. For gateway-active
+installations, count distinct end-user IDs in the reporting window. Filtering `purpose:chat`
+excludes utility generation, but main agent traffic can include scheduled work and delegated
+tasks; it does not establish that a person was active in the UI.
+
+The server's telemetry opt-out suppresses these optional gateway fields too. It does not
+disable the gateway's operational spend accounting. Reporting permissions are separate from
+the inference key; adding tags does not grant access to analytics APIs. Request counts differ
+from turns, and overlapping tag totals must not be added together.
+
 ## Collection boundary
 
 [AnalyticsService.ts](../../apps/server/src/telemetry/AnalyticsService.ts) keeps a per-event
@@ -59,6 +72,13 @@ Draft retries can recreate a thread and reset its creation time, so both are app
 Provider send and completion counts need not match. Providers can emit synthetic
 turns without a send request, and interrupted or cancelled turns also complete. Collection
 is best effort, with no scan or backfill of provider history.
+
+The Ideas page reports `ideas.viewed` once per visit (a view at least 30 minutes after the
+previous one) with how many cards of each kind were showing, `ideas.feedback` for each recorded action
+(the first open of a card, dismiss, not relevant, less like this, or snooze; undo and reopening
+are not counted) with its kind and the card's section, `ideas.sent` when a card's draft is sent, and
+`ideas.generated` for each batch with whether the user asked for it, its outcome, and how many
+generated and starter cards it added. Card text, prompts, and file or thread names are never sent.
 
 Token totals cover the main agent. Child agents and model rerouting prevent a turn
 from representing one provider/model combination's full cost. For provider

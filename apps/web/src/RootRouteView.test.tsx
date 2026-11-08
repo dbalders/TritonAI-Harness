@@ -8,6 +8,9 @@ vi.mock("./components/desktop/DesktopAppActivationCoordinator", () => ({
 vi.mock("./components/onboarding/FirstRunGate", () => ({
   FirstRunGate: ({ children }: { children: React.ReactNode }) => children,
 }));
+vi.mock("./components/onboarding/GettingStartedHost", () => ({
+  GettingStartedHost: () => null,
+}));
 vi.mock("./components/ThreadNotificationCoordinator", () => ({
   ThreadNotificationCoordinator: () => null,
 }));
@@ -19,6 +22,7 @@ vi.mock("./components/settings/ProviderAuthCallbackCoordinator", () => ({
 }));
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vite-plus/test";
+import { Route } from "./routes/__root";
 
 vi.mock("@tanstack/react-router", () => ({
   Outlet: () => null,
@@ -102,7 +106,10 @@ vi.mock("./state/environments", () => ({
 }));
 
 vi.mock("./state/server", () => ({
+  serverEnvironment: { configValueAtom: () => Symbol("config") },
   primaryServerConfigAtom: Symbol("primaryServerConfigAtom"),
+  environmentServerConfigsAtom: Symbol("environmentServerConfigsAtom"),
+  primaryServerLegacyThreadMigrationAtom: Symbol("legacyMigration"),
   primaryServerConfigEventAtom: Symbol("primaryServerConfigEventAtom"),
   primaryServerEnvironmentThemesAtom: Symbol("primaryServerEnvironmentThemesAtom"),
   primaryServerWelcomeAtom: Symbol("primaryServerWelcomeAtom"),
@@ -117,8 +124,6 @@ vi.mock("./components/ProviderUpdateLaunchNotification", () => ({
     <div data-provider-update-launch-notification={providerDriver} />
   ),
 }));
-
-import { Route } from "./routes/__root";
 
 it("renders the TritonAI usage warning for an authenticated root", () => {
   const RootRouteView = Route.options.component;
@@ -141,3 +146,9 @@ it("renders a Codex-scoped provider update launch notification for an authentica
 
   expect(markup).toContain('data-provider-update-launch-notification="codex"');
 });
+
+vi.mock("./components/desktop/DesktopWebLinkCoordinator", () => ({
+  DesktopWebLinkCoordinator: () => null,
+}));
+
+vi.mock("./components/ReopenClosedViewShortcut", () => ({ ReopenClosedViewShortcut: () => null }));

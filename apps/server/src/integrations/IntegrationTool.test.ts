@@ -83,6 +83,25 @@ describe("integration provider tool contracts", () => {
           ),
         }),
       };
+      const transformed = {
+        ...definition,
+        input: pluginSchema.Struct({
+          count: pluginSchema.NumberFromString.check(pluginSchema.isFinite()),
+        }),
+      };
+      await expect(decodeIntegrationToolInput(transformed, { count: "5" })).resolves.toEqual({
+        count: 5,
+      });
+      await expect(
+        decodeIntegrationToolInput(transformed, { count: "invalid" }),
+      ).rejects.toBeDefined();
+      const dated = {
+        ...definition,
+        input: pluginSchema.Struct({ at: pluginSchema.DateFromString }),
+      };
+      const instant = "2026-09-16T07:00:00.000Z";
+      const decodedDate = await decodeIntegrationToolInput(dated, { at: instant });
+      expect((decodedDate as { at: Date }).at.toISOString()).toBe(instant);
       const input = { start: "2026-09-16T00:00:00-07:00", limit: 5 };
       await expect(decodeIntegrationToolInput(foreign, input)).resolves.toEqual(input);
       await expect(decodeIntegrationToolInput(foreign, {})).resolves.toEqual({});

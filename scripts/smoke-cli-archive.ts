@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @effect-diagnostics nodeBuiltinImport:off - The isolated smoke home needs fresh encryption key material.
 /**
  * Unpacks a CLI archive into a scratch directory and runs the executable the
  * way an installer would: no repo, no node_modules, no Node on PATH. Catches
@@ -6,7 +7,6 @@
  * external package reached through `import` or a native addon the hardened
  * runtime refuses to load.
  */
-// @effect-diagnostics nodeBuiltinImport:off - The isolated smoke home needs fresh encryption key material.
 import * as NodeCrypto from "node:crypto";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -20,13 +20,12 @@ import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { Command, Flag } from "effect/unstable/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-
+import { Command, Flag } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NetService from "@t3tools/shared/Net";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import { windowsSystemTar } from "./build-cli-archive.ts";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { windowsSystemTar } from "./lib/windows-tar.ts";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 
 export class CliArchiveSmokeError extends Schema.TaggedError<CliArchiveSmokeError>()(
   "CliArchiveSmokeError",
@@ -78,7 +77,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const platform = yield* HostProcessPlatform;
+  const platform = yield* HostProcess.Platform;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scratch = yield* fs.makeTempDirectory({ prefix: "t3-cli-smoke-" });
   // Windows can keep t3.exe locked (EBUSY) for a moment after the server
@@ -131,10 +130,6 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
     });
   }
 
-  // Starting the server is what actually opens sqlite, loads the terminal
-  // and search stacks (node-pty, fff, msgpackr-extract), and serves the
-  // client, so probe a real `serve` in a scratch home rather than a
-  // command that only reads package metadata.
   const net = yield* NetService.NetService;
   const port = yield* net.findAvailablePort(47700);
   const home = path.join(scratch, "home");

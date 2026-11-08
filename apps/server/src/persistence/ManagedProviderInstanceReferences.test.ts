@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import {
@@ -171,5 +171,71 @@ layer("startup preserves historical model selections", (it) => {
         { payload_json: history },
       ]);
     }),
+  );
+});
+
+layer("V2 managed provider routing", (it) => {
+  it.effect(
+    "repairs V2 routing after the V1 rename receipt without touching tool data or model choices",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`CREATE TABLE projection_projects (default_model_selection_json TEXT)`;
+        yield* sql`CREATE TABLE projection_threads (model_selection_json TEXT)`;
+        yield* sql`CREATE TABLE projection_thread_sessions (provider_instance_id TEXT)`;
+        yield* sql`CREATE TABLE provider_session_runtime (provider_instance_id TEXT, runtime_payload_json TEXT)`;
+        yield* sql`CREATE TABLE orchestration_events (payload_json TEXT)`;
+        const previous = "codex_frontier";
+        const next = "codex_frontier_personal_2";
+        const renames = { [previous]: next };
+        yield* migrateManagedProviderInstanceReferences(renames);
+        // V2 can be imported after the previously shipped V1 receipt exists.
+        yield* sql`CREATE TABLE orchestration_v2_events (provider_instance_id TEXT, payload_json TEXT)`;
+        yield* sql`CREATE TABLE orchestration_v2_projection_threads (provider_instance_id TEXT, payload_json TEXT)`;
+        yield* sql`CREATE TABLE scheduled_tasks (model_selection_json TEXT)`;
+        const payload = {
+          providerInstanceId: previous,
+          driver: "codex",
+          modelSelection: { instanceId: previous, model: "personal-model" },
+          fromProviderInstanceIds: [previous, "other"],
+          fromModelSelections: [{ instanceId: previous, model: "personal-history" }],
+          input: { providerInstanceId: previous },
+          text: "codex_frontier",
+        };
+        const encoded = encodePayload(payload);
+        yield* sql`INSERT INTO orchestration_v2_events VALUES (${previous}, ${encoded})`;
+        yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES (${previous}, ${encoded})`;
+        yield* sql`INSERT INTO scheduled_tasks VALUES ('{"instanceId":"codex_frontier","model":"personal-scheduled"}')`;
+        yield* migrateManagedProviderInstanceReferences(renames);
+        const expected = encodePayload({
+          ...payload,
+          providerInstanceId: next,
+          modelSelection: { ...payload.modelSelection, instanceId: next },
+          fromProviderInstanceIds: [next, "other"],
+          fromModelSelections: [{ instanceId: next, model: "personal-history" }],
+        });
+        const events = yield* sql<{
+          instanceId: string;
+          payload: string;
+        }>`SELECT provider_instance_id AS "instanceId", payload_json AS payload FROM orchestration_v2_events`;
+        const threads = yield* sql<{
+          instanceId: string;
+          payload: string;
+        }>`SELECT provider_instance_id AS "instanceId", payload_json AS payload FROM orchestration_v2_projection_threads`;
+        assert.deepStrictEqual(events, [{ instanceId: next, payload: expected }]);
+        assert.deepStrictEqual(threads, events);
+        assert.deepStrictEqual(
+          yield* sql`SELECT model_selection_json AS selection FROM scheduled_tasks`,
+          [{ selection: encodePayload({ instanceId: next, model: "personal-scheduled" }) }],
+        );
+        // A newly created managed reference must not be treated as the old personal account.
+        yield* sql`INSERT INTO orchestration_v2_events VALUES (${previous}, ${encoded})`;
+        yield* migrateManagedProviderInstanceReferences(renames);
+        assert.equal(
+          (yield* sql`SELECT 1 FROM orchestration_v2_events WHERE provider_instance_id = ${previous}`)
+            .length,
+          1,
+        );
+      }),
   );
 });

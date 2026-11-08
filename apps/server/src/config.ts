@@ -1,11 +1,3 @@
-/**
- * ServerConfig - Runtime configuration services.
- *
- * Defines process-level server configuration and networking helpers used by
- * startup and runtime layers.
- *
- * @module ServerConfig
- */
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -20,6 +12,7 @@ import type { DesktopComputerUseState, DesktopMcpServerConfiguration } from "@t3
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 import { DEFAULT_SIGNAL_EXPORT, type SignalExport } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
+import packageJson from "../package.json" with { type: "json" };
 
 export const DEFAULT_PORT = 3773;
 
@@ -29,20 +22,15 @@ export type RuntimeMode = typeof RuntimeMode.Type;
 export const StartupPresentation = Schema.Literals(["browser", "headless"]);
 export type StartupPresentation = typeof StartupPresentation.Type;
 
-/**
- * ServerDerivedPaths - Derived paths from the base directory.
- */
 export interface ServerDerivedPaths {
   readonly stateDir: string;
   readonly dbPath: string;
   readonly keybindingsConfigPath: string;
   readonly settingsPath: string;
-  /** Palettes this machine publishes for clients to follow, one file per theme. */
   readonly environmentThemesDir: string;
   readonly providerStatusCacheDir: string;
   readonly worktreesDir: string;
   readonly attachmentsDir: string;
-  /** Screenshots the agent asks the collaborative browser to keep for the user. */
   readonly browserArtifactsDir: string;
   readonly logsDir: string;
   readonly serverTracePath: string;
@@ -66,9 +54,6 @@ export interface DeriveServerPathsOptions {
   readonly baseDirIsExplicit?: boolean;
 }
 
-/**
- * ServerConfig - Service tag for server runtime configuration.
- */
 export class ServerConfig extends Context.Service<
   ServerConfig,
   ServerDerivedPaths & {
@@ -81,11 +66,6 @@ export class ServerConfig extends Context.Service<
     readonly otlpTracesUrl: string | undefined;
     readonly otlpMetricsUrl: string | undefined;
     readonly otlpLogsUrl: string | undefined;
-    /**
-     * How each signal is exported. Read instead of a process-wide setting so
-     * the wire format, credential, and schedule travel with the endpoint they
-     * were configured beside.
-     */
     readonly otlpTracesExport: SignalExport;
     readonly otlpMetricsExport: SignalExport;
     readonly otlpLogsExport: SignalExport;
@@ -105,8 +85,12 @@ export class ServerConfig extends Context.Service<
     readonly secretStoreKeys: ReadonlyArray<string> | undefined;
     readonly legacySecretFingerprints: Readonly<Record<string, string>>;
     readonly secretStoreKeyFilePath?: string;
+    readonly desktopBootstrapSecret?: string | undefined;
+    readonly shellEnvironmentPrepared?: boolean | undefined;
     readonly desktopTelemetryFd?: number | undefined;
     readonly desktopTelemetryControlFd?: number | undefined;
+    readonly desktopBrowserFd?: number | undefined;
+    readonly desktopBrowserControlFd?: number | undefined;
     readonly resourceMonitorPath?: string | undefined;
     readonly computerUseMcp?: DesktopMcpServerConfiguration | undefined;
     readonly computerUseState?: DesktopComputerUseState | undefined;
@@ -116,7 +100,6 @@ export class ServerConfig extends Context.Service<
     readonly tailscaleServePort: number;
   }
 >()("t3/config/ServerConfig") {
-  /** @deprecated Import and use `layerTest` from this module. */
   static readonly layerTest = (
     cwd: string,
     baseDirOrPrefix: string | { readonly prefix: string },
@@ -126,16 +109,17 @@ export class ServerConfig extends Context.Service<
 
 export const make = (config: ServerConfig["Service"]) => ServerConfig.of(config);
 
-/**
- * Resource attributes shared by every OTLP exporter, so traces, metrics, and
- * logs report the same service identity to the collector.
- */
-export const otlpResource = (config: ServerConfig["Service"]) => ({
+export const otlpResource = (
+  config: Pick<ServerConfig["Service"], "mode" | "otelEnvironment">,
+  hostName: string,
+) => ({
   serviceName: "t3code-server",
+  serviceVersion: packageJson.version,
   attributes: {
     "service.namespace": "t3code",
     "service.runtime": "t3-server",
     "service.mode": config.mode,
+    "host.name": config.otelEnvironment.resourceAttributes["host.name"] || hostName,
   },
 });
 
@@ -148,8 +132,11 @@ export const deriveServerPaths = Effect.fn(function* (
 ): Effect.fn.Return<ServerDerivedPaths, never, Path.Path> {
   const { join } = yield* Path.Path;
   const isDevState = devUrl !== undefined && !options.baseDirIsExplicit;
-  const stateDir = join(baseDir, isDevState ? "dev" : "userdata");
-  const dbPath = join(stateDir, "state.sqlite");
+  const stateDir = join(
+    baseDir,
+    devUrl !== undefined && !options.baseDirIsExplicit ? "dev" : "userdata",
+  );
+  const dbPath = join(stateDir, "statev2.sqlite");
   const attachmentsDir = join(stateDir, "attachments");
   const logsDir = join(stateDir, "logs");
   const providerLogsDir = join(logsDir, "provider");
@@ -249,6 +236,8 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     legacySecretFingerprints: {},
     desktopTelemetryFd: undefined,
     desktopTelemetryControlFd: undefined,
+    desktopBrowserFd: undefined,
+    desktopBrowserControlFd: undefined,
     resourceMonitorPath: undefined,
     staticDir: undefined,
     devUrl,

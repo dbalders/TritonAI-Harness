@@ -24,7 +24,6 @@ const parseWindowsFirefoxProfiles = (ini: string, root = "C:\\Users\\user\\Firef
     return parseFirefoxProfiles(ini, path, root);
   }).pipe(Effect.provide(NodePath.layerWin32));
 
-/** Builds a `cookies.sqlite` with Firefox's real `moz_cookies` shape. */
 const writeFirefoxCookieDatabase = Effect.fnUntraced(function* (
   rows: ReadonlyArray<{
     host: string;
@@ -130,7 +129,6 @@ describe("readFirefoxCookies", () => {
             name: "plain",
             value: "v",
             path: "/app",
-            // Firefox writes 0 for a session cookie.
             expiry: 0,
             isSecure: 0,
             isHttpOnly: 0,
@@ -142,8 +140,6 @@ describe("readFirefoxCookies", () => {
 
         expect(cookies).toEqual([
           {
-            // The leading dot stays on the domain but not in the URL, which is
-            // what Electron matches against.
             url: "https://github.com/",
             name: "session",
             value: "abc",
@@ -158,13 +154,10 @@ describe("readFirefoxCookies", () => {
             url: "http://example.test/app",
             name: "plain",
             value: "v",
-            // Host-only in Firefox, so no `domain`: supplying one would make
-            // Electron widen it to every subdomain of example.test.
             domain: undefined,
             path: "/app",
             secure: false,
             httpOnly: false,
-            // Session cookies carry no expiry rather than one at the epoch.
             expirationDate: undefined,
             sameSite: "no_restriction",
           },
@@ -336,7 +329,6 @@ describe("readFirefoxCookies", () => {
 
         yield* readFirefoxCookies(file);
 
-        // The browser's own file is snapshotted, never opened for writing.
         const after = yield* fileSystem.stat(file);
         expect(after.mtime).toEqual(before.mtime);
         expect(after.size).toBe(before.size);
@@ -386,45 +378,43 @@ describe("parseFirefoxProfiles", () => {
     }),
   );
 
-  for (const [platform, root] of [
-    ["Linux", "/home/user/.mozilla/firefox"],
-    ["macOS", "/Users/user/Library/Application Support/Firefox"],
-  ] as const) {
-    it.effect(`validates relative and absolute ${platform} profile paths`, () =>
-      Effect.gen(function* () {
-        const parsed = yield* parsePosixFirefoxProfiles(
-          [
-            "[Profile0]",
-            "Name=Relative",
-            "IsRelative=1",
-            "Path=Profiles/relative.default",
-            "[Profile1]",
-            "Name=Custom",
-            "IsRelative=0",
-            "Path=/mnt/custom/firefox-profile",
-            "[Profile2]",
-            "IsRelative=1",
-            "Path=../../escape",
-            "[Profile3]",
-            "IsRelative=1",
-            "Path=/absolute-marked-relative",
-            "[Profile4]",
-            "IsRelative=0",
-            "Path=relative-marked-absolute",
-            "[Profile5]",
-            "IsRelative=1",
-            "Path=Profiles/nul\u0000escape",
-          ].join("\n"),
-          root,
-        );
+  it.effect.each([
+    { platform: "Linux", root: "/home/user/.mozilla/firefox" },
+    { platform: "macOS", root: "/Users/user/Library/Application Support/Firefox" },
+  ])("validates relative and absolute $platform profile paths", ({ root }) =>
+    Effect.gen(function* () {
+      const parsed = yield* parsePosixFirefoxProfiles(
+        [
+          "[Profile0]",
+          "Name=Relative",
+          "IsRelative=1",
+          "Path=Profiles/relative.default",
+          "[Profile1]",
+          "Name=Custom",
+          "IsRelative=0",
+          "Path=/mnt/custom/firefox-profile",
+          "[Profile2]",
+          "IsRelative=1",
+          "Path=../../escape",
+          "[Profile3]",
+          "IsRelative=1",
+          "Path=/absolute-marked-relative",
+          "[Profile4]",
+          "IsRelative=0",
+          "Path=relative-marked-absolute",
+          "[Profile5]",
+          "IsRelative=1",
+          "Path=Profiles/nul\u0000escape",
+        ].join("\n"),
+        root,
+      );
 
-        expect(parsed).toEqual([
-          { directory: "Profiles/relative.default", name: "Relative" },
-          { directory: "/mnt/custom/firefox-profile", name: "Custom" },
-        ]);
-      }),
-    );
-  }
+      expect(parsed).toEqual([
+        { directory: "Profiles/relative.default", name: "Relative" },
+        { directory: "/mnt/custom/firefox-profile", name: "Custom" },
+      ]);
+    }),
+  );
 
   it.effect("uses Windows path rules for relative and absolute profiles", () =>
     Effect.gen(function* () {

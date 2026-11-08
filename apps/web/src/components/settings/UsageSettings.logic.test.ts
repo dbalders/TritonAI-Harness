@@ -1,5 +1,4 @@
 import { describe, expect, it } from "@effect/vitest";
-
 import {
   budgetUtilizationTone,
   calculateBudgetUsage,

@@ -4,7 +4,6 @@ import {
   snoozeWakeLabel,
   type SnoozePreset,
 } from "@t3tools/client-runtime/state/thread-settled";
-
 import { formatShortTimestamp, parseTimestampDate } from "../timestampFormat";
 
 export { snoozeWakeLabel, type SnoozePreset };
@@ -33,10 +32,6 @@ export function resolveSnoozePresets(
   });
 }
 
-/**
- * Human wake time for menus and toasts: "tomorrow 9:00", "Mon 9:00",
- * "17:30" (today).
- */
 export function snoozeWakeDescription(
   snoozedUntil: string,
   now: Date,

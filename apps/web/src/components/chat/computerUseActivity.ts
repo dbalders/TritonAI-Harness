@@ -1,15 +1,24 @@
 import type { WorkLogEntry } from "../../session-logic";
 
 export function computerUseActivity(
-  entry: Pick<WorkLogEntry, "itemType" | "toolData">,
+  entry: Pick<WorkLogEntry, "itemType" | "toolData" | "structuredPayload">,
 ): { action: string; session: string | null; refreshNeeded: boolean } | null {
-  if (
-    entry.itemType !== "mcp_tool_call" ||
-    typeof entry.toolData !== "object" ||
-    entry.toolData === null
-  )
-    return null;
-  const data = entry.toolData as Record<string, unknown>;
+  const item = entry.structuredPayload;
+  const data: Record<string, unknown> | null =
+    item?.type === "dynamic_tool" && item.toolName?.startsWith("cua-driver.")
+      ? {
+          server: "cua-driver",
+          tool: item.toolName.slice("cua-driver.".length),
+          arguments: item.input,
+          result: item.output,
+          status: item.status,
+        }
+      : entry.itemType === "dynamic_tool" &&
+          typeof entry.toolData === "object" &&
+          entry.toolData !== null
+        ? (entry.toolData as Record<string, unknown>)
+        : null;
+  if (!data) return null;
   if (data.server !== "cua-driver" || typeof data.tool !== "string") return null;
   const tool = data.tool;
   const args =
@@ -46,7 +55,8 @@ export function computerUseActivity(
     typeof data.result === "object" && data.result !== null
       ? (data.result as Record<string, unknown>)
       : null;
-  const content = result?.content;
+  const content =
+    Array.isArray(data.result) || typeof data.result === "string" ? data.result : result?.content;
   const messages =
     typeof content === "string"
       ? [content]

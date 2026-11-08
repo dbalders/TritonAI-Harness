@@ -1,8 +1,7 @@
-import {
-  type CheckpointDiffState,
-  type CheckpointDiffTarget,
+import type {
+  CheckpointDiffState,
+  CheckpointDiffTarget,
 } from "@t3tools/client-runtime/state/threads";
-
 import { useCheckpointDiff as useCheckpointDiffQuery } from "../state/queries";
 
 export function useCheckpointDiff(

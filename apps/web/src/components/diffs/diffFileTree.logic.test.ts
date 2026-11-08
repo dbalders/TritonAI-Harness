@@ -1,7 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { preloadFileTree } from "@pierre/trees";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   buildDiffFileTreeUpdates,
   compareDiffFileTreeEntries,

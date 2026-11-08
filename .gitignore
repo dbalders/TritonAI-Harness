@@ -32,11 +32,13 @@ squashfs-root/
 .vercel
 .gstack/
 .plans/
+/audits/
 dist-electron/
 .electron-runtime/
 .showcase/
 apps/mobile/.showcase/
 apps/mobile/.generated/
+apps/mobile/.android-cache/
 /.generated/
 artifacts/app-store/screenshots/
 .github/pr-assets/
@@ -52,6 +54,7 @@ node_modules/
 # Local agent/runtime artifacts
 .agent/
 release-local-*/
+.release-input/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/

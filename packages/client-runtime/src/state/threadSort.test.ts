@@ -1,7 +1,8 @@
-import { ProjectId, TurnId, type OrchestrationLatestTurn } from "@t3tools/contracts";
+import { ProjectId, RunId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  activeThreadAnchorTimestampMs,
   generateSpreadPinOrderKeys,
   getLatestThreadForProject,
   pinOrderKeyBetween,
@@ -15,6 +16,17 @@ import {
   type SettledThreadTimestampInput,
   type ThreadSortInput,
 } from "./threadSort.ts";
+
+describe("activeThreadAnchorTimestampMs", () => {
+  it("uses the later unsettle time when an old thread re-enters the active list", () => {
+    expect(
+      activeThreadAnchorTimestampMs({
+        createdAt: "2026-01-01T00:00:00.000Z",
+        unsettledAt: "2026-08-01T00:00:00.000Z",
+      }),
+    ).toBe(Date.parse("2026-08-01T00:00:00.000Z"));
+  });
+});
 
 type TestThread = { readonly id: string } & ThreadSortInput;
 
@@ -35,7 +47,7 @@ describe("resolveSettledThreadTimestamp", () => {
       resolveSettledThreadTimestamp({
         settledAt: "2026-03-09T10:00:00.000Z",
         latestUserMessageAt: "2026-03-09T11:00:00.000Z",
-        latestTurn: null,
+        latestRun: null,
         updatedAt: "2026-03-09T12:00:00.000Z",
       }),
     ).toBe("2026-03-09T10:00:00.000Z");
@@ -46,7 +58,7 @@ describe("resolveSettledThreadTimestamp", () => {
       resolveSettledThreadTimestamp({
         settledAt: "invalid",
         latestUserMessageAt: "2026-03-09T11:00:00.000Z",
-        latestTurn: null,
+        latestRun: null,
         updatedAt: "2026-03-09T12:00:00.000Z",
       }),
     ).toBe("2026-03-09T11:00:00.000Z");
@@ -54,7 +66,7 @@ describe("resolveSettledThreadTimestamp", () => {
       resolveSettledThreadTimestamp({
         settledAt: null,
         latestUserMessageAt: null,
-        latestTurn: null,
+        latestRun: null,
         updatedAt: "2026-03-09T12:00:00.000Z",
       }),
     ).toBe("2026-03-09T12:00:00.000Z");
@@ -66,13 +78,13 @@ describe("sortSettledThreads", () => {
     id: string;
     settledAt?: string | null;
     latestUserMessageAt?: string | null;
-    latestTurn?: OrchestrationLatestTurn | null;
+    latestRun?: SettledThreadTimestampInput["latestRun"];
     updatedAt?: string;
   }) => ({
     id: input.id,
     settledAt: input.settledAt ?? null,
     latestUserMessageAt: input.latestUserMessageAt ?? null,
-    latestTurn: input.latestTurn ?? null,
+    latestRun: input.latestRun ?? null,
     updatedAt: input.updatedAt ?? "2026-03-09T09:00:00.000Z",
   });
 
@@ -81,7 +93,6 @@ describe("sortSettledThreads", () => {
       settled({
         id: "settled-first",
         settledAt: "2026-03-09T10:00:00.000Z",
-        // Created/active later than the other thread: settle time must win.
         latestUserMessageAt: "2026-03-09T09:59:00.000Z",
       }),
       settled({
@@ -105,16 +116,14 @@ describe("sortSettledThreads", () => {
   });
 
   it("counts a turn completion as activity for auto-settled threads", () => {
-    // The message came in before the other thread's, but its turn finished
-    // after: completion time is the real "work ended" moment.
     const sorted = sortSettledThreads([
       settled({ id: "message-only", latestUserMessageAt: "2026-03-09T10:04:00.000Z" }),
       settled({
         id: "completed-later",
         latestUserMessageAt: "2026-03-09T10:00:00.000Z",
-        latestTurn: {
-          turnId: TurnId.make("turn-1"),
-          state: "completed",
+        latestRun: {
+          runId: RunId.make("run-1"),
+          status: "completed",
           assistantMessageId: null,
           requestedAt: "2026-03-09T10:00:00.000Z",
           startedAt: "2026-03-09T10:00:00.000Z",
@@ -143,13 +152,10 @@ describe("sortSettledThreads", () => {
       { updatedAt: "2026-03-09T09:00:00.000Z" },
       { updatedAt: "invalid" },
     ];
-    // Ids repeat every 3 rows and stamps every 5, so rows tie on the time,
-    // on the id, and on both. (index * 7) % 30 scrambles the input order.
     const threads = Array.from({ length: 30 }, (_, index) => {
       const row = (index * 7) % 30;
       return { ...settled({ id: `thread-${row % 3}`, ...stamps[row % 5] }), row };
     });
-    // The comparator this sort replaced: it resolved both keys on every call.
     const timestampMs = (thread: SettledThreadTimestampInput) => {
       const timestamp = resolveSettledThreadTimestamp(thread);
       return timestamp === null ? 0 : Date.parse(timestamp);

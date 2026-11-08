@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import { applyAppearanceContrast } from "./appearanceContrast";
 
 function makeRoot() {

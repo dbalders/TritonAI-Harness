@@ -1,8 +1,6 @@
 import type { BrowserLinkTarget } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import { ensureClientSettingsHydrated } from "~/hooks/useSettings";
-
 import { resolveBrowserLinkTargetPreference, resolveLinkTarget } from "./browserLinkTarget";
 
 const settings = vi.hoisted(() => ({ browserLinkTarget: "system" as BrowserLinkTarget }));
@@ -38,8 +36,6 @@ describe("resolveLinkTarget", () => {
   });
 
   it("falls back to the system browser where there is no in-app browser", () => {
-    // The hosted web app and mobile have nowhere to open a tab, so the
-    // preference cannot be honoured there and the link still has to open.
     expect(
       resolveLinkTarget({
         url: "https://example.com/",
@@ -63,6 +59,14 @@ describe("resolveLinkTarget", () => {
       resolveLinkTarget({
         url: "https://example.com/",
         event: { metaKey: false, ctrlKey: true },
+        preference: "app",
+        canOpenInApp: true,
+      }),
+    ).toBe("system");
+    expect(
+      resolveLinkTarget({
+        url: "https://example.com/",
+        event: { metaKey: false, ctrlKey: false, button: 1 },
         preference: "app",
         canOpenInApp: true,
       }),

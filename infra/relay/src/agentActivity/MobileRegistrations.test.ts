@@ -9,7 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Redacted from "effect/Redacted";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 
 import * as Devices from "./Devices.ts";
 import * as AgentActivityRows from "./AgentActivityRows.ts";
@@ -18,11 +18,11 @@ import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as LiveActivities from "./LiveActivities.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as AgentActivityPublisher from "./AgentActivityPublisher.ts";
-import { FcmDeliveries } from "./FcmDeliveries.ts";
+import * as FcmDeliveries from "./FcmDeliveries.ts";
 
-const publisherLayer = AgentActivityPublisher.layer.pipe(
+const layerPublisher = AgentActivityPublisher.layer.pipe(
   Layer.provide(
-    Layer.succeed(FcmDeliveries, {
+    Layer.succeed(FcmDeliveries.FcmDeliveries, {
       enqueue: () => Effect.succeed(null),
       process: () => Effect.void,
     }),
@@ -67,6 +67,7 @@ function makeLiveActivities(
   return {
     register: () => Effect.void,
     listTargets: () => Effect.succeed([]),
+    listIdleArmedTargets: () => Effect.succeed([]),
     markDelivery: () => Effect.void,
     markStartQueued: () => Effect.void,
     clearStartQueued: () => Effect.void,
@@ -116,6 +117,8 @@ function makeEnvironmentLinks(
       ]),
     listForUser: () => Effect.succeed([]),
     getForUser: () => Effect.succeed(null),
+    findActiveManagedForEnvironment: () => Effect.succeed([]),
+    setHoldWebhooksWhileOffline: () => Effect.void,
     revokeForUser: () => Effect.succeed(false),
     ...overrides,
   };
@@ -151,13 +154,13 @@ const config = RelayConfiguration.RelayConfiguration.of({
   managedEndpointNamespace: undefined,
 });
 
-function makeRegistrationReplayLayer(input: {
+function layerRegistrationReplay(input: {
   readonly devices: Devices.Devices["Service"];
   readonly liveActivities: LiveActivities.LiveActivities["Service"];
   readonly queuedJobs: Array<SignedApnsDeliveryJob>;
 }) {
   return MobileRegistrations.layer.pipe(
-    Layer.provide(publisherLayer),
+    Layer.provide(layerPublisher),
     Layer.provide(
       ApnsDeliveries.layer.pipe(
         Layer.provide(ApnsClient.layer.pipe(Layer.provide(ApnsProviderTokens.layer))),
@@ -190,6 +193,7 @@ function makeAgentActivityPublisher(
   return {
     publish: () => Effect.succeed({ ok: true, deliveries: [] }),
     replayForLiveActivityRegistration: () => Effect.succeed(null),
+    endIdleLiveActivities: Effect.void,
     ...overrides,
   };
 }
@@ -481,14 +485,11 @@ describe("MobileRegistrations", () => {
           },
         });
 
-        // Activities are armed by the app in the foreground; a device
-        // registration alone never remote-starts one, even when work is
-        // already active and a push-to-start token is on file.
         expect(result).toEqual({ ok: true });
         expect(registeredDevices).toHaveLength(1);
         expect(queuedStarts).toEqual([]);
         expect(queuedJobs).toEqual([]);
-      }).pipe(Effect.provide(makeRegistrationReplayLayer({ devices, liveActivities, queuedJobs })));
+      }).pipe(Effect.provide(layerRegistrationReplay({ devices, liveActivities, queuedJobs })));
     },
   );
 });

@@ -28,15 +28,18 @@ export const getAnonymousInstallId = Effect.gen(function* () {
       const value = raw.trim().toLowerCase();
       return UUID_PATTERN.test(value) ? Option.some(value) : Option.none<string>();
     }),
-    Effect.catchTag("PlatformError", (error) =>
-      error.reason._tag === "NotFound" ? Effect.succeed(Option.none<string>()) : Effect.fail(error),
-    ),
+    Effect.catchTags({
+      PlatformError: (error) =>
+        error.reason._tag === "NotFound"
+          ? Effect.succeed(Option.none<string>())
+          : Effect.fail(error),
+    }),
   );
 
   const existing = yield* readValid;
   if (Option.isSome(existing)) return existing;
 
-  const generated = yield* crypto.randomUUIDv4;
+  const generated = yield* crypto.randomUUIDv4();
   yield* Effect.scoped(
     Effect.gen(function* () {
       const tempPath = yield* fileSystem.makeTempFileScoped({

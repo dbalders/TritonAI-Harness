@@ -1,16 +1,18 @@
+import { SheetHeader } from "../../components/ui/SheetHeader";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import { sortInboxThreadsByReturn } from "@t3tools/client-runtime/state/thread-inbox";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, FlatList, Modal, Pressable, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
-import Reanimated, { ReduceMotion, useAnimatedStyle, withTiming } from "react-native-reanimated";
+import Reanimated from "react-native-reanimated";
+import { ReduceMotion, useAnimatedStyle, withTiming } from "react-native-reanimated";
 import { threadDragGapOffset } from "./threadDragGap";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-import { AppText as Text } from "../../components/AppText";
-import { SymbolView } from "../../components/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { environmentThreadShells } from "../../state/threads";
@@ -26,7 +28,8 @@ import {
   threadDragAction,
   type ThreadMoveDestination,
 } from "./threadOrder";
-import { getThreadListV2OrderedSection } from "./threadListV2";
+import { getThreadListV2OrderedSection, threadListInboxReturns } from "./threadListV2";
+import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 
 const ROW_HEIGHT = 56;
 const HEADER_HEIGHT = 48;
@@ -77,7 +80,6 @@ function ArrangementRow(props: {
   );
 }
 
-/** Native pan recognition wins over list scrolling only inside the handle. */
 function DragHandle(props: {
   title: string;
   disabled: boolean;
@@ -148,12 +150,13 @@ function DragHandle(props: {
 
 export function ThreadArrangementSheet(props: { onClose: () => void }) {
   const insets = useSafeAreaInsets();
-  const threads = useAtomValue(environmentThreadShells.threadShellsAtom);
+  const threads = useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);
   const dropBusy = useAtomValue(threadDropBusyAtom);
   const { moveThread } = useThreadListActions();
+  const { workingShelfEnabled } = useThreadListV2ShelfPreferences();
   const [now, setNow] = useState(() => new Date().toISOString());
   const [expanded, setExpanded] = useState({ snoozed: false, settled: false });
   useEffect(() => {
@@ -195,11 +198,13 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
     );
     return {
       pinned,
-      active,
+      active: workingShelfEnabled
+        ? sortInboxThreadsByReturn(active, threadListInboxReturns.returnedAt)
+        : active,
       snoozed: parked.filter((thread) => effectiveSnoozed(thread, { now })),
       settled: parked.filter((thread) => !effectiveSnoozed(thread, { now })),
     };
-  }, [threads, configs, now, queuedThreadKeys, pendingOrder]);
+  }, [threads, configs, now, queuedThreadKeys, pendingOrder, workingShelfEnabled]);
   const planners = useMemo(() => {
     const planner = (section: "pinned" | "active") =>
       createThreadMovePlanner({
@@ -211,7 +216,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
             (
               section === "pinned"
                 ? config.environment.capabilities.threadPinReorder
-                : config.environment.capabilities.threadActiveReorder
+                : !workingShelfEnabled && config.environment.capabilities.threadActiveReorder
             )
               ? [id]
               : [],
@@ -219,7 +224,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
         ),
       });
     return { pinned: planner("pinned"), active: planner("active") };
-  }, [sections, threads, configs]);
+  }, [sections, threads, configs, workingShelfEnabled]);
   const rows = useMemo(() => {
     const result: Row[] = [];
     let offset = 0;
@@ -372,16 +377,12 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
           className="flex-1 bg-screen"
           style={{ paddingTop: insets.top, paddingBottom: insets.bottom }}
         >
-          <View className="flex-row items-center justify-between gap-3 px-5 py-3">
-            <Text className="flex-1 text-xl font-t3-semibold">Arrange threads</Text>
-            <Pressable
-              accessibilityRole="button"
-              onPress={props.onClose}
-              className="min-h-11 justify-center px-3"
-            >
-              <Text className="text-base text-primary-text">Done</Text>
-            </Pressable>
-          </View>
+          <SheetHeader
+            presentation="inline"
+            title="Arrange threads"
+            onClose={props.onClose}
+            accessibilityLabel="Close arrange threads"
+          />
           <Text className="px-5 pb-3 text-sm text-foreground-muted">
             Drag to reorder, pin, or mark done. Changes save when you drop.
           </Text>
@@ -502,7 +503,6 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
                             if (frame.current !== null) cancelAnimationFrame(frame.current);
                             frame.current = null;
                             drag.current = null;
-                            // Retain the gap until the saved order arrives, avoiding a flash back.
                             void moveThread(current.thread, current.destination).finally(stop);
                           }}
                         />

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   HIDDEN_BROWSER_WEBVIEW_OFFSET,
   resolveHostedBrowserWebviewWrapperStyle,

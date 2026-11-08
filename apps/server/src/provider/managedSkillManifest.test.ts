@@ -24,7 +24,6 @@ describe("loadManagedSkillManifest", () => {
       const skillsDirectory = yield* fs.makeTempDirectory({ prefix: "managed-skills-test-" });
       yield* fs.writeFileString(
         path.join(skillsDirectory, ".tritonai-managed-skills.json"),
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify({
           version: 1,
           kind: "tritonai-secure",

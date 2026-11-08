@@ -6,7 +6,6 @@ export type PendingThreadFeedEntry = ThreadFeedEntry & {
   readonly acknowledged?: boolean;
 };
 
-/** Append the outbox after all presented activity, until the server echoes each message. */
 export function appendPendingThreadMessages(
   presentedFeed: ReadonlyArray<ThreadFeedEntry>,
   feed: ReadonlyArray<ThreadFeedEntry>,
@@ -29,11 +28,14 @@ export function appendPendingThreadMessages(
           id: pendingMessage.messageId,
           role: "user",
           text: pendingMessage.text,
+          attachments: [],
           context: pendingMessage.context,
           createdAt: pendingMessage.createdAt,
           updatedAt: pendingMessage.createdAt,
-          turnId: null,
+          runId: null,
           streaming: false,
+          visibility: "local",
+          sourceThreadId: pendingMessage.threadId,
         },
       })),
   ];

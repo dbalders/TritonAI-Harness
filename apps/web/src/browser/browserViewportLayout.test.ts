@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   resizeBrowserViewportFromRail,
   resizeFreeformViewport,
@@ -123,15 +122,15 @@ describe("resolveBrowserViewportLayout", () => {
     expect(
       resolveBrowserDeviceViewportLayout(
         { width: 1200, height: 900 },
-        { _tag: "freeform", width: 1180, height: 858 },
+        { _tag: "freeform", width: 1180, height: 852 },
       ),
     ).toEqual({
       canvasWidth: 1200,
       canvasHeight: 900,
       viewportX: 10,
-      viewportY: 32,
+      viewportY: 38,
       viewportWidth: 1180,
-      viewportHeight: 858,
+      viewportHeight: 852,
       viewportScale: 1,
       fillsPanel: false,
     });
@@ -140,11 +139,11 @@ describe("resolveBrowserViewportLayout", () => {
   it("captures the available framed area when responsive mode is enabled", () => {
     expect(resolveResponsiveBrowserViewportSize({ width: 1200, height: 900 })).toEqual({
       width: 1180,
-      height: 858,
+      height: 852,
     });
     expect(resolveResponsiveBrowserViewportSize({ width: 1200, height: 900 }, 2)).toEqual({
       width: 590,
-      height: 429,
+      height: 426,
     });
   });
 

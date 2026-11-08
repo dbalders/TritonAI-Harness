@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "./chatList.js";
 
 interface Row {

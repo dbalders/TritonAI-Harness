@@ -1,21 +1,24 @@
 import type { Dispatch, ReactElement, SetStateAction } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  AuthProvidersManageScope,
+  type AuthEnvironmentScope,
   type EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { AsyncResult } from "effect/unstable/reactivity";
-
+import { AsyncResult } from "effect/reactivity";
 import type {
   LocalEnvironmentUpdateGroup,
   ProviderUpdateCandidate,
   ProviderUpdateRowStatus,
 } from "./ProviderUpdateLaunchNotification.logic";
+import { ProviderUpdateEnvironmentRows } from "./ProviderUpdateEnvironmentRows";
 
 const testState = vi.hoisted(() => ({
   groups: [] as LocalEnvironmentUpdateGroup[],
+  permittedEnvironmentIds: new Set<EnvironmentId>(),
   updateProvider: vi.fn(),
 }));
 
@@ -90,6 +93,15 @@ vi.mock("~/state/server", () => ({
   serverEnvironment: { updateProvider: Symbol("updateProvider") },
 }));
 
+vi.mock("~/state/session", () => ({
+  readEnvironmentScope: (environmentId: EnvironmentId, scope: AuthEnvironmentScope) =>
+    scope === AuthProvidersManageScope && testState.permittedEnvironmentIds.has(environmentId),
+  useEnvironmentScope: (environmentId: EnvironmentId | null, scope: AuthEnvironmentScope) =>
+    environmentId !== null &&
+    scope === AuthProvidersManageScope &&
+    testState.permittedEnvironmentIds.has(environmentId),
+}));
+
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: () => testState.updateProvider,
 }));
@@ -100,8 +112,6 @@ vi.mock("./ProviderUpdateLaunchNotification.environments", () => ({
     isAnySettling: false,
   }),
 }));
-
-import { ProviderUpdateEnvironmentRows } from "./ProviderUpdateEnvironmentRows";
 
 const environmentId = "env-wsl" as EnvironmentId;
 const pendingExpiryMs = 6 * 60_000;
@@ -176,6 +186,8 @@ describe("ProviderUpdateEnvironmentRows", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     hooks.reset();
+    testState.permittedEnvironmentIds.clear();
+    testState.permittedEnvironmentIds.add(environmentId);
     testState.updateProvider.mockReset();
     const candidate = provider() as ProviderUpdateCandidate;
     testState.groups = [

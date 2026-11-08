@@ -1,3 +1,4 @@
+import { resolveComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import { filterComposerPullRequestMatches } from "@t3tools/shared/composerPullRequestMatches";
 import { EnvironmentId, MessageId, ThreadId, type AssistantCitation } from "@t3tools/contracts";
 import {
@@ -5,21 +6,24 @@ import {
   expandAssistantCitationsForProvider,
   serializeAssistantCitation,
 } from "@t3tools/shared/assistantCitations";
+import {
+  DEFAULT_RESOLVED_KEYBINDINGS,
+  compileResolvedKeybindingsConfig,
+  mergeWithDefaultKeybindings,
+} from "@t3tools/shared/keybindings";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
+  composerSubmissionIntentForKey,
   composerStateAtPromptEnd,
-  composerSubmissionIntentForEnter,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
   isCollapsedCursorAdjacentToInlineToken,
-  parseGoalComposerSlashCommand,
+  isPathSuggestionCurrent,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
-  resolveGoalComposerCommand,
 } from "./composer-logic";
 import { carryDisplacedCustomAnswerIntoPrompt } from "./pendingUserInput";
 import { formatTerminalContextReference } from "./lib/terminalContext";
@@ -42,7 +46,43 @@ const citation: AssistantCitation = {
   prefix: "前: ",
   suffix: " 後",
 };
+
 const citationSource = serializeAssistantCitation(citation).replaceAll("+", "%20");
+
+describe("isPathSuggestionCurrent", () => {
+  const searchedTarget = {
+    environmentId: EnvironmentId.make("local"),
+    cwd: "/repo",
+    query: "alpha",
+  };
+
+  it("allows a file suggestion matching the live search", () => {
+    expect(
+      isPathSuggestionCurrent(
+        searchedTarget,
+        detectComposerTrigger("@alpha", 6),
+        searchedTarget.environmentId,
+        searchedTarget.cwd,
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["query", { ...searchedTarget, query: "beta" }],
+    ["cwd", { ...searchedTarget, cwd: "/other-repo" }],
+    ["environment", { ...searchedTarget, environmentId: EnvironmentId.make("remote") }],
+  ] as const)("rejects a visible file suggestion after the live %s changes", (_change, current) => {
+    const prompt = `@${current.query}`;
+    expect(
+      isPathSuggestionCurrent(
+        searchedTarget,
+        detectComposerTrigger(prompt, prompt.length),
+        current.environmentId,
+        current.cwd,
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("formatAssistantCitationForComposer", () => {
   it.each([undefined, "", " \n\t "])(
@@ -64,7 +104,15 @@ describe("formatAssistantCitationForComposer", () => {
   });
 });
 
-describe("composerSubmissionIntentForEnter", () => {
+describe("composerSubmissionIntentForKey", () => {
+  const input = {
+    keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
+    platform: "Linux",
+    isSoftwareKeyboardOpen: false,
+    isDraftThread: false,
+  };
+  const enter = { key: "Enter", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false };
+
   it.each([
     ["enter", "one line", false, "foreground"],
     ["enter", "two\nlines", false, "foreground"],
@@ -73,100 +121,278 @@ describe("composerSubmissionIntentForEnter", () => {
     ["mod-enter-multiline", "two\nlines", true, "foreground"],
     ["mod-enter", "one line", false, null],
     ["mod-enter", "one line", true, "foreground"],
-  ] as const)("uses %s for %j with modifier=%s", (sendShortcut, prompt, modifierKey, expected) => {
+  ] as const)("honors %s for %j", (sendShortcut, prompt, ctrlKey, expected) => {
     expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: false,
-        shiftKey: false,
-        modifierKey,
-        isDraftThread: false,
+      composerSubmissionIntentForKey({
+        ...input,
+        event: { ...enter, ctrlKey },
         sendShortcut,
         prompt,
       }),
     ).toBe(expected);
   });
 
-  it.each([
-    ["enter", false, "alternate"],
-    ["enter", true, null],
-    ["mod-enter-multiline", false, "foreground"],
-    ["mod-enter-multiline", true, "alternate"],
-    ["mod-enter", false, "foreground"],
-    ["mod-enter", true, "alternate"],
-  ] as const)(
-    "resolves running follow-ups with %s and shift=%s",
-    (sendShortcut, shiftKey, expected) => {
+  it.each(["MacIntel", "Win32", "Linux"])("uses the configured actions on %s", (platform) => {
+    const modEnter = {
+      ...enter,
+      metaKey: platform === "MacIntel",
+      ctrlKey: platform !== "MacIntel",
+    };
+    for (const [sendShortcut, prompt, requiresModifier] of [
+      ["enter", "one line", false],
+      ["enter", "two\nlines", false],
+      ["mod-enter", "one line", true],
+      ["mod-enter", "two\nlines", true],
+      ["mod-enter-multiline", "one line", false],
+      ["mod-enter-multiline", "two\nlines", true],
+    ] as const) {
+      const running = { ...input, platform, sendShortcut, prompt, isRunning: true };
+      const intent = composerSubmissionIntentForKey({ ...running, event: modEnter });
+      expect(intent).toBe(requiresModifier ? "foreground" : "alternate");
+      const alternateIntent = composerSubmissionIntentForKey({
+        ...running,
+        event: { ...modEnter, shiftKey: requiresModifier },
+      });
+      expect(alternateIntent).toBe("alternate");
+      expect(composerSubmissionIntentForKey({ ...running, event: enter })).toBe(
+        requiresModifier ? null : "foreground",
+      );
+      for (const activeTurnDefault of ["queue", "steer"] as const) {
+        expect(
+          resolveComposerDispatchMode({
+            running: true,
+            alternateModifier: intent === "alternate",
+            activeTurnDefault,
+          }),
+        ).toBe(
+          requiresModifier ? activeTurnDefault : activeTurnDefault === "queue" ? "steer" : "queue",
+        );
+        expect(
+          resolveComposerDispatchMode({
+            running: true,
+            alternateModifier: alternateIntent === "alternate",
+            activeTurnDefault,
+          }),
+        ).toBe(activeTurnDefault === "queue" ? "steer" : "queue");
+      }
       expect(
-        composerSubmissionIntentForEnter({
-          isMobileViewport: false,
-          shiftKey,
-          modifierKey: true,
-          isDraftThread: false,
-          isRunning: true,
+        composerSubmissionIntentForKey({
+          ...input,
+          platform,
           sendShortcut,
-          prompt: "two\nlines",
+          isDraftThread: true,
+          event: { ...modEnter, altKey: true },
         }),
-      ).toBe(expected);
-    },
-  );
-
-  it("submits plain Enter on desktop", () => {
-    expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: false,
-        shiftKey: false,
-        modifierKey: false,
-        isDraftThread: true,
-      }),
-    ).toBe("foreground");
+      ).toBe("background");
+      expect(
+        composerSubmissionIntentForKey({
+          ...input,
+          platform,
+          sendShortcut,
+          event: { ...modEnter, altKey: true },
+        }),
+      ).toBe("background");
+      expect(
+        composerSubmissionIntentForKey({
+          ...input,
+          platform,
+          sendShortcut,
+          prompt,
+          isDraftThread: true,
+          event: modEnter,
+        }),
+      ).toBe("background");
+      expect(
+        composerSubmissionIntentForKey({ ...running, event: { ...enter, shiftKey: true } }),
+      ).toBeNull();
+    }
   });
 
-  it("inserts a newline for plain Enter on mobile", () => {
+  it("leaves queued-message steering on Mod+Shift+Enter outside a draft", () => {
     expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: true,
-        shiftKey: false,
-        modifierKey: false,
-        isDraftThread: true,
-      }),
-    ).toBeNull();
-  });
-
-  it("inserts a newline for Shift+Enter", () => {
-    expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: false,
-        shiftKey: true,
-        modifierKey: false,
-        isDraftThread: true,
+      composerSubmissionIntentForKey({
+        ...input,
+        isRunning: true,
+        event: { ...enter, ctrlKey: true, shiftKey: true },
       }),
     ).toBeNull();
   });
 
-  it("submits a new thread in the background with Mod+Enter", () => {
+  it("honors the send preference with an existing install's saved alternate binding", () => {
+    const keybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        {
+          key: "mod+enter",
+          command: "composer.sendAlternate",
+          when: "composerFocus && turnRunning",
+        },
+      ]),
+    );
+    const running = { ...input, keybindings, isRunning: true, sendShortcut: "mod-enter" as const };
+    expect(composerSubmissionIntentForKey({ ...running, event: { ...enter, ctrlKey: true } })).toBe(
+      "foreground",
+    );
     expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: false,
-        shiftKey: false,
-        modifierKey: true,
+      composerSubmissionIntentForKey({
+        ...running,
+        event: { ...enter, ctrlKey: true, shiftKey: true },
+      }),
+    ).toBe("alternate");
+  });
+
+  it("does not start a background thread with the queued-message shortcut", () => {
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
         isDraftThread: true,
+        event: { ...enter, ctrlKey: true, shiftKey: true },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["mod+arrowup", { key: "ArrowUp", ctrlKey: true }],
+    ["shift+tab", { key: "Tab", shiftKey: true }],
+  ] as const)("accepts a remapped %s action", (key, event) => {
+    const keybindings = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key, command: "composer.sendBackground", when: "composerFocus && draftThreadRoute" },
+      ]),
+    );
+    expect(
+      composerSubmissionIntentForKey({
+        ...input,
+        keybindings,
+        isDraftThread: true,
+        event: { ...enter, ...event },
       }),
     ).toBe("background");
   });
 
-  it("keeps Mod+Enter in the foreground for an active thread", () => {
-    expect(
-      composerSubmissionIntentForEnter({
-        isMobileViewport: false,
-        shiftKey: false,
-        modifierKey: true,
-        isDraftThread: false,
-      }),
-    ).toBe("foreground");
+  it.each(["enter", "mod-enter", "mod-enter-multiline"] as const)(
+    "uses remapped keys and removes the old action bindings with %s",
+    (sendShortcut) => {
+      const keybindings = mergeWithDefaultKeybindings(
+        compileResolvedKeybindingsConfig([
+          {
+            key: "alt+q",
+            command: "composer.sendAlternate",
+            when: "composerFocus && turnRunning",
+          },
+          {
+            key: "alt+b",
+            command: "composer.sendBackground",
+            when: "composerFocus && draftThreadRoute",
+          },
+        ]),
+      );
+      const custom = { ...input, keybindings, sendShortcut, prompt: "two\nlines" };
+      expect(
+        composerSubmissionIntentForKey({
+          ...custom,
+          isRunning: true,
+          event: { ...enter, key: "q", altKey: true },
+        }),
+      ).toBe("alternate");
+      expect(
+        composerSubmissionIntentForKey({
+          ...custom,
+          isDraftThread: true,
+          event: { ...enter, key: "b", altKey: true },
+        }),
+      ).toBe("background");
+      expect(
+        composerSubmissionIntentForKey({
+          ...custom,
+          isRunning: true,
+          event: { ...enter, ctrlKey: true },
+        }),
+      ).toBe("foreground");
+      expect(
+        composerSubmissionIntentForKey({
+          ...custom,
+          isDraftThread: true,
+          event: { ...enter, ctrlKey: true, shiftKey: true },
+        }),
+      ).toBeNull();
+      expect(
+        composerSubmissionIntentForKey({
+          ...custom,
+          isRunning: true,
+          event: { ...enter, ctrlKey: true, shiftKey: true },
+        }),
+      ).toBeNull();
+      expect(
+        composerSubmissionIntentForKey({ ...custom, event: { ...enter, key: "b", altKey: true } }),
+      ).toBeNull();
+    },
+  );
+
+  it.each(["MacIntel", "Win32", "Linux"])(
+    "keeps modifier submission available with the software keyboard open on %s",
+    (platform) => {
+      const modEnter = {
+        ...enter,
+        metaKey: platform === "MacIntel",
+        ctrlKey: platform !== "MacIntel",
+      };
+      const keyboardOpen = { ...input, platform, isSoftwareKeyboardOpen: true };
+      expect(composerSubmissionIntentForKey({ ...keyboardOpen, event: modEnter })).toBe(
+        "foreground",
+      );
+      expect(
+        composerSubmissionIntentForKey({ ...keyboardOpen, isRunning: true, event: modEnter }),
+      ).toBe("alternate");
+      expect(
+        composerSubmissionIntentForKey({ ...keyboardOpen, isDraftThread: true, event: modEnter }),
+      ).toBe("background");
+    },
+  );
+
+  it.each([
+    { isSoftwareKeyboardOpen: true },
+    { event: { ...enter, isComposing: true } },
+    { event: { ...enter, keyCode: 229 } },
+    { event: { ...enter, repeat: true } },
+  ])("does not submit with %j", (override) => {
+    expect(composerSubmissionIntentForKey({ ...input, event: enter, ...override })).toBeNull();
   });
 });
 
 describe("detectComposerTrigger", () => {
+  it.each([
+    ["Run /tmp/build.sh", "Run /tmp/build.sh".length],
+    ["/etc/hosts", "/etc/hosts".length],
+    ["Use /etc/hosts now", "Use /et".length],
+  ])("keeps the path in %j out of the slash menu", (text, cursor) => {
+    expect(detectComposerTrigger(text, cursor)).toBeNull();
+  });
+
+  it.each(["Use ", "Use\t", "Use\n  "])("detects inline slash skills after %j", (prefix) => {
+    const text = `${prefix}/skill:review later`;
+    const cursor = `${prefix}/skill:review`.length;
+    expect(detectComposerTrigger(text, cursor)).toEqual({
+      kind: "slash-command",
+      query: "skill:review",
+      rangeStart: prefix.length,
+      rangeEnd: cursor,
+    });
+  });
+
+  it.each(["Use /", "Use /review"])("detects the inline slash token in %j", (text) => {
+    expect(detectComposerTrigger(text, text.length)).toEqual({
+      kind: "slash-command",
+      query: text.slice(5),
+      rangeStart: 4,
+      rangeEnd: text.length,
+    });
+  });
+
+  it.each(["Use/review", "https://example.com/review", "Use /review "])(
+    "does not trigger for %j",
+    (text) => expect(detectComposerTrigger(text, text.length)).toBeNull(),
+  );
+
   it("detects @path trigger at cursor", () => {
     const text = "Please check @src/com";
     const trigger = detectComposerTrigger(text, text.length);
@@ -299,7 +525,6 @@ describe("detectComposerTrigger", () => {
   });
 
   it("detects @path trigger in the middle of existing text", () => {
-    // User typed @ between "inspect " and "in this sentence"
     const text = "Please inspect @in this sentence";
     const cursorAfterAt = "Please inspect @".length;
 
@@ -313,7 +538,6 @@ describe("detectComposerTrigger", () => {
   });
 
   it("detects @path trigger with query typed mid-text", () => {
-    // User typed @sr between "inspect " and "in this sentence"
     const text = "Please inspect @srin this sentence";
     const cursorAfterQuery = "Please inspect @sr".length;
 
@@ -327,8 +551,6 @@ describe("detectComposerTrigger", () => {
   });
 
   it("detects trigger with true cursor even when regex-based mention detection would false-match", () => {
-    // MENTION_TOKEN_REGEX can false-match plain text like "@in" as a mention.
-    // The fix bypasses it by computing the expanded cursor from the Lexical node tree.
     const text = "Please inspect @in this sentence";
     const cursorAfterAt = "Please inspect @".length;
 
@@ -654,26 +876,6 @@ describe("assistant citation cursor offsets", () => {
   });
 });
 
-describe("replaceTextRange trailing space consumption", () => {
-  it("double space after insertion when replacement ends with space", () => {
-    // Simulates: "and then |@AG| summarize" where | marks replacement range
-    // The replacement is "@AGENTS.md " (with trailing space)
-    // But if we don't extend rangeEnd, the existing space stays
-    const text = "and then @AG summarize";
-    const rangeStart = "and then ".length;
-    const rangeEnd = "and then @AG".length;
-
-    // Without consuming trailing space: double space
-    const withoutConsume = replaceTextRange(text, rangeStart, rangeEnd, "@AGENTS.md ");
-    expect(withoutConsume.text).toBe("and then @AGENTS.md  summarize");
-
-    // With consuming trailing space: single space
-    const extendedEnd = text[rangeEnd] === " " ? rangeEnd + 1 : rangeEnd;
-    const withConsume = replaceTextRange(text, rangeStart, extendedEnd, "@AGENTS.md ");
-    expect(withConsume.text).toBe("and then @AGENTS.md summarize");
-  });
-});
-
 describe("isCollapsedCursorAdjacentToInlineToken", () => {
   it("returns false when no mention exists", () => {
     expect(isCollapsedCursorAdjacentToInlineToken("plain text", 6, "left")).toBe(false);
@@ -737,55 +939,40 @@ describe("parseStandaloneComposerSlashCommand", () => {
   it("ignores slash commands with extra message text", () => {
     expect(parseStandaloneComposerSlashCommand("/plan explain this")).toBeNull();
   });
-});
 
-describe("parseGoalComposerSlashCommand", () => {
-  it("parses a goal objective", () => {
-    expect(parseGoalComposerSlashCommand("/goal ship reliable reconnects")).toEqual({
-      type: "set",
-      objective: "ship reliable reconnects",
-    });
-    expect(parseGoalComposerSlashCommand("/goal set pause")).toEqual({
-      type: "set",
-      objective: "pause",
-    });
-  });
-
-  it("parses goal lifecycle controls", () => {
-    expect(parseGoalComposerSlashCommand("/goal")).toEqual({ type: "view" });
-    expect(parseGoalComposerSlashCommand("/goal set")).toEqual({ type: "view" });
-    expect(parseGoalComposerSlashCommand("/goal pause")).toEqual({ type: "pause" });
-    expect(parseGoalComposerSlashCommand("/goal resume")).toEqual({ type: "resume" });
-    expect(parseGoalComposerSlashCommand("/goal clear")).toEqual({ type: "clear" });
-  });
-
-  it("does not capture unrelated slash commands", () => {
-    expect(parseGoalComposerSlashCommand("/goals are useful")).toBeNull();
+  it("leaves native goal commands to the provider", () => {
+    for (const text of ["/goal", "/goal set pause", "/goal pause", "/goal resume", "/goal clear"]) {
+      expect(parseStandaloneComposerSlashCommand(text)).toBeNull();
+    }
   });
 });
 
-describe("resolveGoalComposerCommand", () => {
-  it("treats text in explicit goal mode as the objective", () => {
-    expect(resolveGoalComposerCommand("  Ship reliable reconnects  ", { goalArmed: true })).toEqual(
-      {
-        type: "set",
-        objective: "Ship reliable reconnects",
-      },
-    );
-    expect(resolveGoalComposerCommand("pause", { goalArmed: true })).toEqual({
-      type: "set",
-      objective: "pause",
-    });
+describe("literal editor answer cursor state", () => {
+  const prefill = "- [X] done $my-skill ";
+
+  it("keeps character positions after token-like text for inserted lines and replacements", () => {
+    for (const replacement of ["\n", "\t", "edited\n  "]) {
+      const next = replaceTextRange(prefill, prefill.length, prefill.length, replacement);
+      const cursor = collapseExpandedComposerCursor(next.text, next.cursor, true);
+      expect(next.text).toBe(prefill + replacement);
+      expect(cursor).toBe(next.text.length);
+      expect(expandCollapsedComposerCursor(next.text, cursor, true)).toBe(next.cursor);
+      expect(clampCollapsedComposerCursor(next.text, cursor, true)).toBe(next.cursor);
+    }
+    const replaced = replaceTextRange(prefill, 11, 20, "$another-skill");
+    const cursor = collapseExpandedComposerCursor(replaced.text, replaced.cursor, true);
+    expect(replaced.text).toBe("- [X] done $another-skill ");
+    expect(cursor).toBe(25);
+    expect(expandCollapsedComposerCursor(replaced.text, cursor, true)).toBe(25);
   });
 
-  it("keeps an empty explicit goal mode armed without creating a command", () => {
-    expect(resolveGoalComposerCommand("   ", { goalArmed: true })).toBeNull();
-  });
-
-  it("preserves raw goal commands outside explicit goal mode", () => {
-    expect(resolveGoalComposerCommand("/goal pause", { goalArmed: false })).toEqual({
-      type: "pause",
-    });
-    expect(resolveGoalComposerCommand("$goal pause", { goalArmed: false })).toBeNull();
+  it("does not open a skill or path menu when restoring an editor answer", () => {
+    for (const value of ["- [X] done $my-skill", "Use @README", ""]) {
+      expect(composerStateAtPromptEnd(value, true)).toEqual({
+        cursor: value.length,
+        trigger: null,
+      });
+    }
+    expect(composerStateAtPromptEnd("Use $my").trigger?.kind).toBe("skill");
   });
 });

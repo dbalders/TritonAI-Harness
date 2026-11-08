@@ -2,9 +2,9 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-
 import {
   DEFAULT_SERVER_SETTINGS,
+  CodexSettings,
   DEFAULT_TRITONAI_CODEX_HOME_PATH,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -22,12 +22,22 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-
 import developmentManagedConfig from "../../../config/tritonai-managed-config.json" with { type: "json" };
 import packageJson from "../package.json" with { type: "json" };
 
 declare const __TRITONAI_BUILD_MANAGED_CONFIG__: unknown;
 declare const __TRITONAI_BUILD_MANAGED_CONFIG_DIGEST__: string | undefined;
+
+const DEFAULT_MANAGED_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
+
+/** The managed Codex instance is the single source for its effective runtime settings. */
+export function getManagedCodexSettings(
+  settings: Pick<ServerSettings, "providerInstances">,
+): CodexSettings {
+  return Schema.decodeUnknownSync(CodexSettings)(
+    settings.providerInstances[ProviderInstanceId.make("codex")]?.config ?? {},
+  );
+}
 
 const MANAGED_POLICY_MIGRATION_VERSION = 2;
 const MANAGED_POLICY_MARKER_KEY = "tritonAiManagedPolicy";
@@ -226,7 +236,7 @@ export function getManagedProviderInstanceRenames(): Readonly<Record<string, str
 
 function modelMetadata(
   models: ManagedConfig["models"]["catalog"],
-): ServerSettings["providers"]["codex"]["customModelMetadata"] {
+): CodexSettings["customModelMetadata"] {
   return Object.fromEntries(
     models.map((model) => [
       model.id,
@@ -344,7 +354,8 @@ export function migrateManagedNewThreadDefaults(
 function managedRuntimeFromDocument(input: unknown, defaultHomePath: string) {
   const root = record(input);
   const marker = record(root?.[MANAGED_POLICY_MARKER_KEY]);
-  const migrated = marker?.migrationVersion === MANAGED_POLICY_MIGRATION_VERSION;
+  const migrated =
+    marker?.migrationVersion === 1 || marker?.migrationVersion === MANAGED_POLICY_MIGRATION_VERSION;
   const provider = record(record(root?.providers)?.codex);
   const instance = record(record(record(root?.providerInstances)?.codex)?.config);
   const nonempty = (...values: unknown[]) =>
@@ -353,7 +364,7 @@ function managedRuntimeFromDocument(input: unknown, defaultHomePath: string) {
     binaryPath:
       nonempty(
         ...(migrated ? [marker.codexBinaryPath] : [instance?.binaryPath, provider?.binaryPath]),
-      ) ?? DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
+      ) ?? DEFAULT_MANAGED_CODEX_SETTINGS.binaryPath,
     homePath:
       nonempty(...(migrated ? [marker.codexHomePath] : [instance?.homePath, provider?.homePath])) ??
       (migrated ? DEFAULT_TRITONAI_CODEX_HOME_PATH : defaultHomePath),
@@ -381,11 +392,6 @@ export function applyManagedHarnessPolicy(
   const availableModels = config.models.catalog.filter((model) =>
     availableRouteIds.has(model.route),
   );
-  const legacyDefaultRouteModels = availableModels.filter(
-    (model) => model.route === config.provider.routes.onPrem.id,
-  );
-  const customModels = legacyDefaultRouteModels.map((model) => model.id);
-  const customModelMetadata = modelMetadata(legacyDefaultRouteModels);
   const managedProviderInstances = Object.fromEntries(
     managedRoutes(config).map((route) => {
       const managedInstanceId = ProviderInstanceId.make(route.instanceId);
@@ -414,6 +420,7 @@ export function applyManagedHarnessPolicy(
           config: {
             ...existingConfig,
             enabled,
+            setupMode: "existing",
             binaryPath: managedRuntimeAnchor.binaryPath,
             homePath: managedRuntimeAnchor.homePath,
             customModels: routeModels.map((model) => model.id),
@@ -436,17 +443,6 @@ export function applyManagedHarnessPolicy(
 
   return {
     ...persisted,
-    providers: {
-      ...persisted.providers,
-      codex: {
-        ...persisted.providers.codex,
-        enabled: true,
-        binaryPath: managedRuntimeAnchor.binaryPath,
-        homePath: managedRuntimeAnchor.homePath,
-        customModels,
-        customModelMetadata,
-      },
-    },
     providerInstances: {
       ...persisted.providerInstances,
       ...managedProviderInstances,
@@ -473,6 +469,7 @@ export function stripManagedFieldsForPersistence(settings: ServerSettings): Serv
     const managedInstanceConfig = record(managedInstance?.config) ?? {};
     const {
       enabled: _enabled,
+      setupMode: _setupMode,
       binaryPath: _binaryPath,
       homePath: _homePath,
       customModels: _customModels,
@@ -512,17 +509,6 @@ export function stripManagedFieldsForPersistence(settings: ServerSettings): Serv
 
   return {
     ...settings,
-    providers: {
-      ...settings.providers,
-      codex: {
-        ...settings.providers.codex,
-        enabled: DEFAULT_SERVER_SETTINGS.providers.codex.enabled,
-        binaryPath: DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
-        homePath: DEFAULT_SERVER_SETTINGS.providers.codex.homePath,
-        customModels: DEFAULT_SERVER_SETTINGS.providers.codex.customModels,
-        customModelMetadata: DEFAULT_SERVER_SETTINGS.providers.codex.customModelMetadata,
-      },
-    },
     providerInstances,
   };
 }
@@ -536,7 +522,7 @@ export function createManagedProfileSettings(codexHomePath: string) {
   return {
     [MANAGED_POLICY_MARKER_KEY]: {
       migrationVersion: MANAGED_POLICY_MIGRATION_VERSION,
-      codexBinaryPath: DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
+      codexBinaryPath: DEFAULT_MANAGED_CODEX_SETTINGS.binaryPath,
       codexHomePath,
     },
   };
@@ -596,14 +582,28 @@ export function migrateLegacyInstallerManagedSettings(
   const providers = record(next.providers);
   const codexProvider = record(providers?.codex);
   const managedRuntimeAnchor = managedRuntimeFromDocument(root, defaultCodexHomePath);
-  for (const key of ["enabled", "binaryPath", "homePath", "customModels", "customModelMetadata"]) {
+  for (const key of [
+    "enabled",
+    "setupMode",
+    "binaryPath",
+    "homePath",
+    "customModels",
+    "customModelMetadata",
+  ]) {
     delete codexProvider?.[key];
   }
 
   const instances = record(next.providerInstances);
   const codexInstance = record(instances?.codex);
   const codexConfig = record(codexInstance?.config);
-  for (const key of ["enabled", "binaryPath", "homePath", "customModels", "customModelMetadata"]) {
+  for (const key of [
+    "enabled",
+    "setupMode",
+    "binaryPath",
+    "homePath",
+    "customModels",
+    "customModelMetadata",
+  ]) {
     delete codexConfig?.[key];
   }
   if (codexInstance) {

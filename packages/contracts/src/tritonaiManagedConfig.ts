@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-
 import { ModelCapabilities } from "./model.ts";
 
 const ManagedHttpsUrl = Schema.String.check(

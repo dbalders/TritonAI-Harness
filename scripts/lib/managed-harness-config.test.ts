@@ -1,8 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - compare the artifact digest to an independent native hash in this test.
 import * as NodeCrypto from "node:crypto";
 import * as NodeURL from "node:url";
 import { TRITONAI_IMAGE_CONTEXT_MODEL, type TritonAiManagedConfig } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   loadManagedHarnessConfigForBuild,
   parseManagedHarnessConfig,

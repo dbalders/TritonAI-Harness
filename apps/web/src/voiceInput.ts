@@ -7,6 +7,8 @@ import {
   type VoiceInputSettings,
 } from "@t3tools/contracts";
 
+import { compactVoicePauses, VOICE_SPEECH_SAMPLE_RATE } from "./voiceAudio";
+
 const VOICE_RECORDING_MIME_TYPES = [
   "audio/webm;codecs=opus",
   "audio/webm",
@@ -14,30 +16,12 @@ const VOICE_RECORDING_MIME_TYPES = [
   "audio/wav",
 ] as const;
 
-const VOICE_TRANSCRIPTION_READY_MIME_TYPES = new Set([
-  "audio/flac",
-  "audio/mp3",
-  "audio/mp4",
-  "audio/mpeg",
-  "audio/mpga",
-  "audio/ogg",
-  "audio/wav",
-  "audio/wave",
-  "audio/x-wav",
-]);
-
 type AudioContextConstructor = typeof AudioContext;
 type VoiceTranscriptionSettings = Pick<VoiceInputSettings, "baseUrl" | "model" | "language">;
 export type VoiceTranscribe = (
   input: ServerVoiceTranscribeInput,
 ) => Promise<ServerVoiceTranscribeResult>;
 
-const VOICE_SIGNAL_FRAME_SECONDS = 0.02;
-const VOICE_ACTIVE_FRAME_RMS_AMPLITUDE = 0.006;
-const MIN_VOICE_AUDIO_DURATION_SECONDS = 0.8;
-const MIN_VOICE_PEAK_AMPLITUDE = 0.015;
-const MIN_VOICE_RMS_AMPLITUDE = 0.002;
-const MIN_VOICE_ACTIVE_DURATION_SECONDS = 0.22;
 const VOICE_VOLUME_SAMPLE_INTERVAL_MS = 68;
 const VOICE_VISUAL_NOISE_FLOOR_RMS = 0.0075;
 const VOICE_VISUAL_NOISE_GATE_WIDTH_RMS = 0.006;
@@ -50,13 +34,6 @@ export interface VoiceRecorderSession {
   readonly stop: () => Promise<Blob>;
   readonly cancel: () => void;
   readonly subscribeToVolume: (listener: VoiceVolumeListener) => () => void;
-}
-
-export interface VoiceAudioSignal {
-  readonly durationSeconds: number;
-  readonly peakAmplitude: number;
-  readonly rmsAmplitude: number;
-  readonly activeDurationSeconds: number;
 }
 
 class VoiceInputSilenceError extends Error {
@@ -298,14 +275,6 @@ async function blobToBase64(blob: Blob): Promise<string> {
   return btoa(binary);
 }
 
-function normalizedMimeType(mimeType: string): string {
-  return mimeType.toLowerCase().split(";")[0]?.trim() ?? "";
-}
-
-function isTranscriptionReadyMimeType(mimeType: string): boolean {
-  return VOICE_TRANSCRIPTION_READY_MIME_TYPES.has(normalizedMimeType(mimeType));
-}
-
 function trimmedVoiceSetting(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
@@ -367,114 +336,80 @@ export function encodeAudioBufferAsWav(
   return output;
 }
 
-export function analyzeAudioBufferSignal(
-  audioBuffer: Pick<AudioBuffer, "getChannelData" | "length" | "numberOfChannels" | "sampleRate">,
-): VoiceAudioSignal {
-  const channelCount = Math.max(1, audioBuffer.numberOfChannels);
-  const sampleCount = audioBuffer.length;
-  const durationSeconds = sampleCount / audioBuffer.sampleRate;
-  if (sampleCount <= 0 || audioBuffer.sampleRate <= 0) {
-    return {
-      durationSeconds: 0,
-      peakAmplitude: 0,
-      rmsAmplitude: 0,
-      activeDurationSeconds: 0,
-    };
-  }
-
-  const channels = Array.from({ length: channelCount }, (_, index) =>
-    audioBuffer.getChannelData(index),
-  );
-  const frameSampleCount = Math.max(
-    1,
-    Math.round(audioBuffer.sampleRate * VOICE_SIGNAL_FRAME_SECONDS),
-  );
-  let peakAmplitude = 0;
-  let totalSquare = 0;
-  let totalSamples = 0;
-  let activeDurationSeconds = 0;
-
-  for (let frameStart = 0; frameStart < sampleCount; frameStart += frameSampleCount) {
-    const frameEnd = Math.min(sampleCount, frameStart + frameSampleCount);
-    let frameSquare = 0;
-    let frameSamples = 0;
-
-    for (let sampleIndex = frameStart; sampleIndex < frameEnd; sampleIndex += 1) {
-      for (const channel of channels) {
-        const sample = Math.max(-1, Math.min(1, channel[sampleIndex] ?? 0));
-        const amplitude = Math.abs(sample);
-        peakAmplitude = Math.max(peakAmplitude, amplitude);
-        const square = sample * sample;
-        totalSquare += square;
-        totalSamples += 1;
-        frameSquare += square;
-        frameSamples += 1;
-      }
-    }
-
-    const frameRms = frameSamples > 0 ? Math.sqrt(frameSquare / frameSamples) : 0;
-    if (frameRms >= VOICE_ACTIVE_FRAME_RMS_AMPLITUDE) {
-      activeDurationSeconds += (frameEnd - frameStart) / audioBuffer.sampleRate;
-    }
-  }
-
-  return {
-    durationSeconds,
-    peakAmplitude,
-    rmsAmplitude: totalSamples > 0 ? Math.sqrt(totalSquare / totalSamples) : 0,
-    activeDurationSeconds,
-  };
-}
-
-export function hasSpeechLikeSignal(signal: VoiceAudioSignal): boolean {
-  return (
-    signal.durationSeconds >= MIN_VOICE_AUDIO_DURATION_SECONDS &&
-    signal.peakAmplitude >= MIN_VOICE_PEAK_AMPLITUDE &&
-    signal.rmsAmplitude >= MIN_VOICE_RMS_AMPLITUDE &&
-    signal.activeDurationSeconds >= MIN_VOICE_ACTIVE_DURATION_SECONDS
-  );
-}
-
-function ensureVoiceSignalDetected(audioBuffer: AudioBuffer): void {
-  if (!hasSpeechLikeSignal(analyzeAudioBufferSignal(audioBuffer))) {
-    throw new VoiceInputSilenceError();
-  }
-}
-
 export function isVoiceInputSilenceError(error: unknown): boolean {
   return error instanceof VoiceInputSilenceError;
 }
 
-async function decodeVoiceBlob(blob: Blob): Promise<AudioBuffer> {
-  const AudioContextCtor = resolveAudioContextConstructor();
-  if (!AudioContextCtor) {
+/** Decodes into a 16 kHz context so the browser's resampler produces the detector's input. */
+async function decodeVoiceBlobAsSpeechSamples(blob: Blob): Promise<Float32Array<ArrayBuffer>> {
+  if (typeof OfflineAudioContext === "undefined") {
     throw new Error("Voice recording format is not supported by this browser.");
   }
+  const context = new OfflineAudioContext(1, 1, VOICE_SPEECH_SAMPLE_RATE);
+  const audioBuffer = await context.decodeAudioData(await blob.arrayBuffer());
+  if (audioBuffer.numberOfChannels === 1) {
+    return audioBuffer.getChannelData(0);
+  }
+  const mono = new Float32Array(audioBuffer.length);
+  for (let channel = 0; channel < audioBuffer.numberOfChannels; channel += 1) {
+    const samples = audioBuffer.getChannelData(channel);
+    for (let index = 0; index < mono.length; index += 1) {
+      mono[index] = (mono[index] ?? 0) + (samples[index] ?? 0) / audioBuffer.numberOfChannels;
+    }
+  }
+  return mono;
+}
 
-  const audioContext = new AudioContextCtor();
+async function detectSpeech(samples: Float32Array<ArrayBuffer>, signal: AbortSignal | undefined) {
   try {
-    return await audioContext.decodeAudioData(await blob.arrayBuffer());
-  } finally {
-    void audioContext.close().catch(() => undefined);
+    const { detectVoiceSpeech } = await import("./voiceActivity");
+    return await detectVoiceSpeech(samples, signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw new Error(
+      "Speech detection could not run, so the recording was not sent. Try again, or reload if this keeps happening.",
+      { cause: error },
+    );
   }
 }
 
-async function prepareVoiceBlobForTranscription(blob: Blob): Promise<Blob> {
-  const audioBuffer = await decodeVoiceBlob(blob);
-  ensureVoiceSignalDetected(audioBuffer);
-  if (isTranscriptionReadyMimeType(blob.type)) {
-    return blob;
-  }
-  return new Blob([encodeAudioBufferAsWav(audioBuffer)], { type: "audio/wav" });
+/**
+ * Uploads detected speech as mono 16 kHz WAV with ordinary pauses intact. Silences over 1.5 s are
+ * shortened so the transcription model does not invent text for them, and recordings without
+ * speech are never uploaded.
+ */
+async function prepareVoiceBlobForTranscription(blob: Blob, signal?: AbortSignal): Promise<Blob> {
+  signal?.throwIfAborted();
+  const samples = await decodeVoiceBlobAsSpeechSamples(blob);
+  signal?.throwIfAborted();
+  // A muted microphone records exact zeros; skip loading the detector for it.
+  if (samples.every((sample) => sample === 0)) throw new VoiceInputSilenceError();
+  const speech = await detectSpeech(samples, signal);
+  signal?.throwIfAborted();
+  const compacted = compactVoicePauses(samples, speech);
+  if (!compacted) throw new VoiceInputSilenceError();
+  return new Blob(
+    [
+      encodeAudioBufferAsWav({
+        getChannelData: () => compacted,
+        length: compacted.length,
+        numberOfChannels: 1,
+        sampleRate: VOICE_SPEECH_SAMPLE_RATE,
+      }),
+    ],
+    { type: "audio/wav" },
+  );
 }
 
 export async function transcribeVoiceBlob(
   blob: Blob,
   transcribe: VoiceTranscribe,
   settings?: VoiceTranscriptionSettings,
+  options?: { readonly signal?: AbortSignal },
 ): Promise<string> {
-  const uploadBlob = await prepareVoiceBlobForTranscription(blob);
+  const uploadBlob = await prepareVoiceBlobForTranscription(blob, options?.signal);
   const audioBase64 = await blobToBase64(uploadBlob);
+  options?.signal?.throwIfAborted();
   const baseUrl = voiceBaseUrlOverride(settings);
   const result = await transcribe({
     audioBase64,

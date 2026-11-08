@@ -1,3 +1,4 @@
+import type { OrchestrationV2TurnItem } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   computerUsePrompt,
@@ -30,13 +31,13 @@ describe("computer use requests", () => {
     ).toBeNull();
     expect(
       computerUseActivity({
-        itemType: "mcp_tool_call",
+        itemType: "dynamic_tool",
         toolData: { server: "other", tool: "click" },
       }),
     ).toBeNull();
     expect(
       computerUseActivity({
-        itemType: "mcp_tool_call",
+        itemType: "dynamic_tool",
         toolData: {
           server: "cua-driver",
           tool: "capture_window",
@@ -80,7 +81,7 @@ describe("computer-use stale observations", () => {
   const stale = "element_token is stale; call get_window_state again to refresh";
   const activity = (data: Record<string, unknown>) =>
     computerUseActivity({
-      itemType: "mcp_tool_call",
+      itemType: "dynamic_tool",
       toolData: { server: "cua-driver", tool: "click", status: "failed", error: null, ...data },
     });
 
@@ -125,5 +126,42 @@ describe("computer-use stale observations", () => {
     expect(activity({ result: { content: [{ type: "image", text: stale }] } })?.refreshNeeded).toBe(
       false,
     );
+  });
+});
+
+describe("V2 computer-use turn items", () => {
+  const item = (output: unknown, status: OrchestrationV2TurnItem["status"] = "failed") => ({
+    itemType: "dynamic_tool" as const,
+    structuredPayload: {
+      type: "dynamic_tool",
+      toolName: "cua-driver.click",
+      input: { session_name: "Notes" },
+      output,
+      status,
+    } as OrchestrationV2TurnItem,
+  });
+  const stale = "element_token is stale; call get_window_state again to refresh";
+  it("renders the native MCP name and session", () => {
+    expect(computerUseActivity(item([], "completed"))).toEqual({
+      action: "Click",
+      session: "Notes",
+      refreshNeeded: false,
+    });
+  });
+  it("recognizes the normalized MCP text-block output", () => {
+    expect(computerUseActivity(item([{ type: "text", text: stale }]))?.refreshNeeded).toBe(true);
+  });
+  it("does not mistake page content or successful output for a stale driver reference", () => {
+    expect(
+      computerUseActivity(item([{ type: "text", text: stale }], "completed"))?.refreshNeeded,
+    ).toBe(false);
+    expect(
+      computerUseActivity(
+        item([
+          { type: "text", text: stale },
+          { type: "image", data: "page" },
+        ]),
+      )?.refreshNeeded,
+    ).toBe(false);
   });
 });

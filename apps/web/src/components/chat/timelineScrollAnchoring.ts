@@ -1,4 +1,37 @@
-import type { TurnId } from "@t3tools/contracts";
+import type { MessageId, RunId, RunAttemptId } from "@t3tools/contracts";
+
+export interface TimelineRunObservation {
+  readonly threadKey: string | null;
+  readonly hydrated: boolean;
+  readonly runId: RunId | null;
+}
+
+export function observeTimelineRun(
+  previous: TimelineRunObservation | null,
+  input: TimelineRunObservation & {
+    readonly queued: boolean;
+    readonly messageId: MessageId | null;
+  },
+): { observation: TimelineRunObservation; anchorMessageId: MessageId | null } {
+  const observation = {
+    threadKey: input.threadKey,
+    hydrated: input.hydrated,
+    runId: input.queued ? null : input.runId,
+  };
+  if (previous?.threadKey !== input.threadKey || !previous.hydrated) {
+    return { observation, anchorMessageId: null };
+  }
+  if (
+    !input.hydrated ||
+    input.runId === null ||
+    input.queued ||
+    previous.runId === input.runId ||
+    input.messageId === null
+  ) {
+    return { observation: previous, anchorMessageId: null };
+  }
+  return { observation, anchorMessageId: input.messageId };
+}
 
 // Match the titlebar fade inset so draft promotion preserves the first row's position.
 export const CHAT_TIMELINE_ANCHOR_OFFSET = 24;
@@ -40,10 +73,9 @@ export function getRowBottom(state: TimelineListMeasurementState, index: number)
 }
 
 /**
- * Whether the timeline's real rows extend past the viewport left above the
- * composer. The list's own content length includes the composer inset
- * spacer, so this measures from the last row instead. Unknown row geometry
- * or an unmeasured viewport counts as fitting.
+ * The list's own content length includes the composer inset spacer, so this
+ * measures from the last row instead. Unknown row positions or an unmeasured
+ * viewport counts as fitting.
  */
 export function timelineContentOverflowsViewport(
   state: TimelineListMeasurementState | undefined,
@@ -56,7 +88,12 @@ export function timelineContentOverflowsViewport(
   if (typeof scrollLength !== "number" || !Number.isFinite(scrollLength) || scrollLength <= 0) {
     return false;
   }
-  const lastBottom = getRowBottom(state, state.data.length - 1);
+  const lastIndex = state.data.length - 1;
+  // Overflow can use an unmeasured tail's lower bound; anchored-turn metrics need its height.
+  const lastTop = state.positionAtIndex(lastIndex);
+  const lastBottom =
+    getRowBottom(state, lastIndex) ??
+    (typeof lastTop === "number" && Number.isFinite(lastTop) ? lastTop + 1 : null);
   if (lastBottom === null) {
     return false;
   }
@@ -113,10 +150,9 @@ export interface RememberedTimelinePosition {
   readonly scrollOffset: number;
   readonly atEnd: boolean;
   readonly disclosures?: {
-    readonly turns: ReadonlySet<TurnId>;
+    readonly runs: ReadonlySet<RunId>;
     readonly workGroups: ReadonlySet<string>;
-    readonly spawnEntries: ReadonlySet<string>;
-    readonly reasoningMessages: ReadonlySet<string>;
+    readonly attempts: ReadonlySet<RunAttemptId>;
     readonly workGroupState: {
       scrollPositions: Map<string, { readonly entryId: string; readonly offset: number }>;
       expandedEntries: Set<string>;
@@ -124,16 +160,22 @@ export interface RememberedTimelinePosition {
   };
 }
 
-// Scoped thread keys keep separate environments independent. Bound the session cache.
 const rememberedTimelinePositions = new Map<string, RememberedTimelinePosition>();
 
 export function readTimelinePosition(threadKey: string) {
   return rememberedTimelinePositions.get(threadKey);
 }
 
-export function rememberTimelinePosition(threadKey: string, position: RememberedTimelinePosition) {
+export function rememberTimelinePosition(
+  threadKey: string,
+  position: RememberedTimelinePosition,
+  liveFollowEnabled: boolean,
+) {
   rememberedTimelinePositions.delete(threadKey);
-  rememberedTimelinePositions.set(threadKey, position);
+  rememberedTimelinePositions.set(threadKey, {
+    ...position,
+    atEnd: liveFollowEnabled || position.atEnd,
+  });
   if (rememberedTimelinePositions.size > 100) {
     const oldest = rememberedTimelinePositions.keys().next().value;
     if (oldest !== undefined) rememberedTimelinePositions.delete(oldest);

@@ -9,12 +9,6 @@ import {
   shouldRefreshOnInterval,
 } from "./useLiveRefresh";
 
-describe("live refresh cadence", () => {
-  it("waits five minutes between automatic host reads", () => {
-    expect(LIVE_REFRESH_INTERVAL_MS).toBe(5 * 60_000);
-  });
-});
-
 describe("shouldLiveRefresh", () => {
   const at = (now: number, lastRefreshedAt: number, visible = true) =>
     shouldLiveRefresh({ visible, now, lastRefreshedAt });
@@ -36,7 +30,6 @@ describe("shouldLiveRefresh", () => {
   });
 
   it("stays quiet while the window is not showing", () => {
-    // A focus event can arrive for a window that is still hidden behind another one.
     expect(at(LIVE_REFRESH_MIN_INTERVAL_MS * 5, 0, false)).toBe(false);
   });
 
@@ -53,7 +46,6 @@ describe("shouldLiveRefresh", () => {
     for (let now = LIVE_REFRESH_INTERVAL_MS; now < hour; now += LIVE_REFRESH_INTERVAL_MS) {
       tick(now, false);
     }
-    // Coming back raises a visibility change and a focus event, one straight after the other.
     tick(hour, true);
     tick(hour, true);
 

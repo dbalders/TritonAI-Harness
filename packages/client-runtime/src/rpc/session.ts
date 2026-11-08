@@ -7,6 +7,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
@@ -18,14 +19,14 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type * as Rpc from "effect/unstable/rpc/Rpc";
-import * as RpcClient from "effect/unstable/rpc/RpcClient";
-import * as RpcClientError from "effect/unstable/rpc/RpcClientError";
-import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
-import * as Socket from "effect/unstable/socket/Socket";
+import type * as Rpc from "effect/rpc/Rpc";
+import * as RpcClient from "effect/rpc/RpcClient";
+import * as RpcClientError from "effect/rpc/RpcClientError";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as Socket from "effect/socket/Socket";
 
-import { makeWsRpcProtocolClient, type WsRpcProtocolClient } from "./protocol.ts";
-import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
+import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
+import { NETWORK_BLOCKING_HINT, UNRESPONSIVE_HOST_HINT } from "../errors/network.ts";
 import type {
   ConnectionAttemptError,
   ConnectionTransientError,
@@ -59,7 +60,6 @@ export interface RpcSessionOptions {
   readonly environmentThemes?: boolean;
   readonly managedPolicyDiagnosticsUpdates?: boolean;
   readonly usageLimitSources?: boolean;
-  /** This client answers /usage-limits itself, so the server may advertise it. */
   readonly usageLimitsCommand?: boolean;
 }
 
@@ -124,29 +124,41 @@ function serverConfigReplayEvents(
 }
 
 const isSocketErrorReason = Schema.is(Socket.SocketErrorReason);
+const PING_TIMEOUT_SECONDS = Duration.toSeconds(PING_TIMEOUT);
 
 function mapSessionRpcError(
   error: InitialConfigError | ProbeError | ServerConfigSubscriptionError,
   networkHint: string,
+  via: "relay" | "direct",
 ): ConnectionAttemptError {
   switch (error._tag) {
     case "EnvironmentAuthorizationError":
       return new ConnectionBlockedError({
         reason: "permission",
         detail: error.message,
+        hop: "server",
+        via,
       });
     case "KeybindingsConfigParseError":
     case "ServerSettingsError":
       return new ConnectionTransientErrorClass({
         reason: "remote-unavailable",
         detail: error.message,
+        hop: "server",
+        via,
       });
     case "RpcClientError":
       return new ConnectionTransientErrorClass({
         reason: "transport",
         detail: `${error.message}${isSocketErrorReason(error.reason) ? networkHint : ""}`,
+        ...socketFailureLocation(via),
       });
   }
+}
+
+/** Over T3 Connect the relay already reached the host, so a socket that drops failed between this device and the tunnel. */
+function socketFailureLocation(via: "relay" | "direct") {
+  return { hop: via === "relay" ? "tunnel" : "server", via } as const;
 }
 
 /** @public Service construction is part of the canonical Effect module API. */
@@ -164,55 +176,70 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
   };
 
   const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {
-    const networkHint =
-      connection.target._tag === "RelayConnectionTarget" ? ` ${NETWORK_BLOCKING_HINT}` : "";
+    const via = connection.target._tag === "RelayConnectionTarget" ? "relay" : "direct";
+    const networkHint = via === "relay" ? ` ${NETWORK_BLOCKING_HINT}` : "";
     const mapRpcError = (error: Parameters<typeof mapSessionRpcError>[0]) =>
-      mapSessionRpcError(error, networkHint);
+      mapSessionRpcError(error, networkHint, via);
     yield* Effect.annotateCurrentSpan({
       "connection.environment.id": connection.environmentId,
     });
 
     const connected = yield* Deferred.make<void>();
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
+    const pingTimedOut = yield* Ref.make(false);
     const hooks = RpcClient.ConnectionHooks.of({
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
-      onDisconnect: Deferred.isDone(connected).pipe(
-        Effect.flatMap((wasConnected) =>
+      onDisconnect: Effect.all([Deferred.isDone(connected), Ref.get(pingTimedOut)]).pipe(
+        Effect.flatMap(([wasConnected, timedOut]) =>
           Deferred.fail(
             disconnected,
             new ConnectionTransientErrorClass({
               reason: "transport",
-              detail: `${
-                wasConnected
-                  ? `${connection.label} disconnected.`
-                  : `${connection.label} could not establish a WebSocket connection.`
-              }${networkHint}`,
+              // The network hint only fits a socket that never opened. Once it
+              // opened, the path worked, and a host that goes quiet is more
+              // often overloaded or asleep than blocked.
+              detail: !wasConnected
+                ? `${connection.label} could not establish a WebSocket connection.${networkHint}`
+                : timedOut
+                  ? `${connection.label} stopped responding for ${PING_TIMEOUT_SECONDS}s. ${UNRESPONSIVE_HOST_HINT}`
+                  : `${connection.label} disconnected.`,
+              ...socketFailureLocation(via),
             }),
           ),
         ),
         Effect.asVoid,
       ),
     });
-    const socketLayer = Socket.layerWebSocket(connection.socketUrl, {
+    const layerSocket = Socket.layerWebSocket(connection.socketUrl, {
       openTimeout: SOCKET_OPEN_TIMEOUT,
     }).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)));
-    const protocolLayer = Layer.effect(
+    const layerProtocol = Layer.effect(
       RpcClient.Protocol,
       RpcClient.makeProtocolSocket({
+        pingTimeout: PING_TIMEOUT,
         retryTransientErrors: false,
         retryPolicy: Schedule.recurs(0),
+        onPingTimeout: Ref.set(pingTimedOut, true),
       }),
     ).pipe(
       Layer.provide(
         Layer.mergeAll(
-          socketLayer,
+          layerSocket,
           RpcSerialization.layerJson,
           Layer.succeed(RpcClient.ConnectionHooks, hooks),
         ),
       ),
     );
-    const protocolContext = yield* Layer.build(protocolLayer).pipe(
+    const protocolContext = yield* Layer.build(layerProtocol).pipe(
       Effect.withSpan("environment.websocket.connect"),
+    );
+    // Building the protocol only starts the socket; this span times the
+    // handshake up to the first open, without making `connect` wait for it.
+    yield* Deferred.await(connected).pipe(
+      Effect.raceFirst(Deferred.await(disconnected)),
+      Effect.withSpan("environment.websocket.open"),
+      Effect.ignore,
+      Effect.forkScoped,
     );
     const protocolClient = yield* makeWsRpcProtocolClient.pipe(Effect.provide(protocolContext));
     const initialConfigDeferred = yield* Deferred.make<ServerConfig>();
@@ -399,5 +426,4 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
   return RpcSessionFactory.of({ connect });
 });
 
-export const layerWithOptions = (options: RpcSessionOptions) =>
-  Layer.effect(RpcSessionFactory, make(options));
+export const layer = (options: RpcSessionOptions) => Layer.effect(RpcSessionFactory, make(options));

@@ -7,7 +7,6 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
 import { ServerIcon } from "lucide-react";
 import { useRef, useState } from "react";
-
 import {
   deregisterManagedRelayEnvironmentCommand,
   useManagedRelayEnvironments,
@@ -38,7 +37,7 @@ function endpointLabel(environment: RelayClientEnvironmentRecord): string {
     : "Activity publishing only";
 }
 
-export function T3ConnectEnvironmentRow(props: {
+function T3ConnectEnvironmentRow(props: {
   readonly environment: RelayClientEnvironmentRecord;
   readonly confirmationOpen: boolean;
   readonly mutationPending: boolean;

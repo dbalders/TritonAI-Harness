@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   claimWorkspaceBasenameLookup,
   needsWorkspaceBasenameLookup,
@@ -81,8 +80,6 @@ describe("claimWorkspaceBasenameLookup", () => {
     const first = claimWorkspaceBasenameLookup();
     const second = claimWorkspaceBasenameLookup();
 
-    // The older lookup answering last must not reopen the panel behind the
-    // newer one.
     expect(second()).toBe(true);
     expect(first()).toBe(false);
   });

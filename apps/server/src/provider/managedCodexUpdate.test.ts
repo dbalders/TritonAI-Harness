@@ -1,3 +1,4 @@
+import { describe } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
@@ -9,19 +10,23 @@ import * as TestClock from "effect/testing/TestClock";
 import * as PlatformError from "effect/PlatformError";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import * as Scope from "effect/Scope";
+import * as Exit from "effect/Exit";
+import { acquireManagedCodexLease } from "./managedCodexLock.ts";
+import { ChildProcessSpawner } from "effect/process";
 
 import type { ProcessRunOutput, ProcessRunner } from "../processRunner.ts";
 import {
   makeProviderMaintenanceCapabilities,
   type ProviderMaintenanceResolutionContext,
   normalizeCommandPath,
-} from "./providerMaintenance.ts";
+} from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   isTritonAiManagedCodexMaintenanceCapabilities,
   makeTritonAiManagedCodexMaintenanceResolver,
   parseCodexCliVersion,
   ManagedCodexApprovedVersion,
+  recoverTritonAiManagedCodex,
   resolveTritonAiManagedCodexInstallation,
   updateTritonAiManagedCodex,
 } from "./managedCodexUpdate.ts";
@@ -246,6 +251,201 @@ const fixtureLayer = Layer.merge(
 );
 
 it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
+  it.effect.each(["failure", "timeout"])(
+    "preserves an existing newer engine instead of recovering after a transient %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const backup = yield* fixture.fs.makeTempDirectory({
+          directory: fixture.runtimeRoot,
+          prefix: ".tritonai-codex-backup.",
+        });
+        const backupRoot = fixture.path.join(backup, "openai-codex-0.146.0");
+        yield* fixture.fs.makeDirectory(fixture.path.join(backupRoot, "bin"), { recursive: true });
+        yield* fixture.fs.copyFile(
+          fixture.binaryPath,
+          fixture.path.join(backupRoot, "bin", "codex"),
+        );
+        yield* fixture.fs.writeFileString(fixture.path.join(backupRoot, "version.txt"), "0.146.0");
+        yield* fixture.fs.writeFileString(
+          fixture.path.join(fixture.installRoot, "version.txt"),
+          "0.160.0",
+        );
+        const runner = yield* makeFakeRunner();
+        let probes = 0;
+        const run: ProcessRunner["Service"]["run"] = (input) => {
+          probes++;
+          return probes === 1
+            ? Effect.succeed({
+                ...failure("transient probe failure"),
+                timedOut: scenario === "timeout",
+              })
+            : runner(input);
+        };
+
+        yield* recoverTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run });
+
+        expect(
+          yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+        ).toBe("0.160.0");
+        expect(yield* fixture.fs.readFileString(fixture.path.join(backupRoot, "version.txt"))).toBe(
+          "0.146.0",
+        );
+        expect(probes).toBe(0);
+      }),
+  );
+
+  it.effect(
+    "allows the full activation verification timeout when restoring a missing launcher",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const backup = yield* fixture.fs.makeTempDirectory({
+          directory: fixture.runtimeRoot,
+          prefix: ".tritonai-codex-backup.",
+        });
+        yield* fixture.fs.rename(
+          fixture.installRoot,
+          fixture.path.join(backup, "openai-codex-0.146.0"),
+        );
+        const runner = yield* makeFakeRunner();
+        const timeouts: Array<unknown> = [];
+        const run: ProcessRunner["Service"]["run"] = (input) => {
+          timeouts.push(input.timeout);
+          return runner(input);
+        };
+
+        yield* recoverTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run });
+
+        expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
+        expect(yield* fixture.fs.exists(backup)).toBe(false);
+        expect(timeouts).toEqual(["30 seconds"]);
+      }),
+  );
+
+  it.effect.each(["before backup", "after backup", "after activation", "verification", "rollback"])(
+    "keeps a usable engine after interruption during %s",
+    (phase) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const paused = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        const pause = Deferred.succeed(paused, undefined).pipe(
+          Effect.andThen(Deferred.await(resume)),
+        );
+        const runner = yield* makeFakeRunner({ failActivatedVerification: phase === "rollback" });
+        const fs = FileSystem.FileSystem.of({
+          ...fixture.fs,
+          rename: (source, destination) =>
+            Effect.gen(function* () {
+              if (phase === "before backup" && source === fixture.installRoot) yield* pause;
+              yield* fixture.fs.rename(source, destination);
+              if (
+                (phase === "after backup" && source === fixture.installRoot) ||
+                (phase === "after activation" &&
+                  source.includes(".tritonai-codex-stage.") &&
+                  destination === fixture.installRoot)
+              )
+                yield* pause;
+            }),
+          remove: (target, options) =>
+            Effect.gen(function* () {
+              if (phase === "rollback" && target === fixture.installRoot) yield* pause;
+              yield* fixture.fs.remove(target, options);
+            }),
+        });
+        const fiber = yield* updateTritonAiManagedCodex({
+          binaryPath: fixture.binaryPath,
+          run: (input) =>
+            Effect.gen(function* () {
+              if (
+                phase === "verification" &&
+                input.command === fixture.binaryPath &&
+                (yield* fixture.fs.readFileString(
+                  fixture.path.join(fixture.installRoot, "version.txt"),
+                )) === "0.151.0"
+              )
+                yield* pause;
+              return yield* runner(input);
+            }).pipe(Effect.orDie),
+        }).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.scoped, Effect.forkChild);
+        yield* Deferred.await(paused);
+        fiber.interruptUnsafe();
+        yield* Deferred.succeed(resume, undefined);
+        yield* Fiber.await(fiber);
+        expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
+        expect(["0.146.0", "0.151.0"]).toContain(
+          yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+        );
+      }).pipe(Effect.scoped),
+  );
+  it.effect("restores the launcher when shutdown interrupts activation after the backup move", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const paused = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const fs = FileSystem.FileSystem.of({
+        ...fixture.fs,
+        rename: (source, destination) =>
+          Effect.gen(function* () {
+            if (source.includes(".tritonai-codex-stage.") && destination === fixture.installRoot) {
+              yield* Deferred.succeed(paused, undefined);
+              yield* Deferred.await(resume);
+            }
+            return yield* fixture.fs.rename(source, destination);
+          }),
+      });
+      const fiber = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: yield* makeFakeRunner(),
+      }).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.scoped, Effect.forkChild);
+      yield* Deferred.await(paused);
+      fiber.interruptUnsafe();
+      yield* Deferred.succeed(resume, undefined);
+      yield* Fiber.await(fiber);
+      expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(true);
+      expect(["0.146.0", "0.151.0"]).toContain(
+        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+      );
+    }).pipe(Effect.scoped),
+  );
+  it.effect("admits a session during staging and safely defers activation", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const staged = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const runner = yield* makeFakeRunner();
+      const fiber = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: (input) =>
+          runner(input).pipe(
+            Effect.tap(() =>
+              input.command === "npm"
+                ? Deferred.succeed(staged, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+                : Effect.void,
+            ),
+          ),
+      }).pipe(Effect.scoped, Effect.result, Effect.forkChild);
+      yield* Deferred.await(staged);
+      const session = yield* Scope.make();
+      yield* acquireManagedCodexLease(fixture.runtimeRoot).pipe(
+        Effect.provideService(Scope.Scope, session),
+      );
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(fiber);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(String(result.failure)).toContain("deferred");
+      expect(
+        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+      ).toBe("0.146.0");
+      yield* Scope.close(session, Exit.void);
+      expect(
+        yield* updateTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run: runner }).pipe(
+          Effect.scoped,
+        ),
+      ).toBe("0.151.0");
+    }).pipe(Effect.scoped),
+  );
   it.effect("stages, verifies, atomically activates, and retains the managed launcher", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();
@@ -262,6 +462,91 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
       expect((yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toSorted()).toEqual([
         "openai-codex-0.146.0",
       ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("serializes two manual updates that finish staging together", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const staged = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      let copies = 0;
+      const observedFs = FileSystem.FileSystem.of({
+        ...fixture.fs,
+        copyFile: (source, destination) =>
+          fixture.fs.copyFile(source, destination).pipe(
+            Effect.tap(() =>
+              destination.includes(".tritonai-codex-stage.")
+                ? Effect.gen(function* () {
+                    copies += 1;
+                    if (copies === 2) yield* Deferred.succeed(staged, undefined);
+                    yield* Deferred.await(resume);
+                  })
+                : Effect.void,
+            ),
+          ),
+      });
+      const runner = yield* makeFakeRunner();
+      const update = updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: runner,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, observedFs), Effect.scoped);
+      const first = yield* update.pipe(Effect.forkChild);
+      const second = yield* update.pipe(Effect.forkChild);
+      yield* Deferred.await(staged);
+      yield* Deferred.succeed(resume, undefined);
+      expect(yield* Fiber.join(first)).toBe("0.151.0");
+      expect(yield* Fiber.join(second)).toBe("0.151.0");
+      expect((yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toSorted()).toEqual([
+        "openai-codex-0.146.0",
+      ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("admits a waiting session only after activation restores a verified launcher", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const paused = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const prepared = yield* Deferred.make<void>();
+      const observedFs = FileSystem.FileSystem.of({
+        ...fixture.fs,
+        rename: (source, destination) =>
+          fixture.fs
+            .rename(source, destination)
+            .pipe(
+              Effect.tap(() =>
+                destination.includes(".tritonai-codex-backup.")
+                  ? Deferred.succeed(paused, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+                  : Effect.void,
+              ),
+            ),
+      });
+      const update = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: yield* makeFakeRunner(),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, observedFs),
+        Effect.scoped,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(paused);
+      expect(yield* fixture.fs.exists(fixture.binaryPath)).toBe(false);
+      const session = yield* acquireManagedCodexLease(
+        fixture.runtimeRoot,
+        fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")).pipe(
+          Effect.tap((version) => Effect.sync(() => expect(version).toBe("0.151.0"))),
+          Effect.andThen(Deferred.succeed(prepared, undefined)),
+          Effect.asVoid,
+        ),
+      ).pipe(Effect.scoped, Effect.forkChild);
+      // The lock uses native timers; allow its first acquisition attempt while activation is paused.
+      yield* TestClock.withLive(Effect.sleep("100 millis"));
+      expect(yield* Deferred.isDone(prepared)).toBe(false);
+      yield* Deferred.succeed(resume, undefined);
+      expect(yield* Fiber.join(update)).toBe("0.151.0");
+      yield* Fiber.join(session);
+      expect(yield* Deferred.isDone(prepared)).toBe(true);
     }).pipe(Effect.scoped),
   );
 
@@ -339,28 +624,31 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
 });
 
 it.layer(fixtureLayer)("approved managed engine policy", (it) => {
-  for (const installed of ["0.151.0", "0.155.1"]) {
-    it.effect(`keeps an already approved engine at ${installed} without running npm`, () =>
-      Effect.gen(function* () {
-        const fixture = yield* makeFixture();
-        yield* fixture.fs.writeFileString(
-          fixture.path.join(fixture.installRoot, "version.txt"),
-          installed,
-        );
-        const version = yield* updateTritonAiManagedCodex({
-          binaryPath: fixture.binaryPath,
-          run: (input) => {
-            expect(input.command).not.toBe("npm");
-            return Effect.succeed(success(`codex-cli ${installed}`));
-          },
-        });
-        expect(version).toBe(installed);
-        expect(yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toEqual([
-          "openai-codex-0.146.0",
-        ]);
-      }).pipe(Effect.scoped),
-    );
-  }
+  describe.each(Array.from(["0.151.0", "0.155.1"], (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: installed }) => {
+      it.effect(`keeps an already approved engine at ${installed} without running npm`, () =>
+        Effect.gen(function* () {
+          const fixture = yield* makeFixture();
+          yield* fixture.fs.writeFileString(
+            fixture.path.join(fixture.installRoot, "version.txt"),
+            installed,
+          );
+          const version = yield* updateTritonAiManagedCodex({
+            binaryPath: fixture.binaryPath,
+            run: (input) => {
+              expect(input.command).not.toBe("npm");
+              return Effect.succeed(success(`codex-cli ${installed}`));
+            },
+          });
+          expect(version).toBe(installed);
+          expect(yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toEqual([
+            "openai-codex-0.146.0",
+          ]);
+        }).pipe(Effect.scoped),
+      );
+    },
+  );
   it.effect("succeeds when another provider already updated the shared engine", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();
@@ -381,18 +669,21 @@ it.layer(fixtureLayer)("approved managed engine policy", (it) => {
       ]);
     }).pipe(Effect.scoped),
   );
-  for (const approved of [null, "latest", "0.155.1 || true"]) {
-    it.effect(`fails closed for policy ${String(approved)}`, () =>
-      Effect.gen(function* () {
-        const fixture = yield* makeFixture();
-        const error = yield* updateTritonAiManagedCodex({
-          binaryPath: fixture.binaryPath,
-          run: () => Effect.die("must not run a command"),
-        }).pipe(Effect.provideService(ManagedCodexApprovedVersion, approved), Effect.flip);
-        expect(error.message).toContain("No valid approved");
-      }).pipe(Effect.scoped),
-    );
-  }
+  describe.each(Array.from([null, "latest", "0.155.1 || true"], (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: approved }) => {
+      it.effect(`fails closed for policy ${String(approved)}`, () =>
+        Effect.gen(function* () {
+          const fixture = yield* makeFixture();
+          const error = yield* updateTritonAiManagedCodex({
+            binaryPath: fixture.binaryPath,
+            run: () => Effect.die("must not run a command"),
+          }).pipe(Effect.provideService(ManagedCodexApprovedVersion, approved), Effect.flip);
+          expect(error.message).toContain("No valid approved");
+        }).pipe(Effect.scoped),
+      );
+    },
+  );
   it.effect("rejects a staged package that differs from the approved pin", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();
@@ -409,159 +700,181 @@ it.layer(fixtureLayer)("approved managed engine policy", (it) => {
 });
 
 it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
-  for (const layout of ["lib\\node_modules", "node_modules"]) {
-    for (const scenario of [
-      "success",
-      "verification failure",
-      "temporary lock",
-      "persistent lock",
-      "unrelated error",
-      "rollback removal lock",
-      "rollback restoration lock",
-    ]) {
-      const rollbackFailure = scenario.startsWith("rollback");
-      const failActivation = scenario === "verification failure" || rollbackFailure;
-      const shouldFail = scenario !== "success" && scenario !== "temporary lock";
-      it.effect(`${layout}: ${scenario}`, () =>
-        Effect.gen(function* () {
-          const fixture = yield* makeFixture();
-          const { fs, path, installRoot, runtimeRoot } = fixture;
-          const binaryPath = path.join(installRoot, "codex.cmd");
-          const nodeHome = path.join(path.dirname(runtimeRoot), "node", "node-v22.23.2-win-x64");
-          const nodeBinary = path.join(nodeHome, "node.exe");
-          const npmCli = path.join(nodeHome, "node_modules", "npm", "bin", "npm-cli.js");
-          const entrySegments = [...layout.split("\\"), "@openai", "codex", "bin", "codex.js"];
-          const launcher = [
-            "@echo off",
-            "setlocal",
-            'set "SCRIPT_DIR=%~dp0"',
-            'set "NODE_BIN=%SCRIPT_DIR%..\\..\\node\\node-v22.23.2-win-x64\\node.exe"',
-            `"%NODE_BIN%" "%SCRIPT_DIR%${entrySegments.join("\\")}" %*`,
-            "",
-          ].join("\r\n");
-          yield* fs.writeFileString(binaryPath, launcher);
-          yield* fs.makeDirectory(path.dirname(npmCli), { recursive: true });
-          yield* fs.writeFileString(nodeBinary, "managed Node");
-          yield* fs.writeFileString(npmCli, "managed npm");
-          const activeEntry = path.join(installRoot, ...entrySegments);
-          yield* fs.makeDirectory(path.dirname(activeEntry), { recursive: true });
-          yield* fs.writeFileString(activeEntry, "0.146.0");
-          let installs = 0;
-          const run: ProcessRunner["Service"]["run"] = (input) =>
-            Effect.gen(function* () {
-              if (input.command === binaryPath) {
-                const version = yield* fs.readFileString(activeEntry);
-                if (failActivation && version === "0.151.0") return failure("activation failed");
-                expect(yield* fs.readFileString(binaryPath)).toBe(launcher);
-                return success(`codex-cli ${version}`);
-              }
-              // Neither npm.cmd nor the generated staged shim may depend on PATH.
-              expect(input.command).toBe(nodeBinary);
-              if (input.args[0] === npmCli) {
-                installs++;
-                expect(input.args).toContain("@openai/codex@0.151.0");
-                const prefix = input.args[input.args.indexOf("--prefix") + 1]!;
-                const entry = path.join(
-                  prefix,
-                  "node_modules",
-                  "@openai",
-                  "codex",
-                  "bin",
-                  "codex.js",
-                );
-                yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
-                yield* fs.writeFileString(entry, "0.151.0");
-                yield* fs.writeFileString(path.join(prefix, "codex.cmd"), "ambient node shim");
-                return success();
-              }
-              expect(input.args[1]).toBe("--version");
-              return success(`codex-cli ${yield* fs.readFileString(input.args[0]!)}`);
-            }).pipe(Effect.orDie);
-          const lockObserved = yield* Deferred.make<void>();
-          let activationAttempts = 0;
-          const testFs = FileSystem.FileSystem.of({
-            ...fs,
-            rename: (source, destination) =>
+  describe.each(Array.from(["lib\\node_modules", "node_modules"], (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: layout }) => {
+      describe.each(
+        Array.from(
+          [
+            "success",
+            "verification failure",
+            "temporary lock",
+            "persistent lock",
+            "unrelated error",
+            "rollback removal lock",
+            "rollback restoration lock",
+            "lock ownership lost during retry",
+          ],
+          (scenario) => ({ scenario }),
+        ),
+      )("case $scenario", ({ scenario }) => {
+        const rollbackFailure = scenario.startsWith("rollback");
+        const ownershipLost = scenario === "lock ownership lost during retry";
+        const failActivation = scenario === "verification failure" || rollbackFailure;
+        const shouldFail = scenario !== "success" && scenario !== "temporary lock";
+        it.effect(`${layout}: ${scenario}`, () =>
+          Effect.gen(function* () {
+            const fixture = yield* makeFixture();
+            const { fs, path, installRoot, runtimeRoot } = fixture;
+            const binaryPath = path.join(installRoot, "codex.cmd");
+            const nodeHome = path.join(path.dirname(runtimeRoot), "node", "node-v22.23.2-win-x64");
+            const nodeBinary = path.join(nodeHome, "node.exe");
+            const npmCli = path.join(nodeHome, "node_modules", "npm", "bin", "npm-cli.js");
+            const entrySegments = [...layout.split("\\"), "@openai", "codex", "bin", "codex.js"];
+            const launcher = [
+              "@echo off",
+              "setlocal",
+              'set "SCRIPT_DIR=%~dp0"',
+              'set "NODE_BIN=%SCRIPT_DIR%..\\..\\node\\node-v22.23.2-win-x64\\node.exe"',
+              `"%NODE_BIN%" "%SCRIPT_DIR%${entrySegments.join("\\")}" %*`,
+              "",
+            ].join("\r\n");
+            yield* fs.writeFileString(binaryPath, launcher);
+            yield* fs.makeDirectory(path.dirname(npmCli), { recursive: true });
+            yield* fs.writeFileString(nodeBinary, "managed Node");
+            yield* fs.writeFileString(npmCli, "managed npm");
+            const activeEntry = path.join(installRoot, ...entrySegments);
+            yield* fs.makeDirectory(path.dirname(activeEntry), { recursive: true });
+            yield* fs.writeFileString(activeEntry, "0.146.0");
+            let installs = 0;
+            const run: ProcessRunner["Service"]["run"] = (input) =>
               Effect.gen(function* () {
-                if (
-                  scenario === "rollback restoration lock" &&
-                  source.includes(".tritonai-codex-backup.")
-                ) {
-                  yield* Deferred.succeed(lockObserved, undefined);
-                  return yield* PlatformError.systemError({
-                    _tag: "Unknown",
-                    module: "FileSystem",
-                    method: "rename",
-                    cause: Object.assign(new Error("locked backup"), { code: "EPERM" }),
-                  });
+                if (input.command === binaryPath) {
+                  const version = yield* fs.readFileString(activeEntry);
+                  if (failActivation && version === "0.151.0") return failure("activation failed");
+                  expect(yield* fs.readFileString(binaryPath)).toBe(launcher);
+                  return success(`codex-cli ${version}`);
                 }
-                if (source.includes(".tritonai-codex-stage.") && destination === installRoot) {
-                  activationAttempts++;
+                // Neither npm.cmd nor the generated staged shim may depend on PATH.
+                expect(input.command).toBe(nodeBinary);
+                if (input.args[0] === npmCli) {
+                  installs++;
+                  expect(input.args).toContain("@openai/codex@0.151.0");
+                  const prefix = input.args[input.args.indexOf("--prefix") + 1]!;
+                  const entry = path.join(
+                    prefix,
+                    "node_modules",
+                    "@openai",
+                    "codex",
+                    "bin",
+                    "codex.js",
+                  );
+                  yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
+                  yield* fs.writeFileString(entry, "0.151.0");
+                  yield* fs.writeFileString(path.join(prefix, "codex.cmd"), "ambient node shim");
+                  return success();
+                }
+                expect(input.args[1]).toBe("--version");
+                return success(`codex-cli ${yield* fs.readFileString(input.args[0]!)}`);
+              }).pipe(Effect.orDie);
+            const lockObserved = yield* Deferred.make<void>();
+            let activationAttempts = 0;
+            const testFs = FileSystem.FileSystem.of({
+              ...fs,
+              rename: (source, destination) =>
+                Effect.gen(function* () {
                   if (
-                    scenario === "persistent lock" ||
-                    scenario === "unrelated error" ||
-                    (scenario === "temporary lock" && activationAttempts === 1)
+                    scenario === "rollback restoration lock" &&
+                    source.includes(".tritonai-codex-backup.")
                   ) {
                     yield* Deferred.succeed(lockObserved, undefined);
                     return yield* PlatformError.systemError({
                       _tag: "Unknown",
                       module: "FileSystem",
                       method: "rename",
-                      cause: Object.assign(new Error("file operation failed"), {
-                        code: scenario === "unrelated error" ? "ENOENT" : "EPERM",
-                      }),
+                      cause: Object.assign(new Error("locked backup"), { code: "EPERM" }),
                     });
                   }
-                }
-                return yield* fs.rename(source, destination);
-              }),
-            remove: (target, options) =>
-              Effect.gen(function* () {
-                if (scenario === "rollback removal lock" && target === installRoot) {
-                  yield* Deferred.succeed(lockObserved, undefined);
-                  return yield* PlatformError.systemError({
-                    _tag: "Unknown",
-                    module: "FileSystem",
-                    method: "remove",
-                    cause: Object.assign(new Error("locked active engine"), { code: "EPERM" }),
-                  });
-                }
-                return yield* fs.remove(target, options);
-              }),
-          });
-          const fiber = yield* updateTritonAiManagedCodex({ binaryPath, run }).pipe(
-            Effect.provideService(FileSystem.FileSystem, testFs),
-            Effect.scoped,
-            Effect.result,
-            Effect.forkChild,
-          );
-          if (scenario.includes("lock")) {
-            yield* Deferred.await(lockObserved);
-            yield* TestClock.adjust("11 seconds");
-          }
-          const result = yield* Fiber.join(fiber);
-          expect(activationAttempts).toBe(
-            scenario === "persistent lock" ? 41 : scenario === "temporary lock" ? 2 : 1,
-          );
-          expect(installs).toBe(1);
-          expect(result._tag).toBe(shouldFail ? "Failure" : "Success");
-          if (rollbackFailure) {
-            const entries = yield* fs.readDirectory(runtimeRoot);
-            const backup = entries.find((entry) => entry.startsWith(".tritonai-codex-backup."));
-            expect(backup).toBeDefined();
-            const savedRoot = path.join(runtimeRoot, backup!, "openai-codex-0.146.0");
-            expect(yield* fs.readFileString(path.join(savedRoot, ...entrySegments))).toBe(
-              "0.146.0",
+                  if (source.includes(".tritonai-codex-stage.") && destination === installRoot) {
+                    activationAttempts++;
+                    if (ownershipLost && activationAttempts === 1) {
+                      yield* fs.rename(`${runtimeRoot}.lock`, `${runtimeRoot}.retired-lock`);
+                      yield* fs.makeDirectory(`${runtimeRoot}.lock`);
+                      yield* fs.makeDirectory(path.dirname(activeEntry), { recursive: true });
+                      yield* fs.writeFileString(activeEntry, "0.160.0");
+                      yield* fs.writeFileString(binaryPath, launcher);
+                    }
+                    if (
+                      ownershipLost ||
+                      scenario === "persistent lock" ||
+                      scenario === "unrelated error" ||
+                      (scenario === "temporary lock" && activationAttempts === 1)
+                    ) {
+                      yield* Deferred.succeed(lockObserved, undefined);
+                      return yield* PlatformError.systemError({
+                        _tag: "Unknown",
+                        module: "FileSystem",
+                        method: "rename",
+                        cause: Object.assign(new Error("file operation failed"), {
+                          code: scenario === "unrelated error" ? "ENOENT" : "EPERM",
+                        }),
+                      });
+                    }
+                  }
+                  return yield* fs.rename(source, destination);
+                }),
+              remove: (target, options) =>
+                Effect.gen(function* () {
+                  if (scenario === "rollback removal lock" && target === installRoot) {
+                    yield* Deferred.succeed(lockObserved, undefined);
+                    return yield* PlatformError.systemError({
+                      _tag: "Unknown",
+                      module: "FileSystem",
+                      method: "remove",
+                      cause: Object.assign(new Error("locked active engine"), { code: "EPERM" }),
+                    });
+                  }
+                  return yield* fs.remove(target, options);
+                }),
+            });
+            const fiber = yield* updateTritonAiManagedCodex({ binaryPath, run }).pipe(
+              Effect.provideService(FileSystem.FileSystem, testFs),
+              Effect.scoped,
+              Effect.result,
+              Effect.forkChild,
             );
-            expect(yield* fs.readFileString(path.join(savedRoot, "codex.cmd"))).toBe(launcher);
-            if (result._tag === "Failure") expect(result.failure.message).toContain(savedRoot);
-          } else {
-            expect(yield* fs.readFileString(activeEntry)).toBe(shouldFail ? "0.146.0" : "0.151.0");
-            expect(yield* fs.readFileString(binaryPath)).toBe(launcher);
-            expect(yield* fs.readDirectory(runtimeRoot)).toEqual(["openai-codex-0.146.0"]);
-          }
-        }).pipe(Effect.scoped),
-      );
-    }
-  }
+            if (scenario.includes("lock")) {
+              yield* Deferred.await(lockObserved);
+              yield* TestClock.adjust("11 seconds");
+            }
+            const result = yield* Fiber.join(fiber);
+            expect(activationAttempts).toBe(
+              scenario === "persistent lock" ? 41 : scenario === "temporary lock" ? 2 : 1,
+            );
+            expect(installs).toBe(1);
+            expect(result._tag).toBe(shouldFail ? "Failure" : "Success");
+            if (rollbackFailure || ownershipLost) {
+              const entries = yield* fs.readDirectory(runtimeRoot);
+              const backup = entries.find((entry) => entry.startsWith(".tritonai-codex-backup."));
+              expect(backup).toBeDefined();
+              const savedRoot = path.join(runtimeRoot, backup!, "openai-codex-0.146.0");
+              expect(yield* fs.readFileString(path.join(savedRoot, ...entrySegments))).toBe(
+                "0.146.0",
+              );
+              expect(yield* fs.readFileString(path.join(savedRoot, "codex.cmd"))).toBe(launcher);
+              if (ownershipLost) expect(yield* fs.readFileString(activeEntry)).toBe("0.160.0");
+              else if (result._tag === "Failure")
+                expect(result.failure.message).toContain(savedRoot);
+            } else {
+              expect(yield* fs.readFileString(activeEntry)).toBe(
+                shouldFail ? "0.146.0" : "0.151.0",
+              );
+              expect(yield* fs.readFileString(binaryPath)).toBe(launcher);
+              expect(yield* fs.readDirectory(runtimeRoot)).toEqual(["openai-codex-0.146.0"]);
+            }
+          }).pipe(Effect.scoped),
+        );
+      });
+    },
+  );
 });

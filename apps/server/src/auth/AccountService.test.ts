@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Independent HMAC and encryption fixtures use Node crypto.
 import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";

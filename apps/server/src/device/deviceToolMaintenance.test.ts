@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as NodePathLayer from "@effect/platform-node/NodePath";
 import * as ProcessRunner from "../processRunner.ts";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 // @effect-diagnostics nodeBuiltinImport:off - tests the same standalone script used by local and SSH hosts.
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
@@ -36,6 +36,9 @@ describe.each([false, true])("device tool cleanup, flat=%s", (flat) => {
         `
 (async () => {
   const root = ${JSON.stringify(root)};
+  // Only this fixture's helper is active; unrelated host processes must not
+  // decide which temporary versions can be pruned (or overflow the scan).
+  require('node:child_process').spawnSync = () => ({ status: 0, stdout: process.argv.join(' ') });
   await pruneTools(root, [['${name}', '0.6.0']], ${flat});
 })().catch(error => { console.error(error); process.exitCode = 1; });`;
       await exec(process.execPath, [
@@ -52,30 +55,33 @@ describe.each([false, true])("device tool cleanup, flat=%s", (flat) => {
     }
   });
 
-  it("keeps every install when the process scan fails", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-tool-scan-"));
-    try {
-      for (const version of ["0.1.0", "0.2.0", "0.3.0"]) {
-        const dir = flat
-          ? NodePath.join(root, `expo-device-hub@${version}`)
-          : NodePath.join(root, "expo-device-hub", version);
-        await NodeFSP.mkdir(dir, { recursive: true });
-        await NodeFSP.writeFile(NodePath.join(dir, ".install-complete"), version);
-      }
-      await exec(process.execPath, [
-        "-e",
-        deviceToolMaintenanceScript +
-          `
-        require('node:child_process').spawnSync = () => ({ status: 1, stdout: '' });
+  it.each([1, null])(
+    "keeps every install when the process scan fails (status %s)",
+    async (status) => {
+      const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-tool-scan-"));
+      try {
+        for (const version of ["0.1.0", "0.2.0", "0.3.0"]) {
+          const dir = flat
+            ? NodePath.join(root, `expo-device-hub@${version}`)
+            : NodePath.join(root, "expo-device-hub", version);
+          await NodeFSP.mkdir(dir, { recursive: true });
+          await NodeFSP.writeFile(NodePath.join(dir, ".install-complete"), version);
+        }
+        await exec(process.execPath, [
+          "-e",
+          deviceToolMaintenanceScript +
+            `
+        require('node:child_process').spawnSync = () => ({ status: ${JSON.stringify(status)}, stdout: 'partial process scan' });
         pruneTools(${JSON.stringify(root)}, [['expo-device-hub', '0.3.0']], ${flat}).catch(() => process.exitCode = 1);
       `,
-      ]);
-      const parent = flat ? root : NodePath.join(root, "expo-device-hub");
-      expect((await NodeFSP.readdir(parent)).length).toBe(3);
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
+        ]);
+        const parent = flat ? root : NodePath.join(root, "expo-device-hub");
+        expect((await NodeFSP.readdir(parent)).length).toBe(3);
+      } finally {
+        await NodeFSP.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("does not prune before the required version has completed installation", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-tool-cleanup-"));

@@ -94,33 +94,42 @@ private final class ComposerTextView: UITextView {
   var onPasteText: ((String, NSRange) -> Void)?
   var clipboardFragment = ""
   var onAttributedMutation: (() -> Void)?
-  var onSubmit: (() -> Void)?
+  var onSubmit: ((Bool) -> Void)?
   var isReadOnly = false
   var textPasteThresholdBytes = 0
   var maxInputChars = Int.max
   var enterBehavior: ComposerEnterBehavior = .send
+  /// Shortcut HUD titles. JS supplies what the two sends actually do right now
+  /// ("Queue Message" / "Steer Message"), so the iPad Command-hold list names
+  /// the outcome rather than a generic "Send".
+  var submitTitle = "Send Message"
+  var alternateSubmitTitle = "Send Message"
   private var bypassTextPasteInterception = false
 
   override var keyCommands: [UIKeyCommand]? {
     var commands = super.keyCommands ?? []
     guard !isReadOnly, markedTextRange == nil else { return commands }
-    let submit = UIKeyCommand(
-      input: "\r",
-      modifierFlags: .command,
-      action: #selector(submitMessage(_:))
-    )
-    submit.discoverabilityTitle = "Send Message"
-    submit.wantsPriorityOverSystemBehavior = true
-    commands.append(submit)
+    // The plainer chord always performs the configured follow-up behavior and
+    // the more-modified one performs its opposite, so Command is the "other
+    // way" modifier whichever Return behavior is configured.
     if enterBehavior == .send {
       let submitOnReturn = UIKeyCommand(
         input: "\r",
         modifierFlags: [],
         action: #selector(submitMessage(_:))
       )
-      submitOnReturn.discoverabilityTitle = "Send Message"
+      submitOnReturn.discoverabilityTitle = submitTitle
       submitOnReturn.wantsPriorityOverSystemBehavior = true
       commands.append(submitOnReturn)
+
+      let submitAlternate = UIKeyCommand(
+        input: "\r",
+        modifierFlags: .command,
+        action: #selector(submitMessageAlternate(_:))
+      )
+      submitAlternate.discoverabilityTitle = alternateSubmitTitle
+      submitAlternate.wantsPriorityOverSystemBehavior = true
+      commands.append(submitAlternate)
 
       let newline = UIKeyCommand(
         input: "\r",
@@ -130,6 +139,24 @@ private final class ComposerTextView: UITextView {
       newline.discoverabilityTitle = "New Line"
       newline.wantsPriorityOverSystemBehavior = true
       commands.append(newline)
+    } else {
+      let submit = UIKeyCommand(
+        input: "\r",
+        modifierFlags: .command,
+        action: #selector(submitMessage(_:))
+      )
+      submit.discoverabilityTitle = submitTitle
+      submit.wantsPriorityOverSystemBehavior = true
+      commands.append(submit)
+
+      let submitAlternate = UIKeyCommand(
+        input: "\r",
+        modifierFlags: [.command, .shift],
+        action: #selector(submitMessageAlternate(_:))
+      )
+      submitAlternate.discoverabilityTitle = alternateSubmitTitle
+      submitAlternate.wantsPriorityOverSystemBehavior = true
+      commands.append(submitAlternate)
     }
     if textPasteThresholdBytes > 0 {
       let pasteAsText = UIKeyCommand(
@@ -146,7 +173,12 @@ private final class ComposerTextView: UITextView {
 
   @objc private func submitMessage(_ sender: UIKeyCommand) {
     guard !isReadOnly, markedTextRange == nil else { return }
-    onSubmit?()
+    onSubmit?(false)
+  }
+
+  @objc private func submitMessageAlternate(_ sender: UIKeyCommand) {
+    guard !isReadOnly, markedTextRange == nil else { return }
+    onSubmit?(true)
   }
 
   @objc private func insertNewline(_ sender: UIKeyCommand) {
@@ -437,6 +469,7 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
   private var pendingIconUris = Set<String>()
   private var tokensNeedRebuild = false
   private var chipsNeedMeasuredWidth = false
+  private var hasDeferredForcedRebuild = false
 
   let onComposerChange = EventDispatcher()
   let onComposerSelectionChange = EventDispatcher()
@@ -489,8 +522,8 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     textView.onAttributedMutation = { [weak self] in
       self?.emitTextChange()
     }
-    textView.onSubmit = { [weak self] in
-      self?.onComposerSubmit([:])
+    textView.onSubmit = { [weak self] alternate in
+      self?.onComposerSubmit(["alternate": alternate])
     }
     let contextTap = UITapGestureRecognizer(target: self, action: #selector(openContext(_:)))
     contextTap.cancelsTouchesInView = false
@@ -701,6 +734,14 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     textView.enterBehavior = ComposerEnterBehavior(rawValue: behavior) ?? .send
   }
 
+  func setSubmitTitle(_ title: String) {
+    textView.submitTitle = title
+  }
+
+  func setAlternateSubmitTitle(_ title: String) {
+    textView.alternateSubmitTitle = title
+  }
+
   func setTextPasteThresholdBytes(_ threshold: Int) {
     textView.textPasteThresholdBytes = threshold
   }
@@ -799,11 +840,21 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
   }
 
   private func applyControlledDocument(force: Bool = false) {
-    let currentSource = textView.serializedText()
-    guard force || currentSource != value || !documentMatchesExpectedTokens() else {
+    // Rebuilding the attributed string tears down an active IME composition.
+    // Skip while marked text exists; committing the composition sends a new
+    // value from JS, and that update rebuilds, keeping any skipped force.
+    if textView.markedTextRange != nil {
+      hasDeferredForcedRebuild = hasDeferredForcedRebuild || force
       updatePlaceholderVisibility()
       return
     }
+    let shouldForce = force || hasDeferredForcedRebuild
+    let currentSource = textView.serializedText()
+    guard shouldForce || currentSource != value || !documentMatchesExpectedTokens() else {
+      updatePlaceholderVisibility()
+      return
+    }
+    hasDeferredForcedRebuild = false
 
     let previousSelection = sourceSelection()
     isApplyingControlledValue = true
@@ -1179,7 +1230,28 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
   }
 
   private func emitContentSizeIfNeeded() {
-    let nextSize = textView.contentSize
+    // The laid-out text without insets. A one-line draft reports its natural width, so
+    // JS can tell whether it fits a narrower row than the one it is laid out in; past
+    // one line only the height matters, so layout stops at the second line. The width
+    // comes from the line fragment because usedRect spans the container once the view
+    // scrolls. A trailing newline's empty line only exists as the extra fragment.
+    let layout = textView.layoutManager
+    let container = textView.textContainer
+    var lines = 0
+    var width: CGFloat = 0
+    var height: CGFloat = 0
+    let glyphs = NSRange(location: 0, length: layout.numberOfGlyphs)
+    layout.enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, _, stop in
+      lines += 1
+      width = used.width
+      height = used.maxY
+      if lines > 1 { stop.pointee = true }
+    }
+    if lines < 2, layout.extraLineFragmentTextContainer === container {
+      lines += 1
+      height = max(height, layout.extraLineFragmentUsedRect.maxY)
+    }
+    let nextSize = CGSize(width: lines == 1 ? ceil(width) : 0, height: ceil(height))
     guard abs(nextSize.width - lastContentSize.width) > 0.5 ||
       abs(nextSize.height - lastContentSize.height) > 0.5 else {
       return

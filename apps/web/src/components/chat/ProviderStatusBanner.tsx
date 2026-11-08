@@ -1,4 +1,4 @@
-import { type ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import type { ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
 import { memo } from "react";
 import { InfoIcon, XIcon } from "lucide-react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
@@ -6,7 +6,6 @@ import { Button, InlineButton } from "../ui/button";
 import { formatProviderDriverKindLabel } from "../../providerModels";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-/** Unsupported and broken versions fail mid-turn, so they warn even when ready. */
 function getIncompatibleVersion(status: ServerProvider) {
   const compatibility = status.compatibilityAdvisory;
   if (status.status === "error" && status.auth.status === "unauthenticated") return null;
@@ -59,7 +58,6 @@ export function hasProviderSetup(status: ServerProvider): boolean {
   );
 }
 
-/** Broken-version guidance takes precedence over startup failures it can cause. */
 export function getProviderStatusMessage(status: ServerProvider): string {
   if (
     status.auth.status !== "unauthenticated" &&

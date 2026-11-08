@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off,preferSchemaOverJson:off - This validates a build-owned intermediate before binding final artifact bytes.
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-
 import {
   bindManagedPluginCompositionToArtifacts,
   managedPluginProofFileName,

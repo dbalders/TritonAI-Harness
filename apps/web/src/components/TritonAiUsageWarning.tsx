@@ -1,6 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
-
 import { usePrimaryEnvironment } from "../state/environments";
 import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
@@ -26,7 +25,7 @@ export function TritonAiUsageWarning() {
 
   useEffect(() => {
     return () => {
-      if (activeToastRef.current !== null) {
+      if (environmentId !== null && activeToastRef.current !== null) {
         toastManager.close(activeToastRef.current);
         activeToastRef.current = null;
       }

@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -14,6 +14,8 @@ const {
   mkdirSyncMock,
   writeFileSyncMock,
   copyFileSyncMock,
+  execFileSyncMock,
+  readFileSyncMock,
 } = vi.hoisted(() => ({
   appendSwitchMock: vi.fn(),
   getSwitchValueMock: vi.fn(),
@@ -23,6 +25,8 @@ const {
   mkdirSyncMock: vi.fn(),
   writeFileSyncMock: vi.fn(),
   copyFileSyncMock: vi.fn(),
+  execFileSyncMock: vi.fn(),
+  readFileSyncMock: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -43,10 +47,14 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("node:fs", () => ({
-  readFileSync: () => "{}",
+  readFileSync: readFileSyncMock,
   mkdirSync: mkdirSyncMock,
   writeFileSync: writeFileSyncMock,
   copyFileSync: copyFileSyncMock,
+}));
+
+vi.mock("node:child_process", () => ({
+  execFileSync: execFileSyncMock,
 }));
 
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
@@ -61,6 +69,67 @@ describe("DesktopPreReadyPlatform", () => {
     mkdirSyncMock.mockReset();
     writeFileSyncMock.mockReset();
     copyFileSyncMock.mockReset();
+    execFileSyncMock.mockReset();
+    readFileSyncMock.mockReset().mockReturnValue("{}");
+  });
+
+  it.effect("persists Linux scaling synchronously across relaunches and settings rewrites", () => {
+    vi.stubEnv("T3CODE_HOME", "/isolated");
+    vi.stubEnv("VITE_DEV_SERVER_URL", "");
+    const settingsPath = "/isolated/userdata/desktop-settings.json";
+    const files = new Map([[settingsPath, "{}"]]);
+    const commandLine = new Map<string, string>();
+    readFileSyncMock.mockImplementation((path: string) => {
+      const contents = files.get(path);
+      if (contents === undefined) throw new Error("ENOENT");
+      return contents;
+    });
+    writeFileSyncMock.mockImplementation((path: string, contents: string) => {
+      files.set(path, contents);
+    });
+    hasSwitchMock.mockImplementation((name: string) => commandLine.has(name));
+    getSwitchValueMock.mockImplementation((name: string) => commandLine.get(name) ?? "");
+    appendSwitchMock.mockImplementation((name: string, value: string) => {
+      commandLine.set(name, value);
+    });
+    const launch = Effect.gen(function* () {
+      const startup = Promise.resolve().then(() => commandLine.get("force-device-scale-factor"));
+      yield* DesktopPreReadyPlatform.make;
+      return yield* Effect.promise(() => startup);
+    });
+
+    return Effect.gen(function* () {
+      for (const explicitScale of ["1.75", "1"]) {
+        commandLine.clear();
+        commandLine.set("force-device-scale-factor", explicitScale);
+        appendSwitchMock.mockClear();
+        assert.equal(yield* launch, explicitScale);
+        assert.isFalse(
+          appendSwitchMock.mock.calls.some(([name]) => name === "force-device-scale-factor"),
+        );
+
+        // The settings service discards fields it does not own when rewriting its document.
+        files.set(settingsPath, JSON.stringify({ linuxPasswordStore: "basic" }));
+        commandLine.clear();
+        assert.equal(yield* launch, explicitScale);
+      }
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    );
+  });
+
+  it.effect.each(["darwin", "win32"] as const)("leaves device scaling alone on %s", (platform) => {
+    readFileSyncMock.mockReturnValue("1.75");
+    hasSwitchMock.mockImplementation((name: string) => name === "force-device-scale-factor");
+    getSwitchValueMock.mockReturnValue("2");
+
+    return Effect.gen(function* () {
+      yield* DesktopPreReadyPlatform.make;
+      assert.deepEqual(readFileSyncMock.mock.calls, []);
+      assert.deepEqual(writeFileSyncMock.mock.calls, []);
+      assert.deepEqual(appendSwitchMock.mock.calls, []);
+    }).pipe(Effect.provideService(HostProcess.Platform, platform));
   });
 
   it.effect("preserves an explicit Linux password-store switch", () => {
@@ -75,60 +144,106 @@ describe("DesktopPreReadyPlatform", () => {
     }).pipe(
       Effect.provide(
         DesktopPreReadyPlatform.layer.pipe(
-          Layer.provide(Layer.succeed(HostProcessPlatform, "linux")),
+          Layer.provide(Layer.succeed(HostProcess.Platform, "linux")),
         ),
       ),
     );
   });
 
-  for (const previousEntry of [undefined, 'Exec="/Applications/deleted-previous.AppImage" %U']) {
-    it.effect(
-      `prepares a ${previousEntry ? "stale" : "missing"} Linux desktop entry before startup yields`,
-      () => {
-        vi.stubEnv("VITE_DEV_SERVER_URL", "");
-        vi.stubEnv("XDG_DATA_HOME", "/xdg");
-        vi.stubEnv("APPIMAGE", "/Applications/current.AppImage");
-        getSwitchValueMock.mockReturnValue("");
-        let desktopName = "t3code.desktop";
-        let desktopEntry = previousEntry;
-        let iconInstalled = false;
-        copyFileSyncMock.mockImplementation((_source: string, destination: string) => {
-          iconInstalled = destination === "/xdg/icons/tritonai-harness.desktop.png";
-        });
-        setDesktopNameMock.mockImplementation((name: string) => {
-          desktopName = name;
-        });
-        writeFileSyncMock.mockImplementation((path: string, contents: string) => {
-          if (path === "/xdg/applications/tritonai-harness.desktop") desktopEntry = contents;
-        });
-
-        return Effect.scoped(
-          Effect.gen(function* () {
-            const portalIdentity = Promise.resolve().then(() => ({
-              desktopName,
-              desktopEntry,
-              iconInstalled,
-            }));
-            yield* Layer.build(
-              DesktopPreReadyPlatform.layer.pipe(
-                Layer.provide(Layer.succeed(HostProcessPlatform, "linux")),
-              ),
-            );
-            const identity = yield* Effect.promise(() => portalIdentity);
-            assert.equal(identity.desktopName, "tritonai-harness.desktop");
-            assert.include(identity.desktopEntry ?? "", 'Exec="/Applications/current.AppImage" %U');
-            assert.include(identity.desktopEntry ?? "", "Name=TritonAI Harness");
-            assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/t3code;");
-            assert.include(
-              identity.desktopEntry ?? "",
-              "Icon=/xdg/icons/tritonai-harness.desktop.png",
-            );
-            assert.isTrue(identity.iconInstalled);
-          }),
-        ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
-      },
+  it.effect.each([
+    {
+      label: "merges the color-manager fallback into disabled features on Hyprland 0.48.1",
+      switches: { "ozone-platform": "wayland", "disable-features": "Vulkan" },
+      hyprlandVersion: "0.48.1",
+      hyprlandCommit: "29e2e59fdbab8ed2cc23a20e3c6043d5decb5cdc",
+      expected: [["disable-features", "Vulkan,WaylandWpColorManagerV1"]],
+    },
+    {
+      label: "preserves color management on Hyprland 0.51.0",
+      switches: { "ozone-platform": "wayland", "disable-features": "Vulkan" },
+      hyprlandVersion: "0.51.0",
+      hyprlandCommit: "0123456789abcdef0123456789abcdef01234567",
+      expected: [],
+    },
+    {
+      label: "preserves color management when Electron resolved X11",
+      switches: { "ozone-platform": "x11", "disable-features": "Vulkan" },
+      hyprlandVersion: "0.48.1",
+      hyprlandCommit: "29e2e59fdbab8ed2cc23a20e3c6043d5decb5cdc",
+      expected: [],
+    },
+  ])("$label", ({ switches, hyprlandVersion, hyprlandCommit, expected }) => {
+    vi.stubEnv("XDG_CURRENT_DESKTOP", "Hyprland");
+    vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+    const commandLine = new Map<string, string>(Object.entries(switches));
+    hasSwitchMock.mockImplementation((switchName: string) => commandLine.has(switchName));
+    getSwitchValueMock.mockImplementation(
+      (switchName: string) => commandLine.get(switchName) ?? "",
     );
-  }
+    execFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        commit: hyprlandCommit,
+        version: hyprlandVersion,
+        dirty: false,
+        tag: `v${hyprlandVersion}`,
+      }),
+    );
+
+    return DesktopPreReadyPlatform.make.pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.map(() => {
+        const featureSwitches = appendSwitchMock.mock.calls.filter(([name]) =>
+          ["disable-features", "enable-features", "ozone-platform"].includes(name),
+        );
+        assert.deepEqual(featureSwitches, expected);
+      }),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    );
+  });
+
+  it.effect.each([
+    { previousEntry: undefined, label: "missing" },
+    { previousEntry: 'Exec="/Applications/deleted-previous.AppImage" %U', label: "stale" },
+  ])("prepares a $label Linux desktop entry before startup yields", ({ previousEntry }) => {
+    vi.stubEnv("VITE_DEV_SERVER_URL", "");
+    vi.stubEnv("XDG_DATA_HOME", "/xdg");
+    vi.stubEnv("APPIMAGE", "/Applications/current.AppImage");
+    getSwitchValueMock.mockReturnValue("");
+    let desktopName = "t3code.desktop";
+    let desktopEntry = previousEntry;
+    let iconInstalled = false;
+    copyFileSyncMock.mockImplementation((_source: string, destination: string) => {
+      iconInstalled = destination === "/xdg/icons/tritonai-harness.desktop.png";
+    });
+    setDesktopNameMock.mockImplementation((name: string) => {
+      desktopName = name;
+    });
+    writeFileSyncMock.mockImplementation((path: string, contents: string) => {
+      if (path === "/xdg/applications/tritonai-harness.desktop") desktopEntry = contents;
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const portalIdentity = Promise.resolve().then(() => ({
+          desktopName,
+          desktopEntry,
+          iconInstalled,
+        }));
+        yield* Layer.build(
+          DesktopPreReadyPlatform.layer.pipe(
+            Layer.provide(Layer.succeed(HostProcess.Platform, "linux")),
+          ),
+        );
+        const identity = yield* Effect.promise(() => portalIdentity);
+        assert.equal(identity.desktopName, "tritonai-harness.desktop");
+        assert.include(identity.desktopEntry ?? "", "Exec=/Applications/current.AppImage %U");
+        assert.include(identity.desktopEntry ?? "", "Name=TritonAI Harness");
+        assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/t3code;");
+        assert.include(identity.desktopEntry ?? "", "Icon=/xdg/icons/tritonai-harness.desktop.png");
+        assert.isTrue(identity.iconInstalled);
+      }),
+    ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
+  });
 
   it.effect("keeps startup available when the early desktop entry cannot be written", () => {
     getSwitchValueMock.mockReturnValue("");
@@ -137,7 +252,7 @@ describe("DesktopPreReadyPlatform", () => {
     });
 
     return DesktopPreReadyPlatform.make.pipe(
-      Effect.provideService(HostProcessPlatform, "linux"),
+      Effect.provideService(HostProcess.Platform, "linux"),
       Effect.asVoid,
     );
   });
@@ -153,7 +268,7 @@ describe("DesktopPreReadyPlatform", () => {
       assert.include(contents, "MimeType=x-scheme-handler/t3code;");
       assert.include(contents, "Icon=");
       assert.equal(setDesktopNameMock.mock.calls.length, 1);
-    }).pipe(Effect.provideService(HostProcessPlatform, "linux"));
+    }).pipe(Effect.provideService(HostProcess.Platform, "linux"));
   });
 
   it.effect(
@@ -169,11 +284,11 @@ describe("DesktopPreReadyPlatform", () => {
           events.push("pre-ready");
         });
 
-        const preReadyLayer = DesktopPreReadyPlatform.layer.pipe(
-          Layer.provide(Layer.succeed(HostProcessPlatform, "darwin")),
+        const layerPreReady = DesktopPreReadyPlatform.layer.pipe(
+          Layer.provide(Layer.succeed(HostProcess.Platform, "darwin")),
         );
 
-        const clerkShapedLayer = Layer.effect(
+        const layerClerkShaped = Layer.effect(
           ClerkShaped,
           Effect.promise(() => Promise.resolve()).pipe(
             Effect.map(() => {
@@ -183,15 +298,15 @@ describe("DesktopPreReadyPlatform", () => {
           ),
         );
 
-        const runtimeLayer = clerkShapedLayer.pipe(
+        const layerRuntime = layerClerkShaped.pipe(
           Layer.flatMap((clerkContext) => Layer.succeedContext(clerkContext)),
-          Layer.provideMerge(preReadyLayer),
+          Layer.provideMerge(layerPreReady),
         );
 
         const result = yield* Effect.all({
           clerk: ClerkShaped,
           preReady: DesktopPreReadyPlatform.DesktopPreReadyElectronOptions,
-        }).pipe(Effect.provide(runtimeLayer));
+        }).pipe(Effect.provide(layerRuntime));
 
         assert.deepEqual(result, {
           clerk: { ready: true },

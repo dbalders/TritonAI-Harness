@@ -1,150 +1,46 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ChatAttachment, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import type { ProviderInstanceId } from "@t3tools/contracts";
+import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import { TextGenerationError } from "@t3tools/contracts";
 
-import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
-import type { ProviderInstance } from "../provider/ProviderDriver.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
-import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
 
-export interface CommitMessageGenerationInput {
-  cwd: string;
-  branch: string | null;
-  stagedSummary: string;
-  stagedPatch: string;
-  /** When true, the model also returns a semantic branch name for the change. */
-  includeBranch?: boolean;
-  policy?: TextGenerationPolicy | undefined;
-  /** What model and provider to use for generation. */
-  modelSelection: ModelSelection;
-}
+export type {
+  DailyMemoryGenerationInput,
+  DailyMemoryGenerationResult,
+  IdeasGenerationInput,
+  IdeasGenerationResult,
+  GeneratedIdea,
+  BranchNameGenerationInput,
+  BranchNameGenerationResult,
+  CommitMessageGenerationInput,
+  CommitMessageGenerationResult,
+  PrContentGenerationInput,
+  PrContentGenerationResult,
+  ReviewGuideGenerationInput,
+  ReviewGuideGenerationResult,
+  ThreadTitleGenerationInput,
+  ThreadTitleGenerationResult,
+} from "@t3tools/provider-core/server/textGeneration";
 
-export interface CommitMessageGenerationResult {
-  subject: string;
-  body: string;
-  /** Only present when `includeBranch` was set on the input. */
-  branch?: string | undefined;
-}
-
-export interface PrContentGenerationInput {
-  cwd: string;
-  baseBranch: string;
-  headBranch: string;
-  commitSummary: string;
-  diffSummary: string;
-  diffPatch: string;
-  changeRequestTemplate?: string | undefined;
-  policy?: TextGenerationPolicy | undefined;
-  /** What model and provider to use for generation. */
-  modelSelection: ModelSelection;
-}
-
-export interface PrContentGenerationResult {
-  title: string;
-  body: string;
-}
-
-export interface BranchNameGenerationInput {
-  cwd: string;
-  message: string;
-  attachments?: ReadonlyArray<ChatAttachment> | undefined;
-  /** What model and provider to use for generation. */
-  modelSelection: ModelSelection;
-}
-
-export interface BranchNameGenerationResult {
-  branch: string;
-}
-
-export interface ThreadTitleGenerationInput {
-  linkedContext?: string | undefined;
-  cwd: string;
-  message: string;
-  /** Present when replacing an existing title from the current thread history. */
-  previousTitle?: string | undefined;
-  attachments?: ReadonlyArray<ChatAttachment> | undefined;
-  /** What model and provider to use for generation. */
-  modelSelection: ModelSelection;
-}
-
-export interface ThreadTitleGenerationResult {
-  title: string;
-  needsRefinement?: boolean | undefined;
-}
-
-export interface DailyMemoryGenerationInput {
-  /** Working directory for the generation process. Nothing in it is read. */
-  cwd: string;
-  /** The local day being summarized, `YYYY-MM-DD`. */
-  day: string;
-  projectNames: ReadonlyArray<string>;
-  activity: string;
-  inboxNotes: string;
-  modelSelection: ModelSelection;
-}
-
-export interface DailyMemoryGenerationResult {
-  overview: string;
-  projects: ReadonlyArray<{
-    readonly project: string;
-    readonly workedOn: ReadonlyArray<string>;
-    readonly recent: string;
-  }>;
-  decisions: ReadonlyArray<string>;
-  openLoops: ReadonlyArray<string>;
-}
-
-/**
- * TextGeneration - Service tag for commit and change request text generation.
- */
-export class TextGeneration extends Context.Service<
-  TextGeneration,
-  {
-    /**
-     * Generate a commit message from staged change context.
-     */
-    readonly generateCommitMessage: (
-      input: CommitMessageGenerationInput,
-    ) => Effect.Effect<CommitMessageGenerationResult, TextGenerationError>;
-
-    /**
-     * Generate change request title/body from branch and diff context.
-     */
-    readonly generatePrContent: (
-      input: PrContentGenerationInput,
-    ) => Effect.Effect<PrContentGenerationResult, TextGenerationError>;
-
-    /**
-     * Generate a concise branch name from a user message.
-     */
-    readonly generateBranchName: (
-      input: BranchNameGenerationInput,
-    ) => Effect.Effect<BranchNameGenerationResult, TextGenerationError>;
-
-    /** Generate a concise thread title from a first message or thread history. */
-    readonly generateThreadTitle: (
-      input: ThreadTitleGenerationInput,
-    ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
-
-    /**
-     * Summarize one day of thread work for the memory vault. Only Codex
-     * implements this; other providers leave it undefined.
-     */
-    readonly generateDailyMemory?: (
-      input: DailyMemoryGenerationInput,
-    ) => Effect.Effect<DailyMemoryGenerationResult, TextGenerationError>;
-  }
->()("t3/textGeneration/TextGeneration") {}
+export class TextGeneration extends Context.Service<TextGeneration, ProviderTextGeneration>()(
+  "t3/textGeneration/TextGeneration",
+) {}
 
 type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateDailyMemory";
+  | "generateDailyMemory"
+  | "generateIdeas"
+  | "generateReviewGuide"
+  | "generateHelp";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -169,6 +65,19 @@ export const make = Effect.gen(function* () {
   const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   return TextGeneration.of({
+    generateHelp: (input) =>
+      resolveInstance(registry, "generateHelp", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) =>
+          textGeneration.generateHelp
+            ? textGeneration.generateHelp(input)
+            : Effect.fail(
+                new TextGenerationError({
+                  operation: "generateHelp",
+                  detail: "The configured provider does not support Help text generation.",
+                }),
+              ),
+        ),
+      ),
     generateCommitMessage: (input) =>
       resolveInstance(registry, "generateCommitMessage", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)),
@@ -180,6 +89,10 @@ export const make = Effect.gen(function* () {
     generateBranchName: (input) =>
       resolveInstance(registry, "generateBranchName", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
+      ),
+    generateReviewGuide: (input) =>
+      resolveInstance(registry, "generateReviewGuide", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input)),
       ),
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
@@ -207,6 +120,20 @@ export const make = Effect.gen(function* () {
                   operation: "generateDailyMemory",
                   detail:
                     "Daily memory needs a Codex text generation model. Choose one under Settings, Text generation.",
+                }),
+              ),
+        ),
+      ),
+    generateIdeas: (input) =>
+      resolveInstance(registry, "generateIdeas", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) =>
+          textGeneration.generateIdeas
+            ? textGeneration.generateIdeas(input)
+            : Effect.fail(
+                new TextGenerationError({
+                  operation: "generateIdeas",
+                  detail:
+                    "Ideas need a Codex text generation model. Choose one under Settings, Text generation.",
                 }),
               ),
         ),

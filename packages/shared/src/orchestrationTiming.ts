@@ -1,14 +1,34 @@
-type LatestTurnTiming = {
-  readonly turnId: string | null;
-  /** Set when the turn is created; `startedAt` waits for the provider. */
+import { isOrchestrationV2WorkActive, type OrchestrationV2Subagent } from "@t3tools/contracts";
+
+export function deriveSubagentElapsedMs(
+  agent: {
+    readonly status: OrchestrationV2Subagent["status"];
+    readonly startedAt: string | null;
+    readonly completedAt: string | null;
+  },
+  nowMs: number,
+): number | null {
+  if (agent.startedAt === null) return null;
+  const end = isOrchestrationV2WorkActive(agent.status)
+    ? nowMs
+    : agent.completedAt === null
+      ? null
+      : Date.parse(agent.completedAt);
+  if (end === null) return null;
+  const start = Date.parse(agent.startedAt);
+  return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : null;
+}
+
+type LatestRunTiming = {
+  readonly runId: string | null;
   readonly requestedAt?: string | null;
   readonly startedAt: string | null;
   readonly completedAt: string | null;
 };
 
-type SessionActivityState = {
+type RuntimeActivityState = {
   readonly orchestrationStatus: string;
-  readonly activeTurnId?: string | null;
+  readonly activeRunId?: string | null;
 };
 
 export function formatDuration(durationMs: number): string {
@@ -18,8 +38,9 @@ export function formatDuration(durationMs: number): string {
     const tenths = Math.round(durationMs / 100) / 10;
     return tenths >= 10 ? "10s" : `${tenths.toFixed(1)}s`;
   }
-  if (durationMs < 60_000) return `${Math.round(durationMs / 1_000)}s`;
   const totalSeconds = Math.round(durationMs / 1_000);
+  // Choose the unit after rounding so 59.5 seconds never renders as "60s".
+  if (totalSeconds < 60) return `${totalSeconds}s`;
   const hours = Math.floor(totalSeconds / 3_600);
   const minutes = Math.floor((totalSeconds % 3_600) / 60);
   const seconds = totalSeconds % 60;
@@ -30,37 +51,33 @@ export function formatDuration(durationMs: number): string {
   return parts.join(" ");
 }
 
-function isLatestTurnSettled(
-  latestTurn: LatestTurnTiming | null,
-  session: SessionActivityState | null,
+function isLatestRunSettled(
+  latestRun: LatestRunTiming | null,
+  runtime: RuntimeActivityState | null,
 ): boolean {
-  if (!latestTurn) return false;
-  if (!latestTurn.completedAt) return false;
-  if (!session) return true;
-  if (session.orchestrationStatus === "running") return false;
+  if (!latestRun) return false;
+  if (!latestRun.completedAt) return false;
+  if (!runtime) return true;
+  if (runtime.orchestrationStatus === "running") return false;
   return true;
 }
 
 /**
- * When the working indicator should be counting, and from when.
- *
- * `requestedAt` is the floor for an unsettled turn. The projector only stamps
- * `startedAt` in the same update that moves the session to "running", so while
- * the provider spins up (session "starting") a requested turn has no
- * `startedAt` at all — and returning null there blinks the indicator out for
- * the whole spin-up. A settled turn still falls through to `sendStartedAt`, so
- * this cannot leave the indicator counting after the work is done.
+ * The projector only stamps `startedAt` in the same update that moves the
+ * session to "running", so while the provider spins up (session "starting") a
+ * requested turn has no `startedAt` at all — and returning null there blinks
+ * the indicator out for the whole spin-up.
  */
 export function deriveActiveWorkStartedAt(
-  latestTurn: LatestTurnTiming | null,
-  session: SessionActivityState | null,
+  latestRun: LatestRunTiming | null,
+  runtime: RuntimeActivityState | null,
   sendStartedAt: string | null,
 ): string | null {
-  if (session?.activeTurnId && session.activeTurnId !== latestTurn?.turnId) {
+  if (runtime?.activeRunId && runtime.activeRunId !== latestRun?.runId) {
     return sendStartedAt;
   }
-  if (!isLatestTurnSettled(latestTurn, session)) {
-    return latestTurn?.startedAt ?? latestTurn?.requestedAt ?? sendStartedAt;
+  if (!isLatestRunSettled(latestRun, runtime)) {
+    return latestRun?.startedAt ?? latestRun?.requestedAt ?? sendStartedAt;
   }
   return sendStartedAt;
 }

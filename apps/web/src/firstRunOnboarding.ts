@@ -10,10 +10,9 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-
 import { APP_BASE_NAME } from "./branding";
 import { useComposerDraftStore } from "./composerDraftStore";
 import {
@@ -31,7 +30,6 @@ import { environmentShell } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
 import {
   TRITONAI_FIRST_RUN_PROMPT,
-  TRITONAI_FIRST_RUN_WORKSPACE,
   isTritonAiCodeBrand,
   isTritonAiWorkspacePath,
   resolveTritonAiFirstRunWorkspacePath,
@@ -103,7 +101,7 @@ function useComposerDraftStoreHydrated(): boolean {
   return hydrated;
 }
 
-function waitForProject(input: {
+export function waitForProject(input: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
   timeoutMs: number;
@@ -195,59 +193,61 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
 
     runningRef.current = true;
     void (async () => {
-      try {
-        const workspacePath = resolveTritonAiFirstRunWorkspacePath();
-        let project = existingTritonAiProject;
+      return await (async () => {
+        try {
+          const workspacePath = resolveTritonAiFirstRunWorkspacePath();
+          let project = existingTritonAiProject;
 
-        if (!project) {
-          const projectId = newProjectId();
-          const result = await createProject({
-            environmentId: primaryEnvironmentId,
-            input: {
-              projectId,
-              title: inferProjectTitleFromPath(workspacePath) || ONBOARDING_PROJECT_TITLE,
-              workspaceRoot: workspacePath,
-              createWorkspaceRootIfMissing: true,
-              defaultModelSelection: null,
-            },
-          });
+          if (!project) {
+            const projectId = newProjectId();
+            const result = await createProject({
+              environmentId: primaryEnvironmentId,
+              input: {
+                projectId,
+                title: inferProjectTitleFromPath(workspacePath) || ONBOARDING_PROJECT_TITLE,
+                workspaceRoot: workspacePath,
+                createWorkspaceRootIfMissing: true,
+                defaultModelSelection: null,
+              },
+            });
 
-          if (result._tag === "Failure") {
-            if (!isAtomCommandInterrupted(result)) {
-              console.error("[first-run-onboarding] project create failed", {
-                error: squashAtomCommandFailure(result),
-              });
+            if (result._tag === "Failure") {
+              if (!isAtomCommandInterrupted(result)) {
+                console.error("[first-run-onboarding] project create failed", {
+                  error: squashAtomCommandFailure(result),
+                });
+              }
+              return;
             }
+
+            project = await waitForProject({
+              environmentId: primaryEnvironmentId,
+              projectId,
+              timeoutMs: PROJECT_CREATE_WAIT_TIMEOUT_MS,
+            });
+          }
+
+          if (!project) return;
+
+          const projectRef = scopeProjectRef(project.environmentId, project.id);
+          const currentDraftStore = useComposerDraftStore.getState();
+          const existingProjectDraft = currentDraftStore.getDraftSessionByProjectRef(projectRef);
+          if (existingProjectDraft) {
+            updateSettings({ tritonAiFirstRunOnboardingCompleted: true });
             return;
           }
 
-          project = await waitForProject({
-            environmentId: primaryEnvironmentId,
-            projectId,
-            timeoutMs: PROJECT_CREATE_WAIT_TIMEOUT_MS,
+          await createNewThread(projectRef, {
+            newDraftPrompt: TRITONAI_FIRST_RUN_PROMPT,
+            replace: true,
           });
-        }
-
-        if (!project) return;
-
-        const projectRef = scopeProjectRef(project.environmentId, project.id);
-        const currentDraftStore = useComposerDraftStore.getState();
-        const existingProjectDraft = currentDraftStore.getDraftSessionByProjectRef(projectRef);
-        if (existingProjectDraft) {
           updateSettings({ tritonAiFirstRunOnboardingCompleted: true });
-          return;
+        } catch (error) {
+          console.error("[first-run-onboarding] failed", error);
         }
-
-        await createNewThread(projectRef, {
-          newDraftPrompt: TRITONAI_FIRST_RUN_PROMPT,
-          replace: true,
-        });
-        updateSettings({ tritonAiFirstRunOnboardingCompleted: true });
-      } catch (error) {
-        console.error("[first-run-onboarding] failed", error);
-      } finally {
+      })().finally(async () => {
         runningRef.current = false;
-      }
+      });
     })();
   }, [
     clientSettingsHydrated,

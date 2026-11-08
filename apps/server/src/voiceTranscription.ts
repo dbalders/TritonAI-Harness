@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-
 import {
   DEFAULT_VOICE_TRANSCRIPTION_BASE_URL,
   DEFAULT_VOICE_TRANSCRIPTION_LANGUAGE,
@@ -9,7 +8,7 @@ import {
   type ServerVoiceTranscribeInput,
   type ServerVoiceTranscribeResult,
 } from "@t3tools/contracts";
-import { makeTritonAiClientHeaders } from "./tritonAiClientHeaders.ts";
+import * as TritonAiRequestAnalytics from "./telemetry/TritonAiRequestAnalytics.ts";
 import { resolveTritonAiServiceApiKey } from "./tritonAiCredential.ts";
 
 const MAX_VOICE_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -239,86 +238,85 @@ function extractErrorMessage(payload: unknown): string {
   return "Provider returned an unsupported error response.";
 }
 
-export function transcribeVoice(
+export const transcribeVoice = Effect.fn("voiceTranscription.transcribeVoice")(function* (
   input: ServerVoiceTranscribeInput,
   options?: {
     readonly env?: VoiceTranscriptionEnv;
     readonly fetch?: FetchLike;
   },
-): Effect.Effect<ServerVoiceTranscribeResult, ServerVoiceTranscriptionError> {
-  return Effect.gen(function* () {
-    const env =
-      options?.env ??
-      ({
-        TRITONAI_API_KEY: process.env.TRITONAI_API_KEY,
-        TRITONAI_ONPREM_API_KEY: process.env.TRITONAI_ONPREM_API_KEY,
-        TRITONAI_FRONTIER_API_KEY: process.env.TRITONAI_FRONTIER_API_KEY,
-        UCSD_AI_BASE_URL: process.env.UCSD_AI_BASE_URL,
-      } satisfies VoiceTranscriptionEnv);
-    const fetchImpl = options?.fetch ?? globalThis.fetch;
-    const config = yield* resolveVoiceTranscriptionConfig(input, env);
-    const audioBuffer = yield* decodeAudioBase64(input);
+): Effect.fn.Return<ServerVoiceTranscribeResult, ServerVoiceTranscriptionError> {
+  const env =
+    options?.env ??
+    ({
+      TRITONAI_API_KEY: process.env.TRITONAI_API_KEY,
+      TRITONAI_ONPREM_API_KEY: process.env.TRITONAI_ONPREM_API_KEY,
+      TRITONAI_FRONTIER_API_KEY: process.env.TRITONAI_FRONTIER_API_KEY,
+      UCSD_AI_BASE_URL: process.env.UCSD_AI_BASE_URL,
+    } satisfies VoiceTranscriptionEnv);
+  const fetchImpl = options?.fetch ?? globalThis.fetch;
+  const config = yield* resolveVoiceTranscriptionConfig(input, env);
+  const audioBuffer = yield* decodeAudioBase64(input);
+  const clientHeaders = (yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics).headers("voice");
 
-    return yield* Effect.tryPromise({
-      try: async () => {
-        const form = new FormData();
-        form.set("model", config.model);
-        form.set("language", config.language);
-        form.set("response_format", "json");
-        form.set(
-          "file",
-          new Blob([audioBuffer], { type: input.mimeType }),
-          `voice-dictation.${audioFilenameExtension(input.mimeType)}`,
-        );
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const form = new FormData();
+      form.set("model", config.model);
+      form.set("language", config.language);
+      form.set("response_format", "json");
+      form.set(
+        "file",
+        new Blob([audioBuffer], { type: input.mimeType }),
+        `voice-dictation.${audioFilenameExtension(input.mimeType)}`,
+      );
 
-        const response = await fetchImpl(transcriptionEndpoint(config.baseUrl), {
-          method: "POST",
-          headers: {
-            ...makeTritonAiClientHeaders(),
-            Authorization: `Bearer ${config.apiKey}`,
-          },
-          body: form,
-          signal: AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS),
+      const response = await fetchImpl(transcriptionEndpoint(config.baseUrl), {
+        method: "POST",
+        headers: {
+          ...clientHeaders,
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: form,
+        signal: AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS),
+      });
+
+      const payload = await readResponsePayload(response);
+      if (!response.ok) {
+        throw voiceError({
+          code: "provider_error",
+          message: `Voice transcription failed: ${extractErrorMessage(payload)}`,
+          status: response.status,
         });
+      }
 
-        const payload = await readResponsePayload(response);
-        if (!response.ok) {
-          throw voiceError({
-            code: "provider_error",
-            message: `Voice transcription failed: ${extractErrorMessage(payload)}`,
-            status: response.status,
-          });
-        }
+      const text = extractTranscriptText(payload);
+      if (!text) {
+        throw voiceError({
+          code: "empty_transcript",
+          message: "Voice transcription returned no text.",
+        });
+      }
 
-        const text = extractTranscriptText(payload);
-        if (!text) {
-          throw voiceError({
-            code: "empty_transcript",
-            message: "Voice transcription returned no text.",
-          });
-        }
-
-        return {
-          text,
-          ...(payload && typeof payload === "object" && "usage" in payload
-            ? { usage: (payload as { usage?: unknown }).usage }
-            : {}),
-        };
-      },
-      catch: (cause) => {
-        if (isServerVoiceTranscriptionError(cause)) return cause;
-        if (cause instanceof DOMException && cause.name === "TimeoutError") {
-          return voiceError({
-            code: "provider_timeout",
-            message: "Voice transcription timed out. Try again with a shorter clip.",
-          });
-        }
-        const message = cause instanceof Error ? cause.message : String(cause);
+      return {
+        text,
+        ...(payload && typeof payload === "object" && "usage" in payload
+          ? { usage: (payload as { usage?: unknown }).usage }
+          : {}),
+      };
+    },
+    catch: (cause) => {
+      if (isServerVoiceTranscriptionError(cause)) return cause;
+      if (cause instanceof DOMException && cause.name === "TimeoutError") {
         return voiceError({
-          code: "provider_unavailable",
-          message: `Voice transcription is unavailable: ${safeProviderDetail(message)}`,
+          code: "provider_timeout",
+          message: "Voice transcription timed out. Try again with a shorter clip.",
         });
-      },
-    });
+      }
+      const message = cause instanceof Error ? cause.message : String(cause);
+      return voiceError({
+        code: "provider_unavailable",
+        message: `Voice transcription is unavailable: ${safeProviderDetail(message)}`,
+      });
+    },
   });
-}
+});

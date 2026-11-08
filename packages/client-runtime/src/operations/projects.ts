@@ -1,19 +1,18 @@
 import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
-import type {
-  CommandId,
-  EnvironmentId,
-  OrchestrationCommand,
-  ProjectId,
-  SourceControlDiscoveryResult,
+import {
+  type CommandId,
+  type EnvironmentId,
+  type ProjectMutation,
+  type ProjectId,
+  type ServerConfig,
+  type SourceControlDiscoveryResult,
+  type SourceControlRepositoryInfo,
   SourceControlProviderKind,
-  SourceControlRepositoryInfo,
 } from "@t3tools/contracts";
 import { newProjectFolderName } from "@t3tools/shared/path";
-import { isSourceControlProviderReady } from "@t3tools/shared/sourceControl";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
-
 import {
   appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
@@ -24,12 +23,12 @@ import {
   resolveProjectPathForDispatch,
 } from "../state/projects.ts";
 import type { EnvironmentProject } from "../state/models.ts";
+import {
+  sourceControlClients,
+  type SourceControlClientDefinition,
+} from "../sourceControlClients.ts";
 
-export type AddProjectRemoteProviderKind = Extract<
-  SourceControlProviderKind,
-  "github" | "gitlab" | "forgejo" | "bitbucket" | "azure-devops"
->;
-export type AddProjectRemoteSource = AddProjectRemoteProviderKind | "url";
+export type AddProjectRemoteSource = SourceControlProviderKind | "url";
 
 export function canCreateProjectInEnvironment(
   connectionPhase: EnvironmentConnectionPhase | null | undefined,
@@ -37,10 +36,23 @@ export function canCreateProjectInEnvironment(
   return connectionPhase === "connected";
 }
 
-export type AddProjectRemoteSourceReadiness = Record<
-  AddProjectRemoteSource,
-  { readonly ready: boolean; readonly hint: string | null }
->;
+export function availableScratchWorkspaceRoot(
+  connectionPhase: EnvironmentConnectionPhase | null | undefined,
+  serverConfig: Pick<ServerConfig, "scratchWorkspaceRoot"> | null | undefined,
+): string | null {
+  return canCreateProjectInEnvironment(connectionPhase)
+    ? (serverConfig?.scratchWorkspaceRoot ?? null)
+    : null;
+}
+
+export interface AddProjectRemoteSourceReadinessEntry {
+  readonly ready: boolean;
+  readonly hint: string | null;
+}
+
+export type AddProjectRemoteSourceReadiness = (
+  source: AddProjectRemoteSource,
+) => AddProjectRemoteSourceReadinessEntry;
 
 export type AddProjectCloneFlow =
   | {
@@ -57,66 +69,32 @@ export type AddProjectCloneFlow =
       readonly remoteUrl: string;
     };
 
-const ADD_PROJECT_REMOTE_SOURCES: ReadonlyArray<AddProjectRemoteSource> = [
-  "url",
-  "github",
-  "gitlab",
-  "forgejo",
-  "bitbucket",
-  "azure-devops",
-];
-
-const ADD_PROJECT_REMOTE_PROVIDER_SOURCES: ReadonlyArray<AddProjectRemoteProviderKind> = [
-  "github",
-  "gitlab",
-  "forgejo",
-  "bitbucket",
-  "azure-devops",
-];
+const ADD_PROJECT_REMOTE_PROVIDER_SOURCES: ReadonlyArray<SourceControlProviderKind> =
+  sourceControlClients.definitions.map((definition) => definition.kind);
 
 export function addProjectRemoteSourceLabel(source: AddProjectRemoteSource): string {
-  switch (source) {
-    case "github":
-      return "GitHub";
-    case "forgejo":
-      return "Forgejo / Gitea";
-    case "gitlab":
-      return "GitLab";
-    case "bitbucket":
-      return "Bitbucket";
-    case "azure-devops":
-      return "Azure DevOps";
-    case "url":
-      return "Git URL";
-  }
+  return source === "url" ? "Git URL" : sourceControlClients.get(source).pickerLabel;
 }
 
 export function addProjectRemoteSourcePathHint(source: AddProjectRemoteSource): string {
-  switch (source) {
-    case "forgejo":
-    case "github":
-      return "owner/repo";
-    case "gitlab":
-      return "group/project";
-    case "bitbucket":
-      return "workspace/repository";
-    case "azure-devops":
-      return "project/repository";
-    case "url":
-      return "URL";
-  }
+  return source === "url" ? "URL" : sourceControlClients.get(source).repositoryPathHint;
 }
 
 export function addProjectRemoteSourceProvider(
   source: AddProjectRemoteSource,
-): AddProjectRemoteProviderKind | null {
+): SourceControlProviderKind | null {
   return source === "url" ? null : source;
+}
+
+export function parseAddProjectRemoteSource(
+  value: string | null | undefined,
+): AddProjectRemoteSource {
+  return (value ? sourceControlClients.find(value)?.kind : undefined) ?? "url";
 }
 
 const GITHUB_REPOSITORY_SHORTHAND =
   /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]+(?:\.git)?$/;
 
-/** Treat the common owner/repository shorthand as a public GitHub HTTPS URL. */
 export function normalizePastedCloneUrl(input: string): string {
   const trimmed = input.trim();
   if (!GITHUB_REPOSITORY_SHORTHAND.test(trimmed)) return trimmed;
@@ -124,39 +102,51 @@ export function normalizePastedCloneUrl(input: string): string {
   return `https://github.com/${repository}`;
 }
 
-/** GitHub and Forgejo default to HTTPS; other providers retain their existing SSH default. */
 export function getDefaultCloneUrl(
   repository: Pick<SourceControlRepositoryInfo, "provider" | "url" | "sshUrl">,
 ): string {
-  return repository.provider === "github" || repository.provider === "forgejo"
+  return sourceControlClients.get(repository.provider).defaultCloneTransport === "https"
     ? repository.url
     : repository.sshUrl;
 }
 
-export function listAddProjectRemoteSources(
-  discovery: SourceControlDiscoveryResult | null,
-): ReadonlyArray<AddProjectRemoteSource> {
-  if (!discovery) {
-    return ["url"];
-  }
-
-  const providerByKind = new Map(
-    discovery.sourceControlProviders.map((provider) => [provider.kind, provider]),
+/** Only offer provider shortcuts that are set up on the selected environment. */
+export function getReadyAddProjectProviderSources(
+  readiness: AddProjectRemoteSourceReadiness,
+): ReadonlyArray<SourceControlProviderKind> {
+  return Arr.sort(
+    ADD_PROJECT_REMOTE_PROVIDER_SOURCES.filter((source) => readiness(source).ready),
+    Order.mapInput(Order.String, addProjectRemoteSourceLabel),
   );
-  const readyProviders = ADD_PROJECT_REMOTE_PROVIDER_SOURCES.filter((source) => {
-    const provider = providerByKind.get(source);
-    return provider !== undefined && isSourceControlProviderReady(provider);
-  });
+}
 
-  return [
-    "url",
-    ...Arr.sort(
-      readyProviders,
-      Order.mapInput(Order.String, (source: AddProjectRemoteProviderKind) =>
-        addProjectRemoteSourceLabel(source),
-      ),
-    ),
-  ];
+const READY: AddProjectRemoteSourceReadinessEntry = { ready: true, hint: null };
+const UNAVAILABLE: AddProjectRemoteSourceReadinessEntry = {
+  ready: false,
+  hint: "Provider status unavailable. Open Source Control settings and rescan.",
+};
+
+export function buildAddProjectRemoteSourceReadiness(
+  discovery: SourceControlDiscoveryResult | null,
+): AddProjectRemoteSourceReadiness {
+  const providerByKind = new Map(
+    (discovery?.sourceControlProviders ?? []).map((provider) => [provider.kind, provider]),
+  );
+  return (source) => {
+    if (source === "url") return READY;
+    const provider = providerByKind.get(source);
+    if (!provider) return UNAVAILABLE;
+    if (provider.status !== "available") return { ready: false, hint: provider.installHint };
+    if (provider.auth.status !== "authenticated") {
+      return {
+        ready: false,
+        hint:
+          Option.getOrNull(provider.auth.detail) ??
+          `${provider.label} is not authenticated. Open Source Control settings for setup guidance.`,
+      };
+    }
+    return READY;
+  };
 }
 
 export function getAddProjectInitialQuery(baseDirectory: string | null | undefined): string {
@@ -164,20 +154,9 @@ export function getAddProjectInitialQuery(baseDirectory: string | null | undefin
   return trimmed.length === 0 ? "~/" : ensureBrowseDirectoryPath(trimmed);
 }
 
-/**
- * Folder name `git clone` would pick, from either a looked-up repository or a
- * pasted clone URL. Providers report `owner/repo`, Azure DevOps reports
- * `org/project/repo`, and a URL can arrive in any form: `https://host/owner/
- * repo.git`, `ssh://git@host:22/owner/repo`, `git@host:owner/repo.git`, with
- * or without a query, a fragment or a trailing slash. The repository is always
- * the last segment, minus the `.git` suffix.
- */
 export function getCloneDirectoryName(repositoryOrRemoteUrl: string | null | undefined): string {
   const withoutQuery = (repositoryOrRemoteUrl ?? "").split(/[?#]/)[0]?.trim() ?? "";
   const schemeIndex = withoutQuery.indexOf("://");
-  // A remote URL carries a host before the repository path. The host is never
-  // the repository, so a link that stops at the host, or at a port, names
-  // nothing and the destination falls back to the browsed folder.
   const hasHost = schemeIndex >= 0 || /^[^/\\:]+@[^/\\:]+:/.test(withoutQuery);
   const pathPart = schemeIndex >= 0 ? withoutQuery.slice(schemeIndex + "://".length) : withoutQuery;
   const segments = pathPart.split(/[/\\:]+/).filter((segment) => segment.trim().length > 0);
@@ -186,20 +165,12 @@ export function getCloneDirectoryName(repositoryOrRemoteUrl: string | null | und
   }
 
   const lastSegment = segments.at(-1)?.trim() ?? "";
-  // A port can only sit directly behind the authority, so it is a port only
-  // when nothing follows it. Deeper segments are path, even when numeric: the
-  // repository in `https://host/acme/123` really is named `123`.
   if (hasHost && segments.length === 2 && /^\d+$/.test(lastSegment)) {
     return "";
   }
   return lastSegment.endsWith(".git") ? lastSegment.slice(0, -".git".length) : lastSegment;
 }
 
-/**
- * Clone destination proposed for a directory: the directory the user picked
- * plus the repository folder inside it. Without a name the directory is the
- * destination, which is what the raw clone URL flow keeps doing.
- */
 export function getCloneDestinationPath(
   directoryPath: string,
   directoryName: string | null | undefined,
@@ -211,41 +182,46 @@ export function getCloneDestinationPath(
   return `${ensureBrowseDirectoryPath(directoryPath)}${name}`;
 }
 
-/**
- * Where `projects.createNew` will put a project named `name`. The server adds
- * `-2`, `-3`, ... when that folder is taken, so this is a preview.
- */
 export function getNewProjectPathPreview(newProjectsRoot: string, name: string): string {
   return getCloneDestinationPath(newProjectsRoot, newProjectFolderName(name));
 }
 
-/**
- * The GitHub account a new project would be published under, or null when
- * GitHub is not ready on that environment. A ready GitHub with an unknown
- * account still publishes; `gh` picks the signed-in user.
- */
-export function getNewProjectGitHubTarget(
-  discovery: SourceControlDiscoveryResult | null,
-): { readonly account: string | null } | null {
-  const github = discovery?.sourceControlProviders.find((provider) => provider.kind === "github");
-  if (!github || !isSourceControlProviderReady(github)) return null;
-  return { account: Option.getOrNull(github.auth.account) };
+export interface NewProjectPublishTarget {
+  readonly definition: SourceControlClientDefinition;
+  readonly owner: string | null;
 }
 
-/** `owner/folder` for publishing a new project, or just the folder for `gh` to place. */
-export function getNewProjectGitHubRepository(
-  target: { readonly account: string | null },
+export function getNewProjectPublishTargets(
+  discovery: SourceControlDiscoveryResult | null,
+): ReadonlyArray<NewProjectPublishTarget> {
+  const readiness = buildAddProjectRemoteSourceReadiness(discovery);
+  return sourceControlClients.definitions.flatMap((definition) => {
+    if (!readiness(definition.kind).ready) return [];
+    const provider = discovery?.sourceControlProviders.find(
+      (candidate) => candidate.kind === definition.kind,
+    );
+    const placement = definition.newRepositoryOwner(
+      provider ? Option.getOrNull(provider.auth.account) : null,
+    );
+    return placement === null ? [] : [{ definition, owner: placement.owner }];
+  });
+}
+
+export function getNewProjectPublishTarget(
+  targets: ReadonlyArray<NewProjectPublishTarget>,
+  kind: SourceControlProviderKind | null,
+): NewProjectPublishTarget | null {
+  return targets.find((target) => target.definition.kind === kind) ?? targets[0] ?? null;
+}
+
+export function getNewProjectRepository(
+  target: Pick<NewProjectPublishTarget, "owner">,
   workspaceRoot: string,
 ): string {
   const folderName = workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
-  return target.account ? `${target.account}/${folderName}` : folderName;
+  return target.owner ? `${target.owner}/${folderName}` : folderName;
 }
 
-/**
- * Destination query after choosing a directory while the clone folder is
- * pinned in the path input. Selecting an existing directory with the pinned
- * name uses that directory directly instead of producing `repo/repo`.
- */
 export function getCloneDestinationBrowsePath(input: {
   readonly browseDirectoryPath: string;
   readonly selectedDirectoryName: string;
@@ -300,8 +276,7 @@ export function buildProjectCreateCommand(input: {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly workspaceRoot: string;
-  readonly createdAt: string;
-}): Extract<OrchestrationCommand, { type: "project.create" }> {
+}): Extract<ProjectMutation, { type: "project.create" }> {
   return {
     type: "project.create",
     commandId: input.commandId,
@@ -310,6 +285,5 @@ export function buildProjectCreateCommand(input: {
     workspaceRoot: input.workspaceRoot,
     createWorkspaceRootIfMissing: true,
     defaultModelSelection: null,
-    createdAt: input.createdAt,
   };
 }

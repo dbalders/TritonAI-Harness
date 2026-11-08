@@ -1,5 +1,4 @@
 import type { ComponentPropsWithoutRef } from "react";
-
 import { cn } from "../lib/utils";
 
 export type WorkspacePageWidth = "readable" | "wide" | "expanded";
@@ -10,7 +9,6 @@ const WIDTH_CLASS: Record<WorkspacePageWidth, string> = {
   expanded: "max-w-6xl",
 };
 
-/** Shared content frame for workspace pages. */
 export function WorkspacePageContainer({
   width = "readable",
   className,

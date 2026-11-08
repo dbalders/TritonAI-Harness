@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 
 export const DEFAULT_VOICE_TRANSCRIPTION_BASE_URL = "https://tritonai-api.ucsd.edu/v1";

@@ -10,20 +10,20 @@ import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Base64Url from "effect/encoding/Base64Url";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Terminal from "effect/Terminal";
-import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientError from "effect/unstable/http/HttpClientError";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
-import * as HttpRouter from "effect/unstable/http/HttpRouter";
-import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
-import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
+import * as HttpClientRequest from "effect/http/HttpClientRequest";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import { buildConnectAuthorizeRequestUrl } from "@t3tools/shared/connectAuth";
 
@@ -44,6 +44,10 @@ const DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 const DEVICE_AUTHORIZATION_DEFAULT_INTERVAL = Duration.seconds(5);
 // RFC 8628 §3.5: a slow_down response means "add 5 seconds to the interval".
 const DEVICE_AUTHORIZATION_SLOW_DOWN_INCREMENT = Duration.seconds(5);
+// Bounds one token or device-authorization request, including reading the
+// body. A stalled refresh holds the manager's semaphore and blocks every
+// other credential call.
+const OAUTH_REQUEST_TIMEOUT = Duration.seconds(10);
 const boldTerminalText = (value: string): string => `\u001b[1m${value}\u001b[22m`;
 
 function formatLoopbackAuthorizationPrompt(authorizationUrl: string): string {
@@ -142,6 +146,21 @@ const OAuthErrorResponse = Schema.Struct({
   error: Schema.String,
   error_description: Schema.optional(Schema.String),
 });
+const OAuthRefreshErrorCode = Schema.Literals([
+  "invalid_grant",
+  "invalid_client",
+  "unauthorized_client",
+  "unsupported_grant_type",
+  "invalid_request",
+  "invalid_scope",
+  "access_denied",
+]);
+const decodeOAuthRefreshErrorResponse = Schema.decodeUnknownOption(
+  Schema.Struct({ error: OAuthRefreshErrorCode }),
+);
+
+const isPermanentRefreshStatus = (status: number): boolean =>
+  status >= 400 && status < 500 && status !== 408 && status !== 429;
 
 const DeviceAuthorizationResponse = Schema.Struct({
   device_code: Schema.String,
@@ -161,16 +180,11 @@ const OidcIdentityClaimsJson = Schema.fromJsonString(
 );
 const decodeOidcIdentityClaimsJson = Schema.decodeUnknownOption(OidcIdentityClaimsJson);
 
-/**
- * Best-effort read of the `email` (or fallback) claim from an OIDC id_token.
- * Only used to show the operator which account they linked, so a malformed
- * token degrades to "no identity" rather than an error.
- */
 function idTokenIdentity(idToken: string | undefined): string | null {
   if (!idToken) return null;
   const payload = idToken.split(".")[1];
   if (!payload) return null;
-  const decoded = Encoding.decodeBase64UrlString(payload);
+  const decoded = Base64Url.decodeString(payload);
   if (decoded._tag !== "Success") return null;
   const claims = decodeOidcIdentityClaimsJson(decoded.success);
   if (Option.isNone(claims)) return null;
@@ -191,12 +205,26 @@ export class CloudCliCredentialRemovalError extends Schema.TaggedError<CloudCliC
 
 export class CloudCliCredentialRefreshError extends Schema.TaggedError<CloudCliCredentialRefreshError>()(
   "CloudCliCredentialRefreshError",
-  { cause: Schema.Defect() },
+  {
+    cause: Schema.Defect(),
+    status: Schema.optional(Schema.Number),
+    oauthErrorCode: Schema.optional(OAuthRefreshErrorCode),
+  },
 ) {
+  get requiresLogin(): boolean {
+    return this.status !== undefined && isPermanentRefreshStatus(this.status);
+  }
+
   override get message(): string {
-    return "Could not refresh the stored TritonAI Connect CLI credential.";
+    return this.requiresLogin
+      ? `Could not refresh the TritonAI Connect CLI credential${
+          this.oauthErrorCode === undefined ? "" : ` (OAuth error: ${this.oauthErrorCode})`
+        }. Run \`t3 connect login\` to authorize again.`
+      : "Could not refresh the TritonAI Connect CLI credential.";
   }
 }
+
+export const isCloudCliCredentialRefreshError = Schema.is(CloudCliCredentialRefreshError);
 
 export class CloudCliCredentialReadError extends Schema.TaggedError<CloudCliCredentialReadError>()(
   "CloudCliCredentialReadError",
@@ -290,20 +318,62 @@ const exchangeToken = Effect.fn("cloud.cli_token.exchange")(function* (
   params: Record<string, string>,
 ) {
   const httpClient = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
-  const response = yield* HttpClientRequest.post(metadata.tokenEndpoint).pipe(
+  const startedAt = yield* Clock.monotonicTimeNanos;
+  return yield* HttpClientRequest.post(metadata.tokenEndpoint).pipe(
     HttpClientRequest.bodyUrlParams(params),
     httpClient.execute,
+    Effect.flatMap((response) => readTokenResponse(response, params)),
+    Effect.timeout(OAUTH_REQUEST_TIMEOUT),
+    Effect.catchTags({
+      HttpClientError: (cause) =>
+        Effect.gen(function* () {
+          const reason = cause.reason;
+          if (
+            params.grant_type !== "refresh_token" ||
+            reason._tag !== "StatusCodeError" ||
+            !isPermanentRefreshStatus(reason.response.status)
+          ) {
+            return yield* cause;
+          }
+          // Reading a rejection body shares the exchange budget without losing
+          // the known status when the body stalls or cannot be decoded.
+          const elapsed = Duration.toMillis(
+            Duration.nanos((yield* Clock.monotonicTimeNanos) - startedAt),
+          );
+          const body = yield* reason.response.json.pipe(
+            Effect.timeout(Math.max(0, Duration.toMillis(OAUTH_REQUEST_TIMEOUT) - elapsed)),
+            Effect.mapError(
+              (cause) =>
+                new CloudCliCredentialRefreshError({
+                  status: reason.response.status,
+                  cause: new HttpClientError.HttpClientError({
+                    reason: new HttpClientError.StatusCodeError({
+                      request: reason.request,
+                      response: reason.response,
+                      cause,
+                    }),
+                  }),
+                }),
+            ),
+          );
+          const diagnostic = decodeOAuthRefreshErrorResponse(body);
+          return yield* new CloudCliCredentialRefreshError({
+            cause,
+            status: reason.response.status,
+            ...(Option.isSome(diagnostic) ? { oauthErrorCode: diagnostic.value.error } : {}),
+          });
+        }),
+    }),
   );
-  return yield* readTokenResponse(response, params);
 });
 
 const makePkceRequest = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
-  const verifier = Encoding.encodeBase64Url(yield* crypto.randomBytes(32));
-  const challenge = Encoding.encodeBase64Url(
+  const verifier = Base64Url.encode(yield* crypto.randomBytes(32));
+  const challenge = Base64Url.encode(
     yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier)),
   );
-  const state = Encoding.encodeBase64Url(yield* crypto.randomBytes(16));
+  const state = Base64Url.encode(yield* crypto.randomBytes(16));
   return { verifier, challenge, state };
 });
 
@@ -317,13 +387,6 @@ export interface DeviceAuthorizationPrompt {
 const isTransportError = (error: unknown) =>
   HttpClientError.isHttpClientError(error) && error.reason._tag === "TransportError";
 
-/**
- * Polls Clerk's token endpoint until the user approves or denies the device
- * request in the browser (RFC 8628 §3.4/3.5). `authorization_pending` keeps
- * waiting, while `slow_down` and transient failures widen the interval before
- * the next tick; the caller bounds the whole loop with the device code's
- * lifetime.
- */
 const pollDeviceToken = Effect.fn("cloud.cli_token.poll_device_token")(function* (
   metadata: Pick<CloudCliOAuthConfig, "tokenEndpoint" | "clientId">,
   deviceCode: string,
@@ -375,13 +438,6 @@ const pollDeviceToken = Effect.fn("cloud.cli_token.poll_device_token")(function*
   }
 });
 
-/**
- * OAuth device authorization grant for machines without a local browser
- * (SSH). Clerk issues a short user code; the user approves it on Clerk's
- * hosted device page from any browser while this process polls the token
- * endpoint. Nothing is typed into the terminal and no redirect URI is
- * involved, so the hosted app plays no part in this flow.
- */
 export const deviceAuthorizationLogin = Effect.fn("cloud.cli_token.device_authorization_login")(
   function* <E, R>(showPrompt: (prompt: DeviceAuthorizationPrompt) => Effect.Effect<void, E, R>) {
     const metadata = yield* cloudCliOAuthConfig;
@@ -393,8 +449,8 @@ export const deviceAuthorizationLogin = Effect.fn("cloud.cli_token.device_author
       }),
       httpClient.execute,
       Effect.flatMap(HttpClientResponse.schemaBodyJson(DeviceAuthorizationResponse)),
+      Effect.timeout(OAUTH_REQUEST_TIMEOUT),
     );
-    // Clerk's advertised lifetime and interval are authoritative.
     const expiresIn = Duration.seconds(authorization.expires_in);
     const interval =
       authorization.interval === undefined
@@ -408,17 +464,15 @@ export const deviceAuthorizationLogin = Effect.fn("cloud.cli_token.device_author
     });
     return yield* pollDeviceToken(metadata, authorization.device_code, interval).pipe(
       Effect.timeout(expiresIn),
-      Effect.catchTag("TimeoutError", (cause) =>
-        Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
-      ),
+      Effect.catchTags({
+        TimeoutError: (cause) => Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
+      }),
     );
   },
 );
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
-  // Capture exactly the services the login/refresh flows need at build time,
-  // not the whole ambient context.
   const crypto = yield* Crypto.Crypto;
   const httpClient = yield* HttpClient.HttpClient;
   const services = Context.make(Crypto.Crypto, crypto).pipe(
@@ -461,7 +515,7 @@ export const make = Effect.gen(function* () {
     const hostedAppUrl = yield* hostedAppUrlConfig;
     const { verifier, challenge, state } = yield* makePkceRequest;
     const callback = yield* Deferred.make<string>();
-    const callbackRoute = HttpRouter.add(
+    const layerCallbackRoute = HttpRouter.add(
       "GET",
       "/callback",
       Effect.gen(function* () {
@@ -477,7 +531,7 @@ export const make = Effect.gen(function* () {
         return HttpServerResponse.html(renderLoopbackAuthorizationCompleteHtml());
       }),
     );
-    yield* HttpRouter.serve(callbackRoute, {
+    yield* HttpRouter.serve(layerCallbackRoute, {
       disableListenLog: true,
       disableLogger: true,
     }).pipe(
@@ -505,9 +559,9 @@ export const make = Effect.gen(function* () {
       authorizationUrl,
       callback: Deferred.await(callback).pipe(
         Effect.timeout(CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT),
-        Effect.catchTag("TimeoutError", (cause) =>
-          Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
-        ),
+        Effect.catchTags({
+          TimeoutError: (cause) => Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
+        }),
       ),
       terminal,
       launchBrowser: externalLauncher.launchBrowser,
@@ -532,12 +586,26 @@ export const make = Effect.gen(function* () {
     if (token.value.expiresAtEpochMs - CLOUD_CLI_OAUTH_REFRESH_EARLY_MS > now) {
       return token;
     }
-    return Option.some(yield* refresh(token.value).pipe(Effect.flatMap(persist)));
+    return Option.some(
+      // The endpoint can rotate the refresh token before shutdown interrupts us.
+      // Keep the lock through persistence; the exchange still times out internally.
+      yield* refresh(token.value).pipe(Effect.flatMap(persist), Effect.uninterruptible),
+    );
   });
 
   const getExisting = semaphore.withPermits(1)(
     getExistingNoLock().pipe(
-      Effect.mapError((cause) => new CloudCliCredentialRefreshError({ cause })),
+      Effect.mapError((cause) =>
+        isCloudCliCredentialRefreshError(cause)
+          ? cause
+          : new CloudCliCredentialRefreshError({
+              cause,
+              ...(HttpClientError.isHttpClientError(cause) &&
+              cause.reason._tag === "StatusCodeError"
+                ? { status: cause.reason.response.status }
+                : {}),
+            }),
+      ),
       Effect.provide(services),
     ),
   );
@@ -549,10 +617,6 @@ export const make = Effect.gen(function* () {
   );
   const get = semaphore.withPermits(1)(
     Effect.gen(function* () {
-      // A stored credential that can't be read or refreshed (corrupt, revoked,
-      // expired grant) must fall through to a fresh login rather than dead-end
-      // the command — authorizeCli applies the same fallback to device
-      // authorization.
       const token = yield* getExistingNoLock().pipe(
         Effect.orElseSucceed(() => Option.none<PersistedToken>()),
       );

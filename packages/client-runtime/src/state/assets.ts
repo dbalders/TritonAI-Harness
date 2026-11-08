@@ -13,11 +13,12 @@ import {
   getProjectFaviconResourceKey,
   isProjectFaviconFallbackUrl,
 } from "@t3tools/shared/projectFavicon";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
@@ -69,15 +70,43 @@ export const EMPTY_ASSET_URL_ATOM = Atom.make(AsyncResult.initial<never, never>(
 
 export type AssetUrlState =
   | { readonly _tag: "Loading" }
-  | { readonly _tag: "Failure" }
+  | {
+      readonly _tag: "Failure";
+      readonly reason?: "missing-file-access";
+    }
   | {
       readonly _tag: "Success";
       readonly url: string;
-      /** The host path the server chose to serve, when it differs from what was asked for. */
+      readonly expiresAt: number;
       readonly sourcePath?: string;
-      /** Pixel size from the image header, when the server could read one. */
       readonly imageDimensions?: AssetImageDimensions;
     };
+
+export const MISSING_FILE_ACCESS_MESSAGE =
+  "This connection cannot read host files. Pair again with a new link to view it.";
+
+export function blockedAssetUrlState(
+  resource: AssetResource | null,
+  fileAccess: {
+    readonly canReadFiles: boolean;
+    readonly isPending: boolean;
+    readonly error: string | null;
+  },
+): AssetUrlState | null {
+  if (
+    resource === null ||
+    fileAccess.canReadFiles ||
+    (resource._tag !== "workspace-file" &&
+      resource._tag !== "media-file" &&
+      resource._tag !== "draft-workspace-file")
+  ) {
+    return null;
+  }
+  if (fileAccess.isPending) return { _tag: "Loading" };
+  return fileAccess.error === null
+    ? { _tag: "Failure", reason: "missing-file-access" }
+    : { _tag: "Failure" };
+}
 
 export function assetUrlStateFromResult(
   result: AsyncResult.AsyncResult<AssetCreateUrlResult, unknown>,
@@ -90,6 +119,7 @@ export function assetUrlStateFromResult(
   return {
     _tag: "Success",
     url,
+    expiresAt: result.value.expiresAt,
     ...(result.value.sourcePath !== undefined ? { sourcePath: result.value.sourcePath } : {}),
     ...(result.value.imageDimensions !== undefined
       ? { imageDimensions: result.value.imageDimensions }
@@ -122,16 +152,16 @@ export function createAssetEnvironmentAtoms<R, E>(
         error._tag === "AssetWorkspaceContextNotFoundError"
       ) ||
       resource._tag !== "media-file" ||
+      resource.disposition === "attachment" ||
       !(resource.path.startsWith("/") || isWindowsAbsolutePath(resource.path)) ||
       mediaMimeTypeFromExtension(resource.path.slice(resource.path.lastIndexOf("."))) === null
     )
       return yield* error;
     const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-    const asset = yield* registry.run(
-      local.environmentId,
-      request(WS_METHODS.assetsCreateUrl, input),
-    );
-    // Callers resolve against the thread's server, so preserve the local server's origin.
+    // Map the full cause so retry defects and interruption survive.
+    const asset = yield* registry
+      .run(local.environmentId, request(WS_METHODS.assetsCreateUrl, input))
+      .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, () => error))));
     return { ...asset, relativeUrl: new URL(asset.relativeUrl, local.httpBaseUrl).href };
   });
   const createUrl = createEnvironmentQueryAtomFamily(runtime, {
@@ -169,10 +199,6 @@ export function createAssetEnvironmentAtoms<R, E>(
   };
 }
 
-/**
- * Keeps project icons visible while their environment reconnects. Each resource
- * owns its last resolved URL, including a confirmed missing-icon response.
- */
 export function createProjectFaviconUrlAtomFamily(input: {
   readonly imageCache?: ProjectFaviconCache;
   readonly createUrl: (target: {
@@ -182,7 +208,6 @@ export function createProjectFaviconUrlAtomFamily(input: {
   readonly preparedConnection: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<Option.Option<{ readonly httpBaseUrl: string }>>;
-  /** The environment's tracked clones, empty when it reports none. */
   readonly projectClones?: (
     environmentId: EnvironmentId,
   ) => Atom.Atom<ReadonlyArray<ProjectCloneSnapshot>>;

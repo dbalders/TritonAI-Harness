@@ -1,7 +1,5 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-
 import type { ReactNode } from "react";
-
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 

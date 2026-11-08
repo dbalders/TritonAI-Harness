@@ -49,15 +49,18 @@ export function groupProviderSkills(input: {
   readonly rows: ReadonlyArray<ProviderSkillRow>;
   readonly managedSkillNames: ReadonlySet<string>;
 }) {
+  const rows = dedupeProviderSkillRows(input.rows);
   const installedByName = new Map<string, ProviderSkillRow>();
-  for (const row of input.rows) {
+  for (const row of rows) {
     if (!installedByName.has(row.skill.name)) {
       installedByName.set(row.skill.name, row);
     }
   }
 
+  const matchedRows = new Set<ProviderSkillRow>();
   const toItem = (entry: ServerProviderSkillCatalogEntry): ProviderCatalogSkillItem => {
     const installedRow = installedByName.get(entry.name) ?? null;
+    if (installedRow) matchedRows.add(installedRow);
     return {
       entry,
       installedRow,
@@ -75,20 +78,14 @@ export function groupProviderSkills(input: {
     .filter((entry) => entry.section === "community" && !input.managedSkillNames.has(entry.name))
     .map(toItem)
     .toSorted(byTitle);
-  const aiTeamCatalogNames = new Set(aiTeamItems.map((item) => item.entry.name));
-  const matchedNames = new Set([
-    ...aiTeamCatalogNames,
-    ...communityItems.map((item) => item.entry.name),
-    ...input.managedSkillNames,
-  ]);
-
   return {
     aiTeamItems,
     communityItems,
-    managedOnlyRows: input.rows.filter(
-      (row) =>
-        input.managedSkillNames.has(row.skill.name) && !aiTeamCatalogNames.has(row.skill.name),
+    managedOnlyRows: rows.filter(
+      (row) => input.managedSkillNames.has(row.skill.name) && !matchedRows.has(row),
     ),
-    otherRows: input.rows.filter((row) => !matchedNames.has(row.skill.name)),
+    otherRows: rows.filter(
+      (row) => !matchedRows.has(row) && !input.managedSkillNames.has(row.skill.name),
+    ),
   };
 }

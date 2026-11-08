@@ -4,14 +4,17 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 
 import {
   VcsProcessExitError,
   VcsProcessSpawnError,
   VcsProcessTimeoutError,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import {
+  Environment as HostProcessEnvironment,
+  Platform as HostProcessPlatform,
+} from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
@@ -58,16 +61,21 @@ describe("optional Git detection", () => {
     ),
   );
 
-  for (const error of [
-    spawnError("PermissionDenied"),
-    spawnError("NotFound", "FileSystem"),
-    new VcsProcessTimeoutError({
-      operation: "test",
-      command: "git",
-      cwd: "/repo",
-      timeoutMs: 5000,
-    }),
-  ]) {
+  describe.each(
+    Array.from(
+      [
+        spawnError("PermissionDenied"),
+        spawnError("NotFound", "FileSystem"),
+        new VcsProcessTimeoutError({
+          operation: "test",
+          command: "git",
+          cwd: "/repo",
+          timeoutMs: 5000,
+        }),
+      ],
+      (scenario) => ({ scenario }),
+    ),
+  )("case $scenario", ({ scenario: error }) => {
     it.effect(`preserves ${error._tag}: ${error.message}`, () =>
       Effect.gen(function* () {
         const driver = yield* GitVcsDriver.makeVcsDriverShape();
@@ -77,7 +85,7 @@ describe("optional Git detection", () => {
         Effect.provideService(HostProcessPlatform, "win32"),
       ),
     );
-  }
+  });
 
   it.effect("detects Git installed after an earlier missing-Git probe", () => {
     let available = false;
@@ -125,37 +133,40 @@ describe("Apple Git detection", () => {
     );
   });
 
-  for (const gitPath of ["/usr/bin/git", "/custom/git-link"]) {
-    it.effect(`does not launch the developer-tools stub resolved from ${gitPath}`, () => {
-      const commands: string[] = [];
-      return Effect.gen(function* () {
-        const driver = yield* GitVcsDriver.makeVcsDriverShape();
-        assert.isFalse(yield* driver.isInsideWorkTree("/repo"));
-        assert.deepStrictEqual(commands, ["/usr/bin/xcode-select"]);
-      }).pipe(
-        Effect.provideService(
-          FileSystem.FileSystem,
-          FileSystem.makeNoop({ realPath: () => Effect.succeed("/usr/bin/git") }),
-        ),
-        withProcess((input) => {
-          commands.push(input.command);
-          return input.command === "/usr/bin/xcode-select"
-            ? Effect.fail(
-                new VcsProcessExitError({
-                  ...input,
-                  exitCode: 2,
-                  detail: "no developer directory",
-                  stderrTruncated: false,
-                  failureKind: "command-failed",
-                }),
-              )
-            : Effect.succeed(output("true\n"));
-        }),
-        Effect.provideService(HostProcessPlatform, "darwin"),
-        Effect.provideService(SpawnExecutableResolution, () => gitPath),
-      );
-    });
-  }
+  describe.each(Array.from(["/usr/bin/git", "/custom/git-link"], (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: gitPath }) => {
+      it.effect(`does not launch the developer-tools stub resolved from ${gitPath}`, () => {
+        const commands: string[] = [];
+        return Effect.gen(function* () {
+          const driver = yield* GitVcsDriver.makeVcsDriverShape();
+          assert.isFalse(yield* driver.isInsideWorkTree("/repo"));
+          assert.deepStrictEqual(commands, ["/usr/bin/xcode-select"]);
+        }).pipe(
+          Effect.provideService(
+            FileSystem.FileSystem,
+            FileSystem.makeNoop({ realPath: () => Effect.succeed("/usr/bin/git") }),
+          ),
+          withProcess((input) => {
+            commands.push(input.command);
+            return input.command === "/usr/bin/xcode-select"
+              ? Effect.fail(
+                  new VcsProcessExitError({
+                    ...input,
+                    exitCode: 2,
+                    detail: "no developer directory",
+                    stderrTruncated: false,
+                    failureKind: "command-failed",
+                  }),
+                )
+              : Effect.succeed(output("true\n"));
+          }),
+          Effect.provideService(HostProcessPlatform, "darwin"),
+          Effect.provideService(SpawnExecutableResolution, () => gitPath),
+        );
+      });
+    },
+  );
 
   it.effect("probes Apple Git when developer tools are available", () => {
     const commands: string[] = [];

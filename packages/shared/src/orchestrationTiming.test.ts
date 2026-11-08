@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-
-import { formatDuration, deriveActiveWorkStartedAt } from "./orchestrationTiming.ts";
+import {
+  formatDuration,
+  deriveActiveWorkStartedAt,
+  deriveSubagentElapsedMs,
+} from "./orchestrationTiming.ts";
 
 describe("formatDuration", () => {
   it.each([
@@ -9,6 +12,9 @@ describe("formatDuration", () => {
     [1_500, "1.5s"],
     [9_950, "10s"],
     [22_000, "22s"],
+    [59_499, "59s"],
+    [59_500, "1m"],
+    [59_999, "1m"],
     [60_000, "1m"],
     [65_000, "1m 5s"],
     [119_500, "2m"],
@@ -37,12 +43,12 @@ describe("deriveActiveWorkStartedAt", () => {
       expect(
         deriveActiveWorkStartedAt(
           {
-            turnId: "old",
+            runId: "old",
             requestedAt: "2026-09-06T23:33:00.000Z",
             startedAt: null,
             completedAt: null,
           },
-          { orchestrationStatus: "running", activeTurnId: "new" },
+          { orchestrationStatus: "running", activeRunId: "new" },
           sendStartedAt,
         ),
       ).toBe(sendStartedAt);
@@ -53,31 +59,26 @@ describe("deriveActiveWorkStartedAt", () => {
     expect(
       deriveActiveWorkStartedAt(
         {
-          turnId: "turn-1",
+          runId: "turn-1",
           requestedAt: "2026-09-06T23:33:00.000Z",
           startedAt: null,
           completedAt: "2026-09-06T23:33:05.000Z",
         },
-        { orchestrationStatus: "error", activeTurnId: null },
+        { orchestrationStatus: "error", activeRunId: null },
         null,
       ),
     ).toBeNull();
   });
-  // The gap this closes. The projector stamps startedAt in the same update
-  // that moves the session to "running", so during provider spin-up the turn
-  // is requested with no startedAt and the session is "starting". Returning
-  // null there blinks the working indicator out between "Setting up
-  // worktree..." and "Working for 0s".
   it("counts from requestedAt while the provider is still starting", () => {
     expect(
       deriveActiveWorkStartedAt(
         {
-          turnId: "turn-1",
+          runId: "turn-1",
           requestedAt: "2026-09-06T23:33:00.000Z",
           startedAt: null,
           completedAt: null,
         },
-        { orchestrationStatus: "starting", activeTurnId: null },
+        { orchestrationStatus: "starting", activeRunId: null },
         null,
       ),
     ).toBe("2026-09-06T23:33:00.000Z");
@@ -87,44 +88,42 @@ describe("deriveActiveWorkStartedAt", () => {
     expect(
       deriveActiveWorkStartedAt(
         {
-          turnId: "turn-1",
+          runId: "turn-1",
           requestedAt: "2026-09-06T23:33:00.000Z",
           startedAt: "2026-09-06T23:33:05.000Z",
           completedAt: null,
         },
-        { orchestrationStatus: "running", activeTurnId: "turn-1" },
+        { orchestrationStatus: "running", activeRunId: "turn-1" },
         null,
       ),
     ).toBe("2026-09-06T23:33:05.000Z");
   });
 
-  // requestedAt must not leak past the end of the work.
   it("stops counting once the turn has settled", () => {
     expect(
       deriveActiveWorkStartedAt(
         {
-          turnId: "turn-1",
+          runId: "turn-1",
           requestedAt: "2026-09-06T23:33:00.000Z",
           startedAt: "2026-09-06T23:33:05.000Z",
           completedAt: "2026-09-06T23:33:09.000Z",
         },
-        { orchestrationStatus: "idle", activeTurnId: null },
+        { orchestrationStatus: "idle", activeRunId: null },
         null,
       ),
     ).toBeNull();
   });
 
-  // A session restarting with no new turn must not resurrect the old one.
   it("does not count a settled turn while a session is starting again", () => {
     expect(
       deriveActiveWorkStartedAt(
         {
-          turnId: "turn-1",
+          runId: "turn-1",
           requestedAt: "2026-09-06T23:33:00.000Z",
           startedAt: "2026-09-06T23:33:05.000Z",
           completedAt: "2026-09-06T23:33:09.000Z",
         },
-        { orchestrationStatus: "starting", activeTurnId: null },
+        { orchestrationStatus: "starting", activeRunId: null },
         null,
       ),
     ).toBeNull();
@@ -134,5 +133,26 @@ describe("deriveActiveWorkStartedAt", () => {
     expect(deriveActiveWorkStartedAt(null, null, "2026-09-06T23:33:00.000Z")).toBe(
       "2026-09-06T23:33:00.000Z",
     );
+  });
+});
+
+describe("deriveSubagentElapsedMs", () => {
+  const startedAt = "2026-09-21T12:00:00.000Z";
+  const completedAt = "2026-09-21T12:00:10.000Z";
+  const now = Date.parse("2026-09-21T13:00:00.000Z");
+  it.each(["idle", "completed", "failed", "cancelled", "interrupted"] as const)(
+    "does not count the age of %s work with unknown completion timing",
+    (status) => {
+      expect(deriveSubagentElapsedMs({ status, startedAt, completedAt: null }, now)).toBeNull();
+      expect(deriveSubagentElapsedMs({ status, startedAt, completedAt }, now)).toBe(10_000);
+    },
+  );
+  it("counts a resumed activation despite a stale previous completion timestamp", () => {
+    expect(deriveSubagentElapsedMs({ status: "running", startedAt, completedAt }, now)).toBe(
+      3_600_000,
+    );
+    expect(
+      deriveSubagentElapsedMs({ status: "running", startedAt: null, completedAt: null }, now),
+    ).toBeNull();
   });
 });

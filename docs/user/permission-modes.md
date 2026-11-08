@@ -4,8 +4,16 @@ A permission mode controls how much the agent does on its own and when it stops 
 
 The mode is set per thread, from the mode control in the message composer. Changing it in one
 thread does not change any other thread. A thread created from inside another thread keeps that
-thread's mode; otherwise new threads start in **Full access** unless you pick something else
-before sending.
+thread's mode. New threads opened in the app remember the last mode you chose in the composer
+on that device, including after restarting the app. Until you choose a mode, new threads use
+your app or project default, which starts as **Auto**. Existing threads and their explicit
+composer choices keep their mode.
+
+On web and desktop, an unsent draft also keeps the mode stored when it was created, including
+after an upgrade or a change to app/project defaults. A draft created earlier in Full access
+therefore stays in Full access until you change its mode. Changing the draft's project or
+machine applies the current remembered mode or destination default, unless you chose a mode
+specifically for that draft.
 
 ## The Modes
 
@@ -16,19 +24,51 @@ Exact command handling depends on the provider; work outside the workspace remai
 **Auto-accept edits**: auto-approve edits, ask before other actions. File changes go through
 without prompting; commands and anything else still stop for approval.
 
-**Auto**: routine actions proceed without you; risky ones still ask. How this is enforced depends
+**Auto** (default): routine actions proceed without you; risky ones still ask. How this is enforced depends
 on the provider: Codex delegates routine approvals to an AI reviewer, Claude uses its own auto
 permission mode, and providers without an equivalent (such as OpenCode) fall back to asking, like
 Supervised.
 
-**Full access**: allow commands and edits without prompts. The default. The agent runs
+**Full access**: allow commands and edits without prompts. The agent runs
 unattended until it finishes or asks a question of its own.
 
 Approvals appear inline in the conversation. Approve or reject one and the agent continues from
 there.
 
+Choose an app or project default in **Settings > General > Permissions**. Saved overrides keep
+their selected mode and supply the fallback before you choose a composer mode. With no saved
+override or remembered choice, new threads use **Auto**, including after an upgrade;
+existing threads are unchanged.
+
 For Grok, **Always allow this session** remembers the matching command or tool input. Other
 actions still ask for approval. It does not change the thread to **Full access**.
+
+## Opening Websites in the Browser
+
+When an agent asks to open a website in the TritonAI browser, the approval shows the complete
+address, so check it before you allow it. Blank tabs and local dev servers, such as
+`localhost:5173`, open without asking.
+
+- **Codex** asks in every mode except **Full access**, whichever browser tools it uses, including
+  the ones it reaches through the TritonAI Harness tool server.
+- **Claude** asks in **Supervised** and **Auto-accept edits**. In **Auto** and **Full access**,
+  Claude opens websites without asking.
+- Other providers follow their own tool approval settings for the browser.
+
+Opening a tab under a named browser profile, which uses that profile's saved sign-ins, also asks,
+and the approval names the profile.
+
+**Always allow this session** lets the agent keep browsing in that thread without asking again. It
+covers every tab and every browser profile in the thread, including profiles with saved sign-ins,
+so choose **Approve** if you want to approve each website or profile separately.
+
+If a website forwards the browser to a different site, the agent is told afterwards that the page
+ended up somewhere else and that the new site was not approved. This applies to Codex and Claude
+browser tools, including pages started from a local address such as `localhost:5173`. Pages
+opened through a dev-server port target are not checked. This check happens only after the page
+has loaded. It does not block the
+forwarding, and it does not stop a site or tracker from seeing your network address. Opening any
+website reveals your network address to that site.
 
 ## Choosing a Mode
 

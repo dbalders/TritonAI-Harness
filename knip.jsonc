@@ -8,19 +8,28 @@
     ".": {
       // Keep vendored reference repositories outside the root project.
       "project": ["*.{js,mjs,cjs,ts,mts,cts}", ".github/**/*.cjs"],
-      "entry": [".github/scripts/thread-transfer-report.cjs"],
+      "entry": [
+        // CodeRabbit loads its configuration by filename.
+        ".coderabbit.config.ts",
+        ".github/scripts/thread-transfer-report.cjs",
+      ],
       "vite": { "entry": [".github/**/*.test.cjs"] },
       "vitest": { "entry": [".github/**/*.test.cjs"] },
     },
     "scripts": {
       // Knip loads its preprocessor through a CLI option; native verification and
-      // worktree setup (from t3.json) run directly.
+      // worktree setup (from t3.json) run directly. release-desktop.yml bundles the
+      // Windows verify script with esbuild through a path knip does not trace.
       "entry": [
         "knip-schemas.ts",
         "mobile-native-client.ts",
         "setup-worktree.ts",
+        "verify-windows-desktop-artifact.ts",
         "verify-macos-desktop-package.ts",
       ],
+      "ignoreDependencies": ["esbuild"],
+      // The `t3` npm package's files: copied into the package, never imported.
+      "ignore": ["npm-launcher/**"],
     },
     "apps/server": {
       // The external Plugins SDK imports the integration API version by path.
@@ -31,40 +40,31 @@
         "src/claude-history-worker.ts!",
         "scripts/cli.ts",
         "scripts/evaluate-thread-titles.ts",
+        "scripts/fetch-expo-schema.ts",
         "scripts/measure-pr-preview.ts",
+        "scripts/probe-claude-fork-local-rollback-replay.ts",
         "scripts/update-test-shard-weights.ts",
+        "scripts/verify-background-live.ts",
         "src/provider/testFixtures/*.mjs",
         "src/integrations/pluginSdk/test-fixtures/**/*.mjs",
+        // graphqlgen reads its config.
+        "graphql.config.ts",
       ],
+      // The generated operations export every selection's class.
+      "ignoreIssues": { "**/*.graphql.ts": ["exports", "types", "namespaceMembers"] },
       // Keep the transitive Effect runtime pinned for standalone npm installs.
       // The Vite+ web build prerequisite and the native CUA driver bridge.
-      "ignoreDependencies": ["@effect/platform-node-shared", "@t3tools/web", "ffi-rs"],
-    },
-    // Deployment manifest: packages are staged and loaded by the packaged desktop/SEA runtime.
-    "apps/desktop-runtime": {
       "ignoreDependencies": [
-        "@anthropic-ai/claude-agent-sdk",
-        "@clerk/electron-passkeys",
-        "@crowecawcaw/xa11y",
-        "@effect/platform-node",
         "@effect/platform-node-shared",
-        "@ff-labs/fff-node",
-        "@napi-rs/keyring",
-        "@opencode-ai/sdk",
-        "effect",
+        "@t3tools/web",
         "ffi-rs",
-        "node-pty",
-        "playwright-core",
-        "stream-chain",
-        "stream-json",
-        "yaml",
-        "yauzl",
-        "@trycua/cua-driver",
-        "ajv",
-        "diff",
-        "jose",
-        "proper-lockfile",
+        "@napi-rs/keyring",
       ],
+    },
+    // Deployment-only manifest: no source imports its dependencies. The checked-in
+    // desktop runtime contract test validates its exact dependency set instead.
+    "apps/desktop-runtime": {
+      "ignoreDependencies": [".*"],
     },
     "apps/desktop": {
       // Electron loads these bundles by filename rather than importing them.
@@ -74,6 +74,7 @@
         "src/snapShot/GlobalShiftShortcutWorker.ts!",
         "src/snapShot/RegionSnapShotWorker.ts!",
         "src/snapShot/SnapShotAccessibilityWorker.ts!",
+        "src/skillRecording/SkillRecordingWorker.ts!",
         "src/boot.ts!",
         "src/compileCache.ts!",
         "src/main.ts!",
@@ -88,22 +89,23 @@
       "ignoreDependencies": ["playwright-core", "electron-builder"],
     },
     "apps/web": {
-      // Vitest loads this through the per-file @vitest-environment directive.
-      "ignoreDependencies": ["jsdom"],
-      // Worktree setup (scripts/setup-worktree.ts) runs this directly.
-      "entry": ["scripts/warm-dep-cache.ts"],
+      // Worktree setup (scripts/setup-worktree.ts) runs this directly, and evidence
+      // fixtures run under node.
+      "entry": ["scripts/warm-dep-cache.ts", "test/fixtures/**/*.mjs"],
       // UI component modules are copied and adapted as cohesive sets. Keep their
       // named subcomponents even before they have callers; the file audit still
       // reports an entire component module when nothing imports it.
       "ignoreIssues": { "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"] },
     },
     "apps/mobile": {
-      // Expo loads plugins by string; Metro embeds the browser entry in the native WebView.
+      // Expo loads plugins and the fingerprint config by string; Metro embeds the browser entry in the native WebView.
       "entry": [
         "index.ts!",
+        "fingerprint.config.js",
         "plugins/*.cjs",
         "scripts/generate-device-stream.mts",
         "src/features/devices/device-stream.browser.ts!",
+        "src/features/browser/preview-stream.browser.ts!",
       ],
       // Fonts are configured as asset paths; Expo autolinks the native packages.
       "ignoreDependencies": [
@@ -112,7 +114,7 @@
         "@t3tools/mobile-terminal-native",
       ],
     },
-    "apps/mobile/modules/t3-markdown-text": {
+    "apps/mobile/modules/t3-source-text": {
       // React Native codegen discovers component specifications by filename.
       "entry": ["src/*NativeComponent.ts!"],
     },
@@ -138,6 +140,11 @@
       "includeEntryExports": true,
       "entry": ["test/fixtures/*.ts"],
       "ignoreIssues": { "src/_generated/**": ["exports", "types"] },
+    },
+    "packages/source-control-github": {
+      // graphqlgen reads its config; the generated operations export every selection's class.
+      "entry": ["graphql.config.ts"],
+      "ignoreIssues": { "**/*.graphql.ts": ["exports", "types", "namespaceMembers"] },
     },
   },
 }

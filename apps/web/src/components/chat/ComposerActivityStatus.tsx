@@ -1,5 +1,4 @@
 import { Spinner } from "~/components/ui/spinner";
-
 import { threadSyncLabel, type ThreadSyncPhase } from "../../threadSync";
 import { ComposerBanner } from "./ComposerBanner";
 

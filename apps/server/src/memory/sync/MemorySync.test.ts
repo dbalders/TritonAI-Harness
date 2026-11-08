@@ -1,3 +1,4 @@
+import { describe } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off - A fake download edits a note synchronously mid-request.
 import * as NodeFS from "node:fs";
 
@@ -6,6 +7,7 @@ import { assert, it } from "@effect/vitest";
 import type { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -13,7 +15,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Semaphore from "effect/Semaphore";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
@@ -264,7 +266,8 @@ class FakeOneDrive {
             ]),
           );
           const url = new URL(request.url);
-          for (const [key, value] of request.urlParams) url.searchParams.append(key, value);
+          for (const [key, value] of request.urlParams)
+            url.searchParams.append(key, typeof value === "string" ? value : Redacted.value(value));
           const held = this.hold?.(url, new URLSearchParams(new TextDecoder().decode(body)));
           if (held) yield* held;
           const reply = this.handle(request.method, url, headers, body);
@@ -548,41 +551,44 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
     }),
   );
 
-  for (const name of ["Other computer", MAC.name]) {
-    it.effect(`stops independent first-sync short-ID collisions with ${name}`, () =>
-      Effect.gen(function* () {
-        const drive = new FakeOneDrive();
-        const mac = yield* setup(drive, MAC);
-        const other = yield* setup(drive, {
-          environmentId: "aaaa2222-0000-4000-8000-000000000002",
-          shortId: MAC.shortId,
-          name,
-        });
-        // Neither registration can see the other's records yet.
-        const first = yield* mac.registerDevice;
-        const second = yield* other.registerDevice;
-        assert.strictEqual(first.shortId, second.shortId);
-        yield* mac.writeDay("2026-10-02", "Surviving cloud note");
-        yield* other.writeDay("2026-10-02", "Independent local note");
-        const macSync = yield* connectSync.pipe(Effect.provide(mac.layer));
-        const otherSync = yield* connectSync.pipe(Effect.provide(other.layer));
-        yield* macSync.syncNow;
-        const before = drive.changes.length;
-        yield* otherSync.syncNow;
-        assert.strictEqual((yield* otherSync.getStatus).sync.state, "error");
-        assert.include((yield* otherSync.getStatus).sync.message ?? "", "ownership conflict");
-        assert.strictEqual(drive.changes.length, before);
-        assert.strictEqual(
-          drive.file("TritonAI Harness/memory/general/Daily/2026/2026-10-02 Mac (aaaa).md"),
-          "Surviving cloud note",
-        );
-        assert.strictEqual(
-          yield* other.read(`Daily/2026/2026-10-02 ${other.label}.md`),
-          "Independent local note",
-        );
-      }),
-    );
-  }
+  describe.each(Array.from(["Other computer", MAC.name], (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: name }) => {
+      it.effect(`stops independent first-sync short-ID collisions with ${name}`, () =>
+        Effect.gen(function* () {
+          const drive = new FakeOneDrive();
+          const mac = yield* setup(drive, MAC);
+          const other = yield* setup(drive, {
+            environmentId: "aaaa2222-0000-4000-8000-000000000002",
+            shortId: MAC.shortId,
+            name,
+          });
+          // Neither registration can see the other's records yet.
+          const first = yield* mac.registerDevice;
+          const second = yield* other.registerDevice;
+          assert.strictEqual(first.shortId, second.shortId);
+          yield* mac.writeDay("2026-10-02", "Surviving cloud note");
+          yield* other.writeDay("2026-10-02", "Independent local note");
+          const macSync = yield* connectSync.pipe(Effect.provide(mac.layer));
+          const otherSync = yield* connectSync.pipe(Effect.provide(other.layer));
+          yield* macSync.syncNow;
+          const before = drive.changes.length;
+          yield* otherSync.syncNow;
+          assert.strictEqual((yield* otherSync.getStatus).sync.state, "error");
+          assert.include((yield* otherSync.getStatus).sync.message ?? "", "ownership conflict");
+          assert.strictEqual(drive.changes.length, before);
+          assert.strictEqual(
+            drive.file("TritonAI Harness/memory/general/Daily/2026/2026-10-02 Mac (aaaa).md"),
+            "Surviving cloud note",
+          );
+          assert.strictEqual(
+            yield* other.read(`Daily/2026/2026-10-02 ${other.label}.md`),
+            "Independent local note",
+          );
+        }),
+      );
+    },
+  );
 
   it.effect("restores a legacy downloaded note repeatedly without adopting its ownership", () =>
     Effect.gen(function* () {
@@ -632,45 +638,54 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
     }),
   );
 
-  for (const name of ["Other computer", MAC.name]) {
-    it.effect(`preserves an orphaned remote note downloaded by ${name} with a matching code`, () =>
-      Effect.gen(function* () {
-        const drive = new FakeOneDrive();
-        const mac = yield* setup(drive, MAC);
-        const other = yield* setup(drive, {
-          environmentId: "aaaa2222-0000-4000-8000-000000000002",
-          shortId: MAC.shortId,
-          name,
-        });
-        yield* mac.registerDevice;
-        yield* other.registerDevice;
-        yield* mac.writeDay("2026-10-02", "Orphaned cloud note");
-        const macSync = yield* connectSync.pipe(Effect.provide(mac.layer));
-        yield* macSync.syncNow;
-        changeDeviceRecord(drive, MAC.environmentId, null);
-        yield* other.write(
-          ".devices/aaaa2222-0000-4000-8000-000000000002/written.json",
-          toJson({ version: 1, files: {} }),
-        );
-        const otherSync = yield* connectSync.pipe(Effect.provide(other.layer));
-        const note = `Daily/2026/2026-10-02 ${mac.label}.md`;
-        yield* otherSync.syncNow;
-        assert.strictEqual(yield* other.read(note), "Orphaned cloud note");
-        for (let pass = 0; pass < 2; pass++) {
-          yield* other.fs.remove(other.path.join(other.vault, note));
-          yield* otherSync.syncNow;
-          assert.strictEqual((yield* otherSync.getStatus).sync.state, "idle");
-          assert.strictEqual(yield* other.read(note), "Orphaned cloud note");
-          assert.strictEqual(
-            drive.file(`TritonAI Harness/memory/general/${note}`),
-            "Orphaned cloud note",
-          );
-        }
-      }),
-    );
-  }
+  describe.each(Array.from(["Other computer", MAC.name], (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: name }) => {
+      it.effect(
+        `preserves an orphaned remote note downloaded by ${name} with a matching code`,
+        () =>
+          Effect.gen(function* () {
+            const drive = new FakeOneDrive();
+            const mac = yield* setup(drive, MAC);
+            const other = yield* setup(drive, {
+              environmentId: "aaaa2222-0000-4000-8000-000000000002",
+              shortId: MAC.shortId,
+              name,
+            });
+            yield* mac.registerDevice;
+            yield* other.registerDevice;
+            yield* mac.writeDay("2026-10-02", "Orphaned cloud note");
+            const macSync = yield* connectSync.pipe(Effect.provide(mac.layer));
+            yield* macSync.syncNow;
+            changeDeviceRecord(drive, MAC.environmentId, null);
+            yield* other.write(
+              ".devices/aaaa2222-0000-4000-8000-000000000002/written.json",
+              toJson({ version: 1, files: {} }),
+            );
+            const otherSync = yield* connectSync.pipe(Effect.provide(other.layer));
+            const note = `Daily/2026/2026-10-02 ${mac.label}.md`;
+            yield* otherSync.syncNow;
+            assert.strictEqual(yield* other.read(note), "Orphaned cloud note");
+            for (let pass = 0; pass < 2; pass++) {
+              yield* other.fs.remove(other.path.join(other.vault, note));
+              yield* otherSync.syncNow;
+              assert.strictEqual((yield* otherSync.getStatus).sync.state, "idle");
+              assert.strictEqual(yield* other.read(note), "Orphaned cloud note");
+              assert.strictEqual(
+                drive.file(`TritonAI Harness/memory/general/${note}`),
+                "Orphaned cloud note",
+              );
+            }
+          }),
+      );
+    },
+  );
 
-  for (const recordProblem of ["missing", "invalid", "wrong ID", "collision", "invalid manifest"]) {
+  describe.each(
+    Array.from(["missing", "invalid", "wrong ID", "collision", "invalid manifest"], (scenario) => ({
+      scenario,
+    })),
+  )("case $scenario", ({ scenario: recordProblem }) => {
     it.effect(
       `preserves an uploaded note after local loss with a ${recordProblem} remote device record`,
       () =>
@@ -732,7 +747,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
           }
         }),
     );
-  }
+  });
 
   it.effect("restores a lost inbox while retaining its sync state", () =>
     Effect.gen(function* () {

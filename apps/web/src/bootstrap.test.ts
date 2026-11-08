@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { showBootError } from "./lib/bootError";
 
 class BootElement extends EventTarget {

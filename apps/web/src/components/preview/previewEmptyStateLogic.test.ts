@@ -1,6 +1,5 @@
 import type { PreviewSessionSnapshot, ProjectScript } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import { getConfiguredPreviewUrls, shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
 
 const snapshot = (navStatus: PreviewSessionSnapshot["navStatus"]): PreviewSessionSnapshot => ({

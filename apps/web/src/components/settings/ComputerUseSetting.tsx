@@ -1,12 +1,12 @@
 import { describeComputerUseReadiness, type DesktopComputerUseState } from "@t3tools/contracts";
 import { CheckIcon, CircleAlertIcon, MonitorIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { watchComputerUseState } from "./watchComputerUseState";
+import { GettingStartedContextHint } from "../onboarding/GettingStartedContextHint";
 
 export function ComputerUseSetting() {
   const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
@@ -51,13 +51,15 @@ export function ComputerUseSetting() {
     watcher.current?.stop();
     setPending(true);
     setError(null);
-    try {
-      setState(await bridge.setComputerUseEnabled(enabled));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not update computer use.");
-    } finally {
+    return await (async () => {
+      try {
+        setState(await bridge.setComputerUseEnabled(enabled));
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Could not update computer use.");
+      }
+    })().finally(async () => {
       setPending(false);
-    }
+    });
   };
 
   return (
@@ -73,6 +75,7 @@ export function ComputerUseSetting() {
         />
       }
     >
+      <GettingStartedContextHint chapters={["computer-use"]} />
       <div className="my-3 rounded-lg border border-border/70 bg-muted/20 p-3 text-sm">
         <div className="flex items-center gap-2 font-medium" role="status">
           <MonitorIcon className="size-4 text-info-foreground" aria-hidden />

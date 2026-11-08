@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-
 import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 const NonNegativeFinite = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));

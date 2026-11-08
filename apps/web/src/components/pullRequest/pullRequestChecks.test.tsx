@@ -1,7 +1,6 @@
 import type { EnvironmentId, ProjectId, PullRequestCheck } from "@t3tools/contracts";
 import { Children, isValidElement, type ReactNode } from "react";
 import { describe, expect, it } from "vite-plus/test";
-
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import type { EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import { PullRequestRow } from "./PullRequestRow";
@@ -27,7 +26,6 @@ describe("pullRequestChecksState", () => {
     expect(pullRequestChecksState([check("success"), check("pending")])).toBe("pending");
     expect(pullRequestChecksState([check("success"), check("action-required")])).toBe("pending");
     expect(pullRequestChecksState([check("success")])).toBe("passing");
-    // Skipped and neutral are neither a pass nor a failure, so they are no verdict at all.
     expect(pullRequestChecksState([check("skipped"), check("neutral")])).toBe(null);
     expect(pullRequestChecksState([])).toBe(null);
   });
@@ -52,11 +50,6 @@ describe("pullRequestChecksState", () => {
   });
 });
 
-/**
- * Every element of the tree the row returned, so a nested indicator can be looked for. The row
- * hands its slots to the shared row lines as props rather than children, so every prop that
- * holds an element is walked too.
- */
 function flatten(node: ReactNode): ReadonlyArray<ReturnType<typeof Object>> {
   const found: unknown[] = [];
   for (const child of Children.toArray(node)) {
@@ -102,6 +95,9 @@ function row(overrides: Partial<EnvironmentPullRequestEntry>): ReactNode {
     showProjectTitle: false,
     showProvider: false,
     onSelect: () => {},
+    speedMode: false,
+    hostActions: new Set(),
+    onActed: () => {},
   });
 }
 

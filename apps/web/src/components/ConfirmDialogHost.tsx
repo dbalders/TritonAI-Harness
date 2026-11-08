@@ -1,5 +1,4 @@
 import { useEffect, useSyncExternalStore } from "react";
-
 import {
   completeConfirmDialogClose,
   readConfirmDialogState,

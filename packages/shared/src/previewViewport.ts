@@ -1,9 +1,9 @@
-import type {
-  PreviewAutomationResizeInput,
-  PreviewViewportPresetId,
-  PreviewViewportSetting,
+import {
+  type PreviewAutomationResizeInput,
+  type PreviewViewportPresetId,
+  type PreviewViewportSetting,
+  PREVIEW_VIEWPORT_PRESET_IDS,
 } from "@t3tools/contracts";
-import { PREVIEW_VIEWPORT_PRESET_IDS } from "@t3tools/contracts";
 
 export interface PreviewViewportPreset {
   readonly id: PreviewViewportPresetId;

@@ -17,16 +17,16 @@ import {
 
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
-import { GlassSurface } from "../../components/GlassSurface";
-import { RowPressable } from "../../components/RowPressable";
-import { AppText as Text } from "../../components/AppText";
-import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
+import { GlassSurface } from "../../components/ui/GlassSurface";
+import { RowPressable } from "../../components/ui/RowPressable";
+import { AppText as Text } from "../../components/ui/AppText";
+import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import { useProjects, useThreadShell, useThreadShells } from "../../state/entities";
 import { useThreadSearch } from "../../state/queries";
-import { useWorkspaceState } from "../../state/workspace";
+import { useWorkspaceEnvironments } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -38,6 +38,7 @@ import {
 } from "./commandPaletteItems";
 import { parseActiveThreadPath, type HardwareKeyboardCommand } from "./hardwareKeyboardCommands";
 import { threadJumpIndex } from "./threadKeyboardShortcuts";
+import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 
 const PALETTE_COMMANDS: ReadonlyArray<HardwareKeyboardCommand> = [
   "commandPalette",
@@ -59,7 +60,7 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
   archive: "archivebox",
   files: "doc.text",
   terminal: "terminal",
-  review: "arrow.triangle.pull",
+  review: PullRequestGlyph.pullRequest,
   copyThreadReference: "link",
 };
 
@@ -145,7 +146,7 @@ export function CommandPalette(props: {
   const threads = useThreadShells();
   const activeThreadRef = useMemo(() => parseActiveThreadPath(props.pathname), [props.pathname]);
   const activeThread = useThreadShell(activeThreadRef);
-  const { environments } = useWorkspaceState();
+  const environments = useWorkspaceEnvironments();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [query, setQuery] = useState("");
   const [selection, setSelection] = useState<string | null>(null);
@@ -224,6 +225,17 @@ export function CommandPalette(props: {
           navigation.navigate("SettingsSheet", {
             screen: "SettingsContent",
             params: { screen: "SettingsEnvironments" },
+          }),
+      },
+      {
+        key: "scheduledTasks",
+        kind: "action",
+        title: "Scheduled tasks",
+        searchTerms: ["schedule", "automations", "recurring"],
+        run: () =>
+          navigation.navigate("SettingsSheet", {
+            screen: "SettingsContent",
+            params: { screen: "SettingsScheduledTasks" },
           }),
       },
       {

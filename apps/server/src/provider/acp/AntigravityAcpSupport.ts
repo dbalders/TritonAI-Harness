@@ -13,21 +13,22 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
-import type * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import {
   makeAntigravityStderrHandler,
   makeAntigravityStdoutTransform,
 } from "../antigravityAuthSupport.ts";
-import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import { normalizeAntigravitySessionUpdate } from "./AntigravityProtocol.ts";
 
 export interface AntigravityAcpRuntimeInput extends Omit<
   AcpSessionRuntime.AcpSessionRuntimeOptions,
   | "authMethodId"
+  | "authenticateEagerly"
   | "cancelBehavior"
   | "clientCapabilities"
   | "onStderr"
@@ -35,23 +36,13 @@ export interface AntigravityAcpRuntimeInput extends Omit<
   | "transformSessionUpdate"
   | "transformStdout"
 > {
-  /** Device CLI environment supplied for this provider session. */
   readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly onAuthorizationUrl?: (url: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
-  /**
-   * Advertise `fs.readTextFile` and `fs.writeTextFile`. The agent then routes
-   * workspace reads and writes through T3, which turns each edit into a
-   * `session/request_permission` with the file content, instead of writing
-   * through its own tools. Chat sessions turn this on. Setup, probe, and text
-   * generation helpers leave it off so they never touch a workspace.
-   */
   readonly clientFileSystem?: boolean;
-  /** ACP `authenticate` method id. Defaults to the personal Google account flow. */
   readonly authMethod?: AntigravityAuthMethod;
 }
 
-/** Normal launches reject browser login; only the auth flow supplies `onAuthorizationUrl`. */
 export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(function* (
   input: AntigravityAcpRuntimeInput,
 ): Effect.fn.Return<
@@ -63,6 +54,7 @@ export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(
     AcpSessionRuntime.layer({
       ...input,
       authMethodId: input.authMethod ?? "oauth-personal",
+      authenticateEagerly: true,
       resumeMethod: "resume",
       cancelBehavior: "wait-for-prompt",
       clientCapabilities: {
@@ -100,7 +92,7 @@ export function antigravityPermissionMode(runtimeMode: RuntimeMode): string {
   }
 }
 
-export function antigravityModelOptions(
+function antigravityModelOptions(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
 ) {
   const model = configOptions.find((option) => option.id === "model");
@@ -108,13 +100,7 @@ export function antigravityModelOptions(
   return model.options.flatMap((entry) => ("value" in entry ? [entry] : entry.options));
 }
 
-/**
- * Resolves the model a turn should run on. A saved selection is reapplied
- * as-is. The provider default alias resolves to `defaultModel` when the
- * account offers it, so T3 can pick a newer model than the one Google marks
- * current. Otherwise the agent's current selection stands.
- */
-export function resolveAntigravityModel(input: {
+function resolveAntigravityModel(input: {
   readonly configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
   readonly model: string | null | undefined;
   readonly defaultModel?: string | undefined;
@@ -136,7 +122,6 @@ export const applyAntigravityAcpModelSelection = Effect.fn("applyAntigravityAcpM
       "getConfigOptions" | "setModel"
     >;
     readonly model: string | null | undefined;
-    /** Model to select for the provider default alias. See `resolveAntigravityModel`. */
     readonly defaultModel?: string | undefined;
     readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
   }): Effect.fn.Return<string | undefined, E> {
@@ -148,9 +133,6 @@ export const applyAntigravityAcpModelSelection = Effect.fn("applyAntigravityAcpM
       model: input.model,
       defaultModel: input.defaultModel,
     });
-    // The default alias never sends an internal ID. It selects the manifest
-    // default when that differs from the agent's current model, and otherwise
-    // leaves the agent's choice alone.
     const explicit = Boolean(input.model) && input.model !== ANTIGRAVITY_DEFAULT_MODEL;
     if (resolved === undefined || (!explicit && resolved === current)) return current;
     const options = antigravityModelOptions(configOptions);
@@ -169,7 +151,6 @@ export const applyAntigravityAcpModelSelection = Effect.fn("applyAntigravityAcpM
 );
 
 const IMAGE_MIME_TYPES = new Set(["image/bmp", "image/jpeg", "image/png", "image/webp"]);
-// Formats the bundled SDK's Audio type accepts. Anything else is rejected up front.
 const AUDIO_MIME_TYPES = new Set([
   "audio/aac",
   "audio/flac",
@@ -246,11 +227,6 @@ const TEXT_FILE_EXTENSIONS = new Set([
 const ANTIGRAVITY_MAX_TEXT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = PROVIDER_SEND_TURN_MAX_FILE_BYTES;
 
-/**
- * Sends supported uploads as native ACP content. Other files, and native
- * candidates over their limits, reach the agent through the saved path
- * ProviderService puts in the text block.
- */
 export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(function* (input: {
   readonly input: ProviderSendTurnInput["input"];
   readonly attachments: ProviderSendTurnInput["attachments"];

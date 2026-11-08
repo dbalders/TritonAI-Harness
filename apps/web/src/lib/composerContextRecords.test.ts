@@ -8,13 +8,11 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { upgradeLegacyContextMessage } from "@t3tools/shared/composerContextLegacy";
-
 import {
   formatInlineContextReference,
   removeInlineContextReference,
 } from "./composerContextReferences";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   asKnownContextRecord,
   attachmentContextRecord,
@@ -399,8 +397,6 @@ describe("composerContextRecords", () => {
     expect(reference.contextId).toBe("terminal_term-1");
 
     const prompt = `prose ${formatInlineContextReference(reference)} tail`;
-    // The send path drops expired excerpts; the raw producer id matches nothing and would
-    // leave the chip behind.
     expect(removeInlineContextReference(prompt, context.id).prompt).toBe(prompt);
     expect(removeInlineContextReference(prompt, reference.contextId).prompt).toBe("prose tail");
   });
@@ -419,7 +415,6 @@ describe("composerContextRecords", () => {
         diff: "d".repeat(diffLength),
       });
 
-    // At the limit the diff is untouched; one character over it is clamped, and both encode.
     const atLimit = build(32_000);
     expect(atLimit.diff).toHaveLength(32_000);
     const overLimit = build(32_001);
@@ -440,7 +435,6 @@ describe("composerContextRecords", () => {
     expect(record.targetSummary).toBe("1 marked region");
     expect(record.screenshotContextId).toBe("image_ann_1");
 
-    // Re-encoding what a paste rebuilt must not empty the summary or drop the screenshot.
     const reencoded = previewAnnotationContextRecord(previewAnnotationFromRecord(record), {
       screenshotContextId: "ann_1",
     });
@@ -460,7 +454,6 @@ describe("composerContextRecords", () => {
       text: "A",
     });
     expect(isSameComposerContextPayload(base, { ...base })).toBe(true);
-    // Labels are display text, never identity.
     expect(isSameComposerContextPayload(base, { ...base, label: "different" })).toBe(true);
     expect(isSameComposerContextPayload(base, { ...base, text: "B" })).toBe(false);
   });
@@ -498,8 +491,6 @@ describe("composerContextRecords", () => {
       text: "A",
     };
     const canonical = terminalContextRecord(draft);
-    // An import carries the id it was sent with; the draft rebuilds the folded
-    // canonical form. Same payload either way, so no duplicate entry may form.
     const imported = { ...canonical, contextId: "legacy_terminal_1" as ComposerContextId };
 
     expect(isSameComposerContextPayload(canonical, imported)).toBe(true);
@@ -514,7 +505,7 @@ describe("composerContextRecords", () => {
     expect(
       isSameComposerContextPayload(base, {
         ...base,
-        elements: base.elements?.map((element) => ({
+        elements: base.elements!.map((element) => ({
           ...element,
           htmlPreview: '<button id="pay">Changed</button>',
         })),
@@ -523,7 +514,7 @@ describe("composerContextRecords", () => {
     expect(
       isSameComposerContextPayload(base, {
         ...base,
-        elements: base.elements?.map((element) => ({
+        elements: base.elements!.map((element) => ({
           ...element,
           source: {
             functionName: "Checkout",

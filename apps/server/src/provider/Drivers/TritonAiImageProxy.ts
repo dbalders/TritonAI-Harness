@@ -13,7 +13,7 @@ import {
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 
 // Match the gateway's four-image limit.
 const MAX_IMAGES = 4;
@@ -97,9 +97,9 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
         yield* client.execute(HttpClientRequest.make(request.method)(target, { headers, body })),
       );
     }).pipe(
-      Effect.catchTag("HttpClientError", () =>
-        Effect.succeed(HttpServerResponse.empty({ status: 502 })),
-      ),
+      Effect.catchTags({
+        HttpClientError: () => Effect.succeed(HttpServerResponse.empty({ status: 502 })),
+      }),
     ),
   );
   return `${HttpServer.formatAddress(server.address)}${prefix}`;

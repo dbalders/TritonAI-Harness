@@ -1,5 +1,4 @@
 import type { ThreadPullRequestLink } from "@t3tools/contracts";
-
 import { resolveThreadCurrentPullRequestLink } from "./threadPullRequests.ts";
 
 export interface ThreadReferenceCopyTarget {

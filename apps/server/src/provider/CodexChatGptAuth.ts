@@ -11,21 +11,22 @@ import {
 import { codexCallbackUrl } from "@t3tools/shared/codexAuthHandoff";
 import * as Clock from "effect/Clock";
 import * as Cause from "effect/Cause";
-import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
+import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
+import * as Crypto from "effect/Crypto";
 import * as Exit from "effect/Exit";
 import { codexAuthCallbackPage, codexAuthReturnUrl } from "./CodexAuthCallbackPage.ts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import * as ProviderAuthFlow from "./ProviderAuthFlow.ts";
-import type { ProviderAuthFlowContext } from "./ProviderAuthFlow.ts";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import * as ProviderAuthFlow from "@t3tools/provider-core/server/providerAuthFlow";
+import type { ProviderAuthFlowContext } from "@t3tools/provider-core/server/providerAuthFlow";
+import { HttpClient, HttpClientRequest } from "effect/http";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
 import { withChatGptSessionLock } from "./CodexChatGptSessionLock.ts";
-import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
-import { ServerSettingsService } from "../serverSettings.ts";
-import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 
 const isSetupError = Schema.is(ProviderSetupError);
 const RESOURCE = "https://api.openai.com/v1";
@@ -58,7 +59,7 @@ const Sessions = Schema.Struct({
   sessions: Schema.Array(Record),
 });
 const sessionLocks = new WeakMap<
-  typeof ServerSecretStore.Service,
+  typeof ServerSecretStore.ServerSecretStore.Service,
   Map<string, Semaphore.Semaphore>
 >();
 const Registration = Schema.Struct({
@@ -106,65 +107,65 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   readonly reconnectProfile?: ChatGptReconnectProfile | null;
   readonly telemetryFlow?: "direct" | "primary_handoff";
 }) {
-  const analytics = yield* Effect.serviceOption(AnalyticsService);
-  const settings = yield* Effect.serviceOption(ServerSettingsService);
-  const track = <A, E extends ProviderSetupError, R>(
+  const analytics = yield* Effect.serviceOption(AnalyticsService.AnalyticsService);
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const track = Effect.fn("CodexChatGptAuth.track")(function* <A, E extends ProviderSetupError, R>(
     event: "auth" | "transfer",
     properties: Readonly<Record<string, string>>,
     task: Effect.Effect<A, E, R>,
     expiresAt?: number,
-  ) =>
-    Effect.gen(function* () {
-      if (Option.isNone(analytics)) return yield* task;
-      const record = (name: string, properties: Readonly<Record<string, unknown>>) =>
-        analytics.value.record(name, properties).pipe(Effect.ignoreCause);
-      const startedAt = yield* Clock.currentTimeMillis;
-      yield* record(`chatgpt.${event}.started`, properties);
-      return yield* task.pipe(
-        Effect.onExit((result) =>
-          Effect.gen(function* () {
-            const endedAt = yield* Clock.currentTimeMillis;
-            const error = Exit.isFailure(result)
-              ? Cause.findErrorOption(result.cause)
-              : Option.none();
-            const counts =
-              Exit.isSuccess(result) &&
-              (event === "transfer" || options.telemetryFlow !== "primary_handoff")
-                ? yield* accountCounts.pipe(Effect.catchCause(() => Effect.succeed({})))
-                : {};
-            yield* record(`chatgpt.${event}.completed`, {
-              ...counts,
-              ...properties,
-              outcome: Exit.isSuccess(result)
-                ? "succeeded"
-                : Cause.hasInterruptsOnly(result.cause)
-                  ? expiresAt !== undefined && endedAt >= expiresAt
-                    ? "expired"
-                    : "cancelled"
-                  : "failed",
-              durationMs: Math.max(0, endedAt - startedAt),
-              ...(Option.isSome(error) && isSetupError(error.value)
-                ? { failureStage: error.value.operation }
-                : {}),
-            });
-          }),
-        ),
-      );
-    });
+  ) {
+    if (Option.isNone(analytics)) return yield* task;
+    const record = (name: string, properties: Readonly<Record<string, unknown>>) =>
+      analytics.value.record(name, properties).pipe(Effect.ignoreCause);
+    const startedAt = yield* Clock.currentTimeMillis;
+    yield* record(`chatgpt.${event}.started`, properties);
+    return yield* task.pipe(
+      Effect.onExit((result) =>
+        Effect.gen(function* () {
+          const endedAt = yield* Clock.currentTimeMillis;
+          const error = Exit.isFailure(result)
+            ? Cause.findErrorOption(result.cause)
+            : Option.none();
+          const counts =
+            Exit.isSuccess(result) &&
+            (event === "transfer" || options.telemetryFlow !== "primary_handoff")
+              ? yield* accountCounts.pipe(Effect.catchCause(() => Effect.succeed({})))
+              : {};
+          yield* record(`chatgpt.${event}.completed`, {
+            ...counts,
+            ...properties,
+            outcome: Exit.isSuccess(result)
+              ? "succeeded"
+              : Cause.hasInterruptsOnly(result.cause)
+                ? expiresAt !== undefined && endedAt >= expiresAt
+                  ? "expired"
+                  : "cancelled"
+                : "failed",
+            durationMs: Math.max(0, endedAt - startedAt),
+            ...(Option.isSome(error) && isSetupError(error.value)
+              ? { failureStage: error.value.operation }
+              : {}),
+          });
+        }),
+      ),
+    );
+  });
   const http = yield* HttpClient.HttpClient;
   const store = yield* ProviderCredentialStore.make("codex-chatgpt", options.instanceId);
   const registrationStore = yield* ProviderCredentialStore.make(
     "codex-chatgpt-registration",
     options.instanceId,
   );
-  const secrets = yield* ServerSecretStore;
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const crypto = yield* Crypto.Crypto;
   const environmentLocks = sessionLocks.get(secrets) ?? new Map<string, Semaphore.Semaphore>();
   sessionLocks.set(secrets, environmentLocks);
   const lock = environmentLocks.get(store.binding.key) ?? (yield* Semaphore.make(1));
   environmentLocks.set(store.binding.key, lock);
   const withSessionLock = <A, E, R>(task: Effect.Effect<A, E, R>) =>
     withChatGptSessionLock(secrets.directory, store.binding.key, options.instanceId, task);
-  const environment = yield* ServerEnvironmentIdentity;
+  const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const hostId = `urn:uuid:${yield* environment.getEnvironmentId}`;
   const resource = options.resource ?? RESOURCE;
   const failure = (operation: string, detail: string) =>
@@ -226,8 +227,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       Effect.flatMap((json) => store.set(new TextEncoder().encode(json))),
       Effect.mapError(() => failure("save", "Could not save the ChatGPT connection.")),
     );
-  // Registration profiles outlive tokens, but belong only to this environment/instance.
-  // Accept the original single-registration record until it is next saved.
   const readRegistrations = registrationStore.get.pipe(
     Effect.mapError(() =>
       failure("registration", "Could not read the ChatGPT sign-in registration. Try again."),
@@ -266,7 +265,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
     const instanceIds = new Set<string>([options.instanceId]);
     if (Option.isSome(settings)) {
       const current = yield* settings.value.getSettings;
-      // Include the legacy default instance as well as explicitly configured ones.
       instanceIds.add("codex");
       for (const [id, instance] of Object.entries(current.providerInstances)) {
         if (instance.driver === "codex") instanceIds.add(id);
@@ -306,7 +304,10 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       savedConnectionCount: savedConnections.size,
       unidentifiedConnectedConnectionCount,
     };
-  }).pipe(Effect.provideService(ServerSecretStore, secrets));
+  }).pipe(
+    Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+    Effect.provideService(Crypto.Crypto, crypto),
+  );
   const saveRegistration = Effect.fnUntraced(function* (profile: typeof Registration.Type) {
     const saved = yield* readRegistrations;
     profile = {
@@ -326,7 +327,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       ),
     );
   });
-  // The active pointer and all profile token sets change in one protected atomic write.
   const save = Effect.fnUntraced(function* (record: CodexChatGptCredentials, activate = true) {
     const saved = yield* readSessions;
     yield* writeSessions({
@@ -349,7 +349,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       );
   });
   const remove = Effect.gen(function* () {
-    // Promote legacy identity into the retained profile before deleting credentials.
     const credentials = yield* read;
     if (Option.isSome(credentials)) {
       const { clientId, subject, email } = credentials.value;
@@ -846,7 +845,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
           description: "Register a connection for another ChatGPT account.",
           type: "agent" as const,
         },
-        // The wire contract allows 32 methods; advertise the 30 most recent profiles.
         ...profiles.slice(0, 30).map((profile) => ({
           id: profileMethodId(profile.clientId),
           name: `${profile.email ?? "ChatGPT account"} · ${profile.connectionLabel}`,

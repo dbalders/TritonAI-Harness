@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ProviderDriverKind } from "@t3tools/contracts";
-
 import type { ComposerCommandItem } from "./ComposerCommandMenu";
 import {
   searchSlashCommandItems,
@@ -219,5 +218,25 @@ describe("searchSlashCommandItems", () => {
       "provider-slash-command:claudeAgent:compact",
       "skill:claudeAgent:unslop",
     ]);
+  });
+
+  it("offers native goal commands only at the start of a message", () => {
+    for (const provider of [claudeDriver, ProviderDriverKind.make("codex")]) {
+      const goal = {
+        id: `provider-slash-command:${provider}:goal`,
+        type: "provider-slash-command",
+        provider,
+        command: { name: "goal" },
+        label: "/goal",
+        description: "Set a native goal",
+      } satisfies ComposerCommandItem;
+
+      expect(
+        searchSlashCommandItems(slashCommandItemsForPromptPosition([goal], true), "go"),
+      ).toEqual([goal]);
+      expect(
+        searchSlashCommandItems(slashCommandItemsForPromptPosition([goal], false), "go"),
+      ).toEqual([]);
+    }
   });
 });

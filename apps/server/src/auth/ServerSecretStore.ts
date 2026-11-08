@@ -1,11 +1,11 @@
+// @effect-diagnostics nodeBuiltinImport:off - Key derivation, encryption and constant-time key comparison require Node crypto.
 import * as NodeCrypto from "node:crypto";
-
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Encoding from "effect/encoding/Base64";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -14,7 +14,6 @@ import * as PlatformError from "effect/PlatformError";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-
 import * as ServerConfig from "../config.ts";
 import { acquireSqliteProcessLock, releaseSqliteProcessLock } from "./SqliteProcessLock.ts";
 
@@ -183,7 +182,6 @@ export const isSecretAlreadyExistsError = (error: SecretStoreError): boolean =>
 export class ServerSecretStore extends Context.Service<
   ServerSecretStore,
   {
-    /** File-backed stores expose their directory for cross-process credential leases. */
     readonly directory?: string;
     readonly get: (name: string) => Effect.Effect<Option.Option<Uint8Array>, SecretStoreError>;
     readonly set: (name: string, value: Uint8Array) => Effect.Effect<void, SecretStoreError>;
@@ -208,7 +206,7 @@ const decodeConfiguredKeys = Effect.fn("ServerSecretStore.decodeConfiguredKeys")
 
   const keys: Buffer[] = [];
   for (const encoded of encodedKeys) {
-    const decoded = yield* Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+    const decoded = yield* Effect.fromResult(Encoding.decode(encoded)).pipe(
       Effect.mapError(
         () =>
           new SecretStoreKeyError({
@@ -233,7 +231,7 @@ const decodeLegacyFingerprints = Effect.fn("ServerSecretStore.decodeLegacyFinger
 ) {
   const fingerprints = new Map<string, Buffer>();
   for (const [name, encoded] of Object.entries(configured ?? {})) {
-    const decoded = yield* Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+    const decoded = yield* Effect.fromResult(Encoding.decode(encoded)).pipe(
       Effect.mapError(
         () =>
           new SecretStoreKeyError({
@@ -364,7 +362,10 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const retireLegacyAuthorization = (name: string): Effect.Effect<void, SecretStoreError> => {
+  const retireLegacyAuthorization = (
+    name: string,
+    migratePlaintext?: Effect.Effect<void, SecretStoreError>,
+  ): Effect.Effect<void, SecretStoreError> => {
     const expected = legacyFingerprints.get(name);
     if (expected === undefined) return Effect.void;
 
@@ -389,18 +390,25 @@ export const make = Effect.gen(function* () {
                 ? keyringFingerprints[name]
                 : undefined;
               if (currentFingerprint === undefined) {
+                if (migratePlaintext !== undefined) {
+                  return yield* new SecretStoreDecodeError({
+                    resource: `secret ${name}`,
+                    cause: new Error("Legacy migration authorization is no longer active."),
+                  });
+                }
                 // Another process can migrate the same authorized bytes and
                 // durably retire the fingerprint while this process waits for
                 // the lock. The absent entry is already the required final
                 // state; a different entry remains a hard failure below.
                 return;
               }
-              if (currentFingerprint !== Encoding.encodeBase64(expected)) {
+              if (currentFingerprint !== Encoding.encode(expected)) {
                 return yield* new SecretStorePersistError({
                   resource: `legacy migration authorization for secret ${name}`,
                 });
               }
 
+              if (migratePlaintext !== undefined) yield* migratePlaintext;
               const remaining = Object.assign(
                 Object.create(null) as Record<string, string>,
                 keyringFingerprints,
@@ -419,7 +427,7 @@ export const make = Effect.gen(function* () {
                     }),
                 ),
               )}\n`;
-              const uuid = yield* crypto.randomUUIDv4.pipe(
+              const uuid = yield* crypto.randomUUIDv4().pipe(
                 Effect.mapError(
                   (cause) =>
                     new SecretStoreTemporaryPathError({
@@ -489,6 +497,8 @@ export const make = Effect.gen(function* () {
             }),
           releaseSqliteProcessLock,
         );
+      } else if (migratePlaintext !== undefined) {
+        yield* migratePlaintext;
       }
       legacyFingerprints.delete(name);
     }).pipe(
@@ -507,7 +517,7 @@ export const make = Effect.gen(function* () {
     const secretPath = resolveSecretPath(name);
     return Effect.gen(function* () {
       const envelope = yield* encodeEnvelope(name, value, keys[0]);
-      const uuid = yield* crypto.randomUUIDv4.pipe(
+      const uuid = yield* crypto.randomUUIDv4().pipe(
         Effect.mapError(
           (cause) =>
             new SecretStoreTemporaryPathError({
@@ -554,48 +564,48 @@ export const make = Effect.gen(function* () {
     });
   };
 
-  const getUnlocked: ServerSecretStore["Service"]["get"] = (name) =>
-    Effect.gen(function* () {
-      const storedOption: Option.Option<Uint8Array> = yield* fileSystem
-        .readFile(resolveSecretPath(name))
-        .pipe(
-          Effect.withSpan("ServerSecretStore.readFile"),
-          Effect.map((bytes): Option.Option<Uint8Array> => Option.some(Uint8Array.from(bytes))),
-          Effect.mapError(
-            (cause) =>
-              new SecretStoreReadError({
-                resource: `secret ${name}`,
-                cause,
-              }),
-          ),
-          Effect.catch((error) =>
-            isPlatformError(error.cause) && error.cause.reason._tag === "NotFound"
-              ? Effect.succeed(Option.none<Uint8Array>())
-              : Effect.fail(error),
-          ),
-        );
-      if (Option.isNone(storedOption)) {
-        yield* retireLegacyAuthorization(name);
-        return Option.none<Uint8Array>();
-      }
-
-      const stored = storedOption.value;
-      if (isTrustedLegacyValue(name, stored, keys, legacyFingerprints)) {
-        // Only bytes fingerprinted while the OS-protected data key was first
-        // created are eligible for migration. This prevents damaged envelope
-        // headers from being reclassified as unauthenticated plaintext.
-        yield* persistReplacing(name, stored);
-        yield* retireLegacyAuthorization(name);
-        return Option.some(Uint8Array.from(stored));
-      }
-
-      const decoded = yield* decodeEnvelope(name, stored, keys);
-      if (decoded.keyIndex !== 0) {
-        yield* persistReplacing(name, decoded.value);
-      }
+  const getUnlocked: ServerSecretStore["Service"]["get"] = Effect.fn(
+    "ServerSecretStore.getUnlocked",
+  )(function* (name) {
+    const storedOption: Option.Option<Uint8Array> = yield* fileSystem
+      .readFile(resolveSecretPath(name))
+      .pipe(
+        Effect.withSpan("ServerSecretStore.readFile"),
+        Effect.map((bytes): Option.Option<Uint8Array> => Option.some(Uint8Array.from(bytes))),
+        Effect.mapError(
+          (cause) =>
+            new SecretStoreReadError({
+              resource: `secret ${name}`,
+              cause,
+            }),
+        ),
+        Effect.catch((error) =>
+          isPlatformError(error.cause) && error.cause.reason._tag === "NotFound"
+            ? Effect.succeed(Option.none<Uint8Array>())
+            : Effect.fail(error),
+        ),
+      );
+    if (Option.isNone(storedOption)) {
       yield* retireLegacyAuthorization(name);
-      return Option.some(decoded.value);
-    });
+      return Option.none<Uint8Array>();
+    }
+
+    const stored = storedOption.value;
+    if (isTrustedLegacyValue(name, stored, keys, legacyFingerprints)) {
+      // Only bytes fingerprinted while the OS-protected data key was first
+      // created are eligible for migration. This prevents damaged envelope
+      // headers from being reclassified as unauthenticated plaintext.
+      yield* retireLegacyAuthorization(name, persistReplacing(name, stored));
+      return Option.some(Uint8Array.from(stored));
+    }
+
+    const decoded = yield* decodeEnvelope(name, stored, keys);
+    if (decoded.keyIndex !== 0) {
+      yield* persistReplacing(name, decoded.value);
+    }
+    yield* retireLegacyAuthorization(name);
+    return Option.some(decoded.value);
+  });
 
   const withSecretLock = <A, R>(
     name: string,
@@ -639,7 +649,7 @@ export const make = Effect.gen(function* () {
     const secretPath = resolveSecretPath(name);
     return Effect.gen(function* () {
       const envelope = yield* encodeEnvelope(name, value, keys[0]);
-      const uuid = yield* crypto.randomUUIDv4.pipe(
+      const uuid = yield* crypto.randomUUIDv4().pipe(
         Effect.mapError(
           (cause) =>
             new SecretStoreTemporaryPathError({

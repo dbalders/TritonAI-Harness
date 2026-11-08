@@ -1,6 +1,5 @@
 import { sign as signApplication, type SignOptions } from "@electron/osx-sign";
 import { expect, it, vi } from "vite-plus/test";
-
 import sign from "./sign-macos.ts";
 
 vi.mock("@electron/osx-sign", () => ({ sign: vi.fn() }));

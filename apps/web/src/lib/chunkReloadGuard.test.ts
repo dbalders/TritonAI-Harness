@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import { clearChunkReloadGuard, reloadOnceForChunkLoadError } from "./chunkReloadGuard";
 
 function createStorageStub(): Storage {

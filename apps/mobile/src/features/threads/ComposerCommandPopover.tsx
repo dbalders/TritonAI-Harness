@@ -4,6 +4,7 @@ import {
 } from "@t3tools/client-runtime/providerSkills";
 import type {
   PullRequestContextMetadata,
+  ScopedThreadRef,
   ServerProviderSkill,
   ServerProviderSlashCommand,
 } from "@t3tools/contracts";
@@ -11,10 +12,11 @@ import type { ComposerTriggerKind } from "@t3tools/shared/composerTrigger";
 import { memo } from "react";
 import { Pressable, ScrollView, StyleSheet, View, type ViewStyle } from "react-native";
 
-import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
-import { AppText as Text } from "../../components/AppText";
-import { GlassSurface } from "../../components/GlassSurface";
+import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
+import { GlassSurface } from "../../components/ui/GlassSurface";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
+import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 export type ComposerCommandItem =
   | {
       readonly id: string;
@@ -28,6 +30,13 @@ export type ComposerCommandItem =
       readonly type: "path";
       readonly path: string;
       readonly kind: "file" | "directory";
+      readonly label: string;
+      readonly description: string;
+    }
+  | {
+      readonly id: string;
+      readonly type: "thread";
+      readonly thread: ScopedThreadRef;
       readonly label: string;
       readonly description: string;
     }
@@ -91,7 +100,7 @@ const SKILL_SOURCE_SYMBOL_BY_KIND: Record<ProviderSkillSourceKind, AppSymbolName
 function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
   switch (item.type) {
     case "pull-request":
-      return { ios: "arrow.triangle.pull", android: "merge" };
+      return pullRequestStatus(item.pullRequest).icon;
     case "slash-command":
     case "provider-slash-command":
       return "terminal";
@@ -99,6 +108,8 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
       return SKILL_SOURCE_SYMBOL_BY_KIND[resolveProviderSkillSourceKind(item.skill)];
     case "path":
       return null;
+    case "thread":
+      return "text.bubble";
   }
 }
 
@@ -156,7 +167,11 @@ const CommandRow = memo(function CommandRow(props: {
         <SymbolView
           name={iconName}
           size={14}
-          tintColorClassName={"accent-icon-subtle"}
+          tintColorClassName={
+            props.item.type === "pull-request"
+              ? pullRequestStatus(props.item.pullRequest).tint
+              : "accent-icon-subtle"
+          }
           type="monochrome"
         />
       ) : null}

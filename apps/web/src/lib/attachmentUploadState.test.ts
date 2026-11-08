@@ -1,6 +1,5 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   attachmentUploadBlockReason,
   formatAttachmentUploadProgress,
@@ -37,7 +36,7 @@ describe("attachmentUploadBlockReason", () => {
     ).toBe("Attachments still uploading");
   });
 
-  it("asks the user to retry or remove failed uploads", () => {
+  it("leaves send enabled for failed uploads so sending can retry them", () => {
     expect(
       attachmentUploadBlockReason({
         imageIds: ["image-1"],
@@ -46,7 +45,7 @@ describe("attachmentUploadBlockReason", () => {
           "image-1": { status: "failed", environmentId, reason: "Upload failed" },
         },
       }),
-    ).toBe("Retry or remove the failed attachment");
+    ).toBeNull();
   });
 
   it("does not accept an upload from another environment", () => {

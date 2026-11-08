@@ -1,11 +1,11 @@
 import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, PullRequestRef, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { CheckIcon, MessageSquareIcon } from "lucide-react";
 import { useState } from "react";
 import { threadPullRequestLinkMode } from "@t3tools/client-runtime/thread-pull-request-compatibility";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
-
 import { parseChangeRequestUrl } from "~/lib/openPullRequestLink";
 import { normalizeThreadPullRequestKey } from "@t3tools/shared/threadPullRequests";
 import { useProjects, useServerConfigs, useThreadShell, useThreadShells } from "~/state/entities";
@@ -29,7 +29,6 @@ interface PullRequestThreadLinksProps {
   onPickerOpenChange?: (open: boolean) => void;
 }
 
-/** Thread relations belong to the detail environment, including when another environment is active. */
 export function PullRequestThreadLinks(props: PullRequestThreadLinksProps) {
   const configs = useServerConfigs();
   if (
@@ -50,8 +49,8 @@ function EnabledPullRequestThreadLinks({
   onPickerOpenChange,
 }: PullRequestThreadLinksProps) {
   const parsed = parseChangeRequestUrl(url);
-  const currentThreadRef = threadRef?.environmentId === environmentId ? threadRef : null;
-  const thread = useThreadShell(currentThreadRef);
+  const thread = useThreadShell(threadRef?.environmentId === environmentId ? threadRef : null);
+  const currentThreadRef = thread === null ? null : threadRef;
   const linking = usePullRequestLinking(environmentId);
   const linkedHere = linking.isLinked(thread, url);
   const relations = useEnvironmentQuery(
@@ -76,17 +75,18 @@ function EnabledPullRequestThreadLinks({
   const changeLink = async (threadId: ThreadId, remove: boolean) => {
     if (parsed === null || pending) return;
     setPending(true);
-    try {
-      await linking.changeLink(scopeThreadRef(environmentId, threadId), url, !remove);
-    } catch (error) {
+    const result = await settlePromise(() =>
+      linking.changeLink(scopeThreadRef(environmentId, threadId), url, !remove),
+    );
+    setPending(false);
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
       toastManager.add({
         type: "error",
         title: remove ? "Could not unlink the pull request" : "Could not link the pull request",
         description: error instanceof Error ? error.message : String(error),
       });
       return;
-    } finally {
-      setPending(false);
     }
     if (linking.mode === "multiple") {
       appAtomRegistry.refresh(

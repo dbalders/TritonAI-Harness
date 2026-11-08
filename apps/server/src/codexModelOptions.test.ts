@@ -13,12 +13,12 @@ it("returns the selected Codex service tier id", () => {
   assert.equal(getCodexServiceTierOptionValue(selection), "flex");
 });
 
-it("lets the hidden default Codex service tier fall back to the runtime default", () => {
+it("sends an explicit default tier so a previous priority selection is cleared", () => {
   const selection = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5", [
     { id: "serviceTier", value: "default" },
   ]);
 
-  assert.equal(getCodexServiceTierOptionValue(selection), undefined);
+  assert.equal(getCodexServiceTierOptionValue(selection), "default");
 });
 
 it("keeps legacy persisted fast mode selections working", () => {

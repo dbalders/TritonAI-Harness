@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -32,7 +32,62 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [55, "ProjectionThreadTitleState"],
   [56, "PullRequestFilesViewed"],
   [57, "ProjectionThreadsAutoSettleDisabledAt"],
+  [58, "Ideas"],
+  [59, "OrchestrationV2"],
+  [60, "RemoveRedundantProjectionIndexes"],
+  [61, "ScheduledTaskWebhooks"],
+  [62, "WebhookRelayDeliveries"],
+  [63, "McpAppModelContext"],
+  [64, "ThreadSnapshotWindowIndexes"],
+  [65, "PullRequestReviewGuides"],
+  [66, "ThreadFailureLookupIndex"],
+  [67, "HarnessActivityViews"],
+  [68, "ProjectBriefs"],
+  [69, "ProjectBriefDispatches"],
+  [70, "ProjectBriefArchives"],
+  [71, "ProjectOverviews"],
+  [72, "ProjectNextStepDismissals"],
+  [73, "DropUnusedV1Projections"],
+  [74, "CanonicalizeThreadPullRequestLinks"],
+  [75, "CodexUsageNativeTurnIndex"],
+  [76, "RepairClientSettlementTimestamps"],
+  [77, "WebhookDedupe"],
 ];
+
+it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
+  "migration upgrade from shipped Harness 072",
+  (it) => {
+    it.effect(
+      "preserves dismissed suggestions and thread history while appending upstream migrations",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* runMigrations({ toMigrationInclusive: 72 });
+          const timestamp = "2026-10-22T12:00:00.000Z";
+          yield* sql`INSERT INTO project_next_step_dismissals (project_id, step_id, title, kind, created_at) VALUES ('project-upgrade', 'dismissed-step', 'Keep this dismissed', 'done', ${timestamp})`;
+          const payload = JSON.stringify({
+            title: "Preserved conversation",
+            messages: ["Keep the history"],
+          });
+          yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json) VALUES ('thread-upgrade', 'project-upgrade', 'Preserved conversation', 'codex', 'full-access', 'default', ${timestamp}, ${timestamp}, ${payload})`;
+
+          assert.deepStrictEqual(
+            yield* runMigrations(),
+            POST_032_MIGRATION_IDENTITIES.filter(([id]) => id > 72),
+          );
+          assert.deepStrictEqual(
+            yield* sql`SELECT step_id, title, kind FROM project_next_step_dismissals WHERE project_id = 'project-upgrade'`,
+            [{ step_id: "dismissed-step", title: "Keep this dismissed", kind: "done" }],
+          );
+          assert.deepStrictEqual(
+            yield* sql`SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id = 'thread-upgrade'`,
+            [{ payload_json: payload }],
+          );
+          assert.deepStrictEqual(yield* runMigrations(), []);
+        }),
+    );
+  },
+);
 
 it("keeps the migration registry unique and preserves shipped downstream identities", () => {
   const identities = migrationManifest.map(([id, name]) => [id, name] as const);
@@ -92,6 +147,20 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })))(
             ),
           ["settled_override", "settled_at", "snoozed_until", "snoozed_at", "unsettled_at"],
         );
+
+        // A fresh install must create all follow-through stores without inventing work.
+        const briefStores = yield* sql<{ readonly store: string; readonly count: number }>`
+          SELECT 'briefs' AS store, COUNT(*) AS count FROM project_briefs
+          UNION ALL SELECT 'requests', COUNT(*) FROM project_brief_requests
+          UNION ALL SELECT 'dispatches', COUNT(*) FROM project_brief_dispatches
+          UNION ALL SELECT 'archives', COUNT(*) FROM project_brief_archives
+        `;
+        assert.deepStrictEqual(briefStores, [
+          { store: "briefs", count: 0 },
+          { store: "requests", count: 0 },
+          { store: "dispatches", count: 0 },
+          { store: "archives", count: 0 },
+        ]);
       }),
     );
   },

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-
 import {
   completeConfirmDialogClose,
+  isConfirmDialogActive,
   readConfirmDialogState,
   registerConfirmDialogHost,
   requestConfirmDialog,
@@ -40,6 +40,7 @@ describe("confirm dialog coordinator", () => {
 
     respondToConfirmDialog(true);
     await expect(confirmation).resolves.toBe(true);
+    expect(isConfirmDialogActive()).toBe(true);
     expect(readConfirmDialogState()).toEqual({
       status: "closing",
       message: "Delete this thread?",
@@ -48,6 +49,7 @@ describe("confirm dialog coordinator", () => {
 
     completeConfirmDialogClose();
     expect(readConfirmDialogState()).toEqual({ status: "idle" });
+    expect(isConfirmDialogActive()).toBe(false);
     unregister();
   });
 

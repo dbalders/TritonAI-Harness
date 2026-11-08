@@ -349,7 +349,11 @@ function adaptProvider(
   };
 }
 
-function admitProvider(value: Record<string, unknown>, expectedId: string): PluginSdkProvider {
+function admitProvider(
+  value: Record<string, unknown>,
+  expectedId: string,
+  requiresConnection: boolean,
+): PluginSdkProvider {
   const id = value.id;
   const status = value.status;
   const invoke = value.invoke;
@@ -365,6 +369,14 @@ function admitProvider(value: Record<string, unknown>, expectedId: string): Plug
     if (hook !== undefined && typeof hook !== "function") {
       throw new Error("Invalid optional provider hook.");
     }
+  }
+  const hasConnect = typeof connect === "function";
+  const hasDisconnect = typeof disconnect === "function";
+  if (
+    (hasConnect || hasDisconnect || typeof poll === "function" || requiresConnection) &&
+    (!hasConnect || !hasDisconnect)
+  ) {
+    throw new Error("Provider must implement connect and disconnect together.");
   }
   return {
     id,
@@ -482,7 +494,12 @@ export async function loadPluginSdkIntegration(input: {
       throw new Error("Invalid provider factory.");
     }
     if (!isRecord(created)) throw new Error("Invalid provider factory.");
-    const provider = admitProvider(created, artifact.sdkManifest.provider);
+    const provider = admitProvider(
+      created,
+      artifact.sdkManifest.provider,
+      artifact.manifest.tools.some((tool) => tool.effect === "write") ||
+        artifact.manifest.capabilities.some((capability) => capability.access === "authorization"),
+    );
     return {
       manifest: artifact.manifest,
       bundledFiles: installedFiles(artifact),

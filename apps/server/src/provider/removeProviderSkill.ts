@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - lstat device/inode checks bind destructive work to the inspected managed directory.
 import * as NodeFS from "node:fs";
-
 import {
   type ServerProvider,
   ServerProviderSkillRemovalError,
@@ -216,48 +215,48 @@ export const ensureProviderSkillRemovalPathIsSafe = Effect.fn(
   );
 });
 
-export function resolveProviderSkillRemovalTarget(input: {
+export const resolveProviderSkillRemovalTarget = Effect.fn(
+  "removeProviderSkill.resolveProviderSkillRemovalTarget",
+)(function* (input: {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly request: ServerRemoveProviderSkillInput;
-}): Effect.Effect<ProviderSkillRemovalTarget, ServerProviderSkillRemovalError, Path.Path> {
-  return Effect.gen(function* () {
-    const path = yield* Path.Path;
-    const provider = input.providers.find(
-      (candidate) => candidate.instanceId === input.request.instanceId,
-    );
-    if (!provider) {
-      return yield* removalError(`Provider '${input.request.instanceId}' was not found.`);
-    }
+}): Effect.fn.Return<ProviderSkillRemovalTarget, ServerProviderSkillRemovalError, Path.Path> {
+  const path = yield* Path.Path;
+  const provider = input.providers.find(
+    (candidate) => candidate.instanceId === input.request.instanceId,
+  );
+  if (!provider) {
+    return yield* removalError(`Provider '${input.request.instanceId}' was not found.`);
+  }
 
-    const skill = provider.skills.find((candidate) => candidate.path === input.request.skillPath);
-    if (!skill) {
-      return yield* removalError("Skill was not found in the current provider inventory.");
-    }
+  const skill = provider.skills.find((candidate) => candidate.path === input.request.skillPath);
+  if (!skill) {
+    return yield* removalError("Skill was not found in the current provider inventory.");
+  }
 
-    if (!path.isAbsolute(skill.path)) {
-      return yield* removalError("Skill path must be absolute before it can be removed.");
-    }
+  if (!path.isAbsolute(skill.path)) {
+    return yield* removalError("Skill path must be absolute before it can be removed.");
+  }
 
-    if (path.basename(skill.path) !== "SKILL.md") {
-      return yield* removalError("Only SKILL.md-backed skill folders can be removed.");
-    }
+  if (path.basename(skill.path) !== "SKILL.md") {
+    return yield* removalError("Only SKILL.md-backed skill folders can be removed.");
+  }
 
-    const skillDirectoryPath = path.dirname(skill.path);
-    if (!skillDirectoryPath || skillDirectoryPath === path.parse(skillDirectoryPath).root) {
-      return yield* removalError("Refusing to remove an unsafe skill directory.");
-    }
-    if (path.basename(path.dirname(skillDirectoryPath)) !== "skills") {
-      return yield* removalError("Skill folder must live directly under a skills directory.");
-    }
+  const skillDirectoryPath = path.dirname(skill.path);
+  if (!skillDirectoryPath || skillDirectoryPath === path.parse(skillDirectoryPath).root) {
+    return yield* removalError("Refusing to remove an unsafe skill directory.");
+  }
+  if (path.basename(path.dirname(skillDirectoryPath)) !== "skills") {
+    return yield* removalError("Skill folder must live directly under a skills directory.");
+  }
 
-    return { skillDirectoryPath };
-  });
-}
+  return { skillDirectoryPath };
+});
 
-export function removeProviderSkillFolder(
-  target: ProviderSkillRemovalTarget,
-): Effect.Effect<void, ServerProviderSkillRemovalError, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
+export const removeProviderSkillFolder = Effect.fn("removeProviderSkill.removeProviderSkillFolder")(
+  function* (
+    target: ProviderSkillRemovalTarget,
+  ): Effect.fn.Return<void, ServerProviderSkillRemovalError, FileSystem.FileSystem | Path.Path> {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const sharedSkillsDirectory = path.resolve(
@@ -364,5 +363,5 @@ export function removeProviderSkillFolder(
         ),
       ),
     );
-  });
-}
+  },
+);

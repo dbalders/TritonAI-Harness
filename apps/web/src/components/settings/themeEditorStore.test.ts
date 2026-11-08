@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "vite-plus/test";
-
 import { OCEAN_THEME_ID, T3_CHAT_THEME_ID } from "../../themePalette";
 import { toggleThemeEditorForTheme, useThemeEditorStore } from "./themeEditorStore";
 

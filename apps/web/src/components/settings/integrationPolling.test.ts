@@ -1,6 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { IntegrationConnectResult } from "@t3tools/contracts";
-
 import {
   integrationConnectResultNeedsPolling,
   integrationFlowCanRetryAfterPollError,

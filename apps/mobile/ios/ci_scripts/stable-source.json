@@ -1,7 +1,7 @@
 {
-  "tag": "v0.3.7",
-  "sourceSha": "65966171c1b6388d8bb6619369865ab2c8cf6ddb",
-  "generatorSha": "cb1e22fad3ee93988d033de095911bbfc17782d5",
+  "tag": "v0.4.1",
+  "sourceSha": "ff37cf884c8679536b34fcff58a4616e1060ddb8",
+  "generatorSha": "7bfe717546a64c583c9fbaae3990611e436123d5",
   "variant": "production",
-  "marketingVersion": "1.4.1"
+  "marketingVersion": "2.0.1"
 }

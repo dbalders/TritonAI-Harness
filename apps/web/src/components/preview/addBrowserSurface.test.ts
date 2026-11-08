@@ -6,9 +6,8 @@ import {
   type PreviewSessionSnapshot,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import {
   applyPreviewServerSnapshot,
   readThreadPreviewState,
@@ -16,7 +15,6 @@ import {
 } from "~/previewStateStore";
 import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
-
 import { addBrowserSurface } from "./addBrowserSurface";
 
 const threadRef = {
@@ -36,7 +34,7 @@ const snapshot = (tabId: string): PreviewSessionSnapshot => ({
 beforeEach(() => {
   __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
   resetPreviewStateForTests();
-  useRightPanelStore.setState({ byThreadKey: {} });
+  useRightPanelStore.setState({ byThreadKey: {}, threadPanelVisibilityByThreadKey: {} });
 });
 
 describe("addBrowserSurface", () => {

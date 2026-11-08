@@ -1,3 +1,4 @@
+import { getManagedCodexSettings } from "./managedPolicy.ts";
 import { TRITONAI_FEEDBACK_SKILL_NAME } from "@t3tools/shared/tritonAiFeedback";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -9,7 +10,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { resolveCodexHomeLayout } from "./provider/Drivers/CodexHomeLayout.ts";
 import {
@@ -130,7 +131,7 @@ export const syncLayer = Effect.gen(function* () {
   const services = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
   const path = yield* Path.Path;
   const skillsDirectoryFor = (effective: ServerSettings) =>
-    resolveCodexHomeLayout(effective.providers.codex).pipe(
+    resolveCodexHomeLayout(getManagedCodexSettings(effective)).pipe(
       Effect.map((layout) => path.join(layout.sharedHomePath, "skills")),
       Effect.provide(services),
     );

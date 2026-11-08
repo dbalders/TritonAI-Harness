@@ -1,7 +1,6 @@
 import { toHtml } from "hast-util-to-html";
 import { getSharedHighlighter } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
-
 import { createIncrementalHighlightedDocument } from "./incrementalHighlighting";
 
 const samples = {

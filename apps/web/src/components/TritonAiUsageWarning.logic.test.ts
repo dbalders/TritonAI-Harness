@@ -1,6 +1,5 @@
 import type { ServerTritonAiUsageSnapshot } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
-
 import {
   observeUsageWarning,
   UsageWarningTracker,

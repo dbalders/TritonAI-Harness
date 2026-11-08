@@ -1,5 +1,4 @@
 import { createRouter, RouterHistory } from "@tanstack/react-router";
-
 import { routeTree } from "./routeTree.gen";
 
 export function getRouter(history: RouterHistory) {
@@ -7,9 +6,6 @@ export function getRouter(history: RouterHistory) {
     routeTree,
     history,
     context: {},
-    // Route components are split chunks (autoCodeSplitting in vite.config);
-    // fetching them on hover/focus intent hides the load from the first
-    // settings or pull-request navigation.
     defaultPreload: "intent",
   });
 }

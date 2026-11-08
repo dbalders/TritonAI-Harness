@@ -1,3 +1,17 @@
+import { PrimaryConnectionTarget } from "@t3tools/client-runtime/connection";
+import { createEnvironmentThreadShellAtoms } from "@t3tools/client-runtime/state/threads";
+import {
+  applyShellStreamEvent,
+  createEnvironmentSnapshotAtom,
+  type EnvironmentShellState,
+  type EnvironmentShellStatus,
+} from "@t3tools/client-runtime/state/shell";
+import {
+  v2ShellSnapshot,
+  v2ThreadShell,
+} from "../../../../packages/client-runtime/src/state/orchestrationV2TestFixtures";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import {
   CommandId,
@@ -7,6 +21,9 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  type OrchestrationV2ThreadShell,
+  type OrchestrationV2ShellSnapshot,
+  type ModelSelection,
 } from "@t3tools/contracts";
 import { onTestFinished, vi } from "vite-plus/test";
 
@@ -148,7 +165,10 @@ vi.mock("../features/sharing/incoming-share-storage", () => ({
 }));
 
 import type { DraftComposerAttachment } from "../lib/composerImages";
-import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
+import {
+  collectComposerContextReferences,
+  formatComposerContextReference,
+} from "@t3tools/shared/composerContextReferences";
 import { appAtomRegistry } from "./atom-registry";
 import { threadOutboxManager } from "./thread-outbox";
 import {
@@ -159,6 +179,7 @@ import {
   archiveCloudComposerDrafts,
   clearComposerDraftContent,
   clearComposerDraftContentState,
+  subscribeComposerDraftModelReconciliation,
   clearComposerDraftsEnvironment,
   ComposerDraftPersistenceError,
   composerDraftsAtom,
@@ -173,8 +194,11 @@ import {
   findLocalComposerClipboardAttachment,
   flushComposerDrafts,
   getComposerDraftSnapshot,
+  getPendingTaskRuntimeMode,
+  composerDraftsLoadFailedAtom,
   mergeComposerDraftContentState,
   migrateLegacyNewTaskDraft,
+  modelOptionMemoryAtom,
   releaseUnusedComposerAttachmentFiles,
   removeComposerDraftsForEnvironment,
   replaceComposerDraftAttachments,
@@ -190,8 +214,11 @@ import {
   waitForComposerDraftsLoaded,
   setStickyComposerModelSelection,
   stickyComposerModelSelectionAtom,
+  setStickyComposerRuntimeMode,
+  stickyComposerRuntimeModeAtom,
   undoComposerDraftMerge,
   undoComposerDraftMergeState,
+  updateComposerDraftSettings,
 } from "./use-composer-drafts";
 import { retainComposerAttachmentFileForPreview } from "../lib/composerAttachmentPreviewRetention";
 
@@ -214,6 +241,8 @@ afterEach(() => {
   appAtomRegistry.set(composerDraftsAtom, {});
   appAtomRegistry.set(composerCloudDraftsAtom, { accountId: null, signedOut: {} });
   appAtomRegistry.set(stickyComposerModelSelectionAtom, null);
+  appAtomRegistry.set(stickyComposerRuntimeModeAtom, null);
+  appAtomRegistry.set(modelOptionMemoryAtom, {});
   appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
   composerAttachmentCleanupMocks.remove.mockClear();
   composerAttachmentCleanupMocks.releaseUploads.mockReset();
@@ -237,7 +266,115 @@ function contextDraft(start: number, count: number): ComposerDraft {
   };
 }
 
+function modelReconciliationHarness(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  initialStatus: EnvironmentShellStatus = "live",
+) {
+  const tasks: Array<() => void> = [];
+  const registry = AtomRegistry.make({
+    scheduleTask: (task) => {
+      tasks.push(task);
+      return () => {};
+    },
+  });
+  onTestFinished(() => registry.dispose());
+  const flush = () => {
+    for (let task = tasks.shift(); task !== undefined; task = tasks.shift()) task();
+  };
+  const selectedThreadId = ThreadId.make("another-selected-thread");
+  const initialSnapshot: OrchestrationV2ShellSnapshot = {
+    ...v2ShellSnapshot,
+    threads: [
+      { ...v2ThreadShell, id: threadId },
+      { ...v2ThreadShell, id: selectedThreadId },
+    ],
+  };
+  const shellStateAtom = Atom.make<EnvironmentShellState>({
+    snapshot: Option.some(initialSnapshot),
+    status: initialStatus,
+    error: Option.none(),
+  });
+  const shellResultAtom = Atom.map(shellStateAtom, AsyncResult.success);
+  const snapshotAtom = createEnvironmentSnapshotAtom(() => shellResultAtom)(environmentId);
+  const catalogValueAtom = Atom.make({
+    isReady: true,
+    entries: new Map([
+      [
+        environmentId,
+        {
+          target: new PrimaryConnectionTarget({
+            environmentId,
+            label: "Environment",
+            httpBaseUrl: "https://example.test",
+            wsBaseUrl: "wss://example.test",
+          }),
+          profile: Option.none(),
+          enabled: true,
+        },
+      ],
+    ]),
+  });
+  const shells = createEnvironmentThreadShellAtoms({
+    catalogValueAtom,
+    snapshotAtom: () => snapshotAtom,
+  });
+  const selectedShell = shells.threadShellAtom({ environmentId, threadId: selectedThreadId });
+  onTestFinished(registry.mount(selectedShell));
+  onTestFinished(
+    subscribeComposerDraftModelReconciliation({
+      registry,
+      threadShellAtom: shells.threadShellAtom,
+      threadRefsAtom: shells.threadRefsAtom,
+      shellStateAtom: () => shellResultAtom,
+    }),
+  );
+  flush();
+  return {
+    flush,
+    setStatus(status: EnvironmentShellStatus) {
+      registry.set(shellStateAtom, { ...registry.get(shellStateAtom), status });
+      flush();
+    },
+    update(changes: Partial<OrchestrationV2ThreadShell>, status?: EnvironmentShellStatus) {
+      const state = registry.get(shellStateAtom);
+      const snapshot = Option.getOrThrow(state.snapshot);
+      registry.set(shellStateAtom, {
+        ...state,
+        status: status ?? state.status,
+        snapshot: Option.some(
+          applyShellStreamEvent(snapshot, {
+            kind: "thread.updated",
+            location: "active",
+            sequence: snapshot.snapshotSequence + 1,
+            thread: { ...snapshot.threads[0]!, ...changes },
+          }),
+        ),
+      });
+      flush();
+      expect(registry.get(selectedShell)?.id).toBe(selectedThreadId);
+    },
+    model: () => registry.get(shells.threadShellAtom({ environmentId, threadId }))!.modelSelection,
+  };
+}
+
 describe("mobile composer drafts", () => {
+  it("restores a PR checkout source after restarting the composer", () => {
+    const draft: ComposerDraft = {
+      text: "Address feedback",
+      attachments: [],
+      workspaceSelection: {
+        mode: "worktree",
+        branch: "fork/feature",
+        worktreePath: null,
+        startFromOrigin: false,
+        pullRequestReference: "https://github.com/acme/repo/pull/123",
+      },
+    };
+    expect(
+      decodePersistedComposerState({ schemaVersion: 1, drafts: { task: draft } }).drafts.task,
+    ).toEqual(draft);
+  });
   it.each([false, true])(
     "restores visible file chips from legacy drafts (archived: %s)",
     async (archived) => {
@@ -385,7 +522,7 @@ describe("mobile composer drafts", () => {
 
   it("gives a folded paste a chip that survives the send", () => {
     const key = "environment-1:thread-1";
-    // What `createPastedTextComposerAttachment` produces for a long paste.
+
     const pasted = {
       type: "file" as const,
       id: "pasted-1",
@@ -397,14 +534,122 @@ describe("mobile composer drafts", () => {
     appendComposerDraftAttachments(key, [pasted], { appendReference: true });
 
     const draft = getComposerDraftSnapshot(key);
-    // Visible in the composer before sending, not only once the message lands.
+
     expect(draft.text).toContain("pasted-text.txt");
     expect(draft.context?.records).toMatchObject([
       { kind: "file", attachmentId: pasted.id, name: pasted.name },
     ]);
-    // The reference points at the record, so the chip stays a chip in the sent message.
+
     const [record] = draft.context?.records ?? [];
     expect(draft.text).toContain(String(record?.contextId));
+  });
+
+  it("retains a pick matching cached state until the live shell confirms it", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const threadId = ThreadId.make("thread-1");
+    const key = `${environmentId}:${threadId}`;
+    const h = modelReconciliationHarness(environmentId, threadId, "cached");
+    const pick = h.model();
+    updateComposerDraftSettings(key, { modelSelection: pick });
+    h.flush();
+    const before = getComposerDraftSnapshot(key);
+    expect(before.modelSelection).toEqual(pick);
+
+    for (const status of ["empty", "synchronizing", "cached"] as const) {
+      h.setStatus(status);
+      expect(getComposerDraftSnapshot(key)).toEqual(before);
+    }
+    h.update({ modelSelection: { ...pick, model: "remote-model" } }, "live");
+    expect(getComposerDraftSnapshot(key)).toEqual(before);
+    h.update({ modelSelection: pick }, "synchronizing");
+    expect(getComposerDraftSnapshot(key)).toEqual(before);
+    h.setStatus("live");
+    expect(appAtomRegistry.get(composerDraftsAtom)[key]).toBeUndefined();
+  });
+
+  it("releases an inactive thread pick only after its queued model becomes durable", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const threadId = ThreadId.make("thread-1");
+    const key = `${environmentId}:${threadId}`;
+    const pick = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.5" };
+    setComposerDraftText(key, "keep this unsent follow-up");
+    appendComposerDraftAttachments(
+      key,
+      [
+        {
+          type: "file",
+          id: "file",
+          name: "notes.txt",
+          mimeType: "text/plain",
+          sizeBytes: 4,
+          fileUri: "file:///notes.txt",
+        },
+      ],
+      { appendReference: true },
+    );
+    updateComposerDraftSettings(key, {
+      modelSelection: pick,
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+    });
+    const before = getComposerDraftSnapshot(key);
+    const remoteKey = `environment-remote:${threadId}`;
+    updateComposerDraftSettings(remoteKey, { modelSelection: pick });
+    const remoteBefore = getComposerDraftSnapshot(remoteKey);
+    const h = modelReconciliationHarness(environmentId, threadId);
+
+    h.update({ status: "queued" });
+    expect(getComposerDraftSnapshot(key)).toEqual(before);
+    h.update({
+      status: "running",
+      modelSelection: { ...pick, options: [{ id: "fastMode", value: false }] },
+    });
+    expect(getComposerDraftSnapshot(key)).toEqual({ ...before, modelSelection: undefined });
+    expect(getComposerDraftSnapshot(remoteKey)).toEqual(remoteBefore);
+
+    h.update({
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-5-5",
+      },
+    });
+    expect(getComposerDraftSnapshot(key).modelSelection ?? h.model()).toEqual(h.model());
+    expect(getComposerDraftSnapshot(key)).toEqual({ ...before, modelSelection: undefined });
+  });
+
+  it("retains an unavailable provider pick through differing durable model updates", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const threadId = ThreadId.make("thread-1");
+    const key = `${environmentId}:${threadId}`;
+    const pick: ModelSelection = {
+      instanceId: ProviderInstanceId.make("codex-secondary"),
+      model: "gpt-5.5",
+      options: [
+        { id: "reasoningEffort", value: "high" },
+        { id: "fastMode", value: true },
+      ],
+    };
+    updateComposerDraftSettings(key, { modelSelection: pick });
+    const before = getComposerDraftSnapshot(key);
+    const h = modelReconciliationHarness(environmentId, threadId);
+    expect(getComposerDraftSnapshot(key)).toEqual(before);
+    for (const modelSelection of [
+      { ...pick, instanceId: ProviderInstanceId.make("codex") },
+      { ...pick, model: "gpt-5.4" },
+      { ...pick, options: [{ id: "reasoningEffort", value: "high" }] },
+      {
+        ...pick,
+        options: [
+          { id: "reasoningEffort", value: "low" },
+          { id: "fastMode", value: true },
+        ],
+      },
+    ]) {
+      h.update({ modelSelection });
+      expect(getComposerDraftSnapshot(key)).toEqual(before);
+    }
+    h.update({ modelSelection: { ...pick, options: pick.options!.toReversed() } });
+    expect(appAtomRegistry.get(composerDraftsAtom)[key]).toBeUndefined();
   });
 
   it("drops chips and records for attachments a replace no longer keeps", () => {
@@ -925,7 +1170,6 @@ describe("mobile composer drafts", () => {
       makeAttachment("incoming-2").fileUri,
     );
 
-    // Restore paths bypass the cap so a failed send never drops its files.
     const overflowRejected = appendComposerDraftAttachments(
       draftKey,
       [makeAttachment("restored-1")],
@@ -984,7 +1228,6 @@ describe("mobile composer drafts", () => {
     await releaseUnusedComposerAttachmentFiles([image]);
     expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
 
-    // A queued outbox message must keep the bytes alive after the draft clears.
     appAtomRegistry.set(composerDraftsAtom, {});
     appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {
       "environment-1:thread-1": [
@@ -1187,7 +1430,7 @@ describe("mobile composer drafts", () => {
       expect(appAtomRegistry.get(composerDraftsAtom)).toEqual({
         "direct-environment:thread-1": DRAFT,
       });
-      // The registry can remove the active outbox and drafts after the backup lands.
+
       appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
       await clearComposerDraftsEnvironment(environmentId);
       await releaseUnusedComposerAttachmentFiles([file]);
@@ -1687,7 +1930,7 @@ describe("mobile composer drafts", () => {
     );
     expect(hydrated).toHaveLength(1);
     const [key, draft] = hydrated[0]!;
-    // Legacy project keys are rewritten to id keys on load.
+
     expect(key).toMatch(/^new-task:[0-9a-z-]+$/);
     expect(draft).toEqual({
       text: "",
@@ -1742,9 +1985,7 @@ describe("mobile composer drafts", () => {
       attachments: [],
       importedShareIds: ["share-1"],
     };
-    // The stale-model strip must not touch receipt-bearing drafts, and the
-    // empty filter must keep them — or the same share would re-import after
-    // restart.
+
     const stripped = Object.values(
       decodePersistedComposerState({
         schemaVersion: 1,
@@ -1806,8 +2047,7 @@ describe("mobile composer drafts", () => {
       { text: "keep me", attachments: [] },
       now,
     );
-    // The new key has no colon after the prefix, so it can never be
-    // mistaken for the legacy shape on the next load.
+
     expect(key).toMatch(/^new-task:[0-9a-z-]+$/);
     expect(draft).toEqual({
       text: "keep me",
@@ -1819,7 +2059,6 @@ describe("mobile composer drafts", () => {
       },
     });
 
-    // Already-migrated, thread, and pending-task keys pass through untouched.
     const stamped: ComposerDraft = {
       text: "x",
       attachments: [],
@@ -1851,8 +2090,7 @@ describe("mobile composer drafts", () => {
     const first = createNewTaskDraft(project);
     const second = createNewTaskDraft(project);
     expect(first).not.toBe(second);
-    // Empty stamped drafts stay in memory so the composer has a key to write
-    // to, but the persisted document leaves them out.
+
     expect(appAtomRegistry.get(composerDraftsAtom)[first]?.project).toMatchObject(project);
 
     setComposerDraftText(first, "first idea");
@@ -1861,7 +2099,6 @@ describe("mobile composer drafts", () => {
       expect.arrayContaining([first, second]),
     );
 
-    // Clearing content on the way out drops the stamp with it.
     clearComposerDraftContent(first, { clearModelSelection: true, clearWorkspaceSelection: true });
     expect(appAtomRegistry.get(composerDraftsAtom)[first]).toBeUndefined();
     expect(getComposerDraftSnapshot(second).text).toBe("second idea");
@@ -1893,7 +2130,7 @@ describe("mobile composer drafts", () => {
     const moved = getComposerDraftSnapshot(key);
     expect(moved.text).toBe("moving house");
     expect(moved.runtimeMode).toBe("approval-required");
-    // Branch and worktree belong to the old repo.
+
     expect(moved.workspaceSelection).toBeUndefined();
     expect(moved.project).toEqual({ ...to, createdAt });
     expect(findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), from)).toEqual([]);
@@ -1916,6 +2153,194 @@ describe("mobile composer drafts", () => {
     });
   });
 
+  it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
+    "persists and reloads the last %s composer choice without changing existing drafts",
+    async (runtimeMode) => {
+      vi.useFakeTimers();
+      const existingDraft: ComposerDraft = { ...DRAFT, runtimeMode: "approval-required" };
+      composerDraftFileMocks.setDocument({
+        schemaVersion: 1,
+        drafts: { "environment-1:thread-1": existingDraft },
+      });
+      await waitForComposerDraftsLoaded();
+      setStickyComposerRuntimeMode(runtimeMode);
+      await flushComposerDrafts();
+
+      expect(JSON.parse(composerDraftFileMocks.getDocument()).stickyRuntimeMode).toBe(runtimeMode);
+      appAtomRegistry.set(stickyComposerRuntimeModeAtom, null);
+      resetComposerDraftsLoadState();
+      await waitForComposerDraftsLoaded();
+
+      expect(appAtomRegistry.get(stickyComposerRuntimeModeAtom)).toBe(runtimeMode);
+      expect(getComposerDraftSnapshot("environment-1:thread-1")).toEqual(existingDraft);
+    },
+  );
+
+  it("keeps a newer composer choice while an older saved choice is loading", async () => {
+    vi.useFakeTimers();
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {},
+      stickyRuntimeMode: "full-access",
+    });
+    composerDraftFileMocks.blockRead();
+    const loading = waitForComposerDraftsLoaded();
+    setStickyComposerRuntimeMode("auto");
+    composerDraftFileMocks.releaseRead();
+    await loading;
+    await flushComposerDrafts();
+
+    expect(appAtomRegistry.get(stickyComposerRuntimeModeAtom)).toBe("auto");
+    expect(JSON.parse(composerDraftFileMocks.getDocument()).stickyRuntimeMode).toBe("auto");
+  });
+
+  it("loads older draft documents without inventing a remembered mode", () => {
+    expect(
+      decodePersistedComposerState({ schemaVersion: 1, drafts: {} }).stickyRuntimeMode,
+    ).toBeNull();
+  });
+
+  it("does not freeze the project fallback into a pending task before preferences load", async () => {
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {},
+      stickyRuntimeMode: "approval-required",
+    });
+    composerDraftFileMocks.blockRead();
+    const loading = waitForComposerDraftsLoaded();
+    try {
+      expect(getPendingTaskRuntimeMode("new-task:cold-start", "full-access")).toBeNull();
+    } finally {
+      composerDraftFileMocks.releaseRead();
+      await loading;
+    }
+    expect(getPendingTaskRuntimeMode("new-task:cold-start", "full-access")).toBe(
+      "approval-required",
+    );
+  });
+
+  it("preserves queued and explicit draft modes over a loaded remembered choice", async () => {
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: { "pending-task:edited": { ...DRAFT, runtimeMode: "full-access" } },
+      stickyRuntimeMode: "approval-required",
+    });
+    await waitForComposerDraftsLoaded();
+
+    expect(getPendingTaskRuntimeMode("pending-task:untouched", "full-access", "auto")).toBe("auto");
+    expect(getPendingTaskRuntimeMode("pending-task:edited", "approval-required", "auto")).toBe(
+      "full-access",
+    );
+  });
+
+  it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
+    "keeps a known %s queued-task or draft mode usable while preferences load",
+    async (runtimeMode) => {
+      composerDraftFileMocks.setDocument({
+        schemaVersion: 1,
+        drafts: {},
+        stickyRuntimeMode: "approval-required",
+      });
+      composerDraftFileMocks.blockRead();
+      const loading = waitForComposerDraftsLoaded();
+      appAtomRegistry.set(composerDraftsAtom, {
+        "pending-task:edited": { ...DRAFT, runtimeMode },
+      });
+      try {
+        expect(
+          getPendingTaskRuntimeMode("pending-task:untouched", "full-access", runtimeMode),
+        ).toBe(runtimeMode);
+        expect(getPendingTaskRuntimeMode("pending-task:edited", "full-access", "auto")).toBe(
+          runtimeMode,
+        );
+        expect(getPendingTaskRuntimeMode("new-task:unknown", "full-access")).toBeNull();
+      } finally {
+        composerDraftFileMocks.releaseRead();
+        await loading;
+      }
+      expect(getPendingTaskRuntimeMode("pending-task:untouched", "full-access", runtimeMode)).toBe(
+        runtimeMode,
+      );
+      expect(getPendingTaskRuntimeMode("pending-task:edited", "full-access", "auto")).toBe(
+        runtimeMode,
+      );
+    },
+  );
+
+  it("allows retry after preference loading fails without submitting the fallback", async () => {
+    composerDraftFileMocks.setReadError(new Error("Preferences temporarily unreadable"));
+    await expect(waitForComposerDraftsLoaded()).rejects.toThrow();
+    expect(appAtomRegistry.get(composerDraftsLoadFailedAtom)).toBe(true);
+    expect(getPendingTaskRuntimeMode("new-task:retry", "full-access")).toBeNull();
+
+    composerDraftFileMocks.setReadError(null);
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {},
+      stickyRuntimeMode: "approval-required",
+    });
+    await waitForComposerDraftsLoaded();
+
+    expect(appAtomRegistry.get(composerDraftsLoadFailedAtom)).toBe(false);
+    expect(getPendingTaskRuntimeMode("new-task:retry", "full-access")).toBe("approval-required");
+  });
+
+  it("uses an explicit choice after a persistent read failure without overwriting saved drafts", async () => {
+    vi.useFakeTimers();
+    const savedDocument = { schemaVersion: 1, drafts: { "environment-1:thread-1": DRAFT } };
+    composerDraftFileMocks.setDocument(savedDocument);
+    composerDraftFileMocks.setReadError(new Error("Preferences remain unreadable"));
+    await expect(waitForComposerDraftsLoaded()).rejects.toThrow();
+    expect(getPendingTaskRuntimeMode("new-task:explicit", "full-access")).toBeNull();
+
+    appAtomRegistry.set(composerDraftsAtom, {
+      "new-task:explicit": { text: "New task", attachments: [], runtimeMode: "approval-required" },
+    });
+    setStickyComposerRuntimeMode("approval-required");
+    expect(getPendingTaskRuntimeMode("new-task:explicit", "full-access")).toBe("approval-required");
+    expect(getPendingTaskRuntimeMode("new-task:next", "full-access")).toBe("approval-required");
+    await expect(flushComposerDrafts()).rejects.toThrow();
+    expect(JSON.parse(composerDraftFileMocks.getDocument())).toEqual(savedDocument);
+  });
+
+  it("decodes model option memory from the composer document", () => {
+    expect(
+      decodePersistedComposerState({
+        schemaVersion: 1,
+        drafts: {},
+        modelOptionMemory: {
+          pi: { "xai/grok-4.6": [{ id: "thinking", value: "xhigh" }] },
+        },
+      }).modelOptionMemory,
+    ).toEqual({ pi: { "xai/grok-4.6": [{ id: "thinking", value: "xhigh" }] } });
+  });
+
+  it("merges persisted option memory without replacing newer choices", async () => {
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {},
+      modelOptionMemory: {
+        pi: {
+          "xai/grok-4.6": [{ id: "thinking", value: "high" }],
+          "openai/gpt-5.4": [{ id: "thinking", value: "medium" }],
+        },
+      },
+    });
+    appAtomRegistry.set(modelOptionMemoryAtom, {
+      pi: { "xai/grok-4.6": [{ id: "thinking", value: "xhigh" }] },
+    });
+
+    ensureComposerDraftsLoaded();
+    await waitForComposerDraftsLoaded();
+
+    expect(appAtomRegistry.get(modelOptionMemoryAtom)).toEqual({
+      pi: {
+        "xai/grok-4.6": [{ id: "thinking", value: "xhigh" }],
+        "openai/gpt-5.4": [{ id: "thinking", value: "medium" }],
+      },
+    });
+  });
+
   it("waits for hydration before persisting the latest composer state", async () => {
     vi.useFakeTimers();
     composerDraftFileMocks.setDocument({
@@ -1933,15 +2358,14 @@ describe("mobile composer drafts", () => {
 
     ensureComposerDraftsLoaded();
     await Promise.resolve();
-    // The read is blocked, hydration is pending.
+
     setComposerDraftText("new-task:environment-1:project-1", "New prompt");
     await vi.advanceTimersByTimeAsync(200);
 
-    // Write should still be deferred — hydration has not resolved.
     expect(composerDraftFileMocks.getWrites()).toHaveLength(0);
 
     composerDraftFileMocks.releaseRead();
-    // Let the loadPromise settle and chain into the deferred persist.
+
     await vi.runAllTimersAsync();
 
     expect(JSON.parse(composerDraftFileMocks.getWrites()[0]!)).toEqual({
@@ -1977,13 +2401,12 @@ describe("mobile composer drafts", () => {
 
     ensureComposerDraftsLoaded();
     await Promise.resolve();
-    // An edit lands before hydration finishes; its debounced write is gated
-    // behind the blocked read.
+
     setComposerDraftText("new-task:environment-1:project-1", "New prompt");
 
     const flush = flushComposerDrafts();
     await vi.advanceTimersByTimeAsync(200);
-    // The flush must not have written the pre-hydration snapshot over disk.
+
     expect(composerDraftFileMocks.getWrites()).toHaveLength(0);
 
     composerDraftFileMocks.releaseRead();
@@ -2085,7 +2508,7 @@ describe("mobile composer drafts", () => {
 
     const clear = clearComposerDraftsEnvironment(EnvironmentId.make("environment-1"));
     await Promise.resolve();
-    // Cleanup write is queued behind the still-blocked debounced write.
+
     expect(composerDraftFileMocks.getWrites()).toHaveLength(0);
 
     releaseFirstWrite();
@@ -2256,6 +2679,44 @@ describe("mobile composer drafts", () => {
       [draftKey]: { ...merged[draftKey]!, text: "User edited the imported context" },
     };
     expect(mergeComposerDraftContentState(edited, draftKey, content)).toBe(edited);
+  });
+
+  it("shows a shared non-image file as a composer chip", () => {
+    const draftKey = "new-task:environment-1:project-1";
+    const sharedFile = {
+      id: "share-1:file:0",
+      type: "file" as const,
+      name: "backup.json",
+      mimeType: "application/json",
+      sizeBytes: 41,
+      fileUri: "file:///documents/backup.json",
+    };
+
+    const existingFile = { ...sharedFile, id: "existing-file", name: "notes.txt" };
+
+    const merged = mergeComposerDraftContentState(
+      { [draftKey]: { text: "", attachments: [existingFile] } },
+      draftKey,
+      { text: "", attachments: [sharedFile], sourceShareId: "share-1" },
+    )[draftKey]!;
+
+    expect(merged.attachments).toEqual([existingFile, sharedFile]);
+    const references = collectComposerContextReferences(merged.text);
+    expect(references).toHaveLength(1);
+    expect(merged.context?.records).toEqual([
+      expect.objectContaining({
+        kind: "file",
+        contextId: references[0]!.contextId,
+        attachmentId: sharedFile.id,
+      }),
+    ]);
+
+    // A recovery merge carries its own text; a chip appended to it would
+    // break the duplicate-text check when the merge is retried.
+    const recovered = { text: "Retry this", attachments: [sharedFile] };
+    const once = mergeComposerDraftContentState({}, draftKey, recovered);
+    expect(once[draftKey]?.text).toBe("Retry this");
+    expect(mergeComposerDraftContentState(once, draftKey, recovered)).toBe(once);
   });
 
   it("preserves existing images when shared content exceeds the draft attachment limit", () => {
@@ -2431,8 +2892,7 @@ describe("mobile composer drafts", () => {
       runtimeMode: "full-access",
       interactionMode: "default",
     };
-    // The user edited the text (forcing the partial undo) and also switched
-    // interaction mode, but never touched the merge-written runtime mode.
+
     const edited: ComposerDraft = {
       text: "typed EDITED before\n\nqueued text",
       attachments: [],
@@ -2476,7 +2936,7 @@ describe("mobile composer drafts", () => {
       text: "typed before\n\nqueued text",
       attachments: [keptAttachment, insertedAttachment],
     };
-    // The user rewrote the leading text and attached a file mid-recovery.
+
     const edited: ComposerDraft = {
       text: "typed EDITED before\n\nqueued text",
       attachments: [keptAttachment, insertedAttachment, userAttachment],
@@ -2491,8 +2951,6 @@ describe("mobile composer drafts", () => {
       },
     );
 
-    // Edits that broke the merged suffix keep their text untouched; only the
-    // inserted attachments still come out.
     const rewritten: ComposerDraft = {
       text: "totally rewritten",
       attachments: [insertedAttachment],
@@ -2541,8 +2999,7 @@ describe("mobile composer drafts", () => {
     });
     const first = fileFor("file-first");
     const reowned = fileFor("file-reowned");
-    // A restore re-owns the second file while the first deletion is in
-    // flight, after the sweep already decided both were unused.
+
     composerAttachmentCleanupMocks.remove.mockImplementationOnce(async () => {
       appAtomRegistry.set(composerDraftsAtom, {
         "environment-1:thread-1": { text: "restored", attachments: [reowned] },
@@ -2554,7 +3011,6 @@ describe("mobile composer drafts", () => {
     expect(composerAttachmentCleanupMocks.remove.mock.calls).toEqual([[first.fileUri]]);
   });
 
-  // These final tests use fresh module instances for independent hydration.
   it("keeps attachment files and uploads after a recovered message leaves an incomplete outbox", async () => {
     vi.resetModules();
     const drafts = await import("./use-composer-drafts");

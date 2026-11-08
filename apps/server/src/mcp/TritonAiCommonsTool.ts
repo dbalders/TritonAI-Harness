@@ -63,7 +63,7 @@ function safeFailure(cause: unknown): TritonAiCommonsToolResult {
 
 export async function invokeTritonAiCommonsTool(input: {
   readonly arguments: unknown;
-  readonly providerInstanceId: McpInvocationContext.McpInvocationScope["providerInstanceId"];
+  readonly providerInstanceId: McpInvocationContext.McpThreadCaller["providerInstanceId"];
   readonly signal: AbortSignal;
   readonly writeApproved: boolean;
   /** Test/embedding override; production resolves the server-lifetime action runtime. */

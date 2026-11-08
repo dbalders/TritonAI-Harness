@@ -9,7 +9,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import sharp from "sharp";
-
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 // Android guarantees the central 66dp of its 108dp adaptive canvas. The 12+

@@ -5,9 +5,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
-
 import { cn } from "~/lib/utils";
-
 import {
   BROWSER_VIEWPORT_RESIZE_RAIL_SIZE,
   type BrowserViewportLayout,

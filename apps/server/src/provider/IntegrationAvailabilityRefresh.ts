@@ -3,7 +3,8 @@ import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import type { RegistryRuntime } from "../integrations/IntegrationRegistry.ts";
-import type { ProviderRegistryShape } from "./Services/ProviderRegistry.ts";
+import type { ProviderRegistry } from "./ProviderRegistry.ts";
+type ProviderRegistryShape = ProviderRegistry["Service"];
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 

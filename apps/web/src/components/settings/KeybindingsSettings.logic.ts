@@ -9,23 +9,26 @@ import {
 import {
   DEFAULT_RESOLVED_KEYBINDINGS,
   parseKeybindingWhenExpression,
+  US_SHIFTED_TO_UNSHIFTED_KEYS,
 } from "@t3tools/shared/keybindings";
-
 import { shortcutKeyFromEvent } from "../../keybindings";
 import { isMacPlatform } from "../../lib/utils";
 import { METRIC_OPTIONS, WINDOW_OPTIONS } from "../usage/usageShortcuts";
+import { commandLabel } from "./KeybindingsSettings.labels";
+export { commandLabel } from "./KeybindingsSettings.labels";
 
+// Every usage.* command needs a rank. An unranked one falls back to the
+// alphabetical compare, which makes the comparator inconsistent and the order
+// depend on the input order.
 const usageCommandOrder = new Map<KeybindingCommand, number>(
-  [...METRIC_OPTIONS, ...WINDOW_OPTIONS].map((option, index) => [option.command, index]),
+  [
+    "usage.open" as const,
+    ...[...METRIC_OPTIONS, ...WINDOW_OPTIONS].map((option) => option.command),
+  ].map((command, index) => [command, index]),
 );
 
 const firstUsageCommand = METRIC_OPTIONS[0].command;
 
-/**
- * Orders commands by `key`, except Usage page commands, which sort as one
- * block in page order where the first of them would sort. A total order, so
- * adding a binding elsewhere cannot reshuffle the Usage rows.
- */
 function compareCommands(
   left: KeybindingCommand,
   right: KeybindingCommand,
@@ -195,17 +198,62 @@ export function keybindingConflictLabels(
   return [...new Set(conflicts)].toSorted();
 }
 
+export interface KeybindingGroup {
+  readonly id: string;
+  readonly title: string;
+  readonly rows: ReadonlyArray<KeybindingRow>;
+}
+
+const KEYBINDING_GROUPS = [
+  {
+    id: "navigation",
+    title: "Navigation",
+    prefixes: ["sidebar", "rightPanel", "commandPalette", "filePicker", "projectSearch", "editor"],
+  },
+  { id: "threads", title: "Threads", prefixes: ["thread", "chat", "pullRequest"] },
+  { id: "composer", title: "Composer", prefixes: ["composer", "modelPicker"] },
+  { id: "terminal", title: "Terminal", prefixes: ["terminal"] },
+  { id: "preview", title: "Preview & diff", prefixes: ["preview", "diff"] },
+  { id: "appearance", title: "Appearance", prefixes: ["theme", "appearance", "themeEditor"] },
+  { id: "scripts", title: "Project scripts", prefixes: ["script"] },
+] as const;
+const OTHER_KEYBINDING_GROUP = { id: "other", title: "Other" } as const;
+
+function keybindingGroupFor(command: KeybindingCommand): { id: string; title: string } {
+  const prefix = String(command).split(".")[0] ?? "";
+  return (
+    KEYBINDING_GROUPS.find((group) => (group.prefixes as ReadonlyArray<string>).includes(prefix)) ??
+    OTHER_KEYBINDING_GROUP
+  );
+}
+
+export function groupKeybindingRows(
+  rows: ReadonlyArray<KeybindingRow>,
+): ReadonlyArray<KeybindingGroup> {
+  const rowsByGroup = new Map<string, Array<KeybindingRow>>();
+  for (const row of rows) {
+    const group = keybindingGroupFor(row.command);
+    const bucket = rowsByGroup.get(group.id);
+    if (bucket) bucket.push(row);
+    else rowsByGroup.set(group.id, [row]);
+  }
+  return [...KEYBINDING_GROUPS, OTHER_KEYBINDING_GROUP].flatMap((group) => {
+    const groupRows = rowsByGroup.get(group.id);
+    return groupRows ? [{ id: group.id, title: group.title, rows: groupRows }] : [];
+  });
+}
+
 export function buildKeybindingRows(
   keybindings: ResolvedKeybindingsConfig,
-  query: string,
 ): ReadonlyArray<KeybindingRow> {
-  const normalizedQuery = query.trim().toLowerCase();
-  const rows = keybindings.map((binding, index) => {
+  const rowsById = new Map<string, KeybindingRow>();
+  for (const binding of keybindings) {
     const defaultBinding = defaultBindingForBinding(binding);
     const key = shortcutToKeybindingInput(binding.shortcut);
     const when = whenAstToExpression(binding.whenAst);
-    return {
-      id: `${keybindingRowId(binding.command, key, when)}\u0000${index}`,
+    const id = keybindingRowId(binding.command, key, when);
+    rowsById.set(id, {
+      id,
       command: binding.command,
       key,
       when,
@@ -214,8 +262,9 @@ export function buildKeybindingRows(
       defaultWhen: whenAstToExpression(defaultBinding?.whenAst),
       binding,
       conflicts: [],
-    } satisfies KeybindingRow;
-  });
+    });
+  }
+  const rows = [...rowsById.values()];
 
   const rowsWithConflicts = rows.map((row) => {
     const conflicts = keybindingConflictLabels(rows, {
@@ -234,11 +283,18 @@ export function buildKeybindingRows(
     return left.key.localeCompare(right.key);
   });
 
-  if (normalizedQuery.length === 0) {
-    return rowsWithConflicts;
-  }
+  return rowsWithConflicts;
+}
 
-  return rowsWithConflicts.filter((row) => {
+// Filtering keeps the row objects so rows that stay visible while the query
+// changes receive the same props and skip rendering.
+export function filterKeybindingRows(
+  rows: ReadonlyArray<KeybindingRow>,
+  query: string,
+): ReadonlyArray<KeybindingRow> {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.length === 0) return rows;
+  return rows.filter((row) => {
     return (
       row.command.toLowerCase().includes(normalizedQuery) ||
       commandLabel(row.command).toLowerCase().includes(normalizedQuery) ||
@@ -305,27 +361,16 @@ export function buildKeybindingCommandOptions(
   return [...commands].toSorted((left, right) => compareCommands(left, right, commandLabel));
 }
 
-export function commandLabel(command: KeybindingCommand): string {
-  if (command === "thread.copyReference") return "Pull Request: Copy Link or Thread ID";
-  const usageMetric = METRIC_OPTIONS.find((option) => option.command === command);
-  if (usageMetric) return `Usage: ${usageMetric.label}`;
-  const usagePeriod = WINDOW_OPTIONS.find((option) => option.command === command);
-  if (usagePeriod) return `Usage: Period: ${usagePeriod.label}`;
-  const raw = String(command);
-  if (raw.startsWith("script.") && raw.endsWith(".run")) {
-    return `Run Script: ${titleCaseCommandSegment(raw.slice("script.".length, -".run".length))}`;
-  }
-  return raw.split(".").map(titleCaseCommandSegment).join(": ");
-}
-
-function titleCaseCommandSegment(segment: string): string {
-  const words: Array<string> = [];
-  for (const part of segment.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[-_\s]+/)) {
-    if (part.length > 0) {
-      words.push(part.slice(0, 1).toUpperCase() + part.slice(1));
-    }
-  }
-  return words.join(" ");
+function recordedLayoutShortcutKey(
+  event: Pick<KeyboardEvent, "key" | "code" | "shiftKey" | "altKey">,
+): string {
+  const physicalKey = shortcutKeyFromEvent(event);
+  const layoutKey = event.key.toLowerCase();
+  if (event.altKey || layoutKey.length !== 1) return physicalKey;
+  // Normalize only US shifted glyphs at their US position. Other layouts can
+  // produce the same glyph without Shift or at a different position.
+  const unshiftedKey = event.shiftKey ? US_SHIFTED_TO_UNSHIFTED_KEYS.get(layoutKey) : undefined;
+  return unshiftedKey === physicalKey ? physicalKey : layoutKey;
 }
 
 function normalizeShortcutKeyToken(key: string): string | null {
@@ -358,12 +403,16 @@ function normalizeShortcutKeyToken(key: string): string | null {
   return null;
 }
 
-/** Turns a keydown into a binding such as `mod+shift+k` or `tab`. Null for modifier-only presses. */
 export function keybindingFromKeyboardEvent(
   event: Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
   platform: string,
+  options?: {
+    readonly layoutCharacter?: boolean;
+  },
 ): string | null {
-  const keyToken = normalizeShortcutKeyToken(shortcutKeyFromEvent(event));
+  const keyToken = normalizeShortcutKeyToken(
+    options?.layoutCharacter ? recordedLayoutShortcutKey(event) : shortcutKeyFromEvent(event),
+  );
   if (!keyToken) return null;
 
   const parts: string[] = [];

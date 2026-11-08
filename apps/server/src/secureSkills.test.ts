@@ -1,6 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as PlatformError from "effect/PlatformError";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
@@ -99,6 +102,92 @@ describe("secure skills feed", () => {
         expect(yield* fs.readLink(path.join(root, "managed-link"))).toBe(external);
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each([false, true])(
+    "keeps original skills through failed installation/recovery (restoreFailure=%s)",
+    (restoreFailure) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "secure-skills-recovery-" });
+        yield* synchronizeSecureSkillsFeed(
+          { schemaVersion: 1, revision: "old", skills: [skill("managed-one", "old")] },
+          root,
+        );
+        const brokenFs = {
+          ...fs,
+          rename: (from: string, to: string) =>
+            from.includes(".secure-skills-stage.") ||
+            (restoreFailure && from.includes(".secure-skills-backup."))
+              ? Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "PermissionDenied",
+                    module: "FileSystem",
+                    method: "rename",
+                  }),
+                )
+              : fs.rename(from, to),
+        };
+        const error = yield* synchronizeSecureSkillsFeed(
+          { schemaVersion: 1, revision: "new", skills: [skill("managed-one", "new")] },
+          root,
+        ).pipe(Effect.provideService(FileSystem.FileSystem, brokenFs), Effect.flip);
+        const backups = (yield* fs.readDirectory(root)).filter((name) =>
+          name.startsWith(".secure-skills-backup."),
+        );
+        if (restoreFailure) {
+          expect(error.message).toContain("recovery is incomplete");
+          expect(backups).toHaveLength(1);
+          expect(
+            yield* fs.readFileString(path.join(root, backups[0]!, "managed-one/SKILL.md")),
+          ).toBe("old");
+        } else {
+          expect(backups).toEqual([]);
+          expect(yield* fs.readFileString(path.join(root, "managed-one/SKILL.md"))).toBe("old");
+        }
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("finishes the local skill transaction before honoring interruption", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "secure-skills-interrupt-" });
+      yield* synchronizeSecureSkillsFeed(
+        { schemaVersion: 1, revision: "old", skills: [skill("managed-one", "old")] },
+        root,
+      );
+      const moved = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      const delayedFs = {
+        ...fs,
+        rename: (from: string, to: string) =>
+          fs
+            .rename(from, to)
+            .pipe(
+              Effect.andThen(
+                to.includes(".secure-skills-backup.")
+                  ? Deferred.succeed(moved, undefined).pipe(Effect.andThen(Deferred.await(proceed)))
+                  : Effect.void,
+              ),
+            ),
+      };
+      const fiber = yield* synchronizeSecureSkillsFeed(
+        { schemaVersion: 1, revision: "new", skills: [skill("managed-one", "new")] },
+        root,
+      ).pipe(Effect.provideService(FileSystem.FileSystem, delayedFs), Effect.forkScoped);
+      yield* Deferred.await(moved);
+      const interruption = yield* Fiber.interrupt(fiber).pipe(Effect.forkScoped);
+      yield* Deferred.succeed(proceed, undefined);
+      yield* Fiber.await(fiber);
+      yield* Fiber.join(interruption);
+      expect(yield* fs.readFileString(path.join(root, "managed-one/SKILL.md"))).toBe("new");
+      expect(
+        JSON.parse(yield* fs.readFileString(path.join(root, ".tritonai-managed-skills.json")))
+          .skills,
+      ).toEqual(["managed-one"]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("stops reading a feed after the byte limit", () =>

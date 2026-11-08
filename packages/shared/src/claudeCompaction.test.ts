@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   formatClaudeResumeCompactionQuestion,
   isClaudeResumeCompactionQuestion,
 } from "./claudeCompaction.ts";
 
 describe("claude resume compaction copy", () => {
-  // The matcher must recognize every question the formatter can produce.
-  // This is the drift guard: rewording one side fails here.
   it.each([
     { ageMinutes: 145, estimatedTokens: 275_123 },
     { ageMinutes: 70, estimatedTokens: 100_000 },

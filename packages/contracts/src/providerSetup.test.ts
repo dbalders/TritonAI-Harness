@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
-
 import { ProviderAuthResponse, ProviderAuthState } from "./providerSetup.ts";
 
 const decodeResponse = Schema.decodeUnknownSync(ProviderAuthResponse);

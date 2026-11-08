@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { isPublicFaviconHost } from "./hostClassification.ts";
 
 describe("isPublicFaviconHost", () => {
@@ -71,7 +70,6 @@ describe("isPublicFaviconHost", () => {
       "::ffff:10.0.0.1",
       "::ffff:100.126.17.15",
       "[::ffff:192.168.1.10]",
-      // c0a8:010a is 192.168.1.10, 0a00:0001 is 10.0.0.1.
       "::ffff:c0a8:010a",
       "::ffff:a00:1",
     ]) {

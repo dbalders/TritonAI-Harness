@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { DEFAULT_VOICE_INPUT_SETTINGS } from "./voice.ts";
 
 describe("voice input defaults", () => {

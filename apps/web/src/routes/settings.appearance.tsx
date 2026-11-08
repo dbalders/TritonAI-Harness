@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-
 import { AppearanceSettingsPanel } from "../components/settings/SettingsPanels";
 
 function SettingsAppearanceRoute() {

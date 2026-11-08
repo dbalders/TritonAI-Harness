@@ -1,6 +1,5 @@
 import type { DesktopPreviewTabState } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import { projectDesktopState } from "./usePreviewBridge";
 
 const favicon = {

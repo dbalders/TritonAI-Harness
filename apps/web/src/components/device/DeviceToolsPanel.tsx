@@ -2,7 +2,6 @@ import type { DeviceHubAccess } from "@t3tools/client-runtime/state/deviceHubAcc
 import type { DevicePermission, DeviceSummary, DeviceTextSize } from "@t3tools/contracts";
 import { ChevronDown, X } from "lucide-react";
 import { useEffect, useState } from "react";
-
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { Input } from "~/components/ui/input";
@@ -75,12 +74,6 @@ const LOCATION_PRESETS = [
   { label: "Tokyo", latitude: 35.6762, longitude: 139.6503 },
 ] as const;
 
-/**
- * The Tools drawer for one open device: current settings read from the device,
- * one control per supported action, and the read-only feeds the hub exposes.
- * Every change is a `device.action` round trip; the returned detail replaces
- * local state so the controls never show a value the device did not confirm.
- */
 export function DeviceToolsPanel(props: {
   readonly controls: DeviceControls;
   readonly hostDiagnostics: string | undefined;

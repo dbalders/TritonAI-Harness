@@ -44,7 +44,11 @@ process.stdout.write(`t3code-dev://connections/new?${query}`);
 NODE
 )"
 
-if ! "$agent_device_command" open com.t3tools.t3code.dev "$deep_link" "$@" \
+app_id="com.t3tools.t3code.dev"
+for argument in "$@"; do
+  if [[ "$argument" == "ios" ]]; then app_id="edu.ucsd.tritonai.harness.dev"; fi
+done
+if ! "$agent_device_command" open "$app_id" "$deep_link" "$@" \
   >/dev/null 2>&1; then
   echo "AgentDevice could not open the pairing route. Check the Device panel and retry with a fresh credential." >&2
   exit 1

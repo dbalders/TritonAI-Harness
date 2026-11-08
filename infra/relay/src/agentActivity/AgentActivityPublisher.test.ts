@@ -2,17 +2,18 @@ import type { RelayAgentActivityState, RelayDeliveryResult } from "@t3tools/cont
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as AgentActivityRows from "./AgentActivityRows.ts";
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as LiveActivities from "./LiveActivities.ts";
 import * as AgentActivityPublisher from "./AgentActivityPublisher.ts";
-import { FcmDeliveries } from "./FcmDeliveries.ts";
+import * as FcmDeliveries from "./FcmDeliveries.ts";
 import * as ApnsDeliveries from "./ApnsDeliveries.ts";
 
-const publisherLayer = AgentActivityPublisher.layer.pipe(
+const layerPublisher = AgentActivityPublisher.layer.pipe(
   Layer.provide(
-    Layer.succeed(FcmDeliveries, {
+    Layer.succeed(FcmDeliveries.FcmDeliveries, {
       enqueue: () => Effect.succeed(null),
       process: () => Effect.void,
     }),
@@ -58,6 +59,7 @@ function makeLiveActivities(
   return {
     register: () => Effect.void,
     listTargets: () => Effect.succeed([]),
+    listIdleArmedTargets: () => Effect.succeed([]),
     markDelivery: () => Effect.void,
     markStartQueued: () => Effect.void,
     clearStartQueued: () => Effect.void,
@@ -94,6 +96,8 @@ function makeEnvironmentLinks(
       ]),
     listForUser: () => Effect.succeed([]),
     getForUser: () => Effect.succeed(null),
+    findActiveManagedForEnvironment: () => Effect.succeed([]),
+    setHoldWebhooksWhileOffline: () => Effect.void,
     revokeForUser: () => Effect.succeed(false),
     ...overrides,
   };
@@ -140,7 +144,7 @@ describe("AgentActivityPublisher", () => {
   it.effect("routes Android publication and registration replay to FCM alongside iOS", () => {
     const android = { ...target("android"), platform: "android" as const, ios_major_version: null };
     const ios = target("ios");
-    const fcmCalls: Array<Parameters<FcmDeliveries["Service"]["enqueue"]>[0]> = [];
+    const fcmCalls: Array<Parameters<FcmDeliveries.FcmDeliveries["Service"]["enqueue"]>[0]> = [];
     const appleDevices: string[] = [];
     return Effect.gen(function* () {
       const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
@@ -180,7 +184,7 @@ describe("AgentActivityPublisher", () => {
                     }),
                 }),
               ),
-              Layer.succeed(FcmDeliveries, {
+              Layer.succeed(FcmDeliveries.FcmDeliveries, {
                 enqueue: (input) =>
                   Effect.sync(() => {
                     fcmCalls.push(input);
@@ -223,7 +227,7 @@ describe("AgentActivityPublisher", () => {
         });
       }).pipe(
         Effect.provide(
-          publisherLayer.pipe(
+          layerPublisher.pipe(
             Layer.provide(
               Layer.mergeAll(
                 Layer.succeed(AgentActivityRows.AgentActivityRows, makeAgentActivityRows()),
@@ -266,6 +270,67 @@ describe("AgentActivityPublisher", () => {
     });
   });
 
+  it.effect("ends an idle card after finished work ages out without another publish", () => {
+    const sent: Array<Parameters<ApnsDeliveries.ApnsDeliveries["Service"]["sendForTarget"]>[0]> =
+      [];
+    let activeStates: ReadonlyArray<RelayAgentActivityState> = [state];
+    const endIdle = AgentActivityPublisher.AgentActivityPublisher.pipe(
+      Effect.flatMap((publisher) => publisher.endIdleLiveActivities),
+      Effect.provide(
+        layerPublisher.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(
+                AgentActivityRows.AgentActivityRows,
+                makeAgentActivityRows({ listForUser: () => Effect.sync(() => activeStates) }),
+              ),
+              Layer.succeed(EnvironmentLinks.EnvironmentLinks, makeEnvironmentLinks()),
+              Layer.succeed(
+                LiveActivities.LiveActivities,
+                makeLiveActivities({
+                  listIdleArmedTargets: () =>
+                    Effect.succeed([{ user_id: "dev:julius", device_id: "device-1" }]),
+                  listTargets: () =>
+                    Effect.succeed([
+                      { ...target("device-1"), activity_push_token: "activity-token" },
+                      target("device-2"),
+                    ]),
+                }),
+              ),
+              Layer.succeed(
+                ApnsDeliveries.ApnsDeliveries,
+                makeApnsDeliveries({
+                  sendForTarget: (input) =>
+                    Effect.sync(() => {
+                      sent.push(input);
+                      return null;
+                    }),
+                }),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      yield* TestClock.adjust("1 hour");
+      yield* endIdle;
+      expect(sent).toEqual([]);
+
+      activeStates = [{ ...state, phase: "completed", updatedAt: "1970-01-01T01:00:00.000Z" }];
+      yield* TestClock.adjust("15 minutes");
+      yield* endIdle;
+      expect(sent).toEqual([]);
+
+      yield* TestClock.adjust("5 minutes");
+      yield* endIdle;
+      expect(sent).toMatchObject([
+        { target: { device_id: "device-1" }, aggregate: null, replay: true },
+      ]);
+    });
+  });
+
   it.effect("publishes listed targets through the APNs delivery service", () => {
     const firstTarget = target("device-1");
     const secondTarget = target("device-2");
@@ -296,7 +361,7 @@ describe("AgentActivityPublisher", () => {
         });
       }).pipe(
         Effect.provide(
-          publisherLayer.pipe(
+          layerPublisher.pipe(
             Layer.provide(
               Layer.mergeAll(
                 Layer.succeed(
@@ -390,7 +455,7 @@ describe("AgentActivityPublisher", () => {
         });
       }).pipe(
         Effect.provide(
-          publisherLayer.pipe(
+          layerPublisher.pipe(
             Layer.provide(
               Layer.mergeAll(
                 Layer.succeed(
@@ -448,8 +513,6 @@ describe("AgentActivityPublisher", () => {
           ok: true,
         },
       ]);
-      // Terminal states are persisted (and later pruned by the cron) so the
-      // finished thread can keep a Done row in later aggregates.
       expect(upserts).toEqual([
         {
           environmentPublicKey: "environment-public-key",
@@ -496,7 +559,7 @@ describe("AgentActivityPublisher", () => {
         });
       }).pipe(
         Effect.provide(
-          publisherLayer.pipe(
+          layerPublisher.pipe(
             Layer.provide(
               Layer.mergeAll(
                 Layer.succeed(
@@ -608,7 +671,7 @@ describe("AgentActivityPublisher", () => {
           });
         }).pipe(
           Effect.provide(
-            publisherLayer.pipe(
+            layerPublisher.pipe(
               Layer.provide(
                 Layer.mergeAll(
                   Layer.succeed(
@@ -850,9 +913,6 @@ describe("makeAggregateState", () => {
       nowMs: hourMs,
     });
 
-    // An armed card never renders an empty state: recently finished threads
-    // keep Done content on it, and once they age out the aggregate becomes
-    // null and the delivery layer ends the card.
     expect(aggregate).toMatchObject({
       title: "TritonAI Harness",
       activeCount: 0,

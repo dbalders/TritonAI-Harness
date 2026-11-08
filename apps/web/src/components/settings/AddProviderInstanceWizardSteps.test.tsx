@@ -1,6 +1,5 @@
 import { Children, isValidElement, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import { WizardSteps } from "../ui/wizard";
 import { ADD_PROVIDER_WIZARD_STEPS } from "./AddProviderInstanceDialog.logic";
 import { AddProviderInstanceWizardSteps } from "./AddProviderInstanceWizardSteps";

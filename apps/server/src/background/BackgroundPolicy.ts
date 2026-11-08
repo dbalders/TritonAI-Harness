@@ -1,11 +1,11 @@
-import {
-  type AuthSessionId,
-  type BackgroundPolicySnapshot,
-  type BackgroundScope,
-  type ClientActivityLease,
-  type ClientActivityReportInput,
-  type HostPowerSnapshot,
-  type RpcClientId,
+import type {
+  AuthSessionId,
+  BackgroundPolicySnapshot,
+  BackgroundScope,
+  ClientActivityLease,
+  ClientActivityReportInput,
+  HostPowerSnapshot,
+  RpcClientId,
 } from "@t3tools/contracts";
 import {
   getBackgroundActivityPresetSettings,
@@ -22,7 +22,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
-import { ServerSettingsService } from "../serverSettings.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
 import * as HostPowerMonitor from "./HostPowerMonitor.ts";
 
@@ -211,7 +211,7 @@ function computeSnapshot(input: {
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("background.policy.make")(function* () {
   const hostPowerMonitor = yield* HostPowerMonitor.HostPowerMonitor;
-  const serverSettings = yield* ServerSettingsService;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
   const leasesRef = yield* Ref.make(new Map<string, ClientActivityLease>());
   const changes = yield* PubSub.sliding<BackgroundPolicySnapshot>(1);
   const publishMutex = yield* Semaphore.make(1);
@@ -289,16 +289,17 @@ export const make = Effect.fn("background.policy.make")(function* () {
   const hasDemand: BackgroundPolicy["Service"]["hasDemand"] = (scope) =>
     Effect.map(snapshot, (current) => current.activeScopeKeys.includes(scopeKey(scope)));
 
-  const shouldRunScopeWork: BackgroundPolicy["Service"]["shouldRunScopeWork"] = (scope) =>
-    Effect.gen(function* () {
-      const [current, settings] = yield* Effect.all([snapshot, backgroundActivitySettings]);
-      if (isHostConstrained(current.hostPower, settings)) {
-        return false;
-      }
-      return current.leases.some((lease) =>
-        leaseMayRunScopedWork(lease, scope, current.updatedAt, settings),
-      );
-    });
+  const shouldRunScopeWork: BackgroundPolicy["Service"]["shouldRunScopeWork"] = Effect.fn(
+    "BackgroundPolicy.shouldRunScopeWork",
+  )(function* (scope) {
+    const [current, settings] = yield* Effect.all([snapshot, backgroundActivitySettings]);
+    if (isHostConstrained(current.hostPower, settings)) {
+      return false;
+    }
+    return current.leases.some((lease) =>
+      leaseMayRunScopedWork(lease, scope, current.updatedAt, settings),
+    );
+  });
 
   const shouldRunOpportunisticWork = Effect.map(
     snapshot,

@@ -1,7 +1,6 @@
 import { sha256 } from "@noble/hashes/sha2";
 import JSZip from "jszip";
 import { parse, type ParseError } from "jsonc-parser";
-
 import type { ThemeDefinition } from "./themePalette";
 import {
   isVsCodeThemeFile,
@@ -49,6 +48,10 @@ const USED_WORKBENCH_COLORS = new Set([
   "dropdown.border",
   "editor.background",
   "editor.foreground",
+  "editor.findMatchBackground",
+  "editor.findMatchForeground",
+  "editor.findMatchHighlightBackground",
+  "editor.findMatchHighlightForeground",
   "editor.selectionBackground",
   "editorCursor.foreground",
   "editorError.foreground",
@@ -244,8 +247,6 @@ export async function searchOpenVsxThemes(
   url.searchParams.set("category", "Themes");
   url.searchParams.set("sortBy", sortBy);
   url.searchParams.set("sortOrder", "desc");
-  // Ask for a few extras because results without a supported SPDX license
-  // are intentionally omitted.
   url.searchParams.set("size", "16");
   const value = await withSearchTimeout(async (requestSignal) => {
     const response = await fetch(url, { signal: requestSignal });

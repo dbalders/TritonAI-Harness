@@ -1,5 +1,4 @@
-import type { ThreadPullRequestLink } from "@t3tools/contracts";
-import { ProjectId } from "@t3tools/contracts";
+import { type ThreadPullRequestLink, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { savedPullRequestStack, pullRequestStackView } from "./pullRequestStackSnapshot";
 
@@ -88,6 +87,10 @@ describe("saved stack navigation", () => {
       isFresh: true,
       notice: null,
     });
-    expect(pullRequestStackView({ ...query, isPending: true }, saved).isFresh).toBe(false);
+    expect(pullRequestStackView({ ...query, isPending: true }, saved).isFresh).toBe(true);
+    expect(pullRequestStackView({ ...query, data: null, isPending: true }, saved)).toMatchObject({
+      data: null,
+      isFresh: true,
+    });
   });
 });

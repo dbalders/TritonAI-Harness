@@ -2,7 +2,6 @@
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
-
 import {
   createManagedPluginValidationReceipt,
   loadManagedPluginCompositionFromEnvironment,

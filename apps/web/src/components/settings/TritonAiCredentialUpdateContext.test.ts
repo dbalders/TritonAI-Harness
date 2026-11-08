@@ -1,7 +1,7 @@
 import type { DesktopTritonAiCredentialsUpdateResult } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
+import { useTritonAiCredentialUpdate } from "./TritonAiCredentialUpdateContext";
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -26,8 +26,6 @@ vi.mock("react/compiler-runtime", async () => {
   return { c: reactHookHarness.useMemoCache };
 });
 vi.mock("../../state/environments", () => ({ usePrimaryEnvironment: () => null }));
-
-import { useTritonAiCredentialUpdate } from "./TritonAiCredentialUpdateContext";
 
 const saved: DesktopTritonAiCredentialsUpdateResult = {
   status: "saved",

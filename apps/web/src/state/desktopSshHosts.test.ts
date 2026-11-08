@@ -1,9 +1,8 @@
 import type { DesktopDiscoveredSshHost } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import { AtomRegistry } from "effect/unstable/reactivity";
-import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import { AtomRegistry } from "effect/reactivity";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import { createDesktopSshHostsStateAtom, filterDiscoveredSshHosts } from "./desktopSshHosts";
 
 const hosts: ReadonlyArray<DesktopDiscoveredSshHost> = [
@@ -87,8 +86,9 @@ describe("filterDiscoveredSshHosts", () => {
     ]);
   });
 
-  it("matches case-insensitively", () => {
+  it("matches aliases and hostnames case-insensitively", () => {
     expect(filterDiscoveredSshHosts(suggestions, "PINOT")).toEqual([suggestions[1]]);
+    expect(filterDiscoveredSshHosts(hosts, "box.LOCAL")).toEqual(hosts);
   });
 
   it("returns an empty array when no hosts match", () => {

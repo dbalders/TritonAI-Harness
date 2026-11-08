@@ -6,12 +6,7 @@ import {
   TRITONAI_CODEX_MODEL_PROVIDER_NAME,
   UCSD_AI_BASE_URL_ENV,
 } from "@t3tools/contracts";
-import {
-  TRITONAI_CLIENT_HEADER,
-  TRITONAI_CLIENT_NAME,
-  TRITONAI_CLIENT_VERSION,
-  TRITONAI_CLIENT_VERSION_HEADER,
-} from "../../tritonAiClientHeaders.ts";
+import { makeTritonAiClientHeaders } from "../../tritonAiClientHeaders.ts";
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
 
@@ -24,7 +19,10 @@ export function resolveTritonAiCodexBaseUrl(env: NodeJS.ProcessEnv = process.env
   );
 }
 
-export function makeTritonAiCodexConfigArgs(env: NodeJS.ProcessEnv = process.env): string[] {
+export function makeTritonAiCodexConfigArgs(
+  env: NodeJS.ProcessEnv = process.env,
+  headers: Readonly<Record<string, string>> = makeTritonAiClientHeaders(),
+): string[] {
   const providerKey = `model_providers.${TRITONAI_CODEX_MODEL_PROVIDER_ID}`;
   const baseUrl = resolveTritonAiCodexBaseUrl(env);
 
@@ -42,7 +40,9 @@ export function makeTritonAiCodexConfigArgs(env: NodeJS.ProcessEnv = process.env
     "--config",
     `${providerKey}.wire_api="responses"`,
     "--config",
-    `${providerKey}.http_headers={${encodeCodexConfigString(TRITONAI_CLIENT_HEADER)}=${encodeCodexConfigString(TRITONAI_CLIENT_NAME)},${encodeCodexConfigString(TRITONAI_CLIENT_VERSION_HEADER)}=${encodeCodexConfigString(TRITONAI_CLIENT_VERSION)}}`,
+    `${providerKey}.http_headers={${Object.entries(headers)
+      .map(([name, value]) => `${encodeCodexConfigString(name)}=${encodeCodexConfigString(value)}`)
+      .join(",")}}`,
     "--config",
     `${providerKey}.requires_openai_auth=false`,
     "--config",

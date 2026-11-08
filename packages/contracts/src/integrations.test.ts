@@ -1,6 +1,5 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
-
 import { IntegrationConnectResult, IntegrationProviderPollResult } from "./integrations.ts";
 
 const decodeConnectResult = Schema.decodeUnknownSync(IntegrationConnectResult);

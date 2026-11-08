@@ -1,6 +1,5 @@
 import type { PreviewViewportSetting } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import { commitViewportAndAspectRatio } from "./browserDeviceToolbarState";
 
 describe("commitViewportAndAspectRatio", () => {
