@@ -153,7 +153,8 @@ test("rejects missing archive support, signing credentials, and symlinks", (t) =
   assert.equal(f.git("diff", "--cached", "--name-only"), "");
 });
 
-test("Xcode Cloud applies the stable marketing version and build number to every target", (t) => {
+for (const versionField of ['"1.4.0"', 'repoEnv.T3CODE_MOBILE_VERSION ?? "2.0.0"']) {
+test(`Xcode Cloud applies stable version to every target for ${versionField}`, (t) => {
   const f = fixture(t);
   const scripts = path.join(f.ios, "ci_scripts");
   fs.mkdirSync(scripts, { recursive: true });
@@ -163,7 +164,7 @@ test("Xcode Cloud applies the stable marketing version and build number to every
   );
   fs.writeFileSync(
     path.join(f.root, "apps/mobile/app.config.ts"),
-    'export default { version: "1.4.0" };\n',
+    `export default { version: ${versionField} };\n`,
   );
   const targets = ["TritonAIHarness", "ExpoWidgetsTarget", "expo-sharing-extension"];
   for (const target of targets) {
@@ -195,7 +196,7 @@ test("Xcode Cloud applies the stable marketing version and build number to every
   );
   assert.match(
     fs.readFileSync(path.join(f.root, "apps/mobile/app.config.ts"), "utf8"),
-    /version: "1\.4\.2"/,
+    /version: (?:repoEnv\.T3CODE_MOBILE_VERSION \?\? )?"1\.4\.2"/,
   );
   assert.equal(values.length, 3);
   assert.ok(
@@ -208,3 +209,5 @@ test("Xcode Cloud applies the stable marketing version and build number to every
     6,
   );
 });
+
+}
