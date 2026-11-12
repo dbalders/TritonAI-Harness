@@ -1964,45 +1964,42 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
         const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
-        const browserAccessEnvironment =
-          serverConfig.mode === "desktop"
-            ? yield* makeCodexBrowserAccessHost(
-                Effect.fn("CodexAdapterV2.authorizeBrowserAccess")(function* (request) {
-                  if (Option.isNone(browserServerSettings)) return false;
-                  const settings = yield* browserServerSettings.value.getSettings.pipe(
-                    Effect.option,
-                  );
-                  if (Option.isNone(settings)) return false;
-                  const context = (yield* Ref.get(activeTurns)).get(request.turnId);
-                  if (
-                    !context ||
-                    context.providerThread.nativeThreadRef?.nativeId !== request.sessionId
-                  )
-                    return false;
-                  const mcp = yield* readMcpSession(context.input.threadId);
-                  if (
-                    !mcp?.browserToolsAvailable ||
-                    (mcp.capabilities !== undefined && !mcp.capabilities.has("preview")) ||
-                    context.browserMcpCredentialId === undefined ||
-                    mcp.providerSessionId !== context.browserMcpCredentialId ||
-                    mcp.providerInstanceId !== adapterOptions.instanceId ||
-                    (mcp.expiresAt !== undefined &&
-                      mcp.expiresAt <= DateTime.toEpochMillis(yield* DateTime.now))
-                  )
-                    return false;
-                  return resolveProjectSettings(
-                    settings.value,
-                    context.projectionAppThread.projectId,
-                  ).settings.enableAgentBrowserAccess;
-                }),
-              ).pipe(
-                Effect.catch(() =>
-                  Effect.logWarning(
-                    "Chrome extension access is unavailable because its authorization host could not start.",
-                  ).pipe(Effect.as(deniedBrowserAccessEnvironment)),
-                ),
-              )
-            : deniedBrowserAccessEnvironment;
+        const browserAccessEnvironment = yield* makeCodexBrowserAccessHost(
+          Effect.fn("CodexAdapterV2.authorizeBrowserAccess")(function* (request) {
+            if (Option.isNone(browserServerSettings)) return false;
+            const settings = yield* browserServerSettings.value.getSettings.pipe(Effect.option);
+            if (Option.isNone(settings)) return false;
+            const context = (yield* Ref.get(activeTurns)).get(request.turnId);
+            if (context === undefined) return false;
+            let root = context;
+            while (root.subagent !== null) root = root.subagent.parentContext;
+            // Codex reports the root session id for native subagent turns.
+            if (
+              context.providerThread.nativeThreadRef?.nativeId !== request.sessionId &&
+              root.providerThread.nativeThreadRef?.nativeId !== request.sessionId
+            )
+              return false;
+            const mcp = yield* readMcpSession(context.input.threadId);
+            if (
+              !mcp?.browserToolsAvailable ||
+              (mcp.capabilities !== undefined && !mcp.capabilities.has("preview")) ||
+              context.browserMcpCredentialId === undefined ||
+              mcp.providerSessionId !== context.browserMcpCredentialId ||
+              mcp.providerInstanceId !== adapterOptions.instanceId ||
+              (mcp.expiresAt !== undefined &&
+                mcp.expiresAt <= DateTime.toEpochMillis(yield* DateTime.now))
+            )
+              return false;
+            return resolveProjectSettings(settings.value, context.projectionAppThread.projectId)
+              .settings.enableAgentBrowserAccess;
+          }),
+        ).pipe(
+          Effect.catch(() =>
+            Effect.logWarning(
+              "Chrome extension access is unavailable because its authorization host could not start.",
+            ).pipe(Effect.as(deniedBrowserAccessEnvironment)),
+          ),
+        );
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
