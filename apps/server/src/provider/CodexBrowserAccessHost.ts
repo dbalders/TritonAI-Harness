@@ -3,11 +3,11 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as FiberSet from "effect/FiberSet";
 import * as Schema from "effect/Schema";
+import { acquirePrivateIpcEndpoint } from "./privateIpcEndpoint.ts";
 
 const MAX_FRAME_BYTES = 2048;
 const MAX_CONNECTIONS = 32;
@@ -86,58 +86,14 @@ export const makeCodexBrowserAccessHost = Effect.fn("CodexBrowserAccessHost.open
   }) => Effect.Effect<boolean>,
 ) {
   const platform = yield* HostProcess.Platform;
-  const uid = yield* HostProcess.UserId;
-  const { publicKey, privateKey } = NodeCrypto.generateKeyPairSync("ed25519");
-  const executorId = NodeCrypto.randomUUID();
-  const owned = yield* Effect.acquireRelease(
-    io(async () => {
-      if (platform === "win32") return { endpoint: `\\\\.\\pipe\\t3-browser-${executorId}` };
-      const create = async (parent: string) => {
-        const resolved = await NodeFSP.realpath(parent);
-        const stat = await NodeFSP.lstat(resolved);
-        if (
-          uid === undefined ||
-          !stat.isDirectory() ||
-          !(
-            (stat.uid === uid && (stat.mode & 0o022) === 0) ||
-            (stat.uid === 0 && ((stat.mode & 0o022) === 0 || (stat.mode & 0o1000) !== 0))
-          )
-        )
-          throw new Error("Untrusted browser IPC parent");
-        const directory = await NodeFSP.mkdtemp(NodePath.join(resolved, "t3-browser-"));
-        try {
-          await NodeFSP.chmod(directory, 0o700);
-          const created = await NodeFSP.lstat(directory);
-          const endpoint = NodePath.join(directory, "s");
-          if (
-            !created.isDirectory() ||
-            created.isSymbolicLink() ||
-            created.uid !== uid ||
-            (created.mode & 0o777) !== 0o700 ||
-            Buffer.byteLength(endpoint) > 100
-          )
-            throw new Error("Unprotected browser IPC directory");
-          return { directory, created, endpoint };
-        } catch (cause) {
-          await NodeFSP.rmdir(directory);
-          throw cause;
-        }
-      };
-      return create(NodeOS.tmpdir()).catch(() => create("/tmp"));
-    }),
-    (owned) =>
-      Effect.promise(async () => {
-        if (!("directory" in owned)) return;
-        const current = await NodeFSP.lstat(owned.directory).catch(() => undefined);
-        if (
-          current &&
-          !current.isSymbolicLink() &&
-          current.dev === owned.created.dev &&
-          current.ino === owned.created.ino
-        )
-          await NodeFSP.rmdir(owned.directory).catch(() => undefined);
-      }),
+  const endpoint = yield* acquirePrivateIpcEndpoint("t3-browser").pipe(
+    Effect.mapError((cause) => new BrowserAccessHostError({ cause })),
   );
+  const { publicKey, privateKey } = yield* Effect.try({
+    try: () => NodeCrypto.generateKeyPairSync("ed25519"),
+    catch: (cause) => new BrowserAccessHostError({ cause }),
+  });
+  const executorId = NodeCrypto.randomUUID();
   const fibers = yield* FiberSet.make<void>();
   const run = yield* FiberSet.runtime(fibers)();
   const sockets = new Set<NodeNet.Socket>();
@@ -190,16 +146,16 @@ export const makeCodexBrowserAccessHost = Effect.fn("CodexBrowserAccessHost.open
     const onError = (cause: Error) => resume(Effect.fail(new BrowserAccessHostError({ cause })));
     server.once("error", onError);
     try {
-      server.listen(owned.endpoint, () => resume(Effect.void));
+      server.listen(endpoint, () => resume(Effect.void));
     } catch (cause) {
       resume(Effect.fail(new BrowserAccessHostError({ cause })));
     }
     return Effect.sync(() => server.off("error", onError));
   });
-  if (platform !== "win32") yield* io(() => NodeFSP.chmod(owned.endpoint, 0o600));
+  if (platform !== "win32") yield* io(() => NodeFSP.chmod(endpoint, 0o600));
   return {
     BROWSER_USE_ACCESS_EXECUTOR_ID: executorId,
-    BROWSER_USE_ACCESS_PIPE_PATH: owned.endpoint,
+    BROWSER_USE_ACCESS_PIPE_PATH: endpoint,
     BROWSER_USE_ACCESS_VERIFYING_IDENTITY: publicKey
       .export({ type: "spki", format: "der" })
       .toString("base64"),

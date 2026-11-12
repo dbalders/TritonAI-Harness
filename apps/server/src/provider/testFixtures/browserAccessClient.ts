@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Native IPC fixture for browser authorization integration tests.
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
+import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 
 export const requestBrowserAccess = (
@@ -30,8 +31,32 @@ export const requestBrowserAccess = (
           const size = NodeOS.endianness() === "LE" ? bytes.readUInt32LE() : bytes.readUInt32BE();
           if (bytes.length !== size + 4) return;
           const result = JSON.parse(bytes.subarray(4).toString("utf8")) as {
+            jsonrpc: string;
+            id: number;
             result: { payload: string; signature: string };
           };
+          const key = NodeCrypto.createPublicKey({
+            key: Buffer.from(environment.BROWSER_USE_ACCESS_VERIFYING_IDENTITY!, "base64"),
+            type: "spki",
+            format: "der",
+          });
+          const decision = JSON.parse(result.result.payload);
+          if (
+            result.jsonrpc !== "2.0" ||
+            result.id !== 1 ||
+            !NodeCrypto.verify(
+              null,
+              Buffer.from(result.result.payload),
+              key,
+              Buffer.from(result.result.signature, "base64"),
+            ) ||
+            decision.domain !== "codex.browserAccess.v1" ||
+            JSON.stringify(decision.request) !== JSON.stringify(params)
+          ) {
+            reject(new Error("Browser access decision failed verification"));
+            socket.destroy();
+            return;
+          }
           resolve(result.result);
           socket.destroy();
         });

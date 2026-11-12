@@ -827,7 +827,7 @@ function withReplayRequestId(
 }
 
 describe("CodexAdapterV2 session initialize", () => {
-  it.live("supplies a private browser authorization host only to desktop sessions", () =>
+  it.live("supplies a private browser authorization host to desktop and server sessions", () =>
     Effect.gen(function* () {
       for (const { mode, failHost } of [
         { mode: "desktop", failHost: false },
@@ -879,7 +879,7 @@ describe("CodexAdapterV2 session initialize", () => {
             )
           : opening;
         assert.isDefined(launchedEnvironment);
-        if (mode === "desktop" && !failHost) {
+        if (!failHost) {
           assert.isNotEmpty(launchedEnvironment!.BROWSER_USE_ACCESS_PIPE_PATH);
           assert.notEqual(launchedEnvironment!.BROWSER_USE_ACCESS_PIPE_PATH, "/other-app/socket");
           assert.isNotEmpty(launchedEnvironment!.BROWSER_USE_ACCESS_VERIFYING_IDENTITY);
@@ -5286,6 +5286,91 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       childTurnCompleted(RESUME_CHILD_TURN_2),
     ],
   });
+
+  it.live("authorizes native child browser turns under their root session and revokes them", () =>
+    Effect.gen(function* () {
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const threadId = ThreadId.make(`thread-${RESUME_SCENARIO}`);
+      yield* sessions.set({
+        environmentId: EnvironmentId.make("browser-child-environment"),
+        threadId,
+        providerSessionId: "browser-child-credential",
+        providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture",
+        browserToolsAvailable: true,
+      });
+      const entries = resumeSubagentTranscript.entries.slice(
+        0,
+        resumeSubagentTranscript.entries.findIndex(
+          (entry) =>
+            entry.type === "emit_inbound" && entry.label === `turn/started/${RESUME_CHILD_TURN_1}`,
+        ) + 1,
+      );
+      entries[5] = {
+        type: "expect_outbound",
+        label: "turn/start",
+        frame: {
+          id: 3,
+          method: "turn/start",
+          params: yield* CodexAdapterV2.buildCodexTurnStartParams({
+            nativeThreadId: RESUME_NATIVE_THREAD,
+            codexInput: [{ type: "text", text: RESUME_PROMPT }],
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+            hasT3Mcp: true,
+            browserToolsAvailable: true,
+          }),
+        },
+      };
+      let environment: NodeJS.ProcessEnv = {};
+      const harness = yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({ scenario: RESUME_SCENARIO, entries }),
+        undefined,
+        undefined,
+        undefined,
+        {},
+        undefined,
+        (value) => {
+          environment = value;
+        },
+      );
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("browser-child-attempt"),
+          text: RESUME_PROMPT,
+        }),
+      );
+      yield* harness.until(() =>
+        harness.subagentUpdates().some((event) => event.subagent.status === "running"),
+      );
+      const request = (sessionId: string) =>
+        requestBrowserAccess(environment as Record<string, string>, {
+          executorId: environment.BROWSER_USE_ACCESS_EXECUTOR_ID!,
+          sessionId,
+          turnId: RESUME_CHILD_TURN_1,
+          nonce: "a".repeat(64),
+        }).pipe(Effect.map((response) => JSON.parse(response.payload).allowed as boolean));
+      assert.isTrue(yield* request(RESUME_NATIVE_THREAD));
+      assert.isTrue(yield* request(RESUME_CHILD_THREAD));
+      assert.isFalse(yield* request("foreign-root-session"));
+      yield* sessions.clear(threadId);
+      assert.isFalse(yield* request(RESUME_NATIVE_THREAD));
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          ServerSettings.layerTest(),
+        ),
+      ),
+    ),
+  );
 
   it.effect("wakes the parent when a native child finishes after the parent's turn", () =>
     Effect.scoped(
