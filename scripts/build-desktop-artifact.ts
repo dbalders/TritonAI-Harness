@@ -18,6 +18,7 @@ import {
   TRITONAI_APP_ID_BASE,
   resolveTritonAiDesktopIdentity,
   isTritonAiNightlyVersion,
+  isTritonAiDevVersion,
 } from "@t3tools/contracts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -3778,7 +3779,11 @@ export const assertNightlySourceVersions = Effect.fn("assertNightlySourceVersion
 // Omit updater manifests, blockmaps, and app-update.yml so stable/nightly clients cannot
 // consume them, and report that no update feed is configured.
 export function isDesktopPreviewVersion(version: string): boolean {
-  return /-pr\./.test(version) || /-preview\.\d{8}\.\d+$/.test(version);
+  return (
+    /-pr\./.test(version) ||
+    /-preview\.\d{8}\.\d+$/.test(version) ||
+    /-dev\.\d{8}\.\d+$/.test(version)
+  );
 }
 
 export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
@@ -3817,6 +3822,9 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 }
 
 export function resolveDesktopProductName(version: string): string {
+  if (isTritonAiDevVersion(version)) {
+    return `${TRITONAI_APP_BASE_NAME} (Dev)`;
+  }
   return resolveDesktopUpdateChannel(version) === "nightly"
     ? `${TRITONAI_APP_BASE_NAME} (Nightly)`
     : TRITONAI_APP_BASE_NAME;

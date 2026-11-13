@@ -4,6 +4,7 @@ import type {
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewRecordingFrame,
+  DesktopPetAction,
   DesktopPreviewTabState,
   DesktopSnapShotEvent,
 } from "@t3tools/contracts";
@@ -55,6 +56,33 @@ if (clientPlatform === "darwin") {
   };
   window.addEventListener("DOMContentLoaded", syncWindowControlInset, { once: true });
   window.addEventListener("resize", syncWindowControlInset);
+}
+
+function isPetAction(value: unknown): value is DesktopPetAction {
+  if (typeof value !== "object" || value === null) return false;
+  const action = value as {
+    kind?: unknown;
+    pet?: unknown;
+    movement?: unknown;
+    environmentId?: unknown;
+    threadId?: unknown;
+  };
+  if (action.kind === "close") return true;
+  if (action.kind === "set-pet") {
+    return (
+      action.pet === "triton" ||
+      action.pet === "trident" ||
+      action.pet === "raccoon" ||
+      action.pet === "off"
+    );
+  }
+  if (action.kind === "set-movement") {
+    return action.movement === "static" || action.movement === "playful";
+  }
+  if (action.kind === "select-thread") {
+    return typeof action.environmentId === "string" && typeof action.threadId === "string";
+  }
+  return false;
 }
 
 function unwrapEnsureSshEnvironmentResult(result: unknown) {
@@ -206,6 +234,21 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return () => {
       ipcRenderer.removeListener(IpcChannels.SKILL_RECORDING_CONTROL_CHANNEL, wrappedListener);
     };
+  },
+  pet: {
+    open: () => ipcRenderer.invoke(IpcChannels.PET_OPEN_CHANNEL, undefined),
+    close: () => ipcRenderer.invoke(IpcChannels.PET_CLOSE_CHANNEL, undefined),
+    setState: (state) => ipcRenderer.invoke(IpcChannels.PET_STATE_CHANNEL, state),
+    onAction: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
+        if (!isPetAction(action)) return;
+        listener(action);
+      };
+      ipcRenderer.on(IpcChannels.PET_ACTION_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(IpcChannels.PET_ACTION_CHANNEL, wrappedListener);
+      };
+    },
   },
   getWslState: () => ipcRenderer.invoke(IpcChannels.GET_WSL_STATE_CHANNEL),
   setWslBackendEnabled: (enabled) =>

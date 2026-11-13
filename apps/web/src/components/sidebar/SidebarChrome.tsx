@@ -1,3 +1,4 @@
+import { PetCompanionSidebarItem } from "../chat/PetCompanion";
 import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
@@ -259,6 +260,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               label="Usage"
               onClick={handleUsageClick}
             />
+            <PetCompanionSidebarItem />
             <SidebarIdeasItem onClick={closeMobileSidebar} />
           </>
         )}
