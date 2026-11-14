@@ -133,6 +133,15 @@ export default defineConfig({
       entry: ["src/preview-pip-preload.ts"],
     },
     {
+      // The pet page is sandboxed and must not share chunks with app preloads.
+      format: "cjs",
+      outDir: "dist-electron",
+      dts: false,
+      sourcemap: true,
+      outExtensions: () => ({ js: ".cjs" }),
+      entry: ["src/petPreload.ts"],
+    },
+    {
       // Sandboxed preloads must be self-contained, without shared runtime chunks.
       format: "cjs",
       outDir: "dist-electron",

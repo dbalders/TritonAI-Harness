@@ -675,6 +675,40 @@ export const DesktopSkillRecordingControl = Schema.Struct({
 });
 export type DesktopSkillRecordingControl = typeof DesktopSkillRecordingControl.Type;
 
+/** The desktop companion shown beside normal chat. `off` closes its window. */
+export const DesktopPetIdSchema = Schema.Literals(["triton", "trident", "raccoon", "off"]);
+export type DesktopPetId = typeof DesktopPetIdSchema.Type;
+
+export const DesktopPetMovementSchema = Schema.Literals(["static", "playful"]);
+export type DesktopPetMovement = typeof DesktopPetMovementSchema.Type;
+
+export const DesktopPetThreadSummarySchema = Schema.Struct({
+  environmentId: Schema.String,
+  threadId: Schema.String,
+  title: Schema.String,
+  status: Schema.Literals(["working", "review", "waiting", "failed", "idle"]),
+  statusLabel: Schema.optionalKey(Schema.String),
+});
+export type DesktopPetThreadSummary = typeof DesktopPetThreadSummarySchema.Type;
+
+export const DesktopPetStateSchema = Schema.Struct({
+  pet: DesktopPetIdSchema,
+  movement: DesktopPetMovementSchema,
+  threads: Schema.Array(DesktopPetThreadSummarySchema),
+});
+export type DesktopPetState = typeof DesktopPetStateSchema.Type;
+
+export const DesktopPetActionSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("set-pet"), pet: DesktopPetIdSchema }),
+  Schema.Struct({ kind: Schema.Literal("set-movement"), movement: DesktopPetMovementSchema }),
+  Schema.Struct({ kind: Schema.Literal("close") }),
+  Schema.Struct({
+    kind: Schema.Literal("select-thread"),
+    environmentId: Schema.String,
+    threadId: Schema.String,
+  }),
+]);
+export type DesktopPetAction = typeof DesktopPetActionSchema.Type;
 export interface PickFolderOptions {
   initialPath?: string | null;
   targetEnvironmentId?: string;
@@ -1277,6 +1311,13 @@ export interface DesktopBridge {
   onSkillRecordingControl?: (
     listener: (control: DesktopSkillRecordingControl) => void,
   ) => () => void;
+  // Pet members are optional so newer web clients still run in older shells.
+  pet?: {
+    open: () => Promise<void>;
+    close: () => Promise<void>;
+    setState: (state: DesktopPetState) => Promise<void>;
+    onAction: (listener: (action: DesktopPetAction) => void) => () => void;
+  };
   getWslState: () => Promise<DesktopWslState>;
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;
@@ -1323,7 +1364,7 @@ export interface DesktopBridge {
   checkInstallerUpdate: () => Promise<InstallerUpdateCheckResult>;
   openInstallerUpdate: () => Promise<InstallerUpdateActionResult>;
   onInstallerUpdateState: (listener: (state: InstallerUpdateState) => void) => () => void;
-  /** Settings → `t3` command. Optional: older desktop builds lack it. */
+  /** Settings command. Optional: older desktop builds lack it. */
   cliCommand?: {
     getState: () => Promise<DesktopCliCommandState>;
     install: () => Promise<DesktopCliCommandState>;

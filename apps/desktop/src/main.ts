@@ -57,6 +57,7 @@ import * as DesktopComputerUse from "./computerUse/DesktopComputerUse.ts";
 import * as DesktopSavedEnvironments from "./settings/DesktopSavedEnvironments.ts";
 import * as DesktopSnapShot from "./snapShot/DesktopSnapShot.ts";
 import * as DesktopSkillRecording from "./skillRecording/DesktopSkillRecording.ts";
+import * as DesktopPet from "./pet/DesktopPet.ts";
 import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
 import * as DesktopPreReadyFileSystem from "./app/DesktopPreReadyFileSystem.ts";
 import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
@@ -150,6 +151,7 @@ const layerDesktopFoundation = Layer.mergeAll(
   DesktopAppSettings.layer,
   DesktopComputerUse.layer,
   DesktopSkillRecording.layer,
+  DesktopPet.layer,
   DesktopClientSettings.layer,
   DesktopConnectionCatalogStore.layer.pipe(Layer.provideMerge(DesktopSavedEnvironments.layer)),
   DesktopAssets.layer,

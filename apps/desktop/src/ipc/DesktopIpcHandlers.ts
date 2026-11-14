@@ -17,6 +17,7 @@ import {
   startSkillRecording,
   stopSkillRecording,
 } from "./methods/skillRecording.ts";
+import { closePet, openPet, setPetState } from "./methods/pet.ts";
 import {
   getLocalEnvironmentEnabled,
   setLocalEnvironmentEnabled,
@@ -162,6 +163,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(startSkillRecording);
   yield* ipc.handle(stopSkillRecording);
   yield* ipc.handle(cancelSkillRecording);
+  yield* ipc.handle(openPet);
+  yield* ipc.handle(closePet);
+  yield* ipc.handle(setPetState);
 
   yield* ipc.handle(getWslState);
   yield* ipc.handle(setWslBackendEnabled);

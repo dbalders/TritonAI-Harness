@@ -5,19 +5,38 @@ export const TRITONAI_CONNECT_NAME = "TritonAI Connect";
 export const TRITONAI_HOME_ENV = "TRITONAI_HOME";
 export const LEGACY_T3CODE_HOME_ENV = "T3CODE_HOME";
 export const DEFAULT_TRITONAI_HOME_DIRNAME = ".tritonai-harness";
-// Stable keeps its historical identity; Nightly owns a separate install and profile.
+// Stable keeps its historical identity; Nightly and Dev own separate installs and profiles.
 export function isTritonAiNightlyVersion(version: string): boolean {
   return /-nightly\.\d{8}\.\d+$/.test(version);
 }
 
+export function isTritonAiDevVersion(version: string): boolean {
+  return /-dev\.\d{8}\.\d+$/.test(version);
+}
+
+export function isTritonAiIsolatedDesktopVersion(version: string): boolean {
+  return [isTritonAiNightlyVersion(version), isTritonAiDevVersion(version)].some(Boolean);
+}
+
 export function resolveTritonAiDesktopIdentity(version: string) {
   const nightly = isTritonAiNightlyVersion(version);
+  const dev = isTritonAiDevVersion(version);
   return {
-    appId: nightly ? `${TRITONAI_APP_ID_BASE}.nightly` : TRITONAI_APP_ID_BASE,
-    packageName: nightly ? "tritonai-harness-nightly" : "tritonai-harness",
+    appId: nightly
+      ? `${TRITONAI_APP_ID_BASE}.nightly`
+      : dev
+        ? `${TRITONAI_APP_ID_BASE}.dev`
+        : TRITONAI_APP_ID_BASE,
+    packageName: nightly
+      ? "tritonai-harness-nightly"
+      : dev
+        ? "tritonai-harness-dev"
+        : "tritonai-harness",
     homeDirName: nightly
       ? `${DEFAULT_TRITONAI_HOME_DIRNAME}-nightly`
-      : DEFAULT_TRITONAI_HOME_DIRNAME,
+      : dev
+        ? `${DEFAULT_TRITONAI_HOME_DIRNAME}-dev`
+        : DEFAULT_TRITONAI_HOME_DIRNAME,
   };
 }
 

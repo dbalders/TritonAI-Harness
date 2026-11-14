@@ -2,7 +2,7 @@ import * as NodeOS from "node:os";
 
 import {
   LEGACY_T3CODE_HOME_ENV,
-  isTritonAiNightlyVersion,
+  isTritonAiIsolatedDesktopVersion,
   resolveTritonAiDesktopIdentity,
   TRITONAI_API_KEY_ENV,
   TRITONAI_FRONTIER_API_KEY_ENV,
@@ -954,7 +954,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     port: input.port,
     // Expand Nightly's home inside Linux; never pass the Windows baseDir,
     // which would share the primary backend's SQLite database through /mnt/c.
-    ...(!environment.isDevelopment && isTritonAiNightlyVersion(environment.appVersion)
+    ...(!environment.isDevelopment && isTritonAiIsolatedDesktopVersion(environment.appVersion)
       ? { t3Home: `~/${resolveTritonAiDesktopIdentity(environment.appVersion).homeDirName}` }
       : {}),
     host: wslBindHost,
