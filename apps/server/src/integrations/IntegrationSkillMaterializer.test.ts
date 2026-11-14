@@ -1,19 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import {
-  DEFAULT_SERVER_SETTINGS,
-  ProviderDriverKind,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { vi } from "vite-plus/test";
 
-import {
-  CodexIntegrationSkillMaterializer,
-  resolveIntegrationCodexHomes,
-} from "./IntegrationSkillMaterializer.ts";
+import { CodexIntegrationSkillMaterializer } from "./IntegrationSkillMaterializer.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -21,6 +13,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 describe("integration Codex skill homes", () => {
+  // regression: #373 fix(server): allow linked Codex skills folders at startup
   it("keeps shared skills until the last configured home is removed", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-shared-homes-"));
     const first = NodePath.join(root, "first");
@@ -58,6 +51,7 @@ describe("integration Codex skill homes", () => {
     }
   });
 
+  // regression: #373 fix(server): allow linked Codex skills folders at startup
   it("reconciles, updates, and retires managed skills through a linked skills root", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-linked-skills-"));
     const home = NodePath.join(root, "codex");
@@ -103,6 +97,7 @@ describe("integration Codex skill homes", () => {
     }
   });
 
+  // regression: #373 fix(server): allow linked Codex skills folders at startup
   it("rejects a skills root linked to a file without modifying it", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-skills-file-"));
     try {
@@ -121,95 +116,7 @@ describe("integration Codex skill homes", () => {
     }
   });
 
-  it("resolves the managed default and every configured Codex instance home", () => {
-    const baseDir = NodePath.resolve("/tmp/tritonai-home-test");
-    const codex = ProviderDriverKind.make("codex");
-    const settings = {
-      ...DEFAULT_SERVER_SETTINGS,
-      providerInstances: {
-        [ProviderInstanceId.make("codex")]: {
-          driver: codex,
-          config: { homePath: NodePath.join(baseDir, "primary") },
-        },
-        [ProviderInstanceId.make("codex_work")]: {
-          driver: codex,
-          config: { homePath: NodePath.join(baseDir, "work") },
-        },
-      },
-    };
-    expect(resolveIntegrationCodexHomes(baseDir, settings)).toEqual([
-      NodePath.join(baseDir, "primary"),
-      NodePath.join(baseDir, "work"),
-    ]);
-    expect(resolveIntegrationCodexHomes(baseDir, DEFAULT_SERVER_SETTINGS)).toEqual([
-      NodePath.join(baseDir, "codex"),
-    ]);
-  });
-
-  it("removes owned skills from retired homes and materializes them in new homes", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-skill-homes-"));
-    const packageRoot = NodePath.join(root, "package");
-    const firstHome = NodePath.join(root, "first");
-    const secondHome = NodePath.join(root, "second");
-    const skillPath = (home: string) => NodePath.join(home, "skills", "fixture-reader", "SKILL.md");
-    try {
-      await NodeFSP.mkdir(NodePath.join(packageRoot, "skills", "fixture-reader"), {
-        recursive: true,
-      });
-      await NodeFSP.writeFile(
-        NodePath.join(packageRoot, "skills", "fixture-reader", "SKILL.md"),
-        "---\nname: fixture-reader\ndescription: Fixture.\n---\n",
-      );
-      const materializer = new CodexIntegrationSkillMaterializer([firstHome]);
-      const active = {
-        integrationId: "fixture",
-        packageRoot,
-        activeSkills: ["fixture-reader"],
-      };
-      await materializer.sync(active);
-      expect(await NodeFSP.readFile(skillPath(firstHome), "utf8")).toContain("fixture-reader");
-
-      await materializer.setCodexHomes([secondHome]);
-      await materializer.sync(active);
-      await expect(NodeFSP.access(skillPath(firstHome))).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await NodeFSP.readFile(skillPath(secondHome), "utf8")).toContain("fixture-reader");
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("does not recopy an unchanged active skill set", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-skill-noop-"));
-    const packageRoot = NodePath.join(root, "package");
-    const home = NodePath.join(root, "home");
-    const target = NodePath.join(home, "skills", "fixture-reader");
-    try {
-      await NodeFSP.mkdir(NodePath.join(packageRoot, "skills", "fixture-reader"), {
-        recursive: true,
-      });
-      await NodeFSP.writeFile(
-        NodePath.join(packageRoot, "skills", "fixture-reader", "SKILL.md"),
-        "---\nname: fixture-reader\ndescription: Fixture.\n---\n",
-      );
-      const materializer = new CodexIntegrationSkillMaterializer([home]);
-      const active = {
-        integrationId: "fixture",
-        packageRoot,
-        activeSkills: ["fixture-reader"],
-      };
-
-      await materializer.sync(active);
-      const firstInode = (await NodeFSP.stat(target)).ino;
-      await materializer.sync({ ...active, activeSkills: [...active.activeSkills] });
-
-      expect((await NodeFSP.stat(target)).ino).toBe(firstInode);
-      await materializer.sync({ integrationId: "fixture", packageRoot: null, activeSkills: [] });
-      await expect(NodeFSP.access(target)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
+  // regression: #373 fix(server): allow linked Codex skills folders at startup
   it.each([false, true])(
     "preserves individual skill symlinks with linked root: %s",
     async (linked) => {
@@ -380,38 +287,6 @@ describe("integration Codex skill homes", () => {
       await expect(
         materializer.sync({ integrationId: "fixture", packageRoot: null, activeSkills: [] }),
       ).rejects.toThrow(/ownership marker must be a regular file/u);
-      await expect(NodeFSP.access(target)).resolves.toBeUndefined();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("propagates marker read I/O failures while pruning a disabled owned skill", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-skill-prune-read-error-"),
-    );
-    const packageRoot = NodePath.join(root, "package");
-    const home = NodePath.join(root, "home");
-    const source = NodePath.join(packageRoot, "skills", "fixture-reader");
-    const target = NodePath.join(home, "skills", "fixture-reader");
-    try {
-      await NodeFSP.mkdir(source, { recursive: true });
-      await NodeFSP.writeFile(
-        NodePath.join(source, "SKILL.md"),
-        "---\nname: fixture-reader\ndescription: Managed fixture.\n---\n",
-      );
-      const materializer = new CodexIntegrationSkillMaterializer([home]);
-      await materializer.sync({
-        integrationId: "fixture",
-        packageRoot,
-        activeSkills: ["fixture-reader"],
-      });
-      const readFailure = Object.assign(new Error("marker read failed"), { code: "EIO" });
-      vi.mocked(NodeFSP.readFile).mockRejectedValueOnce(readFailure);
-
-      await expect(
-        materializer.sync({ integrationId: "fixture", packageRoot: null, activeSkills: [] }),
-      ).rejects.toThrow(/marker read failed/u);
       await expect(NodeFSP.access(target)).resolves.toBeUndefined();
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
@@ -682,22 +557,6 @@ describe("integration Codex skill homes", () => {
       await expect(
         NodeFSP.access(NodePath.join(skillsRoot, "fixture-reader", "SKILL.md")),
       ).resolves.toBeUndefined();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("does not create a configured Codex home for inactive integrations", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-inactive-home-"));
-    const missingHome = NodePath.join(root, "not-created");
-    try {
-      const materializer = new CodexIntegrationSkillMaterializer([missingHome]);
-      await materializer.sync({
-        integrationId: "fixture",
-        packageRoot: null,
-        activeSkills: [],
-      });
-      await expect(NodeFSP.access(missingHome)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

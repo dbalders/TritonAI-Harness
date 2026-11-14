@@ -34,7 +34,7 @@ const DEFAULT_MANAGED_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 export function getManagedCodexSettings(
   settings: Pick<ServerSettings, "providerInstances">,
 ): CodexSettings {
-  return Schema.decodeUnknownSync(CodexSettings)(
+  return compiledDecodeSync1(
     settings.providerInstances[ProviderInstanceId.make("codex")]?.config ?? {},
   );
 }
@@ -103,6 +103,13 @@ function loadManagedConfig(): { readonly config: ManagedConfig; readonly digest:
 
 const loadedManagedConfig = loadManagedConfig();
 export const managedConfig = loadedManagedConfig.config;
+
+/** Campus-hosted models on the on-prem route, whose tool search the gateway proxy translates. */
+export const tritonAiHostedModelIds: ReadonlySet<string> = new Set(
+  managedConfig.models.catalog
+    .filter((model) => model.route === "on-prem")
+    .map((model) => model.id),
+);
 const managedConfigDigest = loadedManagedConfig.digest;
 
 let migrationStatus: TritonAiManagedPolicyDiagnostics["migrationStatus"] = "not-needed";
@@ -570,11 +577,9 @@ export function migrateLegacyInstallerManagedSettings(
     next,
     personalFrontierInstanceId,
   );
-  // Version 1 could leave durable references behind even after a personal
-  // provider was removed from settings. Move every pre-v2 reference away from
-  // the newly claimed managed ID. When the provider still exists, this target
-  // is also the ID assigned to it; otherwise it remains an intentionally
-  // unbound tombstone instead of silently binding to managed credentials.
+  // Move all pre-v2 references away from the newly claimed managed ID.
+  // Map existing personal instances to the same new ID; absent instances get an
+  // unbound tombstone so old references never silently acquire managed credentials.
   const providerInstanceReferenceRenames = {
     [frontierInstanceId]: personalFrontierInstanceId,
   };
@@ -630,3 +635,5 @@ export function migrateLegacyInstallerManagedSettings(
   migrationStatus = "completed";
   return { document: next, migrated: true };
 }
+
+const compiledDecodeSync1 = Schema.decodeSync(CodexSettings);

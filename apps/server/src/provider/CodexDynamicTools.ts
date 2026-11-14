@@ -27,13 +27,23 @@ export interface CodexDynamicToolOptions {
     options: { readonly signal: AbortSignal },
   ) => Promise<CodexDynamicToolAvailability>;
   readonly invokeDynamicTool?: (input: CodexDynamicToolInvocation) => Promise<unknown>;
+  /** The plugin service environment (such as "n8n Dev") a call to this tool would reach now. */
+  readonly dynamicToolServiceEnvironment?: (name: string) => CodexDynamicToolServiceEnvironment;
 }
+
+export type CodexDynamicToolServiceEnvironment =
+  | { readonly id: string; readonly label: string }
+  | undefined;
 export interface CodexDynamicToolDefinition {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Readonly<Record<string, unknown>>;
   /** Marks a write tool whose confirmation follows the task runtime mode. */
   readonly requiresApproval?: boolean;
+  /** Groups a deferred tool for Codex tool search; Codex requires one for deferral. */
+  readonly namespace?: string;
+  /** Leaves the tool out of each request until the model finds it with tool search. */
+  readonly deferLoading?: boolean;
 }
 
 export interface CodexDynamicToolInvocation {
@@ -41,6 +51,8 @@ export interface CodexDynamicToolInvocation {
   readonly arguments: unknown;
   readonly signal: AbortSignal;
   readonly writeApproved?: boolean;
+  /** The plugin service environment this call was approved for; a later switch refuses it. */
+  readonly serviceEnvironment?: string;
 }
 
 export function dynamicToolInvocationAllowed(
@@ -161,8 +173,14 @@ export const gateDynamicToolCall = Effect.fn("CodexDynamicTools.gateDynamicToolC
     readonly payload: Pick<EffectCodexSchema.DynamicToolCallParams, "tool" | "namespace">;
   }): Effect.fn.Return<CodexDynamicToolGate> {
     const { options, payload } = input;
-    const definition = options.dynamicTools?.find((tool) => tool.name === payload.tool);
-    if (payload.namespace || !definition || !options.invokeDynamicTool) {
+    // A deferred tool is called in its namespace, which must match what this session disclosed.
+    // Threads started before plugin tools were deferred still call them by name alone.
+    const definition = options.dynamicTools?.find(
+      (tool) =>
+        tool.name === payload.tool &&
+        (payload.namespace == null || tool.namespace === payload.namespace),
+    );
+    if (!definition || !options.invokeDynamicTool) {
       const current = payload.namespace
         ? undefined
         : options.dynamicToolAvailability
@@ -215,12 +233,6 @@ export const gateDynamicToolCall = Effect.fn("CodexDynamicTools.gateDynamicToolC
     return { allowed: true, definition } as const;
   },
 );
-
-function normalizeDynamicToolNames(
-  dynamicTools: ReadonlyArray<CodexDynamicToolDefinition> | undefined,
-): ReadonlyArray<string> {
-  return [...new Set((dynamicTools ?? []).map((tool) => tool.name))].sort();
-}
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -294,17 +306,18 @@ export interface DynamicToolApprovalPlan {
 }
 
 /**
- * What a dynamic tool call needs approved. Plugin writes ask per tool. The two browser tools that
- * load pages decide by destination instead of their static annotation (which made preview_open
- * always ask and preview_navigate never ask): loading an external website asks, under one
- * browsing grant shared by both tools, and a blank tab or local dev server does not. Opening a tab
- * under a named profile (its saved sign-ins) also asks. Every browser call shares the one session
- * grant, because an existing tab's profile is not visible here; the prompt says so.
- * dynamicToolApprovalRequired still exempts Full access.
+ * Plugin writes approve per tool. Browser calls share a browsing session grant;
+ * external destinations and named profiles require consent, blank/local pages do not.
+ * Full access bypasses dynamic-tool approval.
  */
 export function planDynamicToolApproval(input: {
   readonly requiresApproval: boolean | undefined;
   readonly payload: Pick<EffectCodexSchema.DynamicToolCallParams, "tool" | "arguments">;
+  /**
+   * A plugin write that targets a service environment approves per environment, so allowing a
+   * Dev write for the session never also allows the same write after switching to Prod.
+   */
+  readonly serviceEnvironment?: CodexDynamicToolServiceEnvironment;
 }): DynamicToolApprovalPlan {
   if (isBrowserNavigationTool(input.payload.tool)) {
     const navigation = browserNavigationRequest(input.payload.tool, input.payload.arguments);
@@ -328,10 +341,15 @@ export function planDynamicToolApproval(input: {
       prompt: dynamicToolApprovalPrompt(input.payload),
     };
   }
+  const environment = input.serviceEnvironment;
   return {
     requiresApproval: input.requiresApproval === true,
-    grantKey: input.payload.tool,
-    prompt: dynamicToolApprovalPrompt(input.payload),
+    grantKey: environment ? `${input.payload.tool}@${environment.id}` : input.payload.tool,
+    prompt: dynamicToolApprovalPrompt(
+      environment
+        ? { ...input.payload, tool: `${input.payload.tool} (${environment.label})` }
+        : input.payload,
+    ),
   };
 }
 

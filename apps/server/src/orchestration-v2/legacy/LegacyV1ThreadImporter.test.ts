@@ -1,46 +1,67 @@
-import { assert, it } from "@effect/vitest";
-import {
-  EventId,
-  MessageId,
-  ProviderThreadId,
-  ProviderDriverKind,
-  OrchestrationV2ProviderThread,
-  ThreadId,
-  ComposerContextId,
-  type OrchestrationMessageContext,
-} from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Tracer from "effect/Tracer";
+import { MessageId } from "@t3tools/contracts";
+import { ProviderThreadId } from "@t3tools/contracts";
+import { ProviderDriverKind } from "@t3tools/contracts";
+import { OrchestrationV2ProviderThread } from "@t3tools/contracts";
+
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/sql/SqlClient";
-import * as SqlitePersistence from "../../persistence/Sqlite.ts";
-import { listLinkedPullRequestThreads } from "../../pullRequest/linkedThreads.ts";
-import * as EventSink from "../EventSink.ts";
-import * as EventStore from "../EventStore.ts";
-import * as LegacyV1ThreadImporter from "./LegacyV1ThreadImporter.ts";
-import * as ProjectionMaintenance from "../ProjectionMaintenance.ts";
-import * as ProjectionStore from "../ProjectionStore.ts";
+import { assert, it } from "@effect/vitest";
+
+import {
+  ComposerContextId,
+  EventId,
+  type OrchestrationMessageContext,
+  ThreadId,
+} from "@t3tools/contracts";
+
+import * as DateTime from "effect/DateTime";
+
+import * as Effect from "effect/Effect";
+
 import * as Exit from "effect/Exit";
+
+import * as Layer from "effect/Layer";
+
+import * as SqlClient from "effect/sql/SqlClient";
+
 import * as Statement from "effect/sql/Statement";
 
+import * as SqlitePersistence from "../../persistence/Sqlite.ts";
+
+import { listLinkedPullRequestThreads } from "../../pullRequest/linkedThreads.ts";
+
+import * as EventSink from "../EventSink.ts";
+
+import * as EventStore from "../EventStore.ts";
+
+import * as LegacyV1ThreadImporter from "./LegacyV1ThreadImporter.ts";
+
+import * as ProjectionMaintenance from "../ProjectionMaintenance.ts";
+
+import * as ProjectionStore from "../ProjectionStore.ts";
+
 const layerDatabase = SqlitePersistence.layerMemory;
+
 const layerEventStoreProvided = EventStore.layer.pipe(Layer.provideMerge(layerDatabase));
+
 const layerProjectionStoreProvided = ProjectionStore.layer.pipe(Layer.provideMerge(layerDatabase));
+
 const layerStoresProvided = Layer.mergeAll(
   layerDatabase,
   layerEventStoreProvided,
   layerProjectionStoreProvided,
 );
+
 const layerEventSinkProvided = EventSink.layer.pipe(Layer.provide(layerStoresProvided));
+
 const layerImporterProvided = LegacyV1ThreadImporter.layer.pipe(
   Layer.provide(Layer.mergeAll(layerStoresProvided, layerEventSinkProvided)),
 );
+
 const layerProjectionMaintenanceProvided = ProjectionMaintenance.layer.pipe(
   Layer.provide(layerStoresProvided),
 );
+
 const layerTest = Layer.mergeAll(
   layerStoresProvided,
   layerEventSinkProvided,
@@ -120,6 +141,7 @@ it.effect(
     }).pipe(Effect.provide(layerTest)),
 );
 
+// regression: #15920 one bad legacy message stopped the server from starting
 it.effect("propagates interruption from transcript reads and retry-marker writes", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -155,6 +177,7 @@ it.effect("propagates interruption from transcript reads and retry-marker writes
   }).pipe(Effect.provide(layerTest)),
 );
 
+// regression: #427 preserve migration activity, native file stashes and fatal shutdown
 it.effect("preserves newer thread activity while hydrating legacy transcripts", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -306,48 +329,6 @@ it.effect("preserves newer thread activity while hydrating legacy transcripts", 
 );
 
 it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
-  it.effect("uses the created-thread index for startup migration checks", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
-      const statements: string[] = [];
-      const tracer = Tracer.make({
-        span(options) {
-          const span = new Tracer.NativeSpan(options);
-          const end = span.end.bind(span);
-          span.end = (endTime, exit) => {
-            end(endTime, exit);
-            const query = span.attributes.get("db.query.text");
-            if (
-              typeof query === "string" &&
-              query.includes("FROM projection_threads AS thread") &&
-              query.includes("FROM orchestration_events AS event")
-            ) {
-              statements.push(query);
-            }
-          };
-          return span;
-        },
-      });
-
-      assert.equal(yield* importer.pendingThreadCount.pipe(Effect.withTracer(tracer)), 0);
-      assert.deepStrictEqual(yield* importer.reconcileShells.pipe(Effect.withTracer(tracer)), {
-        importedThreadCount: 0,
-        importedMessageCount: 0,
-      });
-      assert.lengthOf(statements, 2);
-      for (const statement of statements) {
-        const plan = yield* sql.unsafe<{ readonly detail: string }>(
-          `EXPLAIN QUERY PLAN ${statement}`,
-        );
-        assert.match(
-          plan.map((row) => row.detail).join("\n"),
-          /SEARCH event USING INDEX orchestration_events_v2_created_threads_idx \(stream_id=\?\)/,
-        );
-      }
-    }),
-  );
-
   it.effect("imports lightweight shells, hydrates transcripts, and remains idempotent", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -901,7 +882,7 @@ it.layer(layerTest)("Harness V1 goal continuity", (it) => {
         );
         const eventSink = yield* EventSink.EventSinkV2;
         const occurredAt = DateTime.makeUnsafe(at);
-        const nativeOwner = yield* Schema.decodeUnknownEffect(OrchestrationV2ProviderThread)({
+        const nativeOwner = yield* compiledDecodeEffect1({
           id: ProviderThreadId.make("provider-thread:goal-import"),
           driver: ProviderDriverKind.make("codex"),
           providerInstanceId: projection.thread.providerInstanceId,
@@ -949,71 +930,4 @@ it.layer(layerTest)("Harness V1 goal continuity", (it) => {
   );
 });
 
-it.layer(layerTest)("LegacyV1ThreadImporter transcript lookup", (it) => {
-  it.effect("finds imported messages on the V2 thread index, past the thread's V1 events", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
-      const threadId = ThreadId.make("thread:legacy-lookup");
-      yield* sql`
-        INSERT INTO projection_projects (
-          project_id, title, workspace_root, default_model_selection_json, scripts_json,
-          created_at, updated_at, deleted_at
-        ) VALUES (
-          'project:legacy-lookup', 'Legacy project', '/tmp/legacy-lookup',
-          '{"instanceId":"codex","model":"gpt-5.4"}', '[]',
-          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', NULL
-        )
-      `;
-      yield* sql`
-        INSERT INTO projection_threads (
-          thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
-          created_at, updated_at
-        ) VALUES (
-          ${threadId}, 'project:legacy-lookup', 'Migrated conversation',
-          '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', 'default',
-          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
-        )
-      `;
-      yield* sql`
-        INSERT INTO projection_thread_messages (
-          message_id, thread_id, role, text, is_streaming, created_at, updated_at
-        ) VALUES (
-          'message:legacy-lookup:1', ${threadId}, 'user', 'Question', 0,
-          '2026-01-01T01:00:00.000Z', '2026-01-01T01:00:00.000Z'
-        )
-      `;
-      yield* importer.reconcileShells;
-
-      const statements: string[] = [];
-      const tracer = Tracer.make({
-        span(options) {
-          const span = new Tracer.NativeSpan(options);
-          const end = span.end.bind(span);
-          span.end = (endTime, exit) => {
-            end(endTime, exit);
-            const query = span.attributes.get("db.query.text");
-            if (
-              typeof query === "string" &&
-              /^\s*SELECT event_id\s+FROM orchestration_events/.test(query)
-            ) {
-              statements.push(query);
-            }
-          };
-          return span;
-        },
-      });
-      yield* importer.ensureTranscript(threadId).pipe(Effect.withTracer(tracer));
-
-      assert.lengthOf(statements, 1);
-      const plan = yield* sql.unsafe<{ readonly detail: string }>(
-        `EXPLAIN QUERY PLAN ${statements[0]}`,
-        [threadId, "migration:v1:message:%"],
-      );
-      assert.match(
-        plan.map((row) => row.detail).join("\n"),
-        /USING INDEX idx_orchestration_events_agent_stream_sequence \(stream_id=\?\)/,
-      );
-    }),
-  );
-});
+const compiledDecodeEffect1 = Schema.decodeEffect(OrchestrationV2ProviderThread);

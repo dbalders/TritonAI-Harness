@@ -1,12 +1,57 @@
+import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import type { EnvironmentId, ProjectNextStep } from "@t3tools/contracts";
-import { ArrowRightIcon, CheckIcon, XIcon } from "lucide-react";
+import { ArrowRightIcon, CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Skeleton } from "../ui/skeleton";
 import { Spinner } from "../ui/spinner";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { cn } from "~/lib/utils";
+import { observeResize } from "~/lib/observeResize";
 import type { ProjectOverviewView } from "./useProjectOverview";
+
+function ProjectSummary({ text, about = false }: { text: string; about?: boolean }) {
+  const id = useId();
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  // oxlint-disable-next-line t3code/react-effect-budget -- Synchronize the disclosure with rendered text overflow and container resizing.
+  useEffect(() => {
+    const element = ref.current;
+    if (!text || !element || expanded) return;
+    const measure = () => setOverflowing(element.scrollHeight > element.clientHeight + 1);
+    const disconnect = observeResize(element, measure);
+    measure();
+    return disconnect;
+  }, [text, expanded]);
+  return (
+    <div className={about ? "mt-3" : "mt-1"}>
+      <p
+        ref={ref}
+        id={id}
+        className={cn(
+          "break-words text-sm leading-6 text-muted-foreground",
+          !expanded && (about ? "line-clamp-3" : "line-clamp-2"),
+        )}
+      >
+        {text}
+      </p>
+      {overflowing || expanded ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls={id}
+          onClick={() => setExpanded((value) => !value)}
+          className="rounded-sm text-xs leading-6 text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          {expanded ? "Show less" : "Read more"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 export function ProjectDescription({ view }: { view: ProjectOverviewView }) {
   return (
@@ -15,9 +60,7 @@ export function ProjectDescription({ view }: { view: ProjectOverviewView }) {
         About this project
       </h2>
       {view.snapshot?.overview ? (
-        <p className="mt-3 break-words text-sm leading-6 text-foreground/80">
-          {view.snapshot.overview.description}
-        </p>
+        <ProjectSummary text={view.snapshot.overview.description} about />
       ) : view.busy ? (
         <div className="mt-3 space-y-2" aria-label="Loading project description">
           <Skeleton className="h-4 w-full" />
@@ -50,11 +93,8 @@ export function ProjectNextSteps({
   const overview = view.snapshot?.overview;
   const loading = connected && supported && (!view.snapshot || view.busy);
   return (
-    <section
-      aria-labelledby="project-next"
-      className="overflow-hidden rounded-xl border border-border bg-card"
-    >
-      <div className="border-b border-border bg-muted/25 px-4 py-4 sm:px-5">
+    <section aria-labelledby="project-next">
+      <div>
         <div className="flex items-center justify-between gap-3">
           <h2 id="project-next" className="text-base font-semibold tracking-tight">
             What’s next
@@ -78,7 +118,7 @@ export function ProjectNextSteps({
         <div
           role="status"
           aria-live="polite"
-          className="mt-3 flex min-h-5 items-center gap-2 text-xs text-muted-foreground"
+          className="mt-1 flex min-h-5 items-center gap-2 text-xs text-muted-foreground"
         >
           {loading ? (
             <>
@@ -97,7 +137,7 @@ export function ProjectNextSteps({
           ) : null}
         </div>
       </div>
-      <div className="px-4 pb-4 sm:px-5">
+      <div className="mt-1">
         {view.error ? (
           <div role="alert" className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
             <p className="break-words text-muted-foreground">
@@ -114,13 +154,11 @@ export function ProjectNextSteps({
         {overview?.nextSteps.length ? (
           <ol className="divide-y divide-border">
             {overview.nextSteps.map((step) => (
-              <li key={step.id} className="py-4 last:pb-0">
+              <li key={step.id} className="py-3 last:pb-0">
                 <h3 className="break-words text-sm font-medium">{step.title}</h3>
-                <p className="mt-1.5 break-words text-sm leading-6 text-foreground/75">
-                  {step.reason}
-                </p>
-                <div className="mt-3">
-                  <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                <ProjectSummary text={step.reason} />
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                  <div className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground">
                     <span className="shrink-0">From:</span>
                     {overview.sources
                       .filter((source) => step.sources.includes(source.ref))
@@ -135,11 +173,13 @@ export function ProjectNextSteps({
                             {source.title}
                           </Link>
                         ) : (
-                          <span key={source.ref}>{source.title}</span>
+                          <span key={source.ref} className="break-words">
+                            {source.title}
+                          </span>
                         ),
                       )}
                   </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-1">
+                  <div className="ml-auto flex shrink-0 items-center gap-1">
                     <Button
                       variant="outline"
                       size="xs"
@@ -148,28 +188,31 @@ export function ProjectNextSteps({
                       onClick={() => onOpen(step)}
                     >
                       {opening === step.id ? <Spinner aria-hidden /> : null}
-                      {opening === step.id ? "Opening thread…" : "Open in new thread"}
+                      {opening === step.id ? "Opening draft…" : "Open draft"}
                       {opening !== step.id ? <ArrowRightIcon aria-hidden /> : null}
                     </Button>
                     {view.canGiveFeedback ? (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => void view.dismiss(step, "done")}
+                      <Menu>
+                        <MenuTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              aria-label={`Dismiss: ${step.title}`}
+                            />
+                          }
                         >
-                          <CheckIcon aria-hidden />
-                          Already done
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => void view.dismiss(step, "not-relevant")}
-                        >
-                          <XIcon aria-hidden />
-                          Not relevant
-                        </Button>
-                      </>
+                          Dismiss <ChevronDownIcon aria-hidden />
+                        </MenuTrigger>
+                        <MenuPopup align="end">
+                          <MenuItem onClick={() => void view.dismiss(step, "done")}>
+                            <CheckIcon aria-hidden /> Already done
+                          </MenuItem>
+                          <MenuItem onClick={() => void view.dismiss(step, "not-relevant")}>
+                            <XIcon aria-hidden /> Not relevant
+                          </MenuItem>
+                        </MenuPopup>
+                      </Menu>
                     ) : null}
                   </div>
                 </div>

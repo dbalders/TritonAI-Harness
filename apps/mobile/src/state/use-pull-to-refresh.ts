@@ -1,6 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
-import type { AsyncResult, Atom } from "effect/reactivity";
+import { type AsyncResult, type Atom } from "effect/reactivity";
 import { use, useCallback, useEffect, useRef, useState } from "react";
 
 export function usePullToRefresh<A, E>(atom: Atom.Atom<AsyncResult.AsyncResult<A, E>> | null) {

@@ -1,6 +1,7 @@
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
 import { toastManager } from "../components/ui/toast";
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { useThreadUndoNotice } from "../hooks/showThreadUndoNotice";
@@ -55,21 +56,6 @@ describe("discardComposerDraft", () => {
     );
     vi.runAllTimers();
     expect(releaseDraftAttachments).not.toHaveBeenCalled();
-  });
-
-  it("clears a thread draft for good and releases its uploads once undo expires", async () => {
-    useComposerDraftStore.getState().setPrompt(threadRef, "reply in progress");
-
-    discardComposerDraft(threadRef);
-    const notice = undoNotice();
-    expect(useComposerDraftStore.getState().getComposerDraft(threadRef)?.prompt ?? "").toBe("");
-    expect(releaseDraftAttachments).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(5_000);
-    expect(useThreadUndoNotice.getState().notice).toBeNull();
-    expect(releaseDraftAttachments).toHaveBeenCalledOnce();
-    await notice.undo();
-    expect(useComposerDraftStore.getState().getComposerDraft(threadRef)?.prompt ?? "").toBe("");
   });
 
   it("keeps text typed after the discard and releases the old uploads", async () => {

@@ -305,7 +305,7 @@ export function markThreadUnread(
   };
 }
 
-export function setThreadChangedFilesExpanded(
+function setThreadChangedFilesExpanded(
   state: UiState,
   threadId: string,
   turnId: string,
@@ -328,7 +328,7 @@ export function setThreadChangedFilesExpanded(
   };
 }
 
-export function setDefaultAdvertisedEndpointKey(state: UiState, key: string | null): UiState {
+function setDefaultAdvertisedEndpointKey(state: UiState, key: string | null): UiState {
   const nextKey = key && key.length > 0 ? key : null;
   if (state.defaultAdvertisedEndpointKey === nextKey) {
     return state;
@@ -339,7 +339,7 @@ export function setDefaultAdvertisedEndpointKey(state: UiState, key: string | nu
   };
 }
 
-export function setSidebarProjectScopeKey(state: UiState, projectKey: string | null): UiState {
+function setSidebarProjectScopeKey(state: UiState, projectKey: string | null): UiState {
   const nextKey = sanitizeOptionalKey(projectKey);
   if (state.sidebarProjectScopeKey === nextKey) {
     return state;
@@ -470,7 +470,7 @@ function appendUniqueProjectIds(
   return projectOrdersEqual(currentOrder, projectOrder) ? null : projectOrder;
 }
 
-export function pinProjects(state: UiState, projectIds: readonly string[]): UiState {
+function pinProjects(state: UiState, projectIds: readonly string[]): UiState {
   const pinnedProjectOrder = appendUniqueProjectIds(state.pinnedProjectOrder, projectIds);
   if (!pinnedProjectOrder) {
     return state;
@@ -481,7 +481,7 @@ export function pinProjects(state: UiState, projectIds: readonly string[]): UiSt
   };
 }
 
-export function unpinProjects(state: UiState, projectIds: readonly string[]): UiState {
+function unpinProjects(state: UiState, projectIds: readonly string[]): UiState {
   if (projectIds.length === 0) {
     return state;
   }
@@ -496,7 +496,7 @@ export function unpinProjects(state: UiState, projectIds: readonly string[]): Ui
   };
 }
 
-export function setProjectsPinned(
+function setProjectsPinned(
   state: UiState,
   projectIds: readonly string[],
   pinned: boolean,
@@ -504,7 +504,7 @@ export function setProjectsPinned(
   return pinned ? pinProjects(state, projectIds) : unpinProjects(state, projectIds);
 }
 
-export function reorderPinnedProjects(
+function reorderPinnedProjects(
   state: UiState,
   draggedProjectIds: readonly string[],
   targetProjectIds: readonly string[],

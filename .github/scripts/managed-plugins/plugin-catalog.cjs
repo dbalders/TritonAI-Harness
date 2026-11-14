@@ -1,6 +1,6 @@
 "use strict";
 const fs = require("fs");
-const path = require("path");
+
 const { assertCanonicalPluginRepository } = require("./plugin-provenance.cjs");
 const CATALOG_KIND = "tritonai-managed-plugin-catalog";
 const CATALOG_VERSION = 1;

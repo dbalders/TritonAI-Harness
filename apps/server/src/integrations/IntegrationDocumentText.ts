@@ -34,11 +34,9 @@ export interface DocumentTextWorkerCommand {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   /**
-   * How the worker's V8 limits reach it. "arguments" (the default) puts them on the command line
-   * before `args`, which node and Electron-as-node both honor; packaged Electron ignores
-   * NODE_OPTIONS. A single executable has no runtime-flag position before its own entry, so it
-   * receives them through NODE_OPTIONS. Either way the worker refuses to parse unless it can
-   * observe the limits in effect.
+   * Node and Electron-as-node honor argument limits; packaged Electron ignores NODE_OPTIONS.
+   * Single executables have no runtime-flag position and use NODE_OPTIONS instead.
+   * The worker verifies effective limits before parsing.
    */
   readonly limitsVia?: "arguments" | "environment";
 }
@@ -57,11 +55,15 @@ const MAX_QUEUED_EXTRACTIONS = 8;
  */
 export function resolveDocumentTextWorkerCommand(): DocumentTextWorkerCommand | null {
   if (NodeSea.isSea()) {
-    return { command: process.execPath, args: ["__document-text"], limitsVia: "environment" };
+    return {
+      command: process.execPath,
+      args: ["__integration-document-text"],
+      limitsVia: "environment",
+    };
   }
   const entry = process.argv[1];
   if (!entry || !/^bin\.(?:m?js|ts)$/u.test(NodePath.basename(entry))) return null;
-  return { command: process.execPath, args: [entry, "__document-text"] };
+  return { command: process.execPath, args: [entry, "__integration-document-text"] };
 }
 
 function failed(
@@ -72,11 +74,9 @@ function failed(
   return { status: "failed", format, reason, message };
 }
 
-// The child gets a V8 JavaScript heap cap (--max-old-space-size), no code generation from
-// strings, and none of the server's environment, so a parser bug cannot read provider credentials
-// from it. The worker checks that both limits are in effect before parsing and fails otherwise.
-// The heap cap does not bound native or total process memory (RSS); the wall-clock kill is the
-// backstop. It still runs as the same OS user and is not an operating-system sandbox.
+// Clear the child environment, cap the V8 heap, and disable string code generation.
+// The worker verifies both limits; a wall-clock kill bounds hangs.
+// This does not cap total RSS or provide an OS sandbox.
 function workerLimitFlags(heapMb: number): Array<string> {
   return [`--max-old-space-size=${heapMb}`, "--disallow-code-generation-from-strings"];
 }

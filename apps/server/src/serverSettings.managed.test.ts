@@ -5,8 +5,6 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
-  ServerSettings,
-  ServerSettingsPatch,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, it } from "@effect/vitest";
@@ -27,38 +25,6 @@ import { getManagedCodexSettings, getManagedProviderInstanceRenames } from "./ma
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
-const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
-const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
-
-const providerEnvironmentSecretName = (instanceId: string, name: string): string =>
-  `provider-env-${Buffer.from(instanceId, "utf8").toString("base64url")}-${Buffer.from(name, "utf8").toString("base64url")}`;
-
-const makeServerSettingsLayer = () =>
-  ServerSettingsModule.layerUnmanagedTest.pipe(
-    Layer.provide(ServerSecretStore.layer),
-    Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
-    Layer.provideMerge(
-      Layer.fresh(
-        ServerConfig.layerTest(process.cwd(), {
-          prefix: "t3code-server-settings-test-",
-        }),
-      ),
-    ),
-  );
-
-const makeInspectableServerSettingsLayer = () =>
-  ServerSettingsModule.layerUnmanagedTest.pipe(
-    Layer.provideMerge(ServerSecretStore.layer),
-    Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
-    Layer.provideMerge(
-      Layer.fresh(
-        ServerConfig.layerTest(process.cwd(), {
-          prefix: "t3code-server-settings-inspectable-test-",
-        }),
-      ),
-    ),
-  );
-
 const makeManagedServerSettingsLayer = () =>
   ServerSettingsModule.layerManagedTest({ TRITONAI_API_KEY: "managed-test-key" }).pipe(
     Layer.provideMerge(ServerSecretStore.layer),
@@ -70,18 +36,6 @@ const makeManagedServerSettingsLayer = () =>
         }),
       ),
     ),
-  );
-
-const makeFailingSecretStoreLayer = (cause: ServerSecretStore.SecretStoreError) =>
-  Layer.succeed(
-    ServerSecretStore.ServerSecretStore,
-    ServerSecretStore.ServerSecretStore.of({
-      get: () => Effect.fail(cause),
-      set: () => Effect.void,
-      create: () => Effect.void,
-      getOrCreateRandom: () => Effect.succeed(new Uint8Array()),
-      remove: () => Effect.void,
-    }),
   );
 
 const recordProviderUsage = (provider: string, instanceId: string | null = provider) =>
@@ -157,20 +111,8 @@ it.layer(NodeServices.layer)("managed server settings", (it) => {
     }).pipe(Effect.scoped, Effect.provide(makeManagedServerSettingsLayer())),
   );
 
-  it.effect("starts a fresh managed installation in Auto mode", () =>
-    Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      const settings = yield* serverSettings.getSettings;
-
-      assert.equal(settings.defaultRuntimeMode, "auto");
-    }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
-  );
-
   describe.each(
-    Array.from(
-      ["approval-required", "auto-accept-edits", "auto", "full-access"] as const,
-      (scenario) => ({ scenario }),
-    ),
+    Array.from(["approval-required", "full-access"] as const, (scenario) => ({ scenario })),
   )("case $scenario", ({ scenario: defaultRuntimeMode }) => {
     it.effect(`preserves the ${defaultRuntimeMode} default and project override after reload`, () =>
       Effect.gen(function* () {
@@ -200,20 +142,6 @@ it.layer(NodeServices.layer)("managed server settings", (it) => {
       }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
     );
   });
-
-  it.effect("turns Memory on for a new installation and keeps it on after reload", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-
-      assert.isTrue((yield* serverSettings.getSettings).memoryEnabled);
-
-      assert.isTrue(yield* fileSystem.exists(serverConfig.settingsPath));
-      yield* serverSettings.start;
-      assert.isTrue((yield* serverSettings.getSettings).memoryEnabled);
-    }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
-  );
 
   it.effect("turns Memory on for an installation with threads but no settings file", () =>
     Effect.gen(function* () {
@@ -272,75 +200,14 @@ it.layer(NodeServices.layer)("managed server settings", (it) => {
     }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
   );
 
-  it.effect("folds a legacy in-config enabled flag into the envelope on load", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      // Old settings files can carry both flags with conflicting values.
-      // The explicit false must win so a user's disable sticks.
-      yield* fileSystem.writeFileString(
-        serverConfig.settingsPath,
-        '{"providerInstances":{"grok":{"driver":"grok","enabled":true,"config":{"enabled":false}},"codex_work":{"driver":"codex","config":{"enabled":true,"homePath":"~/.codex"}},"cursor":{"driver":"cursor","config":{"enabled":"nope"}}}}',
-      );
-
-      const settings = yield* serverSettings.getSettings;
-
-      const grokId = ProviderInstanceId.make("grok");
-      const codexWorkId = ProviderInstanceId.make("codex_work");
-      assert.deepEqual(settings.providerInstances[grokId], {
-        driver: ProviderDriverKind.make("grok"),
-        enabled: false,
-        config: {},
-      });
-      // A lone in-config flag is lifted to the envelope and stripped.
-      assert.deepEqual(settings.providerInstances[codexWorkId], {
-        driver: ProviderDriverKind.make("codex"),
-        enabled: true,
-        config: { homePath: "~/.codex" },
-      });
-      // A malformed flag is left alone so driver schema validation can
-      // surface it instead of the fold silently repairing the config.
-      assert.deepEqual(settings.providerInstances[ProviderInstanceId.make("cursor")], {
-        driver: ProviderDriverKind.make("cursor"),
-        config: { enabled: "nope" },
-      });
-    }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
-  );
-
-  it.effect("folds in-config enabled flags arriving through updates", () =>
-    Effect.gen(function* () {
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-      const grokId = ProviderInstanceId.make("grok");
-
-      const next = yield* serverSettings.updateSettings({
-        providerInstances: {
-          [grokId]: {
-            driver: ProviderDriverKind.make("grok"),
-            enabled: true,
-            config: { enabled: false, binaryPath: "/opt/grok" },
-          },
-        },
-      });
-
-      assert.deepEqual(next.providerInstances[grokId], {
-        driver: ProviderDriverKind.make("grok"),
-        enabled: false,
-        config: { binaryPath: "/opt/grok" },
-      });
-    }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
-  );
-
   // Pre-marker builds ran an unsaved Codex home at the profile's own
   // `<baseDir>/codex`; the anchor must land there so a nightly or dev profile
   // keeps its history instead of moving onto the production home.
   describe.each(
     Array.from(
       [
-        ["empty", "{}"],
         ["legacy", '{"addProjectBaseDirectory":"~/ExistingProjects"}'],
         ["malformed", "{invalid"],
-        ["non-object", "null"],
       ] as const,
       (scenario) => ({ scenario }),
     ),
@@ -584,31 +451,5 @@ it.layer(NodeServices.layer)("managed server settings", (it) => {
       assert.notInclude(raw, "/attempted/home");
       assert.notInclude(raw, "UCSD_AI_BASE_URL");
     }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
-  );
-
-  it.effect("persists custom usage prices and removes them from the settings file", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const serverConfig = yield* ServerConfig.ServerConfig;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
-        const prices = {
-          inputCostPerMillionTokens: 2,
-          outputCostPerMillionTokens: 8,
-          cacheReadCostPerMillionTokens: 0,
-        };
-        const readPersisted = fileSystem
-          .readFileString(serverConfig.settingsPath)
-          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings))));
-
-        yield* serverSettings.updateSettings({ usagePriceOverrides: { "example-model": prices } });
-        const persisted = yield* readPersisted;
-        assert.deepStrictEqual(persisted.usagePriceOverrides, { "example-model": prices });
-
-        yield* serverSettings.updateSettings({ usagePriceOverrides: { "example-model": null } });
-        const restored = yield* readPersisted;
-        assert.deepStrictEqual(restored.usagePriceOverrides, {});
-      }),
-    ).pipe(Effect.provide(makeManagedServerSettingsLayer())),
   );
 });

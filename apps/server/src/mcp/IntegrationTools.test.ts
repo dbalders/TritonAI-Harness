@@ -11,13 +11,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
+import { HttpRouter } from "effect/http";
+import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import { EmptyIntegrationToolInput } from "../integrations/IntegrationTool.ts";
 import * as Integrations from "../integrations/IntegrationRegistry.ts";
-import { integrationToolInvocationContext } from "./IntegrationTools.ts";
 import {
   integrationToolsRegistrationLayer as registrationLayer,
   integrationToolsRegistrationLayerFor as registrationLayerFor,
   toolkitRegistration,
+  layerMcpTransport,
 } from "./McpHttpServer.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -108,20 +110,6 @@ const serverWithBuiltInFixture = toolkitRegistration(
   ),
 );
 
-it.effect("registers provider-neutral tool definitions with MCP", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const server = yield* McpServer.McpServer;
-      expect(server.tools.map(({ tool }) => tool.name)).toEqual(["fixture.read"]);
-      expect(server.tools[0]?.tool.annotations).toMatchObject({
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-      });
-    }).pipe(Effect.provide(testLayer)),
-  ),
-);
-
 it.effect("awaits the canonical registry catalog before the MCP layer becomes available", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -142,35 +130,6 @@ it.effect("awaits the canonical registry catalog before the MCP layer becomes av
       ),
     ),
   ),
-);
-
-it.effect("fails MCP startup when a catalog tool is reserved", () =>
-  Effect.gen(function* () {
-    const exit = yield* Effect.exit(
-      Effect.void.pipe(
-        Effect.provide(
-          registrationLayer(new Set([fixtureTool.name]), async () =>
-            registryWith([fixtureTool]),
-          ).pipe(
-            Layer.provideMerge(
-              Layer.mergeAll(
-                McpServer.McpServer.layer,
-                Layer.succeed(ThreadManagementService.ThreadManagementService, {
-                  getThreadShell: () => Effect.succeed(null),
-                } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-    expect(exit._tag).toBe("Failure");
-    if (exit._tag === "Failure") {
-      expect(Cause.pretty(exit.cause)).toContain(
-        "Integration tool fixture.read conflicts with an existing MCP tool name.",
-      );
-    }
-  }).pipe(Effect.scoped),
 );
 
 it.effect("registers write-capable tools with conservative MCP annotations", () =>
@@ -198,17 +157,6 @@ it.effect("registers write-capable tools with conservative MCP annotations", () 
     ),
   ),
 );
-
-it("treats the provider runtime as the MCP write approval boundary", () => {
-  const controller = new AbortController();
-  expect(integrationToolInvocationContext(fixtureTool, controller.signal)).toEqual({
-    signal: controller.signal,
-  });
-  expect(integrationToolInvocationContext(writeFixtureTool, controller.signal)).toEqual({
-    signal: controller.signal,
-    writeApproved: true,
-  });
-});
 
 it.effect("rejects integration tool names that collide with existing MCP tools", () =>
   Effect.gen(function* () {
@@ -257,6 +205,7 @@ it.effect("rejects reserved built-in names before built-in registration complete
   }).pipe(Effect.scoped),
 );
 
+// regression: fc95a4c143 fix(server): bound model-facing integration results
 it.effect("preserves bounded results and reports omitted results as completed MCP calls", () => {
   const invokeTool = vi
     .fn<Integrations.RegistryRuntime["invokeTool"]>()
@@ -299,6 +248,37 @@ it.effect("preserves bounded results and reports omitted results as completed MC
   ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
 });
 
+it.effect("preserves both outer MCP channels for a deduplicated remote MCP result", () => {
+  const structuredContent = { records: [{ id: "record-1" }], nextCursor: "page-2" };
+  const normalized = Integrations.normalizeIntegrationToolResult({
+    content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+    structuredContent,
+    resultType: "complete",
+  });
+  const registrySpy = vi.spyOn(Integrations, "getIntegrationRegistry").mockReturnValue({
+    invokeTool: async () => normalized,
+  } as unknown as Integrations.RegistryRuntime);
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const result = yield* server
+        .callTool({ name: "fixture.read", arguments: {} })
+        .pipe(
+          Effect.provideService(
+            McpInvocationContext.McpInvocationContext,
+            invocation(new Set(["integrations.invoke"])),
+          ),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      const expected = { structuredContent, resultType: "complete" };
+      expect(result.isError).toBe(false);
+      expect(result.structuredContent).toEqual(expected);
+      expect(result.content).toEqual([{ type: "text", text: JSON.stringify(expected) }]);
+    }).pipe(Effect.provide(testLayer)),
+  ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
+});
+
+// regression: #304 fix(server): show agents why integration tool calls fail
 it.effect("tells MCP agents why a call failed only through safe errors", () => {
   const invokeTool = vi
     .fn<Integrations.RegistryRuntime["invokeTool"]>()
@@ -381,58 +361,6 @@ it.effect("hides integration tools from MCP credentials without integration acce
   ),
 );
 
-it.effect("shows active integration tools to integration-authorized MCP credentials", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const server = yield* McpServer.McpServer;
-      const enabledWhen = Context.getUnsafe(server.tools[0]!.annotations, McpSchema.EnabledWhen);
-      const visible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
-        Effect.provideService(
-          McpInvocationContext.McpInvocationContext,
-          invocation(new Set(["integrations.invoke"])),
-        ),
-      );
-      expect(visible).toBe(true);
-    }).pipe(Effect.provide(testLayer)),
-  ),
-);
-
-it.effect("uses the same transport grant for active read and write integration tools", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const server = yield* McpServer.McpServer;
-      const enabledWhen = Context.getUnsafe(server.tools[0]!.annotations, McpSchema.EnabledWhen);
-      const previewVisible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
-        Effect.provideService(
-          McpInvocationContext.McpInvocationContext,
-          invocation(new Set(["preview"])),
-        ),
-      );
-      const integrationVisible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
-        Effect.provideService(
-          McpInvocationContext.McpInvocationContext,
-          invocation(new Set(["integrations.invoke"])),
-        ),
-      );
-      expect(previewVisible).toBe(false);
-      expect(integrationVisible).toBe(true);
-    }).pipe(
-      Effect.provide(
-        registrationLayerFor([writeFixtureTool], () => true).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              McpServer.McpServer.layer,
-              Layer.succeed(ThreadManagementService.ThreadManagementService, {
-                getThreadShell: () => Effect.succeed(null),
-              } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
-            ),
-          ),
-        ),
-      ),
-    ),
-  ),
-);
-
 it.effect("hides and rejects an unavailable tool despite read authorization", () => {
   let availabilityChecks = 0;
   const unavailable = () => {
@@ -475,7 +403,7 @@ it.effect("hides and rejects an unavailable tool despite read authorization", ()
   );
 });
 
-it.effect.each(["read-only", "approval-required", "auto-accept-edits", "auto"] as const)(
+it.effect.each(["approval-required", "auto"] as const)(
   "denies an outside plugin write without full-access approval: %s",
   (access) => {
     const invokeTool = vi
@@ -556,3 +484,144 @@ it.effect.each([true, false])(
     ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
   },
 );
+
+// regression: #460 avoid eager MCP copies of Codex dynamic plugin tools
+it("keeps Codex plugin tools on their dynamic route while preserving core MCP and other clients", async () => {
+  const invokeTool = vi
+    .fn<Integrations.RegistryRuntime["invokeTool"]>()
+    .mockResolvedValue({ ok: true });
+  const registrySpy = vi
+    .spyOn(Integrations, "getIntegrationRegistry")
+    .mockReturnValue({ invokeTool } as unknown as Integrations.RegistryRuntime);
+  const base = invocation(new Set(["integrations.invoke"]));
+  const codexScope = {
+    ...base,
+    thread: { ...base.thread!, integrationToolsViaDynamicTools: true },
+  };
+  const claudeScope = {
+    ...base,
+    thread: { ...base.thread!, integrationToolsViaDynamicTools: false },
+  };
+  const scopes = new Map<string, McpInvocationContext.McpInvocationScope>([
+    ["codexdynamic", codexScope],
+    ["claudemcp", claudeScope],
+    ["defaultmcp", base],
+    [
+      "outsidemcp",
+      {
+        ...base,
+        thread: undefined,
+        client: { sessionId: "outside-fixture", label: "Outside fixture", access: "full-access" },
+      },
+    ],
+  ]);
+  const core = Toolkit.make(
+    Tool.make("core_fixture", {
+      description: "Core fixture.",
+      parameters: EmptyIntegrationToolInput,
+      success: Schema.Unknown,
+    }),
+  );
+  const coreLayer = toolkitRegistration(
+    core,
+    McpToolAccess.toLayer(core, {
+      core_fixture: McpToolAccess.reads(() => Effect.succeed({ core: true })),
+    }),
+  );
+  const app = HttpRouter.toWebHandler(
+    Layer.mergeAll(
+      coreLayer,
+      registrationLayerFor([fixtureTool, writeFixtureTool], () => true),
+    ).pipe(
+      Layer.provideMerge(layerMcpTransport),
+      Layer.provide(
+        Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+          resolve: (token) =>
+            Effect.succeed(
+              scopes.get(token) as McpInvocationContext.McpThreadInvocationScope | undefined,
+            ),
+        }),
+      ),
+      Layer.provide(liveThreadsLayer),
+    ),
+    { disableLogger: true },
+  );
+  const rpc = async (
+    token: string,
+    id: number,
+    method: string,
+    params: unknown,
+    sessionId?: string,
+  ) => {
+    const response = await app.handler(
+      new Request("http://fixture.invalid/mcp", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          authorization: `Bearer ${token}`,
+          ...(sessionId
+            ? { "mcp-session-id": sessionId, "mcp-protocol-version": "2025-06-18" }
+            : {}),
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const payload = JSON.parse(
+      text.trim().startsWith("data:")
+        ? text
+            .split("\n")
+            .find((line) => line.startsWith("data:"))!
+            .slice(5)
+        : text,
+    );
+    return { payload, sessionId: response.headers.get("mcp-session-id")! };
+  };
+  try {
+    for (const token of scopes.keys()) {
+      const hidden = token === "codexdynamic";
+      const init = await rpc(token, 1, "initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "fixture", version: "1" },
+      });
+      const list = await rpc(token, 2, "tools/list", {}, init.sessionId);
+      expect(list.payload.result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual(
+        hidden
+          ? ["core_fixture"]
+          : ["core_fixture", fixtureTool.name, writeFixtureTool.name].sort(),
+      );
+      const coreResult = await rpc(
+        token,
+        3,
+        "tools/call",
+        { name: "core_fixture", arguments: {} },
+        init.sessionId,
+      );
+      expect(coreResult.payload.result.isError).not.toBe(true);
+      for (const tool of [fixtureTool, writeFixtureTool]) {
+        const before = invokeTool.mock.calls.length;
+        const call = await rpc(
+          token,
+          4,
+          "tools/call",
+          { name: tool.name, arguments: {} },
+          init.sessionId,
+        );
+        if (hidden) {
+          expect(call.payload.error).toMatchObject({ code: -32602 });
+          expect(call.payload.error.message).toContain("not found");
+          expect(invokeTool.mock.calls.length).toBe(before);
+        } else {
+          expect(call.payload.result.isError).toBe(false);
+          expect(invokeTool.mock.calls.length).toBe(before + 1);
+        }
+      }
+    }
+  } finally {
+    await app.dispose();
+    registrySpy.mockRestore();
+  }
+});

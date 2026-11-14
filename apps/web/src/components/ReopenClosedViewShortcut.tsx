@@ -7,6 +7,7 @@ import {
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef } from "react";
+
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { useClosedViewStore } from "../closedViewStore";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -192,9 +193,7 @@ export function ReopenClosedViewShortcut() {
         isWeb: false,
       },
     };
-    // A focused browser page is a separate process, so these chords never reach
-    // the app's keydown listeners. The desktop claims them in the guest and
-    // sends each command back as a menu action.
+    // Guest browser processes miss app keydown listeners; desktop forwards the chords as menu actions.
     const commands = [
       ...(hasHistory ? (["view.reopenClosed"] as const) : []),
       ...PREVIEW_FORWARDED_LAYOUT_COMMANDS,

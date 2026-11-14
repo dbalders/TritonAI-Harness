@@ -1,6 +1,6 @@
 import { createV5StackNavigator as createNativeStackNavigator } from "../../native/createV5StackNavigator";
 import { NavigationContainer, NavigationIndependentTree } from "@react-navigation/native";
-import type { NativeStackNavigationOptions } from "@react-navigation/native-stack";
+import { type NativeStackNavigationOptions } from "@react-navigation/native-stack";
 import type { ReactNode } from "react";
 import { Platform } from "react-native";
 
@@ -12,8 +12,7 @@ import { useMobileNavigationTheme } from "../../lib/useMobileNavigationTheme";
 const SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
 type SidebarScreenOptions = NativeStackNavigationOptions & {
-  // Same patched RNS option the GLASS/SOLID presets in Stack.tsx use — the
-  // iOS 26 "editor" navigation-item style leading-aligns the inline title.
+  // Patched RNS editor style leading-aligns iOS 26 inline titles, matching Stack.tsx presets.
   readonly unstable_navigationItemStyle?: "editor";
 };
 

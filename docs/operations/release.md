@@ -6,6 +6,18 @@ This document covers the controlled TritonAI Harness release workflow in
 TritonAI Harness releases first. TritonAI Installer is built and published afterward against the
 exact verified Harness assets.
 
+## Plugin channel membership
+
+Requests to use the latest Plugins release authorize updating the source pin, versions, and
+digests for plugins already selected for that channel. Preserve the existing plugin IDs and
+channel membership during those updates.
+
+Never regenerate Stable's selection from the Nightly catalog or all available plugins. A plugin's
+absence from Stable is intentional unless David explicitly directs otherwise.
+
+Adding a Nightly plugin to Stable requires David's explicit approval for that plugin. General
+release, merge, or "include the latest changes" instructions do not authorize promotion.
+
 ## Distribution boundary
 
 TritonAI Harness is distributed through its GitHub release assets and TritonAI Installer. The

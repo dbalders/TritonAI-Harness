@@ -7,6 +7,7 @@ import {
   resolveMarkdownFileLinkTarget,
 } from "@t3tools/shared/markdownLinks";
 import { parseFileUrlHref, splitFilePathPosition } from "@t3tools/shared/fileLinks";
+
 import { formatWorkspaceRelativePath } from "./filePathDisplay";
 import { isTerminalLinkActivation } from "./terminal-links";
 

@@ -69,65 +69,18 @@ it("navigates to registered settings anchors while keeping rejected destinations
     ].join("\n\n"),
   );
   expect(hrefs(screen)).toEqual([
-    "/settings/general#computer-use",
-    "/settings/storage#storage-worktrees",
+    "/settings/maintenance#computer-use",
+    "/settings/worktrees#storage-worktrees",
   ]);
   for (const label of ["Wrong route", "Displaced ID", "Unknown route", "Empty anchor"]) {
     expect(screen.container.textContent).toContain(label);
   }
   expect(location(screen)).toEqual({ pathname: "/", hash: "" });
-  await act(async () => anchor(screen, "/settings/general#computer-use").click());
+  await act(async () => anchor(screen, "/settings/maintenance#computer-use").click());
   await expect
     .poll(() => location(screen))
-    .toEqual({ pathname: "/settings/general", hash: "computer-use" });
+    .toEqual({ pathname: "/settings/maintenance", hash: "computer-use" });
   expect(state.openExternal).not.toHaveBeenCalled();
-});
-
-it("keeps answer headings below the conversation's own headings for screen readers", async () => {
-  setup();
-  await using screen = await renderAnswer(
-    ["# Steps", "## Details", "###### Fine print"].join("\n\n"),
-  );
-  expect(
-    [...screen.container.querySelectorAll("h1, h2, h3, h4, h5, h6")].map((node) => [
-      node.textContent,
-      node.getAttribute("aria-level"),
-    ]),
-  ).toEqual([
-    ["Steps", "4"],
-    ["Details", "5"],
-    ["Fine print", "6"],
-  ]);
-});
-
-it("renders a model's table as rows in a keyboard-scrollable region, with only registered links", async () => {
-  setup();
-  await using screen = await renderAnswer(
-    [
-      "| Plugin | Where |",
-      "| --- | --- |",
-      "| Jira | [Plugins](/settings/plugins) |",
-      "| Leak | [collect](https://evil.test/collect?secret=value) |",
-    ].join("\n"),
-  );
-  const region = screen.container.querySelector<HTMLElement>('[role="region"]')!;
-  expect(region.getAttribute("aria-label")).toBe("Help table");
-  expect([...region.querySelectorAll("thead th")].map((cell) => cell.textContent)).toEqual([
-    "Plugin",
-    "Where",
-  ]);
-  expect(
-    [...region.querySelectorAll("tbody tr")].map((row) =>
-      [...row.querySelectorAll("td")].map((cell) => cell.textContent),
-    ),
-  ).toEqual([
-    ["Jira", "Plugins"],
-    ["Leak", "collect"],
-  ]);
-  expect(screen.container.textContent).not.toContain("|");
-  expect(hrefs(screen)).toEqual(["/settings/plugins"]);
-  region.focus();
-  expect(document.activeElement).toBe(region);
 });
 
 it("keeps GFM autolinks as text unless resolveHelpLink allows the destination", async () => {
@@ -150,15 +103,3 @@ it("keeps GFM autolinks as text unless resolveHelpLink allows the destination", 
   expect(state.openExternal).toHaveBeenCalledExactlyOnceWith(HELP_ISSUE_TRACKER_URL);
   expect(location(screen)).toEqual({ pathname: "/", hash: "" });
 });
-
-it.each(["plugins", "skills", "scheduled-tasks"])(
-  "opens the %s settings page even without searchable setting rows",
-  async (section) => {
-    setup();
-    const to = `/settings/${section}`;
-    await using screen = await renderAnswer(`[Open settings](${to})`);
-    expect(hrefs(screen)).toEqual([to]);
-    await act(async () => anchor(screen, to).click());
-    await expect.poll(() => location(screen)).toEqual({ pathname: to, hash: "" });
-  },
-);

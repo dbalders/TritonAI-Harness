@@ -312,7 +312,9 @@ const decodeEnvelope = (
       }),
   });
 
-/** @public Service construction is part of the canonical Effect module API. */
+/**
+ * @public
+ */
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -579,10 +581,9 @@ export const make = Effect.gen(function* () {
               cause,
             }),
         ),
-        Effect.catch((error) =>
-          isPlatformError(error.cause) && error.cause.reason._tag === "NotFound"
-            ? Effect.succeed(Option.none<Uint8Array>())
-            : Effect.fail(error),
+        Effect.catchIf(
+          (error) => isPlatformError(error.cause) && error.cause.reason._tag === "NotFound",
+          () => Effect.succeed(Option.none<Uint8Array>()),
         ),
       );
     if (Option.isNone(storedOption)) {
@@ -763,13 +764,12 @@ export const make = Effect.gen(function* () {
   const removeUnlocked: ServerSecretStore["Service"]["remove"] = (name) => {
     const secretPath = resolveSecretPath(name);
     return Effect.gen(function* () {
-      yield* fileSystem
-        .remove(secretPath)
-        .pipe(
-          Effect.catch((cause) =>
-            cause.reason._tag === "NotFound" ? Effect.void : Effect.fail(cause),
-          ),
-        );
+      yield* fileSystem.remove(secretPath).pipe(
+        Effect.catchIf(
+          (cause) => cause.reason._tag === "NotFound",
+          () => Effect.void,
+        ),
+      );
       yield* syncDirectory(serverConfig.secretsDir);
     }).pipe(
       Effect.mapError(

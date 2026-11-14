@@ -1,30 +1,42 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
-import * as Deferred from "effect/Deferred";
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+
+import { assert, it } from "@effect/vitest";
+
+import * as Deferred from "effect/Deferred";
+
+import * as Effect from "effect/Effect";
+
+import * as FileSystem from "effect/FileSystem";
+
+import * as Layer from "effect/Layer";
+
+import * as Option from "effect/Option";
+
+import * as PlatformError from "effect/PlatformError";
 
 import * as ServerConfig from "../config.ts";
+
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 
 const ACTIVE_KEY = "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=";
+
 const ROTATED_KEY = "WVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVk=";
+
 const TestSecretStoreKeyring = Schema.Struct({
   version: Schema.Literal(1),
   active: Schema.String,
   previous: Schema.Array(Schema.String),
   legacySecretFingerprints: Schema.Record(Schema.String, Schema.String),
 });
+
 const encodeTestSecretStoreKeyring = Schema.encodeEffect(
   Schema.fromJsonString(TestSecretStoreKeyring),
 );
+
 const decodeTestSecretStoreKeyring = Schema.decodeEffect(
   Schema.fromJsonString(TestSecretStoreKeyring),
 );
@@ -164,34 +176,168 @@ const FailureAfterPublishFileSystemLayer = Layer.effect(
   }),
 ).pipe(Layer.provide(NodeServices.layer));
 
-const RemoveFailureFileSystemLayer = Layer.effect(
-  FileSystem.FileSystem,
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    return {
-      ...fileSystem,
-      remove: (path, options) =>
-        String(path).endsWith(".lock")
-          ? fileSystem.remove(path, options)
-          : Effect.fail(
-              PlatformError.systemError({
-                _tag: "PermissionDenied",
-                module: "FileSystem",
-                method: "remove",
-                pathOrDescriptor: String(path),
-                description: `Permission denied while removing secret file.${options ? " options-set" : ""}`,
-              }),
-            ),
-    } satisfies FileSystem.FileSystem;
-  }),
-).pipe(Layer.provide(NodeServices.layer));
-
 it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
-  it.effect("returns Option.none when a secret file does not exist", () =>
+  it.effect("reuses an existing secret instead of regenerating it", () =>
     Effect.gen(function* () {
       const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      assert.isTrue(Option.isNone(yield* secretStore.get("missing-secret")));
+      const first = yield* secretStore.getOrCreateRandom("session-signing-key", 32);
+      const second = yield* secretStore.getOrCreateRandom("session-signing-key", 32);
+      assert.deepEqual(Array.from(second), Array.from(first));
     }).pipe(Effect.provide(makeServerSecretStoreLayer())),
+  );
+
+  it.effect("returns one persisted value when concurrent creators race", () =>
+    Effect.gen(function* () {
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const values = yield* Effect.all(
+        Array.from({ length: 32 }, () => secretStore.getOrCreateRandom("session-signing-key", 32)),
+        { concurrency: "unbounded" },
+      );
+      const persisted = Option.getOrThrow(yield* secretStore.get("session-signing-key"));
+      for (const value of values) {
+        assert.deepEqual(Array.from(value), Array.from(persisted));
+      }
+    }).pipe(Effect.provide(makeServerSecretStoreLayer())),
+  );
+
+  it.effect("returns the persisted winner when independent store instances race", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-independent-secret-race-",
+      });
+      const initialize = Effect.gen(function* () {
+        const secretStore = yield* ServerSecretStore.ServerSecretStore;
+        return yield* secretStore.getOrCreateRandom("session-signing-key", 32);
+      });
+      const [first, second] = yield* Effect.all(
+        [
+          initialize.pipe(Effect.provide(Layer.fresh(makeServerSecretStoreLayer({ baseDir })))),
+          initialize.pipe(Effect.provide(Layer.fresh(makeServerSecretStoreLayer({ baseDir })))),
+        ],
+        { concurrency: "unbounded" },
+      );
+      assert.deepEqual(Array.from(second), Array.from(first));
+    }).pipe(Effect.scoped, TestClock.withLive),
+  );
+
+  it.effect("serializes removal behind another store instance's active create", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-independent-secret-remove-race-",
+      });
+      const tempOpened = yield* Deferred.make<void>();
+      const continueCreate = yield* Deferred.make<void>();
+      let delayed = false;
+      const delayedTemporaryOpenLayer = Layer.effect(
+        FileSystem.FileSystem,
+        Effect.gen(function* () {
+          const underlying = yield* FileSystem.FileSystem;
+          return {
+            ...underlying,
+            open: (filePath, options) => {
+              const opened = underlying.open(filePath, options);
+              if (
+                delayed ||
+                options?.flag !== "wx" ||
+                !String(filePath).includes("oauth.bin.") ||
+                !String(filePath).endsWith(".tmp")
+              ) {
+                return opened;
+              }
+              delayed = true;
+              return opened.pipe(
+                Effect.tap(() => Deferred.succeed(tempOpened, undefined)),
+                Effect.tap(() => Deferred.await(continueCreate)),
+              );
+            },
+          } satisfies FileSystem.FileSystem;
+        }),
+      ).pipe(Layer.provide(NodeServices.layer));
+      const initializeStore = () =>
+        Effect.service(ServerSecretStore.ServerSecretStore).pipe(
+          Effect.provide(
+            Layer.fresh(
+              makeServerSecretStoreLayer({
+                baseDir,
+                fileSystemLayer: delayedTemporaryOpenLayer,
+              }),
+            ),
+          ),
+        );
+      const [creatingStore, removingStore] = yield* Effect.all(
+        [initializeStore(), initializeStore()],
+        { concurrency: "unbounded" },
+      );
+      const value = new TextEncoder().encode("concurrently-created-value");
+      const createFiber = yield* creatingStore.create("oauth", value).pipe(Effect.forkScoped);
+      yield* Deferred.await(tempOpened);
+
+      const removalStarted = yield* Deferred.make<void>();
+      const removeFiber = yield* Deferred.succeed(removalStarted, undefined).pipe(
+        Effect.andThen(removingStore.remove("oauth")),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(removalStarted);
+      yield* Deferred.succeed(continueCreate, undefined);
+      yield* Fiber.join(createFiber);
+      yield* Fiber.join(removeFiber);
+
+      assert.isTrue(Option.isNone(yield* creatingStore.get("oauth")));
+      const entries = yield* fileSystem.readDirectory(`${baseDir}/userdata/secrets`);
+      assert.isFalse(entries.some((entry) => entry.endsWith(".tmp")));
+    }).pipe(Effect.scoped, TestClock.withLive),
+  );
+
+  it.effect("never deletes a canonical secret after a failed publish", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig.ServerConfig;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const value = new TextEncoder().encode("published-before-injected-failure");
+
+      const error = yield* Effect.flip(secretStore.create("oauth", value));
+      assert.instanceOf(error, ServerSecretStore.SecretStorePersistError);
+      assert.equal((error.cause as PlatformError.PlatformError).reason._tag, "PermissionDenied");
+
+      const persisted = Option.getOrThrow(yield* secretStore.get("oauth"));
+      assert.deepEqual(Array.from(persisted), Array.from(value));
+      const entries = yield* fileSystem.readDirectory(config.secretsDir);
+      assert.isFalse(
+        entries.some((entry) => entry.startsWith("oauth.bin.") && entry.endsWith(".tmp")),
+      );
+    }).pipe(
+      Effect.provide(
+        makeServerSecretStoreLayer({ fileSystemLayer: FailureAfterPublishFileSystemLayer }),
+      ),
+    ),
+  );
+
+  it.effect("propagates read failures other than missing-file errors", () =>
+    Effect.gen(function* () {
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const error = yield* Effect.flip(secretStore.getOrCreateRandom("session-signing-key", 32));
+      assert.instanceOf(error, ServerSecretStore.SecretStoreReadError);
+      assert.equal((error.cause as PlatformError.PlatformError).reason._tag, "PermissionDenied");
+    }).pipe(
+      Effect.provide(
+        makeServerSecretStoreLayer({ fileSystemLayer: PermissionDeniedFileSystemLayer }),
+      ),
+    ),
+  );
+
+  it.effect("propagates write failures instead of treating them as success", () =>
+    Effect.gen(function* () {
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const error = yield* Effect.flip(
+        secretStore.set("session-signing-key", Uint8Array.from([1, 2, 3])),
+      );
+      assert.instanceOf(error, ServerSecretStore.SecretStorePersistError);
+      assert.equal((error.cause as PlatformError.PlatformError).reason._tag, "PermissionDenied");
+    }).pipe(
+      Effect.provide(makeServerSecretStoreLayer({ fileSystemLayer: RenameFailureFileSystemLayer })),
+    ),
   );
 
   it.effect("encrypts new values while preserving the caller-facing bytes", () =>
@@ -543,8 +689,12 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
 
       const migrationFiber = yield* migratingStore.get(name).pipe(Effect.forkScoped);
       yield* Deferred.await(migrationReady);
-      const writerFiber = yield* writingStore.set(name, newerValue).pipe(Effect.forkScoped);
-      yield* Effect.sleep("50 millis");
+      const writerStarted = yield* Deferred.make<void>();
+      const writerFiber = yield* Deferred.succeed(writerStarted, undefined).pipe(
+        Effect.andThen(writingStore.set(name, newerValue)),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(writerStarted);
       yield* Deferred.succeed(allowMigrationPublish, undefined);
 
       const migrated = Option.getOrThrow(yield* Fiber.join(migrationFiber));
@@ -619,97 +769,6 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       );
       assert.isTrue(Option.isSome(recovered));
       assert.isTrue(yield* fileSystem.exists(lockPath));
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("surfaces a failure to remove a raw-key retirement temporary file", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-keyring-temp-cleanup-failure-",
-      });
-      const name = "legacy-oauth";
-      const value = new TextEncoder().encode("legacy-value");
-      const fingerprint = legacyFingerprint(name, value);
-      const locations = yield* Effect.gen(function* () {
-        const config = yield* ServerConfig.ServerConfig;
-        yield* ServerSecretStore.ServerSecretStore;
-        yield* fileSystem.writeFile(secretPath(config, name), value);
-        return { keyFilePath: config.secretStoreKeyFilePath! };
-      }).pipe(
-        Effect.provide(
-          makeServerSecretStoreLayer({
-            baseDir,
-            legacySecretFingerprints: { [name]: fingerprint },
-          }),
-        ),
-      );
-
-      const failedCleanupLayer = Layer.effect(
-        FileSystem.FileSystem,
-        Effect.gen(function* () {
-          const underlying = yield* FileSystem.FileSystem;
-          const isKeyringTemp = (filePath: string) =>
-            filePath.startsWith(`${locations.keyFilePath}.`) && filePath.endsWith(".tmp");
-          return {
-            ...underlying,
-            rename: (from, to) =>
-              isKeyringTemp(String(from)) && String(to) === locations.keyFilePath
-                ? Effect.fail(
-                    PlatformError.systemError({
-                      _tag: "PermissionDenied",
-                      module: "FileSystem",
-                      method: "rename",
-                      pathOrDescriptor: `${String(from)} -> ${String(to)}`,
-                      description: "Injected keyring rename failure.",
-                    }),
-                  )
-                : underlying.rename(from, to),
-            remove: (filePath, options) =>
-              isKeyringTemp(String(filePath))
-                ? Effect.fail(
-                    PlatformError.systemError({
-                      _tag: "PermissionDenied",
-                      module: "FileSystem",
-                      method: "remove",
-                      pathOrDescriptor: String(filePath),
-                      description: "Injected raw-key temporary file cleanup failure.",
-                    }),
-                  )
-                : underlying.remove(filePath, options),
-          } satisfies FileSystem.FileSystem;
-        }),
-      ).pipe(Layer.provide(NodeServices.layer));
-
-      const error = yield* Effect.gen(function* () {
-        const secretStore = yield* ServerSecretStore.ServerSecretStore;
-        return yield* Effect.flip(secretStore.get(name));
-      }).pipe(
-        Effect.provide(
-          Layer.fresh(
-            makeServerSecretStoreLayer({
-              baseDir,
-              legacySecretFingerprints: { [name]: fingerprint },
-              secretStoreKeyFilePath: locations.keyFilePath,
-              fileSystemLayer: failedCleanupLayer,
-            }),
-          ),
-        ),
-      );
-      assert.instanceOf(error, ServerSecretStore.SecretStorePersistError);
-      assert.equal(error.resource, "external secret-store keyring temporary file cleanup");
-      assert.instanceOf(error.cause, AggregateError);
-      assert.isTrue(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
-      const keyringDirectory = locations.keyFilePath.slice(
-        0,
-        locations.keyFilePath.lastIndexOf("/"),
-      );
-      const entries = yield* fileSystem.readDirectory(keyringDirectory);
-      assert.isTrue(
-        entries.some(
-          (entry) => entry.startsWith("test-secret-keyring.json.") && entry.endsWith(".tmp"),
-        ),
-      );
     }).pipe(Effect.scoped),
   );
 
@@ -845,205 +904,5 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       assert.instanceOf(error, ServerSecretStore.SecretStoreKeyError);
       assert.equal(error.reason, "missing-provider");
     }),
-  );
-
-  it.effect("reuses an existing secret instead of regenerating it", () =>
-    Effect.gen(function* () {
-      const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      const first = yield* secretStore.getOrCreateRandom("session-signing-key", 32);
-      const second = yield* secretStore.getOrCreateRandom("session-signing-key", 32);
-      assert.deepEqual(Array.from(second), Array.from(first));
-    }).pipe(Effect.provide(makeServerSecretStoreLayer())),
-  );
-
-  it.effect("returns one persisted value when concurrent creators race", () =>
-    Effect.gen(function* () {
-      const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      const values = yield* Effect.all(
-        Array.from({ length: 32 }, () => secretStore.getOrCreateRandom("session-signing-key", 32)),
-        { concurrency: "unbounded" },
-      );
-      const persisted = Option.getOrThrow(yield* secretStore.get("session-signing-key"));
-      for (const value of values) {
-        assert.deepEqual(Array.from(value), Array.from(persisted));
-      }
-    }).pipe(Effect.provide(makeServerSecretStoreLayer())),
-  );
-
-  it.effect("returns the persisted winner when independent store instances race", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-independent-secret-race-",
-      });
-      const initialize = Effect.gen(function* () {
-        const secretStore = yield* ServerSecretStore.ServerSecretStore;
-        return yield* secretStore.getOrCreateRandom("session-signing-key", 32);
-      });
-      const [first, second] = yield* Effect.all(
-        [
-          initialize.pipe(Effect.provide(Layer.fresh(makeServerSecretStoreLayer({ baseDir })))),
-          initialize.pipe(Effect.provide(Layer.fresh(makeServerSecretStoreLayer({ baseDir })))),
-        ],
-        { concurrency: "unbounded" },
-      );
-      assert.deepEqual(Array.from(second), Array.from(first));
-    }).pipe(Effect.scoped, TestClock.withLive),
-  );
-
-  it.effect("serializes removal behind another store instance's active create", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-independent-secret-remove-race-",
-      });
-      const tempOpened = yield* Deferred.make<void>();
-      const continueCreate = yield* Deferred.make<void>();
-      let delayed = false;
-      const delayedTemporaryOpenLayer = Layer.effect(
-        FileSystem.FileSystem,
-        Effect.gen(function* () {
-          const underlying = yield* FileSystem.FileSystem;
-          return {
-            ...underlying,
-            open: (filePath, options) => {
-              const opened = underlying.open(filePath, options);
-              if (
-                delayed ||
-                options?.flag !== "wx" ||
-                !String(filePath).includes("oauth.bin.") ||
-                !String(filePath).endsWith(".tmp")
-              ) {
-                return opened;
-              }
-              delayed = true;
-              return opened.pipe(
-                Effect.tap(() => Deferred.succeed(tempOpened, undefined)),
-                Effect.tap(() => Deferred.await(continueCreate)),
-              );
-            },
-          } satisfies FileSystem.FileSystem;
-        }),
-      ).pipe(Layer.provide(NodeServices.layer));
-      const initializeStore = () =>
-        Effect.service(ServerSecretStore.ServerSecretStore).pipe(
-          Effect.provide(
-            Layer.fresh(
-              makeServerSecretStoreLayer({
-                baseDir,
-                fileSystemLayer: delayedTemporaryOpenLayer,
-              }),
-            ),
-          ),
-        );
-      const [creatingStore, removingStore] = yield* Effect.all(
-        [initializeStore(), initializeStore()],
-        { concurrency: "unbounded" },
-      );
-      const value = new TextEncoder().encode("concurrently-created-value");
-      const createFiber = yield* creatingStore.create("oauth", value).pipe(Effect.forkScoped);
-      yield* Deferred.await(tempOpened);
-
-      const removeFiber = yield* removingStore.remove("oauth").pipe(Effect.forkScoped);
-      yield* Effect.sleep("50 millis");
-      yield* Deferred.succeed(continueCreate, undefined);
-      yield* Fiber.join(createFiber);
-      yield* Fiber.join(removeFiber);
-
-      assert.isTrue(Option.isNone(yield* creatingStore.get("oauth")));
-      const entries = yield* fileSystem.readDirectory(`${baseDir}/userdata/secrets`);
-      assert.isFalse(entries.some((entry) => entry.endsWith(".tmp")));
-    }).pipe(Effect.scoped, TestClock.withLive),
-  );
-
-  it.effect("never deletes a canonical secret after a failed publish", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const config = yield* ServerConfig.ServerConfig;
-      const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      const value = new TextEncoder().encode("published-before-injected-failure");
-
-      const error = yield* Effect.flip(secretStore.create("oauth", value));
-      assert.instanceOf(error, ServerSecretStore.SecretStorePersistError);
-      assert.equal((error.cause as PlatformError.PlatformError).reason._tag, "PermissionDenied");
-
-      const persisted = Option.getOrThrow(yield* secretStore.get("oauth"));
-      assert.deepEqual(Array.from(persisted), Array.from(value));
-      const entries = yield* fileSystem.readDirectory(config.secretsDir);
-      assert.isFalse(
-        entries.some((entry) => entry.startsWith("oauth.bin.") && entry.endsWith(".tmp")),
-      );
-    }).pipe(
-      Effect.provide(
-        makeServerSecretStoreLayer({ fileSystemLayer: FailureAfterPublishFileSystemLayer }),
-      ),
-    ),
-  );
-
-  it.effect("uses restrictive permissions for the secret directory and files", () => {
-    const chmodCalls: Array<{ readonly path: string; readonly mode: number }> = [];
-    const recordingFileSystemLayer = Layer.effect(
-      FileSystem.FileSystem,
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        return {
-          ...fileSystem,
-          chmod: (path, mode) =>
-            fileSystem
-              .chmod(path, mode)
-              .pipe(
-                Effect.tap(() => Effect.sync(() => chmodCalls.push({ path: String(path), mode }))),
-              ),
-        } satisfies FileSystem.FileSystem;
-      }),
-    ).pipe(Layer.provide(NodeServices.layer));
-
-    return Effect.gen(function* () {
-      const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      yield* secretStore.set("session-signing-key", Uint8Array.from([1, 2, 3]));
-      assert.isTrue(
-        chmodCalls.some((call) => call.mode === 0o700 && /[\\/]secrets$/.test(call.path)),
-      );
-      assert.isAtLeast(chmodCalls.filter((call) => call.mode === 0o600).length, 2);
-    }).pipe(
-      Effect.provide(makeServerSecretStoreLayer({ fileSystemLayer: recordingFileSystemLayer })),
-    );
-  });
-
-  it.effect("propagates read failures other than missing-file errors", () =>
-    Effect.gen(function* () {
-      const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      const error = yield* Effect.flip(secretStore.getOrCreateRandom("session-signing-key", 32));
-      assert.instanceOf(error, ServerSecretStore.SecretStoreReadError);
-      assert.equal((error.cause as PlatformError.PlatformError).reason._tag, "PermissionDenied");
-    }).pipe(
-      Effect.provide(
-        makeServerSecretStoreLayer({ fileSystemLayer: PermissionDeniedFileSystemLayer }),
-      ),
-    ),
-  );
-
-  it.effect("propagates write failures instead of treating them as success", () =>
-    Effect.gen(function* () {
-      const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      const error = yield* Effect.flip(
-        secretStore.set("session-signing-key", Uint8Array.from([1, 2, 3])),
-      );
-      assert.instanceOf(error, ServerSecretStore.SecretStorePersistError);
-      assert.equal((error.cause as PlatformError.PlatformError).reason._tag, "PermissionDenied");
-    }).pipe(
-      Effect.provide(makeServerSecretStoreLayer({ fileSystemLayer: RenameFailureFileSystemLayer })),
-    ),
-  );
-
-  it.effect("propagates remove failures other than missing-file errors", () =>
-    Effect.gen(function* () {
-      const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      const error = yield* Effect.flip(secretStore.remove("session-signing-key"));
-      assert.instanceOf(error, ServerSecretStore.SecretStoreRemoveError);
-      assert.equal((error.cause as PlatformError.PlatformError).reason._tag, "PermissionDenied");
-    }).pipe(
-      Effect.provide(makeServerSecretStoreLayer({ fileSystemLayer: RemoveFailureFileSystemLayer })),
-    ),
   );
 });

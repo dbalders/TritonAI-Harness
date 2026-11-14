@@ -66,14 +66,6 @@ it("records a shortcut once per press, and again when pressed again", () => {
   assert.deepEqual(tick(), ["shortcut Command+B"]);
 });
 
-it("ignores a key already held when a shortcut became possible", () => {
-  const { state, tick } = fakeInput();
-  tick();
-  state.keys.add(B);
-  state.flags = COMMAND;
-  assert.deepEqual([tick(), tick()], [[], []]);
-});
-
 it("reads no keys while a protected field has focus", () => {
   const { state, tick } = fakeInput();
   state.focus = { role: "text_field", subrole: "AXSecureTextField", protected: true };

@@ -1,4 +1,5 @@
 import { type CSSProperties, useState } from "react";
+
 import { cn } from "~/lib/utils";
 
 export function PanelAnimationsPreview({ durationMs }: { durationMs: number }) {

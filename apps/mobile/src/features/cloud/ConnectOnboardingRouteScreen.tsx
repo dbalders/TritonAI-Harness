@@ -6,7 +6,7 @@ import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScroll
 
 import { useAuth } from "@clerk/expo";
 import { StackActions, useNavigation } from "@react-navigation/native";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Platform, RefreshControl, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -20,22 +20,9 @@ import { useConnectionController } from "../connection/useConnectionController";
 import { optOutOfConnectOnboarding } from "./connectOnboardingOptOut";
 import { hasCloudPublicConfig } from "./publicConfig";
 
+// Only reachable with cloud config: onboarding is requested after a T3 Connect
+// sign-in, and appLinking drops the deep link otherwise.
 export function ConnectOnboardingRouteScreen() {
-  const navigation = useNavigation();
-
-  // The route is deep-linkable; without cloud config the sheet would present
-  // empty with no chrome to dismiss it, so bail back out instead.
-  useEffect(() => {
-    if (hasCloudPublicConfig()) {
-      return;
-    }
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-    } else {
-      navigation.dispatch(StackActions.replace("Home"));
-    }
-  }, [navigation]);
-
   return hasCloudPublicConfig() ? <ConfiguredConnectOnboardingRouteScreen /> : null;
 }
 
@@ -66,8 +53,7 @@ function ConfiguredConnectOnboardingRouteScreen() {
   }, [navigation]);
   const handleClose = dismiss;
 
-  // Persist before dismissing so a quick sign-out/sign-in cannot race ahead
-  // of the preference write; the write is a local secure-store update.
+  // Persist before dismissing so quick sign-out/sign-in cannot outrun the write.
   const handleDontShowAgain = () => {
     void (async () => {
       if (userId) {

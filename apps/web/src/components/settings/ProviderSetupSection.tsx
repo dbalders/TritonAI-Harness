@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import { useRef, useState } from "react";
 import { Trash2Icon } from "lucide-react";
+
 import { ensureLocalApi } from "../../localApi";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -184,7 +185,8 @@ function ProviderSetupActions({
 
   return (
     <div className="divide-y divide-border/50">
-      {/* Keep the live region first so the last visible row is not followed by a sibling that adds its divider. */}
+      {/* Keep the live region first so sibling divider rules do not add a divider after the last visible
+       * row. */}
       <p className="sr-only" role="status">
         {pendingLabel ? `${pendingLabel}.` : null}
       </p>

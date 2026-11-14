@@ -1,4 +1,5 @@
 import { DownloadIcon, ExternalLinkIcon } from "lucide-react";
+
 import { resolveExternalWebLinkHost } from "../chat/externalLinkContextMenu";
 import { Button } from "../ui/button";
 import { resolveProtocolRelativeMediaUrl } from "./mediaContent";

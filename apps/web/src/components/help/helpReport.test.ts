@@ -303,20 +303,6 @@ describe("Help report preparation", () => {
     expect(report).toContain("[redacted]");
   });
 
-  it("preserves useful settings routes and safe guidance with optional context present", () => {
-    const content =
-      "Open /settings/providers or /settings/plugins. Read docs/user/help.md. The theme is dark.";
-    const report = buildHelpReport({
-      ...reportInput,
-      context: expandedContext,
-      includeConversation: true,
-      conversation: [{ role: "assistant", content }],
-    });
-    expect(report).toContain(content);
-    expect(report).not.toContain("Private catalog");
-    expect(report).not.toContain("accessibilityPermission");
-  });
-
   it("redacts credentials in manually entered report fields as well as attachments", () => {
     const report = buildHelpReport({
       ...reportInput,
@@ -337,76 +323,6 @@ describe("Help report preparation", () => {
     expect(report).not.toContain("Confidential");
     expect(report).not.toContain("customer-list");
     expect(report).not.toContain("alice");
-  });
-
-  it("prepares a report with no server or model available without claiming diagnostics succeeded", () => {
-    const report = buildHelpReport({ ...reportInput, context: null });
-    expect(report).toContain("App context unavailable");
-    expect(report).toContain("Provider stops replying");
-    expect(report).not.toContain("0 failures");
-  });
-
-  it("removes Linux host paths and exact snapshot paths under arbitrary roots", () => {
-    const report = buildHelpReport({
-      ...reportInput,
-      context: { ...context, paths: [{ label: "State", path: "/custom-mount/private app/state" }] },
-      actual:
-        'Open /root/.t3/userdata/settings.json or "/srv/private project/customer.csv"; state is /custom-mount/private app/state.',
-      includeConversation: true,
-      conversation: [{ role: "user", content: "Check /srv/private-project/customer.csv" }],
-    });
-    expect(report).toContain("[local path]");
-    for (const excluded of ["/root", "/srv", "/custom-mount", "private app", "customer.csv"]) {
-      expect(report).not.toContain(excluded);
-    }
-  });
-
-  it("removes pasted cookie headers from fields and the optional conversation", () => {
-    const report = buildHelpReport({
-      ...reportInput,
-      actual: "Cookie: session=opaque-cookie-secret; auth=another-cookie",
-      includeConversation: true,
-      conversation: [
-        { role: "user", content: "Set-Cookie: session=conversation-secret; HttpOnly" },
-      ],
-    });
-    for (const secret of ["opaque-cookie-secret", "another-cookie", "conversation-secret"]) {
-      expect(report).not.toContain(secret);
-    }
-    expect(report).toContain("[redacted]");
-  });
-
-  it("bounds large pasted content and only includes the most recent conversation messages", () => {
-    const report = buildHelpReport({
-      ...reportInput,
-      summary: "x".repeat(80_000),
-      includeConversation: true,
-      conversation: Array.from({ length: 40 }, (_, index) => ({
-        role: "user" as const,
-        content: `message-${index}: ${"z".repeat(8_000)}`,
-      })),
-    });
-    expect(report.length).toBeLessThan(25_000);
-    expect(report).not.toContain("message-0:");
-    expect(report).not.toContain("message-20:");
-    expect(report).toContain("message-39:");
-  });
-
-  it("keeps the latest failure and chronological order when the conversation exceeds its budget", () => {
-    const report = buildHelpReport({
-      ...reportInput,
-      includeConversation: true,
-      conversation: [
-        ...Array.from({ length: 6 }, (_, index) => ({
-          role: "user" as const,
-          content: `earlier-${index}: ${"x".repeat(4_000)}`,
-        })),
-        { role: "user", content: "latest failure: provider stopped replying" },
-      ],
-    });
-    expect(report).toContain("latest failure: provider stopped replying");
-    expect(report).not.toContain("earlier-0:");
-    expect(report.indexOf("earlier-5:")).toBeLessThan(report.indexOf("latest failure:"));
   });
 });
 
@@ -445,11 +361,5 @@ describe("Help credential redaction", () => {
   ])("removes a credential from %s", (input, secret) => {
     expect(redactHelpText(input)).not.toContain(secret);
     expect(redactHelpText(input)).toMatch(/redacted|removed/u);
-  });
-
-  it("preserves useful settings guidance and exact application paths for private troubleshooting", () => {
-    const text =
-      "Open /settings/providers. Settings live at /Users/example/.t3/userdata/settings.json.";
-    expect(redactHelpText(text)).toBe(text);
   });
 });

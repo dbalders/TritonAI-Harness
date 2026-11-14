@@ -21,7 +21,7 @@ const probe = (directory: string) =>
       "-e",
       `
     const { lock } = require(process.argv[1]);
-    lock(process.argv[2], { realpath: false }).then(async release => {
+    lock(process.argv[2], { realpath: false, lockfilePath: process.argv[2].replace(/.bin$/, ".chatgpt-session.lock") }).then(async release => {
       await release(); process.stdout.write('acquired');
     }, error => {
       if (error.code === 'ELOCKED') process.stdout.write('blocked');

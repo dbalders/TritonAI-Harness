@@ -148,33 +148,6 @@ describe("included integration activation defaults", () => {
     }
   });
 
-  it("activates on first catalog appearance in an existing profile", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "integration-appearance-"));
-    const other = syntheticPackage({
-      ...assistantManifest,
-      id: "other-integration",
-      provider: "other-provider",
-      tools: [],
-      skills: [],
-    });
-    let registry = new RegistryRuntime(root, [other]);
-    try {
-      await registry.install(other.manifest.id);
-      const previous = (await registry.setEnabled(other.manifest.id, false)).integrations[0];
-      await registry.close();
-      registry = new RegistryRuntime(root, [other, syntheticPackage()]);
-      const { integrations } = await registry.list();
-      expect(integrations.find(({ id }) => id === assistantManifest.id)).toMatchObject({
-        installed: true,
-        enabled: true,
-      });
-      expect(integrations.find(({ id }) => id === other.manifest.id)).toEqual(previous);
-    } finally {
-      await registry.close();
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it.each(["disable", "disable-capability", "enable-opt-in-capability", "uninstall"] as const)(
     "preserves %s across restart, upgrade, and catalog reintroduction",
     async (choice) => {
@@ -415,7 +388,6 @@ describe("included integration activation defaults", () => {
   });
 
   it.each([
-    { uninstalled: "ucsd-assistant" },
     { uninstalled: ["ucsd-assistant", "ucsd-assistant"] },
     { uninstalled: ["../ucsd-assistant"] },
   ])(

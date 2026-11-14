@@ -1249,7 +1249,6 @@ function KeybindingsGroups(props: KeybindingsGroupsProps) {
 }
 
 function BrowserKeybindingNotice() {
-  const message = "The browser may claim some shortcuts first. The desktop app receives them all.";
   return (
     <div className="flex items-center gap-2 px-3 py-2.5 text-xs leading-normal text-muted-foreground sm:px-4">
       <TriangleAlertIcon className="size-3.5 shrink-0 text-warning" aria-hidden />
@@ -1272,9 +1271,7 @@ function keybindingAnchorIds(rows: ReturnType<typeof buildKeybindingRows>) {
   return ids;
 }
 
-// Rows come from a hook so they are cached on the server keybindings alone. Built
-// inline, the compiler joins them to the query's cache scope (filtering might
-// mutate them), and every keystroke rebuilds and re-renders every row.
+// Cache rows in a separate hook so the compiler does not rebuild them per search keystroke.
 function useKeybindingCatalog() {
   const serverKeybindings = useSettingsScope().environment?.serverConfig?.keybindings;
   const merged = mergeWithDefaultKeybindings(serverKeybindings ?? []);

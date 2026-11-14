@@ -8,6 +8,7 @@ import {
 import type { Construct, Extension, Tokenizer } from "micromark-util-types";
 import remarkParse from "remark-parse";
 import { unified, type Processor } from "unified";
+
 import {
   codexArtifactTemplatePresentationLabel,
   resolveCodexArtifactTemplate,

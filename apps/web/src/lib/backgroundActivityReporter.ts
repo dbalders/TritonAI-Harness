@@ -18,6 +18,7 @@ import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+
 import { randomUUID } from "./utils";
 
 const CLIENT_ID_STORAGE_KEY = "t3.backgroundActivity.clientId";
@@ -74,7 +75,7 @@ function resolveClientKind(): ClientActivityReportInput["clientKind"] {
   return window.desktopBridge ? "desktop-renderer" : "web";
 }
 
-export function wasRecentlyInteracted(lastInteractionAtMs: number, observedAtMs: number): boolean {
+function wasRecentlyInteracted(lastInteractionAtMs: number, observedAtMs: number): boolean {
   return (
     lastInteractionAtMs <= observedAtMs &&
     observedAtMs - lastInteractionAtMs <= RECENT_INTERACTION_WINDOW_MS

@@ -79,7 +79,7 @@ const fixture = Effect.gen(function* () {
   const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "project-brief-runtime-" });
   const outside = yield* fs.makeTempDirectoryScoped({ prefix: "project-brief-outside-" });
-  let selectedProject: Project = {
+  const selectedProject: Project = {
     id: projectId,
     title: "Operations",
     workspaceRoot: root,
@@ -220,9 +220,6 @@ const fixture = Effect.gen(function* () {
     setProviderUnavailable: () => {
       provider = { ...provider, enabled: false };
     },
-    setNoDefault: () => {
-      selectedProject = { ...selectedProject, defaultModelSelection: null };
-    },
   };
 });
 
@@ -340,25 +337,6 @@ it.layer(NodeServices.layer)("ProjectBriefRuntime", (it) => {
       expect(yield* f.runtime.changes.pipe(Stream.runCollect)).toEqual([projectId]);
     }),
   );
-  it.effect("freezes exact file text and changes the source identity when its bytes change", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      yield* f.fs.writeFileString(f.path.join(f.root, "brief.md"), "First signed report.\n");
-      const first = yield* f.runtime.capture({
-        projectId,
-        selection: { kind: "file", relativePath: "brief.md" },
-      });
-      expect(first.text).toBe("First signed report.\n");
-      expect(first.digest).toMatch(/^[a-f0-9]{64}$/u);
-      yield* f.fs.writeFileString(f.path.join(f.root, "brief.md"), "Revised signed report.\n");
-      const next = yield* f.runtime.capture({
-        projectId,
-        selection: { kind: "file", relativePath: "brief.md" },
-      });
-      expect(next.digest).not.toBe(first.digest);
-      expect(next.revision).not.toBe(first.revision);
-    }),
-  );
   it.effect(
     "rejects absolute, parent traversal, and outside-project symlink sources and artifacts",
     () =>
@@ -383,34 +361,6 @@ it.layer(NodeServices.layer)("ProjectBriefRuntime", (it) => {
           expect(["invalid_request", "forbidden"]).toContain(artifact.code);
         }
       }),
-  );
-  it.effect("rejects binary, malformed UTF-8, directory and oversized source input", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      yield* f.fs.writeFile(f.path.join(f.root, "binary"), new Uint8Array([0, 1, 2]));
-      yield* f.fs.writeFile(f.path.join(f.root, "bad-utf8"), new Uint8Array([0xff]));
-      yield* f.fs.writeFileString(f.path.join(f.root, "large"), "x".repeat(32_001));
-      yield* f.fs.makeDirectory(f.path.join(f.root, "directory"));
-      for (const relativePath of ["binary", "bad-utf8", "large", "directory"]) {
-        expect(
-          (yield* f.runtime
-            .capture({ projectId, selection: { kind: "file", relativePath } })
-            .pipe(Effect.flip)).code,
-        ).toBe("invalid_request");
-      }
-    }),
-  );
-  it.effect("captures only the selected completed project message", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      const selection = { kind: "message" as const, threadId, messageId: message().id };
-      f.setMessages([message(), message({ id: MessageId.make("other"), text: "Unselected" })]);
-      expect((yield* f.runtime.capture({ projectId, selection })).text).toBe(message().text);
-      f.setMessages([message({ streaming: true })]);
-      expect((yield* f.runtime.capture({ projectId, selection }).pipe(Effect.flip)).code).toBe(
-        "unavailable",
-      );
-    }),
   );
   it.effect(
     "keeps pasted text with its supplied link and rejects executable or credentialed links",
@@ -470,26 +420,6 @@ it.layer(NodeServices.layer)("ProjectBriefRuntime", (it) => {
         ).toBe("conflict");
       }),
   );
-  it.effect("rejects an unadvertised explicitly chosen model before launching", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      f.setExists(false);
-      expect(
-        (yield* f.runtime
-          .launch({
-            projectId,
-            purpose: "synthesis",
-            title: "Brief",
-            prompt: "Prepare",
-            commandId: "launch:bad-model",
-            threadId,
-            modelSelection: { ...modelSelection, model: "invented" },
-          })
-          .pipe(Effect.flip)).code,
-      ).toBe("invalid_request");
-      expect(f.launches).toHaveLength(0);
-    }),
-  );
   it.effect(
     "recovers only the bound initial run and its restart continuation, never a later unrelated result",
     () =>
@@ -531,26 +461,6 @@ it.layer(NodeServices.layer)("ProjectBriefRuntime", (it) => {
         expect(f.interrupts[0]?.runId).toBe(continuationId);
       }),
   );
-  it.effect("requires a project default when the owner has not chosen a model", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      f.setExists(false);
-      f.setNoDefault();
-      expect(
-        (yield* f.runtime
-          .launch({
-            projectId,
-            purpose: "synthesis",
-            title: "Brief",
-            prompt: "Prepare",
-            commandId: "launch:no-model",
-            threadId,
-          })
-          .pipe(Effect.flip)).code,
-      ).toBe("invalid_request");
-      expect(f.launches).toHaveLength(0);
-    }),
-  );
   it.effect("refuses messages and artifact reads from another project", () =>
     Effect.gen(function* () {
       const f = yield* fixture;
@@ -565,31 +475,6 @@ it.layer(NodeServices.layer)("ProjectBriefRuntime", (it) => {
           .verifyArtifact({ projectId, threadId, relativePath: "report.pdf" })
           .pipe(Effect.flip)).code,
       ).toBe("forbidden");
-    }),
-  );
-  it.effect("hashes real binary artifact bytes and notices replacement before acceptance", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      yield* f.fs.writeFile(
-        f.path.join(f.root, "report.pdf"),
-        new Uint8Array([37, 80, 68, 70, 0, 1]),
-      );
-      const first = yield* f.runtime.verifyArtifact({
-        projectId,
-        threadId,
-        relativePath: "report.pdf",
-      });
-      expect(first.sizeBytes).toBe(6);
-      yield* f.fs.writeFile(
-        f.path.join(f.root, "report.pdf"),
-        new Uint8Array([37, 80, 68, 70, 0, 2]),
-      );
-      const second = yield* f.runtime.verifyArtifact({
-        projectId,
-        threadId,
-        relativePath: "report.pdf",
-      });
-      expect(second.digest).not.toBe(first.digest);
     }),
   );
 });

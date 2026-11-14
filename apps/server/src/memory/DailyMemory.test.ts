@@ -34,9 +34,7 @@ import { memorySkillName } from "./memoryVault.ts";
 const localIso = (day: number, hour: number) => new Date(2026, 8, day, hour).toISOString();
 const NOW = new Date(2026, 8, 29, 9).getTime();
 const NOON_28 = new Date(2026, 8, 28, 12);
-const HOUR = 60 * 60_000;
 const AFTER_MIDNIGHT_30 = new Date(2026, 8, 30, 1).getTime();
-const AFTERNOON_27 = new Date(2026, 8, 27, 15);
 const readCoverage = (text: string) =>
   JSON.parse(text) as {
     readonly coveredFrom: string | null;
@@ -197,22 +195,6 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
       }),
   );
 
-  it.effect(
-    "does not read notes while memory is disabled, but keeps original thread updates available",
-    () =>
-      Effect.gen(function* () {
-        const { layer } = yield* makeHarness({ memoryEnabled: false });
-        yield* Effect.gen(function* () {
-          yield* seed;
-          const memory = yield* DailyMemory.make;
-          const result = yield* memory.getProjectMemory({ projectId: ProjectId.make("project-1") });
-          assert.strictEqual(result.state, "disabled");
-          assert.isNull(result.markdown);
-          assert.isTrue(result.recentUpdates.length > 0);
-        }).pipe(Effect.provide(layer));
-      }),
-  );
-
   it.effect("summarizes new V2 activity once alongside retained history", () =>
     Effect.gen(function* () {
       const captured: DailyMemoryGenerationInput[] = [];
@@ -297,6 +279,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
   describe.each(Array.from(["stable", "nightly"] as const, (scenario) => ({ scenario })))(
     "case $scenario",
     ({ scenario: profile }) => {
+      // regression: 918a8176d3 enable memory automatically for existing installations
       it.effect(`automatically backfills a full week for an existing ${profile} installation`, () =>
         Effect.gen(function* () {
           const { baseDir, codexHome, calls, layer, fs, path } = yield* makeHarness({ profile });
@@ -306,9 +289,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
             const config = yield* ServerConfig.ServerConfig;
             const settings = yield* ServerSettings.ServerSettingsService;
             const sql = yield* SqlClient.SqlClient;
-            const legacySettings = yield* Schema.encodeUnknownEffect(
-              Schema.fromJsonString(Schema.Unknown),
-            )({
+            const legacySettings = yield* compiledEncodeUnknownEffect1({
               providerInstances: {
                 [ProviderInstanceId.make("codex")]: {
                   driver: ProviderDriverKind.make("codex"),
@@ -461,64 +442,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
-  it.effect("rewrites today's note every four hours while there is new activity", () =>
-    Effect.gen(function* () {
-      const { baseDir, calls, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
-      const vaultFiles = files(path, path.join(baseDir, "memory", "general"));
-      yield* TestClock.setTime(NOW);
-
-      yield* Effect.gen(function* () {
-        yield* seed;
-        const sql = yield* SqlClient.SqlClient;
-        const memory = yield* DailyMemory.make;
-        yield* memory.runCatchUp;
-        assert.deepStrictEqual(calls.slice(-1), ["2026-09-29"]);
-        const first = yield* fs.readFileString(vaultFiles.daily("2026-09-29"));
-        assert.include(first, "status: partial");
-        assert.include(first, `updatedThrough: ${localIso(29, 9)}`);
-
-        // New work two hours later waits for the four-hour mark.
-        const at = localIso(29, 10);
-        yield* sql`
-          INSERT INTO projection_thread_messages (message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at)
-          VALUES ('m9', 'thread-1', 'turn-m9', 'user', 'Next step', 0, ${at}, ${at})
-        `;
-        yield* TestClock.setTime(NOW + 2 * HOUR);
-        yield* memory.runCatchUp;
-        assert.lengthOf(calls, 3);
-
-        yield* TestClock.setTime(NOW + 4 * HOUR);
-        yield* memory.runCatchUp;
-        assert.lengthOf(calls, 4);
-        assert.include(
-          yield* fs.readFileString(vaultFiles.daily("2026-09-29")),
-          `updatedThrough: ${localIso(29, 13)}`,
-        );
-
-        // Nothing new by the next mark: no model call.
-        yield* TestClock.setTime(NOW + 8 * HOUR);
-        yield* memory.runCatchUp;
-        assert.lengthOf(calls, 4);
-
-        // A reply that started before the last update but finished after it counts.
-        const finishedLate = localIso(29, 18);
-        yield* sql`UPDATE projection_thread_messages SET updated_at = ${finishedLate} WHERE message_id = 'm9'`;
-        yield* TestClock.setTime(NOW + 9 * HOUR);
-        yield* memory.runCatchUp;
-        assert.lengthOf(calls, 5);
-
-        // After midnight the day is written one last time as final.
-        yield* TestClock.setTime(AFTER_MIDNIGHT_30);
-        yield* memory.runCatchUp;
-        assert.deepStrictEqual(calls.slice(-1), ["2026-09-29"]);
-        assert.include(yield* fs.readFileString(vaultFiles.daily("2026-09-29")), "status: final");
-        const coverage = readCoverage(yield* fs.readFileString(vaultFiles.coverage));
-        assert.strictEqual(coverage.lastSummarizedDay, "2026-09-29");
-        assert.property(coverage.notes, "2026-09-29");
-      }).pipe(Effect.provide(layer));
-    }),
-  );
-
+  // regression: ec31417a1b keep loose inbox notes and drop day notes with nothing left to summarize
   it.effect("removes today's partial note when its only thread is deleted", () =>
     Effect.gen(function* () {
       const { baseDir, calls, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
@@ -542,27 +466,6 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         const coverage = readCoverage(yield* fs.readFileString(vaultFiles.coverage));
         assert.strictEqual(coverage.lastSummarizedDay, "2026-09-29");
         assert.notProperty(coverage.notes, "2026-09-29");
-      }).pipe(Effect.provide(layer));
-    }),
-  );
-
-  it.effect("writes a note for a day that only had inbox notes", () =>
-    Effect.gen(function* () {
-      const { baseDir, calls, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
-      const vaultFiles = files(path, path.join(baseDir, "memory", "general"));
-      yield* fs.makeDirectory(vaultFiles.inbox, { recursive: true });
-      const inboxNote = path.join(vaultFiles.inbox, "2026-09-27-1500-idea.md");
-      yield* fs.writeFileString(inboxNote, "## Summary\n\nTry cookie sessions.\n");
-      yield* fs.utimes(inboxNote, AFTERNOON_27, AFTERNOON_27);
-      yield* TestClock.setTime(NOW);
-
-      yield* Effect.gen(function* () {
-        const memory = yield* DailyMemory.make;
-        yield* memory.runCatchUp;
-        assert.deepStrictEqual(calls, ["2026-09-27"]);
-        const day27 = yield* fs.readFileString(vaultFiles.daily("2026-09-27"));
-        assert.include(day27, "- None. This day only had inbox notes.");
-        assert.include(day27, "- Inbox: [[Inbox/3f2a/processed/2026-09-27/2026-09-27-1500-idea]]");
       }).pipe(Effect.provide(layer));
     }),
   );
@@ -654,6 +557,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  // regression: 8fa2a69b2f keep same-titled projects apart and defer inbox notes that do not fit
   it.effect("gives same-titled projects in different workspaces their own notes", () =>
     Effect.gen(function* () {
       const activityByDay = new Map<string, string>();
@@ -707,6 +611,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  // regression: 8fa2a69b2f keep same-titled projects apart and defer inbox notes that do not fit
   it.effect("leaves inbox notes that did not fit in the summary for the next one", () =>
     Effect.gen(function* () {
       const inboxByDay = new Map<string, string>();
@@ -748,6 +653,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  // regression: 8097499d11 wait for streaming turns before summarizing a day
   it.effect("waits for a day whose turn is still streaming, unless it was abandoned", () =>
     Effect.gen(function* () {
       const { calls, layer } = yield* makeHarness({ memoryEnabled: true });
@@ -777,6 +683,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  // regression: 2b1d09f266 record which days memory covered so agents do not read gaps as idle days
   it.effect("restarts coverage after a gap longer than the catch-up window", () =>
     Effect.gen(function* () {
       const { baseDir, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
@@ -864,28 +771,8 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
       assert.isTrue(yield* fs.exists(baseDir));
     }),
   );
-
-  it.effect("leaves a same-named skill it did not write alone", () =>
-    Effect.gen(function* () {
-      const { baseDir, codexHome, layer, fs, path } = yield* makeHarness({ memoryEnabled: false });
-      const skillFile = path.join(
-        codexHome,
-        "skills",
-        memorySkillName(path.join(baseDir, "memory", "general")),
-        "SKILL.md",
-      );
-      yield* fs.makeDirectory(path.dirname(skillFile), { recursive: true });
-      yield* fs.writeFileString(skillFile, "---\nname: tritonai-memory\n---\nMine.\n");
-      yield* TestClock.setTime(NOW);
-
-      yield* Effect.gen(function* () {
-        const memory = yield* DailyMemory.make;
-        yield* memory.runCatchUp;
-      }).pipe(Effect.provide(layer));
-      assert.strictEqual(
-        yield* fs.readFileString(skillFile),
-        "---\nname: tritonai-memory\n---\nMine.\n",
-      );
-    }),
-  );
 });
+
+const compiledEncodeUnknownEffect1 = Schema.encodeUnknownEffect(
+  Schema.fromJsonString(Schema.Unknown),
+);

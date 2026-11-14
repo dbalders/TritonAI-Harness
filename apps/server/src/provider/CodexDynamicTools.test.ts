@@ -1,9 +1,12 @@
-import { IntegrationOperationError, ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-
-import { IntegrationToolUnavailableError } from "../integrations/IntegrationToolFailure.ts";
-import { dynamicToolApprovalPrompt, invokeAdmittedDynamicTool } from "./CodexDynamicTools.ts";
+import {
+  dynamicToolApprovalPrompt,
+  gateDynamicToolCall,
+  invokeAdmittedDynamicTool,
+  planDynamicToolApproval,
+} from "./CodexDynamicTools.ts";
 
 const threadId = ThreadId.make("thread-codex-dynamic-tools");
 
@@ -21,33 +24,7 @@ const invokeFailing = (error: unknown) =>
 const responseText = (response: { readonly contentItems: ReadonlyArray<unknown> }) =>
   (response.contentItems[0] as { readonly text: string }).text;
 
-it.effect("tells the agent why a plugin tool was unavailable at invoke time", () =>
-  Effect.gen(function* () {
-    const response = yield* invokeFailing(
-      new IntegrationToolUnavailableError("The plugin tool is unavailable.", {
-        toolName: "microsoft365.mail.search",
-        reason: "not_connected",
-        detail: "Reconnect Microsoft 365.",
-      }),
-    );
-    assert.isFalse(response.success);
-    assert.equal(responseText(response), "The plugin tool is unavailable.");
-  }),
-);
-
-it.effect("passes host-authored operation errors through to the agent", () =>
-  Effect.gen(function* () {
-    const response = yield* invokeFailing(
-      new IntegrationOperationError({ code: "not_connected", message: "Sign in again." }),
-    );
-    assert.isFalse(response.success);
-    assert.equal(
-      responseText(response),
-      "Integration tool call failed (not_connected): Sign in again.",
-    );
-  }),
-);
-
+// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it.effect("keeps raw provider errors generic", () =>
   Effect.gen(function* () {
     const response = yield* invokeFailing(new Error("HTTP 500 body with private data"));
@@ -56,6 +33,7 @@ it.effect("keeps raw provider errors generic", () =>
   }),
 );
 
+// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it.effect("returns a successful result as JSON", () =>
   Effect.gen(function* () {
     let received: { readonly writeApproved?: boolean } | undefined;
@@ -75,6 +53,7 @@ it.effect("returns a successful result as JSON", () =>
   }),
 );
 
+// regression: #400 restore plugin access, failure detail, and approvals after orchestration-v2
 it("shows the change a plugin write will make in its approval prompt", () => {
   assert.equal(
     dynamicToolApprovalPrompt({
@@ -90,4 +69,57 @@ it("shows the change a plugin write will make in its approval prompt", () => {
     }),
     'microsoft365__mail_draft_reply\nmessageId: "m-1"\napiToken: [hidden]',
   );
+});
+
+it.effect("admits a deferred tool only in the namespace this session disclosed", () =>
+  Effect.gen(function* () {
+    const options = {
+      threadId,
+      dynamicTools: [
+        {
+          name: "n8n_search_workflows",
+          description: "Search workflows.",
+          inputSchema: { type: "object" },
+          namespace: "n8n",
+          deferLoading: true,
+        },
+        { name: "tritonai_commons_submit_skill", description: "Submit.", inputSchema: {} },
+      ],
+      dynamicToolAvailability: () => ({ available: true }) as const,
+      invokeDynamicTool: async () => "ok",
+    };
+    const gate = (tool: string, namespace?: string) =>
+      gateDynamicToolCall({ options, payload: { tool, ...(namespace ? { namespace } : {}) } });
+    assert.isTrue((yield* gate("n8n_search_workflows", "n8n")).allowed);
+    assert.isTrue((yield* gate("tritonai_commons_submit_skill")).allowed);
+    // Threads started before deferral call the same tool without a namespace.
+    assert.isTrue((yield* gate("n8n_search_workflows")).allowed);
+    for (const [tool, namespace] of [
+      ["n8n_search_workflows", "github"],
+      ["tritonai_commons_submit_skill", "n8n"],
+    ] as const) {
+      const result = yield* gate(tool, namespace);
+      assert.isFalse(result.allowed, `${namespace}/${tool}`);
+    }
+  }),
+);
+
+it("approves plugin writes per service environment and names it in the prompt", () => {
+  const payload = { tool: "n8n__update_workflow", arguments: { workflowId: "wf-1" } };
+  const single = planDynamicToolApproval({ requiresApproval: true, payload });
+  const dev = planDynamicToolApproval({
+    requiresApproval: true,
+    payload,
+    serviceEnvironment: { id: "development", label: "n8n Dev" },
+  });
+  const prod = planDynamicToolApproval({
+    requiresApproval: true,
+    payload,
+    serviceEnvironment: { id: "production", label: "n8n Prod" },
+  });
+  assert.equal(single.grantKey, "n8n__update_workflow");
+  assert.equal(dev.grantKey, "n8n__update_workflow@development");
+  assert.notEqual(dev.grantKey, prod.grantKey);
+  assert.isTrue(dev.prompt.startsWith("n8n__update_workflow (n8n Dev)"));
+  assert.include(dev.prompt, 'workflowId: "wf-1"');
 });

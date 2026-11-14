@@ -1,16 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - Vault paths identify independent skills in a shared Codex home.
 /**
- * Layout of the memory folder and the files Harness owns inside it.
- *
- * `<memoryDir>/` is the parent for every memory system. `general/` is the
- * first one: an Obsidian-style vault of daily notes, project notes, and an
- * inbox. Later systems (teams, project heads) get their own sibling folders.
- *
- * Every file Harness generates belongs to one device and carries that device's
- * label in its name, such as `Daily/2026/2026-09-29 MacBook Pro (3f2a).md`.
- * Only that device ever writes it, so a vault shared between machines never
- * has two writers for one file. A device's own records live in
- * `.devices/<environment id>/`.
+ * memoryDir/general is the first vault; other systems get sibling folders.
+ * Generated filenames include device labels and short IDs; full IDs live in .devices.
+ * Only the owning device writes its generated files in a shared vault.
  */
 import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";

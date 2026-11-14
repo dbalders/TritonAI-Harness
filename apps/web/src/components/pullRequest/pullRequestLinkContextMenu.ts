@@ -1,15 +1,17 @@
 import type { ContextMenuItem } from "@t3tools/contracts";
 import {
-  type SourceControlClientDefinition,
+  type SourceControlDefinition,
   UNKNOWN_SOURCE_CONTROL_CLIENT,
 } from "@t3tools/client-runtime/source-control-clients";
+
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { readLocalApi } from "~/localApi";
+
 import { toastManager } from "../ui/toast";
 
 export type PullRequestLinkContextMenuAction = "copy-link" | "open-external";
 
-export const openOnHostLabel = (host: SourceControlClientDefinition): string =>
+export const openOnHostLabel = (host: SourceControlDefinition): string =>
   host === UNKNOWN_SOURCE_CONTROL_CLIENT ? "Open on host" : `Open on ${host.label}`;
 
 function pullRequestLinkContextMenuItems(

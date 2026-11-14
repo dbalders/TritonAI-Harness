@@ -1,6 +1,7 @@
 import { Button } from "../../components/ui/Button";
 import { SubagentStatusDot } from "./SubagentStatusDot";
 import { ThreadSubagentGroup } from "./thread-subagent-group";
+import { ProposedPlanCard } from "./ProposedPlanCard";
 import {
   WorkLogLabel,
   WorkLogBlock,
@@ -20,7 +21,7 @@ import { type AppSymbolName, SymbolView } from "../../components/ui/AppSymbol";
 import { MaskedView } from "@expo/ui/community/masked-view";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
-import { StackActions, useIsFocused, useNavigation } from "@react-navigation/native";
+import { useIsFocused } from "@react-navigation/native";
 import {
   useEffect,
   useEffectEvent,
@@ -32,9 +33,7 @@ import {
   type ReactNode,
 } from "react";
 import {
-  AccessibilityInfo,
   Animated as NativeAnimated,
-  AppState,
   type ColorValue,
   Easing,
   Pressable,
@@ -62,6 +61,7 @@ import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 import { AppText as Text } from "../../components/ui/AppText";
 import { HarnessToolIcon } from "../../components/HarnessToolIcon";
 import { BrowserAppIcon } from "./BrowserAppIcon";
+import { useAppActive, useReduceMotionEnabled } from "../../lib/appState";
 import { cn } from "../../lib/cn";
 import { THREAD_WORK_ROW_MIN_HEIGHT, type deriveThreadWorkLogSizing } from "../../lib/layout";
 import {
@@ -105,6 +105,7 @@ import {
 } from "react-native-reanimated";
 import { useAssetUrl } from "../../state/assets";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
+import { useOpenLinkedThread } from "./useOpenLinkedThread";
 
 const SHIMMER_WIDTH = 72;
 const SHIMMER_SWEEP_MS = 1_350;
@@ -174,10 +175,12 @@ export function ThreadDisclosureChevron(props: {
   const rotation = useSharedValue(props.expanded ? expandedAngle : 0);
 
   useLayoutEffect(() => {
-    rotation.value = withTiming(props.expanded ? expandedAngle : 0, {
-      duration: THREAD_DISCLOSURE_TRANSITION_MS,
-      reduceMotion: ReduceMotion.System,
-    });
+    rotation.set(
+      withTiming(props.expanded ? expandedAngle : 0, {
+        duration: THREAD_DISCLOSURE_TRANSITION_MS,
+        reduceMotion: ReduceMotion.System,
+      }),
+    );
   }, [expandedAngle, props.expanded, rotation]);
 
   const rotationStyle = useAnimatedStyle(() => ({
@@ -266,8 +269,8 @@ export function ShimmeringWorkContent(props: {
 }) {
   const [availableWidth, setAvailableWidth] = useState(0);
   const [textWidth, setTextWidth] = useState(0);
-  const [appIsActive, setAppIsActive] = useState(AppState.currentState === "active");
-  const [reducedMotion, setReducedMotion] = useState(true);
+  const appIsActive = useAppActive();
+  const reducedMotion = useReduceMotionEnabled();
   const screenIsFocused = useIsFocused();
   const progress = useAnimatedValue(0);
   const gradientId = `work-shimmer-${useId().replaceAll(":", "")}`;
@@ -275,22 +278,6 @@ export function ShimmeringWorkContent(props: {
     availableWidth,
     (props.showIcon ? SHIMMER_ICON_AND_GAP_WIDTH : 0) + Math.ceil(textWidth),
   );
-
-  useEffect(() => {
-    const subscription = AppState.addEventListener("change", (state) => {
-      setAppIsActive(state === "active");
-    });
-    return () => subscription.remove();
-  }, []);
-
-  useEffect(() => {
-    void AccessibilityInfo.isReduceMotionEnabled().then(setReducedMotion);
-    const subscription = AccessibilityInfo.addEventListener(
-      "reduceMotionChanged",
-      setReducedMotion,
-    );
-    return () => subscription.remove();
-  }, []);
 
   // Runs on React Native's native driver instead of Reanimated, whose
   // per-frame commits starve React's while commit pausing is disabled
@@ -439,16 +426,14 @@ function workRowSymbolName(icon: ThreadFeedActivity["icon"]): WorkContentIcon {
   }
 }
 
-// Entering fades only for rows created moments ago: rows remount whenever the
-// list scrolls them back into view, and old rows must not replay an entrance.
+// Animate only fresh rows; virtualization remounts old rows during scrolling.
 const FRESH_ROW_WINDOW_MS = 3_000;
 function isFreshRow(createdAt: string): boolean {
   const timestamp = Date.parse(createdAt);
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ROW_WINDOW_MS;
 }
 
-// The minimum matches min-h-8 below. Exact sizing is disabled when native
-// accessibility scaling can make the single-line text taller than that minimum.
+// Match min-h-8; disable exact sizing when native accessibility scaling can exceed it.
 const WORK_ROW_HEIGHT = THREAD_WORK_ROW_MIN_HEIGHT;
 const WORK_ROW_GAP = 1;
 const WORK_LOG_BOTTOM_MARGIN = 3.5;
@@ -487,6 +472,7 @@ interface ThreadWorkLogProps {
   readonly activities: ReadonlyArray<ThreadFeedActivity>;
   readonly anchorKey: string;
   readonly environmentId: EnvironmentId;
+  readonly workspaceRoot?: string | null | undefined;
   readonly copiedRowId: string | null;
   readonly expandedRows: Readonly<Record<string, boolean>>;
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
@@ -523,6 +509,18 @@ export function ThreadWorkLog(props: ThreadWorkLogProps) {
 
   if (props.activities.length === 0) {
     return null;
+  }
+
+  const plan = props.activities[0]?.projectedItem.item;
+  if (plan?.type === "proposed_plan") {
+    return (
+      <ProposedPlanCard
+        environmentId={props.environmentId}
+        workspaceRoot={props.workspaceRoot}
+        markdown={plan.markdown}
+        renderMarkdown={props.renderReasoning}
+      />
+    );
   }
 
   if (props.activities[0]?.projectedItem.item.type === "subagent") {
@@ -674,11 +672,8 @@ function ThreadWorkGroupList(props: {
     finishPendingAppend();
     rememberPosition();
   });
-  // The native ScrollView reports its content size a frame or more after
-  // LegendList has laid the rows out, so a detail toggle rendered the group
-  // at its old height while the rows below already moved. Read the size
-  // LegendList computes on the JS thread instead; it settles in the same
-  // commit as the row measurement that changed it.
+  // Native ScrollView reports size after LegendList lays out rows. Use LegendList's JS size
+  // so group height and row measurements settle in the same commit.
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
@@ -700,6 +695,7 @@ function ThreadWorkGroupList(props: {
 
   return (
     <View style={{ height, overflow: "hidden" }}>
+      {/* oxlint-disable-next-line t3code/require-registered-list-scroll -- Nested in a fixed-height card inside the thread feed, which owns the header's scroll view. */}
       <AnimatedLegendList
         ref={listRef}
         data={props.activities}
@@ -707,8 +703,7 @@ function ThreadWorkGroupList(props: {
         estimatedItemSize={props.rowSizing.estimatedRowHeight + WORK_ROW_GAP}
         getFixedItemSize={getFixedItemSize}
         initialScrollIndex={initialScrollIndex}
-        // Bootstrap overscan is only 50px. An offset inside expanded detail can
-        // otherwise leave its own row unmeasured until after scroll restoration.
+        // 50px bootstrap overscan may leave expanded details unmeasured until after scroll restoration.
         alwaysRender={
           restoringPosition && initialPosition ? { keys: [initialPosition.rowId] } : undefined
         }
@@ -877,8 +872,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
   },
 ) {
   const { row, expanded } = props;
-  const navigation = useNavigation();
-  // Command rows stream their output, including the final output, from the server.
+  const openLinkedThread = useOpenLinkedThread();
   const streamsOutput =
     useCommandOutputStreaming(props.environmentId) &&
     row.projectedItem.item.type === "command_execution";
@@ -1052,14 +1046,10 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
         accessibilityState={canExpand ? { expanded } : undefined}
         onPress={() => {
           if (notifiedSubagentThreadId !== undefined) {
-            // Push, not navigate: navigate reuses this Thread route, so back
-            // would skip the parent thread and land on Home (matches #15068).
-            navigation.dispatch(
-              StackActions.push("Thread", {
-                environmentId: String(props.environmentId),
-                threadId: String(notifiedSubagentThreadId),
-              }),
-            );
+            openLinkedThread({
+              environmentId: String(props.environmentId),
+              threadId: String(notifiedSubagentThreadId),
+            });
             return;
           }
           if (canExpand) {
@@ -1230,18 +1220,20 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
                 call.argsText,
               ]
                 .filter((line) => Boolean(line))
-                .map((line, index) =>
-                  typeof line === "string" ? (
-                    <Text
-                      key={`${index}:${line}`}
-                      selectable
-                      className="font-mono text-2xs leading-normal text-foreground"
-                    >
-                      {line}
-                    </Text>
-                  ) : (
-                    line
-                  ),
+                .map(
+                  (line, index) =>
+                    /* oxlint-disable react/no-array-index-key -- Log lines are stateless positions within this output. */ typeof line ===
+                    "string" ? (
+                      <Text
+                        key={`${index}:${line}`}
+                        selectable
+                        className="font-mono text-2xs leading-normal text-foreground"
+                      >
+                        {line}
+                      </Text>
+                    ) : (
+                      line
+                    ) /* oxlint-enable react/no-array-index-key */,
                 )
             ) : fullDetail ? (
               <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
@@ -1293,6 +1285,7 @@ export function ThreadWorkGroupToggle(props: {
   readonly hasFailure: boolean;
   readonly shimmer: boolean;
   readonly thought?: string | undefined;
+  readonly trailing?: ReactNode;
   readonly onToggle: () => void;
 }) {
   const statusLabel = props.hasFailure ? `${props.summary}, tool call failed` : props.summary;
@@ -1325,49 +1318,54 @@ export function ThreadWorkGroupToggle(props: {
           </Text>
         </Pressable>
       ) : null}
-      <WorkLogPressable
-        accessibilityRole="button"
-        accessibilityState={{ expanded: props.expanded }}
-        accessibilityLabel={accessibilityLabel}
-        accessibilityHint={`Double tap to ${props.expanded ? "hide" : "show"} ${props.hiddenCount} tool ${props.hiddenCount === 1 ? "call" : "calls"}.`}
-        onPress={() => {
-          void Haptics.selectionAsync();
-          props.onToggle();
-        }}
-        rowSizing={props.rowSizing}
-      >
-        {props.shimmer ? (
-          <ShimmeringWorkContent
-            key={props.rowSizing.textSizeKey}
-            environmentId={props.environmentId}
-            icon={icon}
-            iconSubtleColor={props.iconSubtleColor}
-            label={props.summary}
-            showIcon
-            themeAppearance={props.themeAppearance}
-            toolIcon={props.toolIcon}
-          />
-        ) : (
-          <>
-            <WorkLogIconSlot>
-              <ToolActivityIconView
+      <View className="flex-row items-center">
+        <View className="min-w-0 flex-1">
+          <WorkLogPressable
+            accessibilityRole="button"
+            accessibilityState={{ expanded: props.expanded }}
+            accessibilityLabel={accessibilityLabel}
+            accessibilityHint={`Double tap to ${props.expanded ? "hide" : "show"} ${props.hiddenCount} tool ${props.hiddenCount === 1 ? "call" : "calls"}.`}
+            onPress={() => {
+              void Haptics.selectionAsync();
+              props.onToggle();
+            }}
+            rowSizing={props.rowSizing}
+          >
+            {props.shimmer ? (
+              <ShimmeringWorkContent
+                key={props.rowSizing.textSizeKey}
                 environmentId={props.environmentId}
-                icon={props.toolIcon}
-                fallback={icon}
-                fallbackColor={props.iconSubtleColor}
+                icon={icon}
+                iconSubtleColor={props.iconSubtleColor}
+                label={props.summary}
+                showIcon
                 themeAppearance={props.themeAppearance}
+                toolIcon={props.toolIcon}
               />
-            </WorkLogIconSlot>
-            <WorkLogLabel key={props.rowSizing.textSizeKey}>{props.summary}</WorkLogLabel>
-          </>
-        )}
-        <ThreadDisclosureChevron
-          expanded={props.expanded}
-          collapsedDirection="down"
-          size={11}
-          tintColor={props.iconSubtleColor}
-        />
-      </WorkLogPressable>
+            ) : (
+              <>
+                <WorkLogIconSlot>
+                  <ToolActivityIconView
+                    environmentId={props.environmentId}
+                    icon={props.toolIcon}
+                    fallback={icon}
+                    fallbackColor={props.iconSubtleColor}
+                    themeAppearance={props.themeAppearance}
+                  />
+                </WorkLogIconSlot>
+                <WorkLogLabel key={props.rowSizing.textSizeKey}>{props.summary}</WorkLogLabel>
+              </>
+            )}
+            <ThreadDisclosureChevron
+              expanded={props.expanded}
+              collapsedDirection="down"
+              size={11}
+              tintColor={props.iconSubtleColor}
+            />
+          </WorkLogPressable>
+        </View>
+        {props.trailing}
+      </View>
     </WorkLogBlock>
   );
 }
@@ -1594,14 +1592,17 @@ function ToolActivityImage(props: {
         <View
           style={[
             StyleSheet.absoluteFill,
-            props.themeAppearance === "light" ? { filter: [{ brightness: 0.6 }] } : undefined,
+            props.themeAppearance === "light" ? { filter: [{ brightness: 0.7 }] } : undefined,
           ]}
         >
           <Image
             source={props.source}
             cachePolicy="memory-disk"
             contentFit="contain"
-            style={[StyleSheet.absoluteFill, { opacity: loaded ? 0.7 : 0 }]}
+            style={[
+              StyleSheet.absoluteFill,
+              { opacity: loaded ? (props.themeAppearance === "dark" ? 0.7 : 1) : 0 },
+            ]}
             onLoad={() => setLoaded(true)}
             onError={() => setFailed(true)}
           />

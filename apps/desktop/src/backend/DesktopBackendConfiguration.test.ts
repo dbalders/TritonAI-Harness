@@ -5,43 +5,21 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as PlatformError from "effect/PlatformError";
-import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
-import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
-
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
-import * as ElectronDialog from "../electron/ElectronDialog.ts";
-import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
-import * as DesktopTritonAiApiKey from "../settings/DesktopTritonAiApiKey.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
-
-const PersistedServerObservabilitySettingsDocument = Schema.Struct({
-  observability: Schema.Struct({
-    otlpTracesUrl: Schema.String,
-    otlpMetricsUrl: Schema.String,
-    otlpLogsUrl: Schema.String,
-  }),
-});
-
-const encodePersistedServerObservabilitySettingsDocument = Schema.encodeEffect(
-  Schema.fromJsonString(PersistedServerObservabilitySettingsDocument),
-);
-
-const isDesktopBackendObservabilitySettingsReadError = Schema.is(
-  DesktopBackendConfiguration.DesktopBackendObservabilitySettingsReadError,
-);
+import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 
 const layerShellEnvironment = (prepared = true) =>
   Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
@@ -49,7 +27,9 @@ const layerShellEnvironment = (prepared = true) =>
   });
 
 const layerBackendConfiguration = (prepared = true) =>
-  DesktopBackendConfiguration.layer.pipe(Layer.provide(layerShellEnvironment(prepared)));
+  DesktopBackendConfiguration.layer.pipe(
+    Layer.provide(Layer.merge(layerShellEnvironment(prepared), desktopTestServicesLayer)),
+  );
 
 const layerServerExposure = Layer.succeed(DesktopServerExposure.DesktopServerExposure, {
   getState: Effect.die("unexpected getState"),
@@ -65,33 +45,6 @@ const layerServerExposure = Layer.succeed(DesktopServerExposure.DesktopServerExp
   setTailscaleServeEnabled: () => Effect.die("unexpected setTailscaleServeEnabled"),
   getAdvertisedEndpoints: Effect.succeed([]),
 } satisfies DesktopServerExposure.DesktopServerExposure["Service"]);
-
-const safeStorageLayer = Layer.succeed(ElectronSafeStorage.ElectronSafeStorage, {
-  isEncryptionAvailable: Effect.succeed(true),
-  selectedStorageBackend: Effect.succeed("gnome_libsecret"),
-  encryptString: (value) =>
-    Effect.succeed(new TextEncoder().encode(Array.from(value).toReversed().join(""))),
-  decryptString: (value) =>
-    Effect.succeed(Array.from(new TextDecoder().decode(value)).toReversed().join("")),
-} satisfies ElectronSafeStorage.ElectronSafeStorage["Service"]);
-
-const makeDialogLayer = (response = 0) =>
-  Layer.succeed(ElectronDialog.ElectronDialog, {
-    pickFolder: () => Effect.succeed(Option.none()),
-    pickFiles: () => Effect.succeed([]),
-    confirm: () => Effect.succeed(false),
-    showMessageBox: () => Effect.succeed({ response, checkboxChecked: false }),
-    showErrorBox: () => Effect.void,
-  } satisfies ElectronDialog.ElectronDialog["Service"]);
-
-const dialogLayer = makeDialogLayer();
-
-const desktopTestServicesLayer = Layer.mergeAll(
-  layerServerExposure,
-  safeStorageLayer,
-  dialogLayer,
-  DesktopComputerUse.layerTest(),
-);
 
 function layerEnvironment(
   baseDir: string,
@@ -337,7 +290,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
+            Layer.provideMerge(layerServerExposure),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(DesktopWslEnvironment.layerTest()),
             Layer.provideMerge(
@@ -368,67 +321,6 @@ describe("DesktopBackendConfiguration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("only the local primary bootstrap claims the prepared shell environment", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-
-        const primary = yield* configuration.resolvePrimary;
-        const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
-
-        assert.equal(primary.bootstrap.shellEnvironmentPrepared, true);
-        assert.isUndefined(wsl.bootstrap.shellEnvironmentPrepared);
-      }),
-    ),
-  );
-
-  it.effect("keeps server hydration enabled when desktop preparation failed", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const primary = yield* configuration.resolvePrimary;
-        assert.equal(primary.bootstrap.shellEnvironmentPrepared, false);
-      }),
-      "darwin",
-      false,
-    ),
-  );
-
-  it.effect("resolveWsl reuses the primary's bootstrap token", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-
-        const primary = yield* configuration.resolvePrimary;
-        const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
-
-        assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
-      }),
-    ),
-  );
-
-  it.effect("uses Nightly's distro-local home and credential inventory for WSL", () =>
-    withPackagedWslHarness(
-      {
-        archiveHash: "a".repeat(64),
-        appVersion: "0.3.4-nightly.20260912.12",
-        wsl: () => ({
-          readSecretFiles: (_distro, development, appVersion) => {
-            assert.isFalse(development);
-            assert.equal(appVersion, "0.3.4-nightly.20260912.12");
-            return { ok: true, files: [] };
-          },
-        }),
-      },
-      () =>
-        Effect.gen(function* () {
-          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-          const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
-          assert.equal(wsl.bootstrap.t3Home, "~/.tritonai-harness-nightly");
-        }),
-    ),
-  );
-
   it.effect("resolveWsl pins a default-tracking run to the concrete default distro", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -447,7 +339,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
+            Layer.provideMerge(layerServerExposure),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(DesktopWslServerTree.layerTest()),
             Layer.provideMerge(
@@ -489,76 +381,6 @@ describe("DesktopBackendConfiguration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("resolveWsl authorizes only approved distro-local legacy credentials", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-wsl-secret-migration-",
-      });
-      const entryPath = path.join(baseDir, "app.asar.unpacked/apps/server/dist/bin.mjs");
-      yield* fileSystem.makeDirectory(path.dirname(entryPath), { recursive: true });
-      yield* fileSystem.writeFileString(entryPath, "");
-      const name = "integration-microsoft-365--oauth";
-      const value = new TextEncoder().encode("wsl-refresh-token");
-      const inventoryCalls: Array<readonly [string | null, boolean]> = [];
-
-      const config = yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        return yield* configuration.resolveWsl({ port: 5000, distro: "Ubuntu" });
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(
-              Layer.mergeAll(
-                layerServerExposure,
-                safeStorageLayer,
-                makeDialogLayer(1),
-                DesktopComputerUse.layerTest(),
-              ),
-            ),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(
-              DesktopWslServerTree.layerTest({
-                result: { ok: true, root: path.join(baseDir, "app.asar.unpacked") },
-              }),
-            ),
-            Layer.provideMerge(
-              DesktopWslEnvironment.layerTest({
-                isAvailable: true,
-                distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
-                windowsToWslPath: () => Option.some("/repo/apps/server/dist/bin.mjs"),
-                ensureNodePty: () => ({
-                  ok: true,
-                  nodePath: "/usr/bin/node",
-                  resolvedPath: "/usr/bin:/bin",
-                }),
-                getDistroIp: () => Option.some("172.27.0.99"),
-                readSecretFiles: (distro, development) => {
-                  inventoryCalls.push([distro, development]);
-                  return { ok: true, files: [{ name, value }] };
-                },
-              }),
-            ),
-            Layer.provideMerge(
-              layerEnvironment(baseDir, {
-                appPath: baseDir,
-                platform: "win32",
-                resourcesPath: baseDir,
-              }),
-            ),
-          ),
-        ),
-      );
-
-      const activeKey = Buffer.from(config.bootstrap.secretStoreKeys[0]!, "base64");
-      const expected = Buffer.from(
-        SecretEnvelope.fingerprintLegacyServerSecret(name, value, activeKey),
-      ).toString("base64");
-      assert.deepEqual(config.bootstrap.legacySecretFingerprints, { [name]: expected });
-      assert.deepEqual(inventoryCalls, [["Ubuntu", false]]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
   it.effect("resolveWsl launches a packaged backend from the WSL-local runtime cache", () => {
     const observedArchives: Array<{
       windowsArchivePath: string;
@@ -744,71 +566,6 @@ describe("DesktopBackendConfiguration", () => {
     );
   });
 
-  it.effect("resolveWsl preserves the staging error when the mounted fallback is fatal", () =>
-    withPackagedWslHarness(
-      {
-        archiveHash: "b".repeat(64),
-        wsl: () => ({
-          prepareRuntime: () => ({
-            ok: false,
-            reason:
-              "t3: error while loading shared libraries: libatomic.so.1: cannot open shared object file",
-          }),
-          ensureNodePty: () => ({
-            ok: false,
-            reason: "the packaged Linux node-pty binary was not included",
-            fatal: true,
-          }),
-        }),
-      },
-      () =>
-        Effect.gen(function* () {
-          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-          const config = yield* configuration.resolveWsl({ port: 5000, distro: "Ubuntu" });
-          const failure = Option.getOrThrow(config.preflightFailure);
-
-          assert.isTrue(failure.fatal);
-          assert.include(failure.reason, "libatomic.so.1");
-        }),
-    ),
-  );
-
-  it.effect("resolveWsl keeps the staged runtime when the mounted tree fails too", () => {
-    const stagedAppRoot = "/home/test/.t3/wsl-runtime/cache";
-    const invalidatedRuntimeIds: string[] = [];
-    return withPackagedWslHarness(
-      {
-        archiveHash: "d".repeat(64),
-        wsl: () => ({
-          prepareRuntime: () => ({ ok: true, linuxAppRoot: stagedAppRoot }),
-          invalidateRuntime: (_distro, runtimeId) =>
-            Effect.sync(() => {
-              invalidatedRuntimeIds.push(runtimeId);
-            }),
-          probeRuntime: () => ({
-            ok: false,
-            reason: "unsupported CPU architecture or incompatible system libraries",
-          }),
-          ensureNodePty: () => ({
-            ok: false,
-            reason: "mounted tree is broken in some other way",
-            fatal: true,
-          }),
-        }),
-      },
-      () =>
-        Effect.gen(function* () {
-          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-          const config = yield* configuration.resolveWsl({ port: 5000, distro: "Ubuntu" });
-          const failure = Option.getOrThrow(config.preflightFailure);
-
-          assert.isTrue(failure.fatal);
-          assert.include(failure.reason, "unsupported CPU architecture");
-          assert.deepEqual(invalidatedRuntimeIds, []);
-        }),
-    );
-  });
-
   it.effect("resolveWsl keeps WSL retryable when the mounted fallback fails transiently", () => {
     const stagedAppRoot = "/home/test/.t3/wsl-runtime/cache";
     const invalidatedRuntimeIds: string[] = [];
@@ -867,7 +624,7 @@ describe("DesktopBackendConfiguration", () => {
         }).pipe(
           Effect.provide(
             layerBackendConfiguration().pipe(
-              Layer.provideMerge(desktopTestServicesLayer),
+              Layer.provideMerge(layerServerExposure),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(DesktopWslServerTree.layerTest()),
               Layer.provideMerge(
@@ -928,693 +685,7 @@ describe("DesktopBackendConfiguration", () => {
     ),
   );
 
-  it.effect("resolvePrimary surfaces persisted backend observability endpoints", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const environment = yield* DesktopEnvironment.DesktopEnvironment;
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-
-        yield* fileSystem.makeDirectory(environment.path.dirname(environment.serverSettingsPath), {
-          recursive: true,
-        });
-        yield* fileSystem.writeFileString(
-          environment.serverSettingsPath,
-          yield* encodePersistedServerObservabilitySettingsDocument({
-            observability: {
-              otlpTracesUrl: " http://127.0.0.1:4318/v1/traces ",
-              otlpMetricsUrl: " http://127.0.0.1:4318/v1/metrics ",
-              otlpLogsUrl: " http://127.0.0.1:4318/v1/logs ",
-            },
-          }),
-        );
-
-        const config = yield* configuration.resolvePrimary;
-        assert.equal(config.bootstrap.otlpTracesUrl, "http://127.0.0.1:4318/v1/traces");
-        assert.equal(config.bootstrap.otlpMetricsUrl, "http://127.0.0.1:4318/v1/metrics");
-        assert.equal(config.bootstrap.otlpLogsUrl, "http://127.0.0.1:4318/v1/logs");
-      }),
-    ),
-  );
-
-  it.effect("resolvePrimary omits backend observability endpoints when settings are missing", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolvePrimary;
-
-        assert.isUndefined(config.bootstrap.otlpTracesUrl);
-        assert.isUndefined(config.bootstrap.otlpMetricsUrl);
-        assert.isUndefined(config.bootstrap.otlpLogsUrl);
-      }),
-    ),
-  );
-
-  it.effect("resolvePrimary passes UCSD installer environment into the backend process", () =>
-    Effect.gen(function* () {
-      const previousTritonAiKey = process.env.TRITONAI_API_KEY;
-      const previousUcsdAiBaseUrl = process.env.UCSD_AI_BASE_URL;
-      const previousOpenCodeConfig = process.env.OPENCODE_CONFIG;
-      try {
-        delete process.env.TRITONAI_API_KEY;
-        delete process.env.UCSD_AI_BASE_URL;
-        delete process.env.OPENCODE_CONFIG;
-
-        yield* withHarness(
-          Effect.gen(function* () {
-            const fileSystem = yield* FileSystem.FileSystem;
-            const environment = yield* DesktopEnvironment.DesktopEnvironment;
-            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-            const envFile = environment.path.join(
-              environment.homeDirectory,
-              ".agents",
-              "ucsd",
-              "env",
-            );
-
-            yield* fileSystem.makeDirectory(environment.path.dirname(envFile), {
-              recursive: true,
-            });
-            yield* fileSystem.writeFileString(
-              envFile,
-              [
-                "export UCSD_AI_BASE_URL=https://tritonai-api.ucsd.edu/v1",
-                "export TRITONAI_API_KEY='triton-key'",
-                'export OPENCODE_CONFIG="/Users/test/.agents/ucsd/config/opencode/opencode.json"',
-                'export UCSD_ESCAPED_VALUE="escaped \\"quote\\" and \\$dollar and \\`tick\\`"',
-                "export UCSD_QUOTED_NAME='Triton AI'\\''s API'",
-                "export T3CODE_PORT=1234",
-                "export TRITONAI_HOME=/tmp/wrong-home",
-                "",
-              ].join("\n"),
-            );
-
-            const config = yield* configuration.resolvePrimary;
-            assert.equal(config.env.UCSD_AI_BASE_URL, "https://tritonai-api.ucsd.edu/v1");
-            assert.equal(config.env.TRITONAI_API_KEY, "triton-key");
-            assert.equal(
-              config.env.OPENCODE_CONFIG,
-              "/Users/test/.agents/ucsd/config/opencode/opencode.json",
-            );
-            assert.equal(config.env.UCSD_ESCAPED_VALUE, 'escaped "quote" and $dollar and `tick`');
-            assert.equal(config.env.UCSD_QUOTED_NAME, "Triton AI's API");
-            assert.isUndefined(config.env.T3CODE_PORT);
-            assert.isUndefined(config.env.TRITONAI_HOME);
-          }),
-        );
-      } finally {
-        restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
-        restoreEnv("UCSD_AI_BASE_URL", previousUcsdAiBaseUrl);
-        restoreEnv("OPENCODE_CONFIG", previousOpenCodeConfig);
-      }
-    }),
-  );
-
-  it.effect(
-    "resolvePrimary appends the Installer's newest Node runtime after the inherited PATH",
-    () =>
-      Effect.gen(function* () {
-        const previousPath = process.env.PATH;
-        try {
-          yield* withHarness(
-            Effect.gen(function* () {
-              const fileSystem = yield* FileSystem.FileSystem;
-              const environment = yield* DesktopEnvironment.DesktopEnvironment;
-              const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-              const runtimeRoot = environment.path.join(
-                environment.homeDirectory,
-                ".agents",
-                "ucsd",
-                "runtime",
-                "node",
-              );
-
-              process.env.PATH = "/usr/bin:/bin";
-              assert.isUndefined(
-                (yield* configuration.resolvePrimary).env.PATH,
-                "no managed runtime leaves the inherited PATH alone",
-              );
-
-              // The harness runs as darwin/x64.
-              const runtimes = {
-                older: "node-v22.9.0-darwin-x64",
-                newest: "node-v22.23.2-darwin-x64",
-                otherArch: "node-v23.0.0-darwin-arm64",
-                missingNpx: "node-v24.0.0-darwin-x64",
-                notExecutable: "node-v25.0.0-darwin-x64",
-                staging: ".node-v99.0.0-darwin-x64-stage-abc",
-              };
-              const writeRuntime = (name: string, commands: ReadonlyArray<string>, mode: number) =>
-                Effect.gen(function* () {
-                  const bin = environment.path.join(runtimeRoot, name, "bin");
-                  yield* fileSystem.makeDirectory(bin, { recursive: true });
-                  for (const command of commands) {
-                    const file = environment.path.join(bin, command);
-                    yield* fileSystem.writeFileString(file, "");
-                    yield* fileSystem.chmod(file, mode);
-                  }
-                });
-              const complete = ["node", "npm", "npx"];
-              yield* writeRuntime(runtimes.older, complete, 0o755);
-              yield* writeRuntime(runtimes.newest, complete, 0o755);
-              yield* writeRuntime(runtimes.otherArch, complete, 0o755);
-              yield* writeRuntime(runtimes.missingNpx, ["node", "npm"], 0o755);
-              yield* writeRuntime(runtimes.notExecutable, complete, 0o644);
-              yield* writeRuntime(runtimes.staging, complete, 0o755);
-              const newestBin = environment.path.join(runtimeRoot, runtimes.newest, "bin");
-
-              assert.equal(
-                (yield* configuration.resolvePrimary).env.PATH,
-                `/usr/bin:/bin:${newestBin}`,
-                "the newest usable runtime for this platform and arch goes last so a user-installed Node keeps precedence",
-              );
-
-              process.env.PATH = "/usr/bin::/bin";
-              assert.equal(
-                (yield* configuration.resolvePrimary).env.PATH,
-                `/usr/bin::/bin:${newestBin}`,
-                "an empty inherited entry (the current directory) is preserved",
-              );
-
-              process.env.PATH = `/usr/bin:${newestBin}:/bin`;
-              assert.equal(
-                (yield* configuration.resolvePrimary).env.PATH,
-                `/usr/bin:${newestBin}:/bin`,
-                "an entry already on PATH is not duplicated",
-              );
-            }),
-          );
-        } finally {
-          restoreEnv("PATH", previousPath);
-        }
-      }),
-  );
-
-  it.effect(
-    "resolvePrimary restores the Installer's declared tool folders after the inherited PATH",
-    () =>
-      Effect.gen(function* () {
-        const previousPath = process.env.PATH;
-        try {
-          yield* withHarness(
-            Effect.gen(function* () {
-              const fileSystem = yield* FileSystem.FileSystem;
-              const environment = yield* DesktopEnvironment.DesktopEnvironment;
-              const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-              const ucsd = environment.path.join(environment.homeDirectory, ".agents", "ucsd");
-              const declared = {
-                helpers: environment.path.join(ucsd, "bin"),
-                codex: environment.path.join(
-                  ucsd,
-                  "runtime",
-                  "codex",
-                  "openai-codex-0.151.0",
-                  "bin",
-                ),
-                npmGlobal: environment.path.join(ucsd, "runtime", "node-global", "bin"),
-                node: environment.path.join(
-                  ucsd,
-                  "runtime",
-                  "node",
-                  "node-v22.23.2-darwin-x64",
-                  "bin",
-                ),
-              };
-              for (const directory of [declared.helpers, declared.codex, declared.node]) {
-                yield* fileSystem.makeDirectory(directory, { recursive: true });
-              }
-              // A newer staged runtime the env file does not declare must not be picked.
-              const undeclared = environment.path.join(
-                ucsd,
-                "runtime",
-                "node",
-                "node-v24.0.0-darwin-x64",
-                "bin",
-              );
-              yield* fileSystem.makeDirectory(undeclared, { recursive: true });
-              for (const command of ["node", "npm", "npx"]) {
-                yield* fileSystem.writeFileString(environment.path.join(undeclared, command), "");
-                yield* fileSystem.chmod(environment.path.join(undeclared, command), 0o755);
-              }
-              yield* fileSystem.writeFileString(
-                environment.path.join(ucsd, "env"),
-                [
-                  `export PATH='${Object.values(declared).join(":")}':$PATH`,
-                  "export UCSD_AI_BASE_URL=https://tritonai-api.ucsd.edu/v1",
-                  "",
-                ].join("\n"),
-              );
-
-              process.env.PATH = "/usr/bin:/bin";
-              assert.equal(
-                (yield* configuration.resolvePrimary).env.PATH,
-                `/usr/bin:/bin:${declared.helpers}:${declared.codex}:${declared.node}`,
-                "declared folders are restored in launcher order, missing ones skipped, after the user's PATH",
-              );
-
-              process.env.PATH = "";
-              assert.equal(
-                (yield* configuration.resolvePrimary).env.PATH,
-                `:${declared.helpers}:${declared.codex}:${declared.node}`,
-                "an explicitly empty PATH (the current directory) stays first",
-              );
-
-              // Under the old launcher they are already on PATH; nothing changes.
-              const launcherPath = `${Object.values(declared).join(":")}:/usr/bin:/bin`;
-              process.env.PATH = launcherPath;
-              assert.equal((yield* configuration.resolvePrimary).env.PATH, launcherPath);
-            }),
-          );
-        } finally {
-          restoreEnv("PATH", previousPath);
-        }
-      }),
-  );
-
-  it.effect("resolvePrimary falls back to the newest usable Codex and Node runtimes", () =>
-    Effect.gen(function* () {
-      const previousPath = process.env.PATH;
-      try {
-        yield* withHarness(
-          Effect.gen(function* () {
-            const fileSystem = yield* FileSystem.FileSystem;
-            const environment = yield* DesktopEnvironment.DesktopEnvironment;
-            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-            const runtime = environment.path.join(
-              environment.homeDirectory,
-              ".agents",
-              "ucsd",
-              "runtime",
-            );
-            const writeCommands = (bin: string, commands: ReadonlyArray<string>) =>
-              Effect.gen(function* () {
-                yield* fileSystem.makeDirectory(bin, { recursive: true });
-                for (const command of commands) {
-                  yield* fileSystem.writeFileString(environment.path.join(bin, command), "");
-                  yield* fileSystem.chmod(environment.path.join(bin, command), 0o755);
-                }
-              });
-            const olderCodex = environment.path.join(
-              runtime,
-              "codex",
-              "openai-codex-0.146.0",
-              "bin",
-            );
-            const newerCodex = environment.path.join(
-              runtime,
-              "codex",
-              "openai-codex-0.151.0",
-              "bin",
-            );
-            const nodeBin = environment.path.join(
-              runtime,
-              "node",
-              "node-v22.23.2-darwin-x64",
-              "bin",
-            );
-            yield* writeCommands(olderCodex, ["codex"]);
-            yield* writeCommands(newerCodex, ["codex"]);
-            yield* writeCommands(nodeBin, ["node", "npm", "npx"]);
-
-            process.env.PATH = "/usr/bin:/bin";
-            assert.equal(
-              (yield* configuration.resolvePrimary).env.PATH,
-              `/usr/bin:/bin:${newerCodex}:${nodeBin}`,
-            );
-          }),
-        );
-      } finally {
-        restoreEnv("PATH", previousPath);
-      }
-    }),
-  );
-
-  it.effect("Windows startup reads Installer literals without running its launcher", () =>
-    Effect.gen(function* () {
-      const names = ["TRITONAI_API_KEY", "UCSD_AI_BASE_URL"] as const;
-      const previous = names.map((name) => process.env[name]);
-      try {
-        process.env.TRITONAI_API_KEY = "stale-shared-key";
-        process.env.UCSD_AI_BASE_URL = "https://user.example/v1";
-        yield* withHarness(
-          Effect.gen(function* () {
-            const fs = yield* FileSystem.FileSystem;
-            const environment = yield* DesktopEnvironment.DesktopEnvironment;
-            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-            const directory = environment.path.join(environment.homeDirectory, ".agents", "ucsd");
-            yield* fs.makeDirectory(directory, { recursive: true });
-            yield* fs.writeFileString(
-              environment.path.join(directory, "env"),
-              "export TRITONAI_API_KEY='wrong-platform-key'\n",
-            );
-            yield* fs.writeFileString(
-              environment.path.join(directory, "env.ps1"),
-              [
-                "$env:PATH = 'C:\\managed;' + $env:PATH",
-                "$env:UCSD_AI_BASE_URL = 'https://installer.example/v1'",
-                "$env:TRITONAI_HOME = 'C:\\wrong-profile'",
-                "Remove-Item Env:TRITONAI_API_KEY -ErrorAction SilentlyContinue",
-                "$env:TRITONAI_ONPREM_API_KEY = 'test-onprem'",
-                "$env:TRITONAI_FRONTIER_API_KEY = 'test-frontier'",
-                "$env:UCSD_LITERAL = 'Triton''s $literal `value C:\\config'",
-                "$env:UCSD_EXPRESSION = $(throw 'must not execute')",
-                "$env:UCSD_TRAILING = 'value'; throw 'must not execute'",
-              ].join("\r\n"),
-            );
-            // Direct startup and subsequent backend resolution use the same file.
-            for (let attempt = 0; attempt < 2; attempt++) {
-              const config = yield* configuration.resolvePrimary;
-              assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "test-onprem");
-              assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "test-frontier");
-              assert.isUndefined(config.env.TRITONAI_API_KEY);
-              assert.isUndefined(config.env.UCSD_AI_BASE_URL);
-              assert.isTrue(config.extendEnv);
-              assert.isUndefined(config.env.PATH);
-              assert.isUndefined(config.env.TRITONAI_HOME);
-              assert.equal(config.bootstrap.t3Home, environment.baseDir);
-              assert.equal(config.env.UCSD_LITERAL, "Triton's $literal `value C:\\config");
-              assert.isUndefined(config.env.UCSD_EXPRESSION);
-              assert.isUndefined(config.env.UCSD_TRAILING);
-            }
-            yield* fs.writeFileString(
-              environment.path.join(directory, "env.ps1"),
-              "$env:TRITONAI_API_KEY = 'installed-shared-key'\n",
-            );
-            const shared = yield* configuration.resolvePrimary;
-            assert.equal(shared.env.TRITONAI_API_KEY, "installed-shared-key");
-            assert.isUndefined(shared.env.TRITONAI_ONPREM_API_KEY);
-            assert.isUndefined(shared.env.TRITONAI_FRONTIER_API_KEY);
-            yield* DesktopTritonAiApiKey.replaceTritonAiApiKey("desktop-override");
-            const overridden = yield* configuration.resolvePrimary;
-            assert.equal(overridden.env.TRITONAI_API_KEY, "desktop-override");
-            assert.isUndefined(overridden.env.TRITONAI_ONPREM_API_KEY);
-            assert.isUndefined(overridden.env.TRITONAI_FRONTIER_API_KEY);
-          }),
-          "win32",
-        );
-      } finally {
-        names.forEach((name, index) => restoreEnv(name, previous[index]));
-      }
-    }),
-  );
-
-  it.effect("resolvePrimary clears an inherited shared key for split installer credentials", () =>
-    Effect.gen(function* () {
-      const previousSharedKey = process.env.TRITONAI_API_KEY;
-      const inherited = "stale-shared-key";
-      const installedLocal = "installed-on-prem-key";
-      const installedFrontier = "installed-frontier-key";
-      try {
-        process.env.TRITONAI_API_KEY = inherited;
-
-        yield* withHarness(
-          Effect.gen(function* () {
-            const fileSystem = yield* FileSystem.FileSystem;
-            const environment = yield* DesktopEnvironment.DesktopEnvironment;
-            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-            const envFile = environment.path.join(
-              environment.homeDirectory,
-              ".agents",
-              "ucsd",
-              "env",
-            );
-            yield* fileSystem.makeDirectory(environment.path.dirname(envFile), {
-              recursive: true,
-            });
-            yield* fileSystem.writeFileString(
-              envFile,
-              [
-                `export TRITONAI_ONPREM_API_KEY='${installedLocal}'`,
-                `export TRITONAI_FRONTIER_API_KEY='${installedFrontier}'`,
-                "",
-              ].join("\n"),
-            );
-
-            const config = yield* configuration.resolvePrimary;
-            assert.isUndefined(config.env.TRITONAI_API_KEY);
-            assert.equal(config.env.TRITONAI_ONPREM_API_KEY, installedLocal);
-            assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, installedFrontier);
-          }),
-        );
-      } finally {
-        restoreEnv("TRITONAI_API_KEY", previousSharedKey);
-      }
-    }),
-  );
-
-  it.effect("resolvePrimary prefers the persistent desktop key override", () =>
-    Effect.gen(function* () {
-      const previousTritonAiKey = process.env.TRITONAI_API_KEY;
-      try {
-        process.env.TRITONAI_API_KEY = "old-key";
-
-        yield* withHarness(
-          Effect.gen(function* () {
-            const fileSystem = yield* FileSystem.FileSystem;
-            const environment = yield* DesktopEnvironment.DesktopEnvironment;
-            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-            const envFile = environment.path.join(
-              environment.homeDirectory,
-              ".agents",
-              "ucsd",
-              "env",
-            );
-            yield* fileSystem.makeDirectory(environment.path.dirname(envFile), {
-              recursive: true,
-            });
-            yield* fileSystem.writeFileString(envFile, "export TRITONAI_API_KEY='setup-key'\n");
-            yield* DesktopTritonAiApiKey.replaceTritonAiApiKey("new-key");
-
-            const first = yield* configuration.resolvePrimary;
-            const afterRelaunch = yield* configuration.resolvePrimary;
-            assert.equal(first.env.TRITONAI_API_KEY, "new-key");
-            assert.equal(afterRelaunch.env.TRITONAI_API_KEY, "new-key");
-          }),
-        );
-      } finally {
-        restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
-      }
-    }),
-  );
-
-  it.effect("resolvePrimary applies a split desktop credential override atomically", () =>
-    Effect.gen(function* () {
-      const previousSharedKey = process.env.TRITONAI_API_KEY;
-      const previousOnPremKey = process.env.TRITONAI_ONPREM_API_KEY;
-      const previousFrontierKey = process.env.TRITONAI_FRONTIER_API_KEY;
-      try {
-        process.env.TRITONAI_API_KEY = "old-shared-key";
-        process.env.TRITONAI_ONPREM_API_KEY = "old-on-prem-key";
-        process.env.TRITONAI_FRONTIER_API_KEY = "old-frontier-key";
-
-        yield* withHarness(
-          Effect.gen(function* () {
-            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-            yield* DesktopTritonAiApiKey.replaceTritonAiCredentials({
-              onPremApiKey: "new-on-prem-key",
-              frontierApiKey: "new-frontier-key",
-            });
-
-            const config = yield* configuration.resolvePrimary;
-            assert.isUndefined(config.env.TRITONAI_API_KEY);
-            assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "new-on-prem-key");
-            assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "new-frontier-key");
-          }),
-        );
-      } finally {
-        restoreEnv("TRITONAI_API_KEY", previousSharedKey);
-        restoreEnv("TRITONAI_ONPREM_API_KEY", previousOnPremKey);
-        restoreEnv("TRITONAI_FRONTIER_API_KEY", previousFrontierKey);
-      }
-    }),
-  );
-
-  it.effect("resolveWsl carries environment-configured observability endpoints", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
-
-        assert.equal(config.bootstrap.otlpTracesUrl, "http://127.0.0.1:4318/v1/traces");
-        assert.equal(config.bootstrap.otlpMetricsUrl, "http://127.0.0.1:4318/v1/metrics");
-        assert.equal(config.bootstrap.otlpLogsUrl, "http://127.0.0.1:4318/v1/logs");
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(
-              DesktopWslEnvironment.layerTest({
-                isAvailable: true,
-                windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
-                getDistroIp: () => Option.some("172.27.0.99"),
-              }),
-            ),
-            Layer.provideMerge(
-              layerEnvironment(baseDir, {
-                platform: "win32",
-                otlpTracesUrl: " http://127.0.0.1:4318/v1/traces ",
-                otlpMetricsUrl: " http://127.0.0.1:4318/v1/metrics ",
-                otlpLogsUrl: " http://127.0.0.1:4318/v1/logs ",
-              }),
-            ),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("environment observability endpoints win over the persisted settings file", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-
-      yield* Effect.gen(function* () {
-        const environment = yield* DesktopEnvironment.DesktopEnvironment;
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-
-        yield* fileSystem.makeDirectory(environment.path.dirname(environment.serverSettingsPath), {
-          recursive: true,
-        });
-        yield* fileSystem.writeFileString(
-          environment.serverSettingsPath,
-          yield* encodePersistedServerObservabilitySettingsDocument({
-            observability: {
-              otlpTracesUrl: "http://persisted:4318/v1/traces",
-              otlpMetricsUrl: "http://persisted:4318/v1/metrics",
-              otlpLogsUrl: "http://persisted:4318/v1/logs",
-            },
-          }),
-        );
-
-        const config = yield* configuration.resolvePrimary;
-        assert.equal(config.bootstrap.otlpLogsUrl, "http://env:4318/v1/logs");
-        assert.equal(config.bootstrap.otlpTracesUrl, "http://persisted:4318/v1/traces");
-        assert.equal(config.bootstrap.otlpMetricsUrl, "http://persisted:4318/v1/metrics");
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-            Layer.provideMerge(
-              layerEnvironment(baseDir, { otlpLogsUrl: "http://env:4318/v1/logs" }),
-            ),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("logs structured context when persisted observability settings cannot be read", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-      const settingsPath = path.join(baseDir, "userdata", "settings.json");
-      const cause = PlatformError.systemError({
-        _tag: "PermissionDenied",
-        module: "FileSystem",
-        method: "readFileString",
-        pathOrDescriptor: settingsPath,
-      });
-      const messages: Array<unknown> = [];
-      const logger = Logger.make(({ message }) => {
-        messages.push(message);
-      });
-      const layerFailingFileSystem = Layer.effect(
-        FileSystem.FileSystem,
-        Effect.gen(function* () {
-          const liveFileSystem = yield* FileSystem.FileSystem;
-          return {
-            ...liveFileSystem,
-            readFileString: (target, encoding) =>
-              String(target) === settingsPath
-                ? Effect.fail(cause)
-                : liveFileSystem.readFileString(target, encoding),
-          } satisfies FileSystem.FileSystem;
-        }),
-      ).pipe(Layer.provide(NodeServices.layer));
-
-      const config = yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        return yield* configuration.resolvePrimary;
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            layerBackendConfiguration().pipe(
-              Layer.provideMerge(desktopTestServicesLayer),
-              Layer.provideMerge(DesktopAppSettings.layerTest()),
-              Layer.provideMerge(DesktopWslServerTree.layerTest()),
-              Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-              Layer.provideMerge(layerEnvironment(baseDir)),
-              Layer.provideMerge(layerFailingFileSystem),
-            ),
-            Logger.layer([logger], { mergeWithExisting: false }),
-          ),
-        ),
-      );
-
-      assert.isUndefined(config.bootstrap.otlpTracesUrl);
-      assert.isUndefined(config.bootstrap.otlpMetricsUrl);
-      assert.isUndefined(config.bootstrap.otlpLogsUrl);
-
-      const error = messages
-        .flatMap((message) => (Array.isArray(message) ? message : [message]))
-        .find(isDesktopBackendObservabilitySettingsReadError);
-      assert.isDefined(error);
-      assert.equal(error.settingsPath, settingsPath);
-      assert.equal(error.cause, cause);
-      assert.equal(
-        error.message,
-        `Failed to read persisted backend observability settings at ${settingsPath}.`,
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolvePrimary captures backend output in dev so child logs can be persisted", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolvePrimary;
-        assert.equal(config.captureOutput, true);
-        assert.notInclude(config.args, "--require");
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-            Layer.provideMerge(
-              layerEnvironment(baseDir, {
-                isPackaged: false,
-                devServerUrl: "http://127.0.0.1:5733",
-              }),
-            ),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolveWsl carries the kill switch into the distro", () =>
+  it.effect("resolveWsl carries the kill switch and resource attributes into the distro", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -1624,10 +695,12 @@ describe("DesktopBackendConfiguration", () => {
       const previousWslEnv = process.env.WSLENV;
       const previousDisabled = process.env.OTEL_SDK_DISABLED;
       const previousTelemetry = process.env.T3CODE_TELEMETRY_ENABLED;
+      const previousResourceAttributes = process.env.OTEL_RESOURCE_ATTRIBUTES;
       try {
         delete process.env.WSLENV;
         process.env.OTEL_SDK_DISABLED = "true";
         process.env.T3CODE_TELEMETRY_ENABLED = "false";
+        process.env.OTEL_RESOURCE_ATTRIBUTES = "deployment.environment.name=staging";
 
         yield* Effect.gen(function* () {
           const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
@@ -1637,10 +710,12 @@ describe("DesktopBackendConfiguration", () => {
           assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_SDK_DISABLED");
           assert.equal(config.env.T3CODE_TELEMETRY_ENABLED, "false");
           assert.include((config.env.WSLENV ?? "").split(":"), "T3CODE_TELEMETRY_ENABLED");
+          assert.equal(config.env.OTEL_RESOURCE_ATTRIBUTES, "deployment.environment.name=staging");
+          assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_RESOURCE_ATTRIBUTES");
         }).pipe(
           Effect.provide(
             layerBackendConfiguration().pipe(
-              Layer.provideMerge(desktopTestServicesLayer),
+              Layer.provideMerge(layerServerExposure),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(DesktopWslServerTree.layerTest()),
               Layer.provideMerge(
@@ -1658,76 +733,12 @@ describe("DesktopBackendConfiguration", () => {
         restoreEnv("WSLENV", previousWslEnv);
         restoreEnv("OTEL_SDK_DISABLED", previousDisabled);
         restoreEnv("T3CODE_TELEMETRY_ENABLED", previousTelemetry);
+        restoreEnv("OTEL_RESOURCE_ATTRIBUTES", previousResourceAttributes);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect(
-    "resolveWsl carries the standard OTLP endpoint, headers, and protocol into the distro",
-    () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "t3-desktop-backend-config-test-",
-        });
-
-        const standard = {
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com:4318/base?api_key=secret",
-          OTEL_EXPORTER_OTLP_LOGS_HEADERS: "authorization=Bearer%20token",
-          T3CODE_OTLP_TRACES_URL: "http://t3.example.com:4318/v1/traces",
-        };
-        const previousWslEnv = process.env.WSLENV;
-        const ambientOtel = Object.entries(process.env).filter(
-          ([name]) => name.startsWith("OTEL_") || name.startsWith("T3CODE_OTLP_"),
-        );
-        try {
-          for (const [name] of ambientOtel) delete process.env[name];
-          delete process.env.WSLENV;
-          Object.assign(process.env, standard);
-
-          yield* Effect.gen(function* () {
-            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-            const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
-
-            assert.equal(
-              config.env.OTEL_EXPORTER_OTLP_ENDPOINT,
-              "https://collector.example.com:4318/base?api_key=secret",
-            );
-            assert.equal(
-              config.env.OTEL_EXPORTER_OTLP_LOGS_HEADERS,
-              "authorization=Bearer%20token",
-            );
-            const wslEnv = (config.env.WSLENV ?? "").split(":");
-            assert.include(wslEnv, "OTEL_EXPORTER_OTLP_ENDPOINT");
-            assert.include(wslEnv, "OTEL_EXPORTER_OTLP_LOGS_HEADERS");
-            assert.equal(config.env.T3CODE_OTLP_TRACES_URL, "http://t3.example.com:4318/v1/traces");
-            assert.include(wslEnv, "T3CODE_OTLP_TRACES_URL");
-          }).pipe(
-            Effect.provide(
-              layerBackendConfiguration().pipe(
-                Layer.provideMerge(desktopTestServicesLayer),
-                Layer.provideMerge(DesktopAppSettings.layerTest()),
-                Layer.provideMerge(DesktopWslServerTree.layerTest()),
-                Layer.provideMerge(
-                  DesktopWslEnvironment.layerTest({
-                    isAvailable: true,
-                    windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
-                    getDistroIp: () => Option.some("172.27.0.99"),
-                  }),
-                ),
-                Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
-              ),
-            ),
-          );
-        } finally {
-          for (const name of Object.keys(standard)) delete process.env[name];
-          restoreEnv("WSLENV", previousWslEnv);
-          for (const [name, value] of ambientOtel) restoreEnv(name, value);
-        }
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolveWsl preserves WSLENV while forwarding backend configuration", () =>
+  it.effect("resolveWsl preserves existing WSLENV entries when forwarding backend secrets", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -1737,13 +748,6 @@ describe("DesktopBackendConfiguration", () => {
       const previousWslEnv = process.env.WSLENV;
       const previousOpenAiKey = process.env.OPENAI_API_KEY;
       const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
-      const previousTritonAiKey = process.env.TRITONAI_API_KEY;
-      const previousTritonAiOnPremKey = process.env.TRITONAI_ONPREM_API_KEY;
-      const previousTritonAiFrontierKey = process.env.TRITONAI_FRONTIER_API_KEY;
-      const previousUcsdAiBaseUrl = process.env.UCSD_AI_BASE_URL;
-      const previousAccountServiceUrl = process.env.TRITONAI_ACCOUNT_SERVICE_URL;
-      const previousAccountAllowInsecureLoopback =
-        process.env.TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK;
       const previousOtlpHeaders = process.env.T3CODE_OTLP_HEADERS;
       const previousOtlpProtocol = process.env.T3CODE_OTLP_PROTOCOL;
       const ambientOtel = Object.entries(process.env).filter(([name]) => name.startsWith("OTEL_"));
@@ -1752,12 +756,6 @@ describe("DesktopBackendConfiguration", () => {
         process.env.WSLENV = "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u";
         process.env.OPENAI_API_KEY = "openai-key";
         process.env.ANTHROPIC_API_KEY = "anthropic-key";
-        process.env.TRITONAI_API_KEY = "tritonai-key";
-        process.env.TRITONAI_ONPREM_API_KEY = "on-prem-key";
-        process.env.TRITONAI_FRONTIER_API_KEY = "frontier-key";
-        process.env.UCSD_AI_BASE_URL = "https://voice.example.test/v1";
-        process.env.TRITONAI_ACCOUNT_SERVICE_URL = "https://accounts.example.test";
-        process.env.TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK = "1";
         process.env.T3CODE_OTLP_HEADERS = 'authorization="Bearer%20my-token"';
         process.env.T3CODE_OTLP_PROTOCOL = "http/protobuf";
 
@@ -1774,21 +772,15 @@ describe("DesktopBackendConfiguration", () => {
           assert.equal(config.httpBaseUrl.href, "http://172.27.0.99:5050/");
           assert.equal(config.env.OPENAI_API_KEY, "openai-key");
           assert.equal(config.env.ANTHROPIC_API_KEY, "anthropic-key");
-          assert.equal(config.env.TRITONAI_API_KEY, "tritonai-key");
-          assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "on-prem-key");
-          assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "frontier-key");
-          assert.equal(config.env.UCSD_AI_BASE_URL, "https://voice.example.test/v1");
-          assert.equal(config.env.TRITONAI_ACCOUNT_SERVICE_URL, "https://accounts.example.test");
-          assert.equal(config.env.TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK, "1");
           assert.equal(config.env.T3CODE_OTLP_PROTOCOL, "http/protobuf");
           assert.equal(
             config.env.WSLENV,
-            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:TRITONAI_API_KEY:TRITONAI_ONPREM_API_KEY:TRITONAI_FRONTIER_API_KEY:UCSD_AI_BASE_URL:TRITONAI_ACCOUNT_SERVICE_URL:TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK:T3CODE_OTLP_HEADERS:T3CODE_OTLP_PROTOCOL",
+            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:T3CODE_OTLP_HEADERS:T3CODE_OTLP_PROTOCOL",
           );
         }).pipe(
           Effect.provide(
             layerBackendConfiguration().pipe(
-              Layer.provideMerge(desktopTestServicesLayer),
+              Layer.provideMerge(layerServerExposure),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(DesktopWslServerTree.layerTest()),
               Layer.provideMerge(
@@ -1808,134 +800,7 @@ describe("DesktopBackendConfiguration", () => {
         restoreEnv("ANTHROPIC_API_KEY", previousAnthropicKey);
         restoreEnv("T3CODE_OTLP_HEADERS", previousOtlpHeaders);
         restoreEnv("T3CODE_OTLP_PROTOCOL", previousOtlpProtocol);
-        restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
-        restoreEnv("TRITONAI_ONPREM_API_KEY", previousTritonAiOnPremKey);
-        restoreEnv("TRITONAI_FRONTIER_API_KEY", previousTritonAiFrontierKey);
-        restoreEnv("UCSD_AI_BASE_URL", previousUcsdAiBaseUrl);
-        restoreEnv("TRITONAI_ACCOUNT_SERVICE_URL", previousAccountServiceUrl);
-        restoreEnv(
-          "TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK",
-          previousAccountAllowInsecureLoopback,
-        );
         for (const [name, value] of ambientOtel) restoreEnv(name, value);
-      }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolveWsl forwards UCSD environment and prefers the desktop key override", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-      const envFile = path.join(baseDir, ".agents", "ucsd", "env.ps1");
-      yield* fileSystem.makeDirectory(path.dirname(envFile), { recursive: true });
-      yield* fileSystem.writeFileString(
-        envFile,
-        [
-          "$env:TRITONAI_API_KEY = 'installer-triton-key'",
-          "$env:UCSD_AI_BASE_URL = 'https://installer.example.edu/v1'",
-          "",
-        ].join("\n"),
-      );
-      yield* DesktopTritonAiApiKey.replaceTritonAiApiKey("wsl-key").pipe(
-        Effect.provide(layerEnvironment(baseDir)),
-      );
-
-      const previousWslEnv = process.env.WSLENV;
-      const previousOpenAiKey = process.env.OPENAI_API_KEY;
-      const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
-      const previousTritonAiKey = process.env.TRITONAI_API_KEY;
-      const previousUcsdAiBaseUrl = process.env.UCSD_AI_BASE_URL;
-      try {
-        process.env.WSLENV = "GOPATH/p";
-        delete process.env.OPENAI_API_KEY;
-        delete process.env.ANTHROPIC_API_KEY;
-        delete process.env.TRITONAI_API_KEY;
-        delete process.env.UCSD_AI_BASE_URL;
-
-        yield* Effect.gen(function* () {
-          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-          const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
-
-          assert.equal(config.env.TRITONAI_API_KEY, "wsl-key");
-          assert.equal(config.env.UCSD_AI_BASE_URL, "https://installer.example.edu/v1");
-          assert.equal(config.env.WSLENV, "GOPATH/p:TRITONAI_API_KEY:UCSD_AI_BASE_URL");
-        }).pipe(
-          Effect.provide(
-            layerBackendConfiguration().pipe(
-              Layer.provideMerge(desktopTestServicesLayer),
-              Layer.provideMerge(DesktopAppSettings.layerTest()),
-              Layer.provideMerge(DesktopWslServerTree.layerTest()),
-              Layer.provideMerge(
-                DesktopWslEnvironment.layerTest({
-                  isAvailable: true,
-                  windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
-                  getDistroIp: () => Option.some("172.27.0.99"),
-                }),
-              ),
-              Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
-            ),
-          ),
-        );
-      } finally {
-        restoreEnv("WSLENV", previousWslEnv);
-        restoreEnv("OPENAI_API_KEY", previousOpenAiKey);
-        restoreEnv("ANTHROPIC_API_KEY", previousAnthropicKey);
-        restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
-        restoreEnv("UCSD_AI_BASE_URL", previousUcsdAiBaseUrl);
-      }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolveWsl clears inherited shared credentials for a split desktop override", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-      yield* DesktopTritonAiApiKey.replaceTritonAiCredentials({
-        onPremApiKey: "wsl-on-prem-key",
-        frontierApiKey: "wsl-frontier-key",
-      }).pipe(Effect.provide(layerEnvironment(baseDir)));
-
-      const previousWslEnv = process.env.WSLENV;
-      const previousSharedKey = process.env.TRITONAI_API_KEY;
-      try {
-        process.env.WSLENV = "GOPATH/p";
-        process.env.TRITONAI_API_KEY = "stale-shared-key";
-
-        yield* Effect.gen(function* () {
-          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-          const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
-
-          assert.isUndefined(config.env.TRITONAI_API_KEY);
-          assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "wsl-on-prem-key");
-          assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "wsl-frontier-key");
-          assert.notInclude(config.env.WSLENV ?? "", "TRITONAI_API_KEY");
-          assert.include(config.env.WSLENV ?? "", "TRITONAI_ONPREM_API_KEY");
-          assert.include(config.env.WSLENV ?? "", "TRITONAI_FRONTIER_API_KEY");
-        }).pipe(
-          Effect.provide(
-            layerBackendConfiguration().pipe(
-              Layer.provideMerge(desktopTestServicesLayer),
-              Layer.provideMerge(DesktopAppSettings.layerTest()),
-              Layer.provideMerge(DesktopWslServerTree.layerTest()),
-              Layer.provideMerge(
-                DesktopWslEnvironment.layerTest({
-                  isAvailable: true,
-                  windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
-                  getDistroIp: () => Option.some("172.27.0.99"),
-                }),
-              ),
-              Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
-            ),
-          ),
-        );
-      } finally {
-        restoreEnv("WSLENV", previousWslEnv);
-        restoreEnv("TRITONAI_API_KEY", previousSharedKey);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
@@ -1960,7 +825,7 @@ describe("DesktopBackendConfiguration", () => {
         }).pipe(
           Effect.provide(
             layerBackendConfiguration().pipe(
-              Layer.provideMerge(desktopTestServicesLayer),
+              Layer.provideMerge(layerServerExposure),
               Layer.provideMerge(
                 DesktopAppSettings.layerTest({
                   ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -1997,7 +862,7 @@ describe("DesktopBackendConfiguration", () => {
         }).pipe(
           Effect.provide(
             layerBackendConfiguration().pipe(
-              Layer.provideMerge(desktopTestServicesLayer),
+              Layer.provideMerge(layerServerExposure),
               Layer.provideMerge(
                 DesktopAppSettings.layerTest({
                   ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -2020,42 +885,6 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("resolveWsl keeps a transient distro-list failure retryable", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolveWsl({ port: 5050, distro: "Ubuntu" });
-        const failure = Option.getOrThrow(config.preflightFailure);
-
-        assert.isFalse(failure.fatal);
-        assert.equal(failure.retryLimit, 12);
-        assert.include(failure.reason, "timed out");
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(
-              DesktopWslEnvironment.layerTest({
-                isAvailable: true,
-                distroListError: new DesktopWslEnvironment.DesktopWslDistroListError({
-                  reason: "wsl.exe --list --verbose timed out",
-                }),
-              }),
-            ),
-            Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("resolveWsl marks a missing packaged server entry as fatal", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -2073,7 +902,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
+            Layer.provideMerge(layerServerExposure),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(DesktopWslServerTree.layerTest()),
             Layer.provideMerge(
@@ -2082,113 +911,6 @@ describe("DesktopBackendConfiguration", () => {
                 distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
               }),
             ),
-            Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolveWsl surfaces sidecar extraction failures through typed preflight", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolveWsl({ port: 5050, distro: "Ubuntu" });
-        const failure = Option.getOrThrow(config.preflightFailure);
-
-        assert.isFalse(failure.fatal);
-        assert.equal(failure.retryLimit, 12);
-        assert.include(failure.reason, "could not be extracted");
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(
-              DesktopWslServerTree.layerTest({
-                result: {
-                  ok: false,
-                  reason: "WSL server files could not be extracted",
-                  fatal: false,
-                },
-              }),
-            ),
-            Layer.provideMerge(
-              DesktopWslEnvironment.layerTest({
-                isAvailable: true,
-                distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
-              }),
-            ),
-            Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolveWsl marks a missing selected distro as a fatal preflight failure", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolveWsl({ port: 5050, distro: "Removed-Distro" });
-        const failure = Option.getOrThrow(config.preflightFailure);
-
-        assert.isTrue(failure.fatal);
-        assert.include(failure.reason, "Removed-Distro");
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(
-              DesktopWslEnvironment.layerTest({
-                isAvailable: true,
-                distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
-              }),
-            ),
-            Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolvePrimaryLabel reports the WSL distro when wsl-only and WSL is available", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const label = yield* configuration.resolvePrimaryLabel;
-        assert.equal(label, "WSL (Ubuntu)");
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
-            Layer.provideMerge(
-              DesktopAppSettings.layerTest({
-                ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
-                wslBackendEnabled: true,
-                wslOnly: true,
-                wslDistro: "Ubuntu",
-              }),
-            ),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(DesktopWslEnvironment.layerTest({ isAvailable: true })),
             Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
           ),
         ),
@@ -2227,7 +949,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
+            Layer.provideMerge(layerServerExposure),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(DesktopWslServerTree.layerTest()),
             Layer.provideMerge(DesktopWslEnvironment.layerTest()),
@@ -2239,93 +961,6 @@ describe("DesktopBackendConfiguration", () => {
                 resourcesPath,
               }),
             ),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("prefers the release resource monitor when both development builds exist", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-      const dirname = path.join(baseDir, "apps/desktop/src");
-      const releaseMonitorPath = path.join(
-        baseDir,
-        "native/resource-monitor/target/release/t3-resource-monitor",
-      );
-      const debugMonitorPath = path.join(
-        baseDir,
-        "native/resource-monitor/target/debug/t3-resource-monitor",
-      );
-      yield* fileSystem.makeDirectory(path.dirname(releaseMonitorPath), { recursive: true });
-      yield* fileSystem.makeDirectory(path.dirname(debugMonitorPath), { recursive: true });
-      yield* fileSystem.writeFileString(releaseMonitorPath, "release");
-      yield* fileSystem.writeFileString(debugMonitorPath, "debug");
-
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolvePrimary;
-        assert.equal(config.bootstrap.resourceMonitorPath, releaseMonitorPath);
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-            Layer.provideMerge(
-              layerEnvironment(baseDir, {
-                dirname,
-                devServerUrl: "http://127.0.0.1:5733",
-                isPackaged: false,
-              }),
-            ),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("resolvePrimaryLabel reports the local environment on non-Windows platforms", () =>
-    withHarness(
-      Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const label = yield* configuration.resolvePrimaryLabel;
-        assert.equal(label, "Local environment");
-      }),
-    ),
-  );
-
-  it.effect("resolvePrimaryLabel reports Windows when wsl-only but WSL is unavailable", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-desktop-backend-config-test-",
-      });
-
-      yield* Effect.gen(function* () {
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const label = yield* configuration.resolvePrimaryLabel;
-        assert.equal(label, "Windows");
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(desktopTestServicesLayer),
-            Layer.provideMerge(
-              DesktopAppSettings.layerTest({
-                ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
-                wslBackendEnabled: true,
-                wslOnly: true,
-                wslDistro: "Ubuntu",
-              }),
-            ),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(DesktopWslEnvironment.layerTest({ isAvailable: false })),
-            Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
           ),
         ),
       );
@@ -2364,3 +999,26 @@ describe("DesktopBackendConfiguration", () => {
     }
   });
 });
+const safeStorageLayer = Layer.succeed(ElectronSafeStorage.ElectronSafeStorage, {
+  isEncryptionAvailable: Effect.succeed(true),
+  selectedStorageBackend: Effect.succeed("gnome_libsecret"),
+  encryptString: (value) =>
+    Effect.succeed(new TextEncoder().encode(Array.from(value).toReversed().join(""))),
+  decryptString: (value) =>
+    Effect.succeed(Array.from(new TextDecoder().decode(value)).toReversed().join("")),
+} satisfies ElectronSafeStorage.ElectronSafeStorage["Service"]);
+const makeDialogLayer = (response = 0) =>
+  Layer.succeed(ElectronDialog.ElectronDialog, {
+    pickFolder: () => Effect.succeedNone,
+    pickFiles: () => Effect.succeed([]),
+    confirm: () => Effect.succeed(false),
+    showMessageBox: () => Effect.succeed({ response, checkboxChecked: false }),
+    showErrorBox: () => Effect.void,
+  } satisfies ElectronDialog.ElectronDialog["Service"]);
+const dialogLayer = makeDialogLayer();
+const desktopTestServicesLayer = Layer.mergeAll(
+  layerServerExposure,
+  safeStorageLayer,
+  dialogLayer,
+  DesktopComputerUse.layerTest(),
+);

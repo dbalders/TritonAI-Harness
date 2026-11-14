@@ -21,6 +21,16 @@ export interface IntegrationManifestSkill {
   readonly capabilities: ReadonlyArray<string>;
 }
 
+/**
+ * One deployment of the external service a plugin can target, such as Prod or Dev. The user picks
+ * one in Harness; the plugin keeps a separate connection for each.
+ */
+export interface IntegrationManifestServiceEnvironment {
+  readonly id: string;
+  readonly displayName: string;
+  readonly description: string;
+}
+
 export interface IntegrationManifest {
   readonly apiVersion: typeof HARNESS_INTEGRATION_API_VERSION;
   readonly kind: "IntegrationPlugin";
@@ -33,6 +43,8 @@ export interface IntegrationManifest {
   readonly capabilities: ReadonlyArray<IntegrationManifestCapability>;
   readonly tools: ReadonlyArray<IntegrationManifestTool>;
   readonly skills: ReadonlyArray<IntegrationManifestSkill>;
+  /** Present only when the plugin offers more than one service environment. The first is the default. */
+  readonly serviceEnvironments?: ReadonlyArray<IntegrationManifestServiceEnvironment>;
 }
 
 const ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*(?![\s\S])/u;
@@ -40,6 +52,11 @@ const MAX_ID_LENGTH = 64;
 const TOOL = /^[a-z][a-z0-9_.-]*(?![\s\S])/u;
 const MAX_TOOL_NAME_LENGTH = 128;
 const SKILL = /^[a-z][a-z0-9-]{0,63}(?![\s\S])/u;
+const SERVICE_ENVIRONMENT = /^[a-z][a-z0-9-]{0,31}(?![\s\S])/u;
+export const MIN_SERVICE_ENVIRONMENTS = 2;
+export const MAX_SERVICE_ENVIRONMENTS = 4;
+const MAX_SERVICE_ENVIRONMENT_DISPLAY_NAME = 32;
+const MAX_SERVICE_ENVIRONMENT_DESCRIPTION = 120;
 const VERSION =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?![\s\S])/u;
 const MANIFEST_KEYS = new Set([
@@ -54,7 +71,9 @@ const MANIFEST_KEYS = new Set([
   "capabilities",
   "tools",
   "skills",
+  "serviceEnvironments",
 ]);
+const SERVICE_ENVIRONMENT_KEYS = new Set(["id", "displayName", "description"]);
 const CAPABILITY_KEYS = new Set(["id", "displayName", "description", "access"]);
 const TOOL_KEYS = new Set(["name", "displayName", "description", "capabilities", "effect"]);
 const SKILL_KEYS = new Set(["name", "description", "capabilities"]);
@@ -99,6 +118,46 @@ export function isIntegrationId(value: unknown): value is string {
 
 export function isIntegrationSkillName(value: unknown): value is string {
   return typeof value === "string" && SKILL.test(value);
+}
+
+export function isIntegrationServiceEnvironmentId(value: unknown): value is string {
+  return typeof value === "string" && SERVICE_ENVIRONMENT.test(value);
+}
+
+function boundedText(value: unknown, maximum: number): value is string {
+  return nonEmpty(value) && value === value.trim() && value.length <= maximum;
+}
+
+function validateServiceEnvironments(
+  value: unknown,
+): ReadonlyArray<IntegrationManifestServiceEnvironment> {
+  if (
+    !Array.isArray(value) ||
+    value.length < MIN_SERVICE_ENVIRONMENTS ||
+    value.length > MAX_SERVICE_ENVIRONMENTS
+  ) {
+    throw new Error(
+      `Integration serviceEnvironments must list ${MIN_SERVICE_ENVIRONMENTS} to ${MAX_SERVICE_ENVIRONMENTS} environments.`,
+    );
+  }
+  const ids = new Set<string>();
+  return value.map((entry) => {
+    if (!isRecord(entry) || !hasOnlyKeys(entry, SERVICE_ENVIRONMENT_KEYS)) {
+      throw new Error("Invalid or unsupported service environment fields.");
+    }
+    if (
+      !isIntegrationServiceEnvironmentId(entry.id) ||
+      !boundedText(entry.displayName, MAX_SERVICE_ENVIRONMENT_DISPLAY_NAME) ||
+      !boundedText(entry.description, MAX_SERVICE_ENVIRONMENT_DESCRIPTION)
+    ) {
+      throw new Error(
+        "Every service environment requires a stable id, a short displayName, and a description.",
+      );
+    }
+    if (ids.has(entry.id)) throw new Error(`Duplicate service environment ${entry.id}.`);
+    ids.add(entry.id);
+    return { id: entry.id, displayName: entry.displayName, description: entry.description };
+  });
 }
 
 export function isIntegrationVersion(value: unknown): value is string {
@@ -161,6 +220,13 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
   if (hasProviderAuthorizedCapability && input.provider === undefined) {
     throw new Error("Provider-authorized capabilities require a declared provider.");
   }
+  const serviceEnvironments =
+    input.serviceEnvironments === undefined
+      ? undefined
+      : validateServiceEnvironments(input.serviceEnvironments);
+  if (serviceEnvironments && input.provider === undefined) {
+    throw new Error("Service environments require a declared provider.");
+  }
   for (const [kind, entries] of [
     ["tool", tools],
     ["skill", skills],
@@ -201,8 +267,12 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
       names.add(name);
     }
   }
+  const { serviceEnvironments: _serviceEnvironments, ...base } = input;
   return {
-    ...(input as unknown as Omit<IntegrationManifest, "capabilities" | "tools" | "skills">),
+    ...(base as unknown as Omit<
+      IntegrationManifest,
+      "capabilities" | "tools" | "skills" | "serviceEnvironments"
+    >),
     capabilities: capabilities.map((capability) => ({
       id: capability.id as string,
       displayName: capability.displayName as string,
@@ -221,5 +291,6 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
       description: skill.description as string,
       capabilities: [...(skill.capabilities as ReadonlyArray<string>)],
     })),
+    ...(serviceEnvironments ? { serviceEnvironments } : {}),
   };
 }

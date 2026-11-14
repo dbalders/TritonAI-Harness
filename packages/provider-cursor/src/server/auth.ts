@@ -17,6 +17,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+
 import { Cursor, InMemoryCredentialStore } from "./sdk.ts";
 import type { ProviderAuthController } from "@t3tools/provider-core/server/auth";
 
@@ -245,7 +246,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
         }).pipe(Effect.uninterruptible),
       );
     },
-    (effect, flow, stopSessions) =>
+    (effect, flow, _stopSessions) =>
       effect.pipe(
         Effect.scoped,
         Effect.timeoutOrElse({

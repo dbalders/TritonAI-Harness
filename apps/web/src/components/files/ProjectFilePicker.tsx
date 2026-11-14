@@ -8,7 +8,7 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { PierreEntryIcon } from "../chat/PierreEntryIcon";
 import { CommandPaletteContent } from "../CommandPaletteContent";
-import type { CommandPaletteActionItem } from "../CommandPalette.logic";
+import { type CommandPaletteActionItem } from "../CommandPalette.logic";
 import { CommandPaletteResults } from "../CommandPaletteResults";
 import {
   getProjectFilePickerMatches,

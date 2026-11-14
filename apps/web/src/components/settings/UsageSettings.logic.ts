@@ -80,13 +80,6 @@ export function formatUsagePercent(value: number | null): string {
     : `${PERCENT_FORMAT.format(value)}%`;
 }
 
-export function formatUsageLimit(value: number | null, suffix: string): string {
-  if (value === null) return "Not reported";
-  return Number.isFinite(value) && value >= 0
-    ? `${NUMBER_FORMAT.format(value)} ${suffix}`
-    : "Not available";
-}
-
 export function usageErrorTitle(error: string): string {
   if (error.startsWith("Usage is not configured.")) return "API key not configured";
   if (

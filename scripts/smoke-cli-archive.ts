@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off - The isolated smoke home needs fresh encryption key material.
 /**
- * Unpacks a CLI archive into a scratch directory and runs the executable the
- * way an installer would: no repo, no node_modules, no Node on PATH. Catches
- * the failures that only show inside the single-executable, such as an
- * external package reached through `import` or a native addon the hardened
- * runtime refuses to load.
+ * Run an unpacked CLI with no repository, node_modules, or Node on PATH.
+ * This catches single-executable external imports and hardened native loading failures.
  */
 import * as NodeCrypto from "node:crypto";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -58,8 +55,7 @@ const runExecutable = Effect.fn("runExecutable")(function* (
   const child = yield* spawner.spawn(
     ChildProcess.make(executable, args, {
       cwd,
-      // Empty PATH: the archive must not reach a system node, and the
-      // launcher context must not leak in from a developer shell.
+      // Isolate system Node and inherited launcher context from the archive smoke check.
       env: { PATH: "", HOME: cwd, USERPROFILE: cwd, TMPDIR: cwd, TEMP: cwd },
       extendEnv: false,
     }),
@@ -80,9 +76,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
   const platform = yield* HostProcess.Platform;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scratch = yield* fs.makeTempDirectory({ prefix: "t3-cli-smoke-" });
-  // Windows can keep t3.exe locked (EBUSY) for a moment after the server
-  // exits. A leftover scratch directory on a CI runner is harmless, so
-  // cleanup retries briefly and never fails a smoke test that passed.
+  // Windows can briefly retain executable locks; cleanup retries but must not fail a successful smoke check.
   yield* Effect.addFinalizer(() =>
     fs.remove(scratch, { recursive: true }).pipe(
       Effect.retry({ times: 10, schedule: Schedule.spaced("500 millis") }),
@@ -92,8 +86,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
     ),
   );
 
-  // On Windows the archive is a zip and the Git Bash `tar` on PATH is GNU
-  // tar; use the bsdtar Windows ships, which reads both formats.
+  // Windows bsdtar reads zip; Git Bash's GNU tar does not.
   const tar = platform === "win32" ? windowsSystemTar() : "tar";
   const extract = yield* spawner
     .spawn(ChildProcess.make(tar, ["-xf", input.archive, "-C", scratch]))
@@ -164,8 +157,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
     Effect.all([collect(server.stdout), collect(server.stderr)]),
   );
   const httpClient = yield* HttpClient.HttpClient;
-  // A request that connects while the server is still initializing can hang,
-  // so each probe gets its own deadline, like the SSH readiness probe.
+  // Probes can hang during server initialization; bound each request as SSH readiness does.
   const probe = httpClient.execute(HttpClientRequest.get(`http://127.0.0.1:${String(port)}/`)).pipe(
     Effect.map((response) => response.status === 200),
     Effect.timeout(Duration.seconds(2)),

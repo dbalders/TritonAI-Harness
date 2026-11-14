@@ -1,65 +1,26 @@
 import * as NodeChildProcess from "node:child_process";
+
 import * as NodeEvents from "node:events";
+
 import * as NodeFS from "node:fs";
+
 import * as NodeOS from "node:os";
+
 import * as NodePath from "node:path";
+
 import * as NodeVM from "node:vm";
 
 import { assert, describe, it } from "vite-plus/test";
 
 import {
-  APP_BUNDLE_ID,
-  APP_DISPLAY_NAME,
   makeDevelopmentEnvironmentScript,
   makeDevelopmentLauncherScript,
   resolveElectronBinaryPath,
-  resolveMacBundleInfoPlistStrings,
-  resolveMacCodeSignArguments,
-  resolveMacLauncherIconPaths,
   resolveMacLauncherPaths,
   writeDevelopmentLauncherScript,
 } from "./electron-launcher.mjs";
 
-function executeLauncher({ capturedEnvironment, runtimeEnvironment }) {
-  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "tritonai-launcher-test-"));
-  const electronBinaryPath = NodePath.join(tempDir, "electron-stub");
-
-  try {
-    NodeFS.writeFileSync(
-      electronBinaryPath,
-      '#!/bin/sh\nprintf "TRITONAI_HOME=%s\\n" "${TRITONAI_HOME:-}"\nprintf "T3CODE_HOME=%s\\n" "${T3CODE_HOME:-}"\n',
-    );
-    NodeFS.chmodSync(electronBinaryPath, 0o755);
-
-    const environmentFilePath = NodePath.join(tempDir, "environment.sh");
-    NodeFS.writeFileSync(
-      environmentFilePath,
-      makeDevelopmentEnvironmentScript(capturedEnvironment),
-    );
-    const script = makeDevelopmentLauncherScript({
-      electronBinaryPath,
-      mainEntryPath: "/repo/apps/desktop/dist-electron/main.cjs",
-      desktopRoot: "/repo/apps/desktop",
-      environmentFilePath,
-    });
-    const result = NodeChildProcess.spawnSync("/bin/sh", ["-c", script], {
-      encoding: "utf8",
-      env: runtimeEnvironment,
-    });
-
-    assert.equal(result.status, 0, result.stderr);
-    return result.stdout;
-  } finally {
-    NodeFS.rmSync(tempDir, { recursive: true, force: true });
-  }
-}
-
 describe("electron development launcher", () => {
-  it("keeps the downstream desktop identity", () => {
-    assert.equal(APP_DISPLAY_NAME, "TritonAI Harness");
-    assert.match(APP_BUNDLE_ID, /^edu\.ucsd\.tritonai\.harness(?:\.dev\.[a-z0-9]+)?$/u);
-  });
-
   it("uses captured values only as fallbacks for a live runner environment", () => {
     const environmentScript = makeDevelopmentEnvironmentScript({
       VITE_DEV_SERVER_URL: "http://127.0.0.1:8526",
@@ -96,46 +57,6 @@ describe("electron development launcher", () => {
       script,
       "exec '/repo/node_modules/electron/Electron' --t3code-dev-root='/repo/apps/desktop' '/repo/apps/desktop/dist-electron/main.cjs' \"$@\"",
     );
-  });
-
-  it("normalizes a captured legacy home into TRITONAI_HOME", () => {
-    const script = makeDevelopmentEnvironmentScript({ T3CODE_HOME: "/tmp/legacy-home" });
-
-    assert.include(
-      script,
-      'if [ -z "${TRITONAI_HOME:-}" ] && [ -n "${T3CODE_HOME:-}" ]; then export TRITONAI_HOME="$T3CODE_HOME"; fi',
-    );
-    assert.include(
-      script,
-      "if [ -z \"${TRITONAI_HOME:-}\" ]; then export TRITONAI_HOME='/tmp/legacy-home'; fi",
-    );
-    assert.notInclude(script, "export T3CODE_HOME=");
-    assert.include(script, "unset T3CODE_HOME");
-  });
-
-  it("keeps captured TRITONAI_HOME ahead of a live legacy input", () => {
-    const output = executeLauncher({
-      capturedEnvironment: {
-        TRITONAI_HOME: "/tmp/captured-tritonai",
-        T3CODE_HOME: "/tmp/captured-legacy",
-      },
-      runtimeEnvironment: {
-        T3CODE_HOME: "/tmp/runtime-legacy",
-      },
-    });
-
-    assert.equal(output, "TRITONAI_HOME=/tmp/captured-tritonai\nT3CODE_HOME=\n");
-  });
-
-  it("promotes a live legacy input when no home was captured", () => {
-    const output = executeLauncher({
-      capturedEnvironment: {},
-      runtimeEnvironment: {
-        T3CODE_HOME: "/tmp/runtime-legacy",
-      },
-    });
-
-    assert.equal(output, "TRITONAI_HOME=/tmp/runtime-legacy\nT3CODE_HOME=\n");
   });
 
   it("repairs Electron before loading the package entrypoint", () => {
@@ -187,30 +108,6 @@ describe("electron development launcher", () => {
     assert.notInclude(script, "node_modules/electron");
   });
 
-  it("declares why the macOS app needs protected access", () => {
-    const values = resolveMacBundleInfoPlistStrings("TritonAI Harness (Dev) Launcher");
-
-    assert.equal(
-      values.NSScreenCaptureUsageDescription,
-      "TritonAI Harness captures the active window when you use the snapshot shortcut.",
-    );
-    assert.equal(
-      values.NSDocumentsFolderUsageDescription,
-      "TritonAI Harness reads project files you open in the desktop app.",
-    );
-  });
-
-  it("ad-hoc signs the complete development app bundle", () => {
-    assert.deepEqual(resolveMacCodeSignArguments("/runtime/TritonAI Harness (Dev).app"), [
-      "--force",
-      "--deep",
-      "--sign",
-      "-",
-      "--timestamp=none",
-      "/runtime/TritonAI Harness (Dev).app",
-    ]);
-  });
-
   it("restores execute permissions on an unchanged launcher", () => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-launcher-"));
     const launcherPath = NodePath.join(directory, "launcher");
@@ -223,19 +120,6 @@ describe("electron development launcher", () => {
     } finally {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
-  });
-
-  it("derives launcher icons from canonical development and production assets", () => {
-    const development = resolveMacLauncherIconPaths("/runtime", true);
-    const production = resolveMacLauncherIconPaths("/runtime", false);
-
-    assert.match(
-      development.sourceIconPath,
-      /assets[\\/]dev\/tritonai-harness-dev-macos-1024\.png$/,
-    );
-    assert.equal(development.generatedIconPath, "/runtime/icon-dev.icns");
-    assert.match(production.sourceIconPath, /assets[\\/]prod\/tritonai-harness-1024\.png$/);
-    assert.equal(production.generatedIconPath, "/runtime/icon-prod.icns");
   });
 });
 

@@ -12,25 +12,14 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 
 const PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
-/**
- * Incognito partitions deliberately omit the `persist:` prefix, which is what
- * makes Chromium keep them in memory and discard them with the process. They
- * still carry the product prefix so `isPartition` can admit them — the
- * `will-attach-webview` gate rejects anything it does not recognise.
- */
+/** Ephemeral partitions omit persist: but retain a product prefix so the webview gate recognizes them. */
 const PREVIEW_EPHEMERAL_PARTITION_PREFIX = "t3code-preview-ephemeral-";
 const PROFILE_PARTITION_MARKER = "profile-";
 
 export type BrowserSessionPartitionNamespace = "profile";
 
-// Permission granted to preview web content. `clipboard-sanitized-write` is the
-// Electron permission behind `navigator.clipboard.writeText()` — note it is NOT
-// `clipboard-write`, which is not a valid Electron permission name. Async
-// clipboard writes are gated by the permission *check* handler (not only the
-// request handler), so both handlers must allow it; otherwise built-in "Copy"
-// buttons — e.g. the Next.js / Vercel error overlay — fail with
-// `Failed to execute 'writeText' on 'Clipboard': Write permission denied`.
-// Untrusted preview pages need app-level consent for origin-sensitive permissions.
+// Allow clipboard-sanitized-write in both Electron permission handlers for writeText.
+// clipboard-write is not an Electron permission. Origin-sensitive permissions still need app consent.
 /**
  * Schemes a preview page may never hand to the OS, even with the user's
  * consent: they read local files, run script, or are web pages that belong in
@@ -157,12 +146,7 @@ const selectSessions = (
     ([partition]) => partitions === undefined || partitions.includes(partition),
   );
 
-/**
- * `TextEncoder` replaces a lone UTF-16 surrogate with U+FFFD, so `"p\ud800"`
- * and `"p\ufffd"` would hash to the same partition and share cookies. Those
- * are distinct, supported ids, so lone surrogates are escaped to `\uXXXX`
- * first — and a literal backslash is doubled so the escape cannot be forged.
- */
+/** Escape lone surrogates before UTF-8 hashing, which otherwise merges them with U+FFFD; escape backslashes too. */
 const encodeScopeForDigest = (scope: string): Uint8Array =>
   new TextEncoder().encode(
     scope
@@ -173,10 +157,7 @@ const encodeScopeForDigest = (scope: string): Uint8Array =>
       ),
   );
 
-/**
- * A `<webview>` guest has no window of its own, so look it up through the page
- * that embeds it.
- */
+// Webview guests have no window; use their embedding page.
 const previewHostWindow = (guest: WebContents | null): BrowserWindow | undefined => {
   if (guest === null || guest.isDestroyed()) return undefined;
   const host = guest.hostWebContents ?? guest;
@@ -184,18 +165,14 @@ const previewHostWindow = (guest: WebContents | null): BrowserWindow | undefined
   return BrowserWindow.fromWebContents(host) ?? undefined;
 };
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* BrowserSessionMake() {
   const crypto = yield* Crypto.Crypto;
   const electronDialog = yield* ElectronDialog.ElectronDialog;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   // One prompt at a time, so a page cannot stack dialogs by looping a deep link.
   let externalPromptOpen = false;
-  /**
-   * Electron grants an external-protocol navigation through the `openExternal`
-   * permission and then launches the OS handler itself. Ask first: previews run
-   * untrusted pages, and a silent grant would let any of them launch apps.
-   */
+  /** Electron launches external protocols after granting openExternal; untrusted pages require confirmation. */
   const confirmOpenExternal = (
     requester: WebContents | null,
     rawUrl: string | undefined,
@@ -267,11 +244,7 @@ export const make = Effect.gen(function* BrowserSessionMake() {
       return Effect.try({
         try: () => {
           const browserSession = session.fromPartition(partition);
-          // The guest keeps Electron's native User-Agent. Rewriting it in any
-          // form — even variants that keep the Electron token — makes Cloudflare
-          // Turnstile fail its integrity check with error 600010 and recreate
-          // the challenge every few seconds, so logins behind it never complete
-          // (#5002).
+          // Rewriting Electron's native User-Agent makes Turnstile fail integrity checks with error 600010.
           browserSession.setPermissionRequestHandler(
             (webContents, permission, callback, details) => {
               if (permission === "openExternal") {

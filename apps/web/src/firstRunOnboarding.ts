@@ -39,13 +39,15 @@ const ONBOARDING_PROJECT_TITLE = "TritonAI";
 const PROJECT_CREATE_WAIT_TIMEOUT_MS = 5_000;
 
 const EMPTY_SHELL_STATE: EnvironmentShellState = {
+  generation: 0,
+  removedAt: new Map(),
   snapshot: Option.none(),
   status: "empty",
   error: Option.none(),
 };
 const EMPTY_SHELL_STATE_ATOM = Atom.make(EMPTY_SHELL_STATE);
 
-export function hasPriorProjectOrConversationState(input: {
+function hasPriorProjectOrConversationState(input: {
   projectCount: number;
   nonOnboardingProjectCount: number;
   threadCount: number;
@@ -80,12 +82,6 @@ export function getTritonAiFirstRunOnboardingDecision(input: {
   if (!input.primaryEnvironmentReady || !input.primaryEnvironmentBootstrapped) return "defer";
   if (input.routePathname !== "/") return "defer";
   return hasPriorProjectOrConversationState(input) ? "complete" : "run";
-}
-
-export function shouldRunTritonAiFirstRunOnboarding(
-  input: Parameters<typeof getTritonAiFirstRunOnboardingDecision>[0],
-): boolean {
-  return getTritonAiFirstRunOnboardingDecision(input) === "run";
 }
 
 function useComposerDraftStoreHydrated(): boolean {

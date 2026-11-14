@@ -1,33 +1,39 @@
-import { GUIDED_TOUR_AVAILABLE, HOSTED_APP_CHANNEL } from "~/branding";
-import { isElectron } from "~/env";
-import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
-import type { EnvironmentId } from "@t3tools/contracts";
-import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
-import {
-  validateSettingsScopeSearch,
-  type ResolvedSettingsScope,
-  type SettingsScopeSearch,
-} from "./settingsScope";
 import {
   SETTINGS_SECTION_LABELS,
   SETTINGS_SEARCH_ITEMS,
   type SettingsPath,
+  type SettingsSearchScope,
   type SettingsSearchItem,
   type SettingsSearchItemId,
-  type SettingsSearchScope,
 } from "./settingsSearchCatalog";
 export {
   SETTINGS_SECTION_LABELS,
+  SETTINGS_NAV_GROUPS,
   SETTINGS_SEARCH_ITEMS,
   keybindingSearchAnchorId,
   sourceControlHostSettingsSearchId,
+  sourceControlHostSearchItems,
   type SettingsPath,
+  type SettingsSearchScope,
   type SettingsSearchItem,
   type SettingsSearchItemId,
-  type SettingsSearchScope,
 } from "./settingsSearchCatalog";
+import { HOSTED_APP_CHANNEL } from "~/branding";
+import { isFeatureAvailable } from "~/features";
+import { isElectron } from "~/env";
+import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
+
+import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+
+import * as Schema from "effect/Schema";
+import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
+import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
+
+import type { ResolvedSettingsScope } from "./settingsScope";
 
 export interface SettingsSearchAvailability {
+  readonly hasStageArtwork?: boolean;
   readonly localEnvironmentDisabled?: boolean;
   readonly hasCloudPublicConfig: boolean;
   readonly hasEnvironment: boolean;
@@ -36,7 +42,6 @@ export interface SettingsSearchAvailability {
   readonly canManageLocalBackend: boolean;
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
-  readonly hasStageArtwork?: boolean;
   readonly managedTunnelActive?: boolean;
 }
 
@@ -44,21 +49,62 @@ const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id,
 
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
   "/settings/diagnostics": "environment",
+  "/settings/plugins": null,
+  "/settings/skills": null,
+  "/settings/usage": null,
   "/settings/projects": "project",
   "/settings/general": null,
   "/settings/appearance": null,
+  "/settings/chat": null,
+  "/settings/diffs": null,
   "/settings/snap-shot": null,
   "/settings/keybindings": null,
   "/settings/providers": null,
-  "/settings/integrations": null,
-  "/settings/plugins": null,
-  "/settings/skills": null,
+  "/settings/threads": null,
+  "/settings/browser": null,
+  "/settings/devices": null,
   "/settings/source-control": "environment-defaults",
-  "/settings/storage": "project-defaults",
+  "/settings/worktrees": "project-defaults",
   "/settings/connections": "connections",
+  "/settings/access": "connections",
   "/settings/scheduled-tasks": null,
+  "/settings/maintenance": null,
+  "/settings/labs": null,
+  "/settings/about": null,
   "/settings/archived": "project-defaults",
 };
+
+const RENAMED_SETTINGS_PATHS: Readonly<Record<string, SettingsPath>> = {
+  "/settings/integrations": "/settings/browser",
+  "/settings/storage": "/settings/maintenance",
+  "/settings/beta": "/settings/labs",
+};
+const SPLIT_SETTINGS_PATHS: ReadonlySet<string> = new Set([
+  "/settings/general",
+  "/settings/appearance",
+  "/settings/source-control",
+  "/settings/connections",
+  ...Object.keys(RENAMED_SETTINGS_PATHS),
+]);
+// Section anchors that moved but are not search results themselves.
+const MOVED_SECTION_ANCHORS: Readonly<Record<string, SettingsPath>> = {
+  "authorized-clients": "/settings/access",
+  "legacy-features": "/settings/labs",
+  "text-generation": "/settings/threads",
+  about: "/settings/about",
+};
+
+/** Where an old settings link now lives. Its anchor finds the page its row moved to. */
+export function movedSettingsPath(pathname: string, hash: string): SettingsPath | null {
+  if (!SPLIT_SETTINGS_PATHS.has(pathname)) return null;
+  const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;
+  const anchored = hash
+    ? (items.find((item) => item.id === hash) ?? items.find((item) => item.targetId === hash))
+    : undefined;
+  const to =
+    anchored?.to ?? MOVED_SECTION_ANCHORS[hash] ?? RENAMED_SETTINGS_PATHS[pathname] ?? null;
+  return to === pathname ? null : to;
+}
 
 export function getSettingsSearchTargetScope(targetId: string) {
   const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;
@@ -136,18 +182,6 @@ export function isSettingsSearchScopeAvailable(
   }
 }
 
-function settingsScopeKindFromSearch(search: SettingsScopeSearch): ResolvedSettingsScope["kind"] {
-  const target = validateSettingsScopeSearch({ ...search });
-  if (target.checkout && !target.project) return "unavailable";
-  if (target.project) return target.checkout ? "checkout" : "project";
-  return target.machine ? "environment" : "all";
-}
-
-export function isSettingsOverviewVisible(search: SettingsScopeSearch): boolean {
-  const kind = settingsScopeKindFromSearch(search);
-  return kind === "project" || kind === "checkout";
-}
-
 export function searchableSetting(id: SettingsSearchItemId): {
   readonly id: string;
   readonly title: string;
@@ -162,8 +196,8 @@ export function filterAvailableSettingsSearchItems(
   const items: ReadonlyArray<SettingsSearchItem> = SETTINGS_SEARCH_ITEMS;
   return items.filter(
     (item) =>
-      (item.id !== "experimental-guided-tour" || GUIDED_TOUR_AVAILABLE) &&
-      (item.id !== "environment-identification" || availability.hasStageArtwork) &&
+      (!item.feature || isFeatureAvailable(item.feature)) &&
+      (item.id !== "environment-identification" || availability.hasStageArtwork === true) &&
       (!item.cloudOnly || availability.hasCloudPublicConfig) &&
       (!item.environmentOnly || availability.hasEnvironment) &&
       (!item.providerSettingsOnly || availability.hasProviderSettingsEnvironment) &&
@@ -176,6 +210,21 @@ export function filterAvailableSettingsSearchItems(
   );
 }
 
+/** The settings that exist on this platform and app channel. */
+export function settingsForThisPlatform(
+  items: ReadonlyArray<SettingsSearchItem>,
+): ReadonlyArray<SettingsSearchItem> {
+  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  return items.filter(
+    (item) =>
+      (!item.feature || isFeatureAvailable(item.feature)) &&
+      (isElectron || item.desktopOnly !== true) &&
+      (!item.releaseChannelOnly || isElectron || HOSTED_APP_CHANNEL !== null) &&
+      (!item.macOnly || isMacPlatform(platform)) &&
+      (!item.windowsOnly || isWindowsPlatform(platform)),
+  );
+}
+
 export function searchSettings(
   query: string,
   items: ReadonlyArray<SettingsSearchItem> = SETTINGS_SEARCH_ITEMS,
@@ -183,16 +232,9 @@ export function searchSettings(
   const normalizedQuery = normalizeSearchText(query);
   if (normalizedQuery.length === 0) return [];
   const queryTokens = normalizedQuery.split(" ");
-  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
 
-  return items
+  return settingsForThisPlatform(items)
     .flatMap((item, index) => {
-      if (item.id === "experimental-guided-tour" && !GUIDED_TOUR_AVAILABLE) return [];
-      if (!isElectron && item.desktopOnly === true) return [];
-      if (item.releaseChannelOnly && !isElectron && HOSTED_APP_CHANNEL === null) return [];
-      if (item.macOnly && !isMacPlatform(platform)) return [];
-      if (item.windowsOnly && !isWindowsPlatform(platform)) return [];
-
       const title = normalizeSearchText(item.title);
       const fields = [
         title,
@@ -204,16 +246,18 @@ export function searchSettings(
       const exactPhraseField = fields.findIndex((field) => field.includes(normalizedQuery));
       const rank =
         title === normalizedQuery
-          ? 5
-          : title.startsWith(normalizedQuery)
-            ? 4
-            : title.includes(normalizedQuery)
-              ? 3
-              : queryTokens.every((token) => title.includes(token))
-                ? 2
-                : exactPhraseField >= 0
-                  ? 1
-                  : 0;
+          ? 6
+          : title.startsWith(`${normalizedQuery} `)
+            ? 5
+            : title.startsWith(normalizedQuery)
+              ? 4
+              : title.includes(normalizedQuery)
+                ? 3
+                : queryTokens.every((token) => title.includes(token))
+                  ? 2
+                  : exactPhraseField >= 0
+                    ? 1
+                    : 0;
       return [{ item, index, rank }];
     })
     .toSorted(
@@ -223,4 +267,25 @@ export function searchSettings(
         left.index - right.index,
     )
     .map(({ item }) => item);
+}
+
+// These rows only exist with separate fonts on, so a search jump to one turns them on.
+const ADVANCED_TYPOGRAPHY_TARGET_IDS: ReadonlySet<string> = new Set([
+  "prompt-font",
+  "terminal-font",
+]);
+
+export function isAdvancedTypographyTarget(targetId: string): boolean {
+  return ADVANCED_TYPOGRAPHY_TARGET_IDS.has(targetId);
+}
+
+/**
+ * Opens the persisted section a search result lives in before jumping to it, so
+ * its row is mounted to scroll to. The terminal reads the same flag, so it must
+ * stay on after the jump.
+ */
+export function revealSettingsSearchTarget(targetId: string): void {
+  if (isAdvancedTypographyTarget(targetId)) {
+    writeLocalStorageValue(TYPOGRAPHY_ADVANCED_STORAGE_KEY, true, false, Schema.Boolean);
+  }
 }

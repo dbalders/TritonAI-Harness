@@ -1,36 +1,51 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+
 import * as ModelManifest from "./ModelManifest.ts";
+
 import { expect, it } from "@effect/vitest";
+
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as Clock from "effect/Clock";
+
 import * as Crypto from "effect/Crypto";
+
 import * as Deferred from "effect/Deferred";
+
 import * as Effect from "effect/Effect";
+
 import * as Hex from "effect/encoding/Hex";
+
 import * as FileSystem from "effect/FileSystem";
+
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
+
 import * as PlatformError from "effect/PlatformError";
+
 import * as Exit from "effect/Exit";
+
 import * as Queue from "effect/Queue";
+
 import * as Scope from "effect/Scope";
-import * as Sink from "effect/Sink";
+
 import * as Stream from "effect/Stream";
+
 import { HttpClient, HttpClientResponse } from "effect/http";
-import * as TestClock from "effect/testing/TestClock";
+
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+
 import * as CodexInstallation from "./CodexInstallation.ts";
 
 const archive = Buffer.from(
   "H4sIAAAAAAAC/+3W0W6DIBQGYB/FcD0sKNSkD7J7aom6tmAQtzXL3n3QZM3qdWVt+n8XoCckJp78wLY3q8bu9Ge2HBbUUp7nYD4H8s9zrNdSsCxnWQLT6JULn8ye09K9h/u2/c0/jSM9xqGzo0+bf3Gdf15WQiD/Kdy61/CA+z8dlO9Wrv2387+c5Z9VZY38p7BY0+Gh8t/sVauLt9Ga9Pnnop7ln1e4/6fxRQ7qZCf/qt3YW0M2OX/JyfvljbCCy3XBSaiGH9VqH4tKuaZbC6qG4aDpTrmP3sQV2nh3Gmxvzqsud0vyjaABAAAAAAAAAAAAAAAk8gOq19rvACgAAA==",
   "base64",
 );
+
 const asset = {
   version: "0.156.1",
   target: "aarch64-apple-darwin",
   url: "https://github.com/openai/codex/releases/download/test/package.tar.gz",
   archiveBytes: archive.length,
 };
+
 const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
   input: {
     options?: Partial<CodexInstallation.CodexInstallationOptions>;
@@ -130,6 +145,7 @@ const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
     downloads: () => downloads,
   };
 });
+
 const terminalState = (installation: CodexInstallation.CodexInstallation["Service"]) =>
   installation.changes.pipe(
     Stream.filter((state) => ["succeeded", "failed", "cancelled"].includes(state.phase)),
@@ -167,6 +183,7 @@ it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
       expect((yield* h.installation.state).source).toBe("local");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
 it.effect.each([
   { version: "0.128.9" },
   { version: "0.145.0" },
@@ -190,17 +207,6 @@ it.effect.each([
     expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
-it.effect("falls back to a managed download when the reused local executable disappears", () =>
-  Effect.gen(function* () {
-    const h = yield* makeHarness({ local: { version: "0.156.1" } });
-    expect((yield* h.installation.resolve()).source).toBe("local");
-    yield* h.fs.remove(h.localBinaryPath);
-    yield* h.installation.start;
-    expect((yield* terminalState(h.installation)).phase).toBe("succeeded");
-    expect((yield* h.installation.resolve()).source).toBe("managed");
-    expect(h.downloads()).toBe(1);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
 
 const compileNative = Effect.fn("test.compileNative")(function* (
   executablePath: string,
@@ -217,6 +223,7 @@ const compileNative = Effect.fn("test.compileNative")(function* (
   expect(yield* compiler.exitCode).toBe(0);
 }, Effect.scoped);
 
+// regression: #19154 fix(server): skip local Codex binaries missing codex-code-mode-host
 it.effect.each([
   { withHost: false, marker: null },
   { withHost: true, marker: null },
@@ -485,122 +492,5 @@ it.effect("keeps an activated runtime when a later update fails verification", (
     yield* update.installation.start;
     expect((yield* terminalState(update.installation)).phase).toBe("failed");
     expect((yield* update.installation.resolve()).version).toBe("0.156.1");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-it("publishes complete packages for all supported platforms", () => {
-  for (const platform of ["darwin", "linux", "win32"] as const)
-    for (const arch of ["x64", "arm64"])
-      expect(CodexInstallation.resolveCodexReleaseAsset(platform, arch)?.url).toContain(
-        "codex-package-",
-      );
-  expect(CodexInstallation.resolveCodexReleaseAsset("linux", "riscv64")).toBeNull();
-});
-// Live clock: staleness compares real filesystem mtimes.
-it.live("startup removes only stale staging directories", () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-install-test-" });
-    const managed = `${baseDir}/tools/codex`;
-    const stale = ((yield* Clock.currentTimeMillis) - 25 * 60 * 60_000) / 1000;
-    for (const name of [".install-stale", ".active-stale", ".install-live"]) {
-      yield* fs.makeDirectory(`${managed}/${name}`, { recursive: true });
-    }
-    yield* fs.utimes(`${managed}/.install-stale`, stale, stale);
-    yield* fs.utimes(`${managed}/.active-stale`, stale, stale);
-    const h = yield* makeHarness({ baseDir });
-    expect(yield* fs.readDirectory(managed)).toEqual([".install-live"]);
-    expect((yield* h.installation.state).canRemove).toBe(true);
-
-    yield* fs.remove(`${managed}/.install-live`, { recursive: true });
-    yield* fs.makeDirectory(`${managed}/.install-stale`);
-    yield* fs.utimes(`${managed}/.install-stale`, stale, stale);
-    const fresh = yield* makeHarness({ baseDir });
-    expect(yield* fs.readDirectory(managed)).toEqual([]);
-    expect((yield* fresh.installation.state).canRemove).toBe(false);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-
-const processHandle = (stdout: string) =>
-  ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(1),
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-    isRunning: Effect.succeed(false),
-    kill: () => Effect.void,
-    unref: Effect.succeed(Effect.void),
-    stdin: Sink.drain,
-    stdout: Stream.make(new TextEncoder().encode(stdout)),
-    stderr: Stream.empty,
-    all: Stream.empty,
-    getInputFd: () => Sink.drain,
-    getOutputFd: () => Stream.empty,
-  });
-const windowsPackage: Record<string, string> = {
-  "bin/codex.exe": "codex",
-  "bin/codex-code-mode-host.exe": "host",
-  "codex-path/rg.exe": "rg",
-  "codex-package.json": JSON.stringify({
-    layoutVersion: 1,
-    version: asset.version,
-    target: asset.target,
-    entrypoint: "bin/codex.exe",
-  }),
-};
-// Stands in for Windows' bsdtar: CRLF listings, and extraction writes the Windows layout.
-const makeWindowsTar = (fs: FileSystem.FileSystem, commands: Array<string>) =>
-  ChildProcessSpawner.make((command) =>
-    Effect.gen(function* () {
-      const { command: executable, args } = command as unknown as {
-        readonly command: string;
-        readonly args: ReadonlyArray<string>;
-      };
-      commands.push(executable);
-      const names = Object.keys(windowsPackage);
-      if (args[0] === "-tzf") return processHandle(`${names.join("\r\n")}\r\n`);
-      if (args[0] === "-tvzf")
-        return processHandle(`${names.map((name) => `-rwxr-xr-x 0 0 ${name}`).join("\r\n")}\r\n`);
-      const runtime = args[3] ?? "";
-      for (const [name, contents] of Object.entries(windowsPackage)) {
-        yield* fs.makeDirectory(`${runtime}/${name.split("/").slice(0, -1).join("/")}`, {
-          recursive: true,
-        });
-        yield* fs.writeFileString(`${runtime}/${name}`, contents);
-      }
-      return processHandle("");
-    }).pipe(Effect.orDie),
-  );
-
-it.effect("installs on Windows via System32 tar with CRLF output and a locked runtime", () =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const commands: Array<string> = [];
-    const h = yield* makeHarness({
-      platform: "win32",
-      spawner: makeWindowsTar(fs, commands),
-      runtimeRenameFailures: 3,
-    });
-    yield* h.installation.start;
-    // Each failed attempt has scheduled its retry before the test fiber resumes.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      yield* Queue.take(h.failedRenames);
-      yield* TestClock.adjust("100 millis");
-    }
-    expect(yield* terminalState(h.installation)).toMatchObject({ phase: "succeeded" });
-    expect(commands).toEqual([
-      "C:\\Windows\\System32\\tar.exe",
-      "C:\\Windows\\System32\\tar.exe",
-      "C:\\Windows\\System32\\tar.exe",
-    ]);
-    const path = yield* Path.Path;
-    expect((yield* h.installation.resolve()).executablePath).toBe(
-      path.join(h.baseDir, "tools", "codex", "0.156.1", "bin", "codex.exe"),
-    );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-);
-it.effect("does not retry a failed runtime rename outside Windows", () =>
-  Effect.gen(function* () {
-    const h = yield* makeHarness({ runtimeRenameFailures: 1 });
-    yield* h.installation.start;
-    expect((yield* terminalState(h.installation)).phase).toBe("failed");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

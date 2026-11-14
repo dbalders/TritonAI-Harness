@@ -1,4 +1,3 @@
-import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 import type {
   RelayClientEnvironmentRecord,
   RelayEnvironmentStatusResponse,
@@ -128,7 +127,7 @@ export function createManagedRelaySession(input: ManagedRelaySessionInput): Mana
         try: () => readCachedClerkToken(nowMillis),
         catch: (cause) =>
           new ManagedRelaySessionError({
-            message: `Could not obtain the ${TRITONAI_CONNECT_NAME} session token.`,
+            message: "Could not obtain the TritonAI Connect session token.",
             cause,
           }),
       });
@@ -185,7 +184,7 @@ function readSessionClerkToken(
       (token): token is string => Boolean(token),
       () =>
         new ManagedRelaySessionError({
-          message: `The ${TRITONAI_CONNECT_NAME} session token is unavailable.`,
+          message: "The TritonAI Connect session token is unavailable.",
         }),
     ),
   );
@@ -200,7 +199,7 @@ export const deregisterManagedRelayEnvironment = Effect.fn(
   const session = registry.get(managedRelaySessionAtom);
   if (!session || session.accountId !== input.accountId) {
     return yield* new ManagedRelaySessionError({
-      message: `Sign in to ${TRITONAI_CONNECT_NAME} before deregistering an environment.`,
+      message: "Sign in to TritonAI Connect before deregistering an environment.",
     });
   }
   const clerkToken = yield* readSessionClerkToken(session);
@@ -216,7 +215,7 @@ function requireClerkToken(
   if (!session || session.accountId !== accountId) {
     return Effect.fail(
       new ManagedRelaySessionError({
-        message: `Sign in to ${TRITONAI_CONNECT_NAME} before loading relay data.`,
+        message: "Sign in to TritonAI Connect before loading relay data.",
       }),
     );
   }
@@ -279,28 +278,48 @@ function validateEnvironmentStatus(
   return Effect.succeed(status);
 }
 
+function describeManagedRelayFailure(cause: Cause.Cause<unknown>): {
+  readonly message: string;
+  readonly traceId: string | null;
+} {
+  const error = Cause.squash(cause);
+  return {
+    message:
+      isManagedRelayRequestFailedError(error) && error.relayError
+        ? relayProtectedErrorMessage(error.relayError)
+        : error instanceof Error
+          ? error.message
+          : "Could not load TritonAI Connect data.",
+    traceId: findErrorTraceId(error),
+  };
+}
+
 export function readManagedRelaySnapshotState<A>(
   result: AsyncResult.AsyncResult<A, unknown>,
 ): ManagedRelaySnapshotState<A> {
-  let error: string | null = null;
-  let errorTraceId: string | null = null;
-  if (result._tag === "Failure") {
-    const cause = Cause.squash(result.cause);
-    error =
-      isManagedRelayRequestFailedError(cause) && cause.relayError
-        ? relayProtectedErrorMessage(cause.relayError)
-        : cause instanceof Error
-          ? cause.message
-          : `Could not load ${TRITONAI_CONNECT_NAME} data.`;
-    errorTraceId = findErrorTraceId(cause);
-  }
+  const failure = result._tag === "Failure" ? describeManagedRelayFailure(result.cause) : null;
   return {
     data: Option.getOrNull(AsyncResult.value(result)),
-    error,
-    errorTraceId,
+    error: failure?.message ?? null,
+    errorTraceId: failure?.traceId ?? null,
     isPending: result.waiting,
   };
 }
+
+// Logged where the listing runs so each failed fetch reports once, however many
+// components read the atom.
+const logListingFailure =
+  (label: string) =>
+  <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    self.pipe(
+      Effect.tapCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+        const { message, traceId } = describeManagedRelayFailure(cause);
+        return Effect.logError(`[t3-cloud] Relay ${label} listing failed`).pipe(
+          Effect.annotateLogs({ message, traceId }),
+        );
+      }),
+    );
 
 export function createManagedRelayQueryManager(
   runtime: Atom.AtomRuntime<ManagedRelay.ManagedRelayClient>,
@@ -350,7 +369,7 @@ export function createManagedRelayQueryManager(
             { ...base, stage: "relay-request" },
             relay.listEnvironments({ clerkToken }),
           );
-        }),
+        }).pipe(logListingFailure("environment")),
       )
       .pipe(
         Atom.swr({ staleTime, revalidateOnMount: true }),
@@ -373,7 +392,7 @@ export function createManagedRelayQueryManager(
             { ...base, stage: "relay-request" },
             relay.listDevices({ clerkToken }),
           );
-        }),
+        }).pipe(logListingFailure("device")),
       )
       .pipe(
         Atom.swr({ staleTime, revalidateOnMount: true }),

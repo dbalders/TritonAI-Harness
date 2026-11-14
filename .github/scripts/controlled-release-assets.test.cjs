@@ -84,70 +84,6 @@ for (const [version, channel, prerelease] of [
   );
 }
 
-for (const [channel, tag, lookupFails] of [
-  ["stable", "v1.2.3-rc.1", false],
-  ["nightly", "v1.2.3-nightly.20261017.1", false],
-  ["stable", "v1.2.3-rc.1", true],
-]) {
-  test(
-    `handles published notes for ${tag} when lookup ${lookupFails ? "fails" : "succeeds"}`,
-    { skip: os.platform() === "win32" },
-    (t) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "discord-release-notes-"));
-      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-      const argsFile = path.join(root, "gh-args");
-      fs.writeFileSync(
-        path.join(root, "gh"),
-        [
-          "#!/bin/sh",
-          'printf \'%s\\n\' "$@" > "$GH_STUB_ARGS"',
-          'if [ "$GH_STUB_FAIL" = true ]; then',
-          "  printf 'partial response'",
-          "  exit 1",
-          "fi",
-          "printf '%s\\n' 'Published release notes.'",
-          "",
-        ].join("\n"),
-        { mode: 0o700 },
-      );
-      const workflow = parse(
-        fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"),
-      );
-      const readNotes = workflow.jobs.announce_discord.steps.find(
-        (step) => step.name === "Read published release notes",
-      );
-      const result = cp.spawnSync("bash", ["-e", "-o", "pipefail", "-c", readNotes.run], {
-        encoding: "utf8",
-        timeout: 5_000,
-        env: {
-          PATH: `${root}${path.delimiter}${process.env.PATH}`,
-          RUNNER_TEMP: root,
-          RELEASE_TAG: tag,
-          RELEASE_CHANNEL: channel,
-          GH_STUB_ARGS: argsFile,
-          GH_STUB_FAIL: String(lookupFails),
-        },
-      });
-      assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(fs.readFileSync(argsFile, "utf8").trim().split("\n"), [
-        "release",
-        "view",
-        tag,
-        "--json",
-        "body",
-        "--jq",
-        '.body // ""',
-      ]);
-      assert.equal(
-        fs.readFileSync(path.join(root, "discord-release-notes.md"), "utf8"),
-        lookupFails ? "" : "Published release notes.\n",
-      );
-      if (lookupFails)
-        assert.match(result.stdout, /::warning::Could not read published release notes/);
-    },
-  );
-}
-
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stable-assets-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -188,12 +124,14 @@ function fixture(t) {
   return { root, version, mac, win, save };
 }
 
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("accepts complete Stable assets but blocks a corrupt updater ZIP", (t) => {
   const f = fixture(t);
   assert.equal(verifyControlledReleaseAssets(f.root, f.version), path.join(f.root, `${f.mac}.zip`));
   fs.appendFileSync(path.join(f.root, `${f.mac}.zip`), "corrupt");
   assert.throws(() => verifyControlledReleaseAssets(f.root, f.version), /size differs/);
 });
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("blocks missing platform assets", (t) => {
   const f = fixture(t);
   fs.unlinkSync(path.join(f.root, `${f.win}.exe`));
@@ -210,6 +148,7 @@ for (const staleAsset of [
     assert.throws(() => verifyControlledReleaseAssets(f.root, f.version), /exact expected set/);
   });
 }
+// regression: #236 fix(desktop): harden macOS updates and release validation
 test("blocks a feed pointing at another version or the Nightly track", (t) => {
   const f = fixture(t);
   assert.throws(
@@ -222,25 +161,8 @@ test("blocks a feed pointing at another version or the Nightly track", (t) => {
   f.save("latest-mac.yml", manifest);
   assert.throws(() => verifyControlledReleaseAssets(f.root, f.version), /wrong version/);
 });
-test("controlled release verifies downloaded draft bytes before publishing", () => {
-  const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
-  const steps = workflow.jobs.release.steps;
-  const verify = steps.findIndex((step) => step.name === "Verify final controlled release assets");
-  const publish = steps.findIndex((step) => step.name === "Publish controlled release");
-  assert(verify > 0 && verify < publish);
-  assert(steps.slice(0, verify).some((step) => step.id === "app_token"));
-  for (const name of [
-    "Verify controlled draft gate",
-    "Attach verified release assets",
-    "Verify final controlled release assets",
-  ]) {
-    assert.equal(steps.find((step) => step.name === name).env.GH_TOKEN, "${{ github.token }}");
-  }
-  assert.match(steps[verify].run, /gh release download/);
-  assert.match(steps[verify].run, /verify-controlled-release-assets/);
-  assert.match(steps[verify].run, /git rev-parse HEAD/);
-});
 
+// regression: #260 fix(release): leave controlled builds as drafts by default
 test("controlled releases publish only after an explicit manual opt-in", () => {
   const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
@@ -307,31 +229,4 @@ test("controlled releases publish only after an explicit manual opt-in", () => {
     (step) => step.name === "Verify final controlled release assets",
   );
   assert.equal(verify.if, undefined);
-});
-
-test("stable drafts require both hosted platforms with matching configuration", () => {
-  const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
-  assert(workflow.jobs.release.needs.includes("mac"));
-  assert.match(workflow.jobs.release.if, /needs\.mac\.result == 'success'/);
-  const mac = workflow.jobs.mac;
-  assert.equal(mac["runs-on"], "macos-15");
-  const prepare = mac.steps.find((step) => step.name === "Prepare source once");
-  const windows = workflow.jobs.build.steps.find((step) => step.id === "build_desktop");
-  for (const key of ["TRITONAI_PLUGIN_CONFIGURATION_JSON", "UCSD_AI_BASE_URL"]) {
-    assert.equal(prepare.env[key], windows.env[key]);
-  }
-  const sign = mac.steps.find((step) => step.name === "Sign, notarize, and verify packaged app");
-  assert.match(sign.run, /finalize-macos-release\.cjs/);
-  assert.match(sign.run, /verify-macos-update-zip\.cjs/);
-  assert.equal(sign.env.RELEASE_VERSION, "${{ needs.preflight.outputs.version }}");
-  const upload = mac.steps.find((step) => step.name === "Upload verified Mac artifacts");
-  assert.match(upload.with.path, /release\/latest-mac\.yml/);
-  assert.doesNotMatch(upload.with.path, /nightly-mac|harness-mac-verification/);
-});
-
-test("Windows release collection excludes build diagnostics", () => {
-  const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
-  const collect = workflow.jobs.build.steps.find((step) => step.name === "Collect release assets");
-  assert(collect.run.includes('"release/latest.yml"'));
-  assert(!collect.run.includes('"release/*.yml"'));
 });

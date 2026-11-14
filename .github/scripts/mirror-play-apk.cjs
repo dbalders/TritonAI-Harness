@@ -1,7 +1,4 @@
-// Publishes closed-testing betas, or downloads the internal APK for a normal
-// nightly release. Play generates and signs the APK from the
-// uploaded bundle with the app signing key, so it carries the same signature
-// as the Play Store install. Run by .github/workflows/mobile-android-apk.yml.
+// Play signs generated APKs with the app signing key, matching Play Store installs.
 const { execFileSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -50,11 +47,9 @@ async function play(token, method, url) {
   return response;
 }
 
-// This endpoint reads without opening an edit; creating an edit would invalidate
-// an open EAS Submit edit made with the same service account. Its PUBLISHED state
-// also includes halted releases, with no separate rollout status. Until Play
-// exposes a read-only source for that status, retain the existing mirror rather
-// than distribute a potentially halted build. Do not replace this with edits.insert.
+// Use the read-only endpoint: opening an edit invalidates concurrent EAS Submit edits.
+// PUBLISHED includes halted releases; retain the mirror until a read-only source can
+// distinguish rollout status. Never replace this with edits.insert.
 async function newestTrackBuild(token, appUrl, trackName) {
   const { releases = [] } = await (
     await play(token, "GET", `${appUrl}/tracks/${trackName}/releases`)
@@ -84,8 +79,7 @@ function readRelease(tag) {
   }
 }
 
-// Download to a temporary directory so a failed request cannot leave a partial
-// APK among the release assets.
+// Stage downloads so failed requests cannot leave partial release assets.
 async function downloadApk({ token, appUrl, build, apkName }) {
   const generated = await (
     await play(token, "GET", `${appUrl}/generatedApks/${build.versionCode}`)

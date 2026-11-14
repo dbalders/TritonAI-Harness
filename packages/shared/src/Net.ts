@@ -1,4 +1,5 @@
 import * as NodeNet from "node:net";
+
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -41,7 +42,7 @@ export class NetService extends Context.Service<NetService, NetServiceShape>()(
   "@t3tools/shared/Net/NetService",
 ) {}
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = () => {
   const canListenOnHost = (port: number, host: string): Effect.Effect<boolean> =>
     Effect.callback<boolean>((resume) => {

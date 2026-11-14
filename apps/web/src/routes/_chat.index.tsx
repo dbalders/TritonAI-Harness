@@ -1,8 +1,3 @@
-import { APP_DISPLAY_NAME } from "../branding";
-import { hasCloudPublicConfig } from "../cloud/publicConfig";
-import { isLocalEnvironmentDisabled } from "../localEnvironment";
-import { LinkIcon, PlusIcon } from "lucide-react";
-import { Link } from "@tanstack/react-router";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
@@ -42,8 +37,7 @@ function IndexDraftLanding() {
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
   const router = useRouter();
-  // Read at effect time: this page stays mounted while a navigation away from
-  // "/" is still loading, but the router already points at the new location.
+  // Read at effect time; this page can stay mounted while the router is already navigating away.
   const isStillOnIndex = useEffectEvent(() => router.state.location.pathname === "/");
   const startedAttemptRef = useRef<number | null>(null);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
@@ -114,50 +108,3 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
 export const Route = createFileRoute("/_chat/")({
   component: ChatIndexRouteView,
 });
-
-function HostedStaticOnboardingState() {
-  const cloudEnabled = hasCloudPublicConfig();
-  const localEnvironmentOff = isLocalEnvironmentDisabled();
-  const description = localEnvironmentOff
-    ? "The local environment is turned off. Connect a remote environment, or turn the local environment back on in Connections."
-    : cloudEnabled
-      ? "Enable TritonAI Connect on that machine, then open Connections here to sign in with the same account. You can also add the machine using a pairing link."
-      : "Open Connections and add that machine using its pairing link. This app must be able to reach it.";
-
-  return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
-        <WorkspacePageHeader electron={isElectron} className="border-b border-border">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-foreground md:text-muted-foreground/60">
-              {APP_DISPLAY_NAME}
-            </span>
-          </div>
-        </WorkspacePageHeader>
-
-        <Empty className="flex-1">
-          <div className="w-full max-w-xl rounded-3xl border border-border/55 bg-card/20 px-8 py-12 shadow-sm/5">
-            <EmptyHeader className="max-w-none">
-              <div className="mx-auto mb-5 flex size-11 items-center justify-center rounded-xl border border-border/70 bg-background/70 text-muted-foreground">
-                <LinkIcon className="size-5" />
-              </div>
-              <EmptyTitle>Connect to a computer running TritonAI Harness</EmptyTitle>
-              <EmptyDescription>
-                This app connects to TritonAI Harness running on your computer or a server. Start
-                the TritonAI Harness desktop app or command-line server on that machine and keep it
-                running.
-              </EmptyDescription>
-              <EmptyDescription>{description}</EmptyDescription>
-              <div className="mt-6 flex justify-center">
-                <Button render={<Link to="/settings/connections" />} size="sm">
-                  <PlusIcon className="size-4" />
-                  Open Connections
-                </Button>
-              </div>
-            </EmptyHeader>
-          </div>
-        </Empty>
-      </div>
-    </SidebarInset>
-  );
-}

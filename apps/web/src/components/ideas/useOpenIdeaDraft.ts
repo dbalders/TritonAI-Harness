@@ -10,11 +10,8 @@ import { updateGettingStarted } from "../../onboarding/gettingStartedState";
 import { mergeIdeaPrompt } from "./ideaDraft";
 
 /**
- * Opens an idea as a draft the user reviews before sending. Ideas about a
- * thread fill that thread's composer; the rest start a new thread in the
- * idea's project, else the scratch project, else the first project.
- * Resolves with the thread the new draft becomes when sent, or null when there
- * is nowhere to put the draft.
+ * Open thread ideas in their composer; otherwise create a draft in the idea, scratch,
+ * or first project. Return the eventual thread ID, or null when no project exists.
  */
 export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
   const navigate = useNavigate();

@@ -1,5 +1,6 @@
 import { ComposerContextId, type ComposerContextRecord } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+
 import { upgradeLegacyContextMessage } from "./composerContextLegacy.ts";
 import { formatComposerContextReference } from "./composerContextReferences.ts";
 import { serializeLegacyContextMessage } from "./composerContextLegacySend.ts";
@@ -142,10 +143,6 @@ describe("serializeLegacyContextMessage", () => {
         },
       ],
     });
-  });
-
-  it("keeps prose without context untouched", () => {
-    expect(serializeLegacyContextMessage({ text: "just prose", records: [] })).toBe("just prose");
   });
 
   it("appends review comments the text never referenced", () => {

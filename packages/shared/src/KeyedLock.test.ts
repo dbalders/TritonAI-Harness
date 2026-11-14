@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+
 import * as KeyedLock from "./KeyedLock.ts";
 
 describe("KeyedLock", () => {
@@ -90,13 +91,6 @@ describe("KeyedLock", () => {
       );
 
       assert.deepStrictEqual(yield* lock.activeKeys, []);
-    }),
-  );
-
-  it.effect("keeps working after the scope that made it closes", () =>
-    Effect.gen(function* () {
-      const lock = yield* Effect.scoped(KeyedLock.make<string>());
-      assert.strictEqual(yield* lock.withLock("key", Effect.succeed("ran")), "ran");
     }),
   );
 

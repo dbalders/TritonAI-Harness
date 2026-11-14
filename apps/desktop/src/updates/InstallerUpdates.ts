@@ -271,7 +271,7 @@ export interface InstallerUpdateControllerOptions {
   readonly onState?: (state: InstallerUpdateState) => void | Promise<void>;
 }
 
-export function createInstallerUpdateController(options: InstallerUpdateControllerOptions) {
+function createInstallerUpdateController(options: InstallerUpdateControllerOptions) {
   let state = createInitialState(
     options.enabled && isSupportedInstallerTarget(options.platform, options.arch),
   );

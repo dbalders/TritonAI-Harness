@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
+
 import { Sheet, SheetPopup } from "./ui/sheet";
 
 export function RightPanelSheet(props: {

@@ -314,7 +314,7 @@ export const layerTest = (input?: {
     DesktopComputerUse,
     DesktopComputerUse.of({
       acquire: Effect.void,
-      getState: (enabled) =>
+      getState: Effect.fn("DesktopComputerUse.getState")((enabled) =>
         Effect.succeed({
           enabled,
           available: input?.state?.available ?? true,
@@ -322,6 +322,7 @@ export const layerTest = (input?: {
           accessibilityPermission: input?.state?.accessibilityPermission ?? null,
           screenRecordingPermission: input?.state?.screenRecordingPermission ?? null,
         }),
+      ),
       requestPermissions: (input?.onRequestPermissions ?? Effect.void).pipe(Effect.as(null)),
       currentMcpConfiguration: Effect.succeed(input?.mcpConfiguration),
     }),

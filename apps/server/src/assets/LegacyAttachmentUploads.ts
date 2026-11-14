@@ -198,9 +198,7 @@ export const makeLegacyAttachmentUploads = Effect.gen(function* () {
           const liveAttachmentIds = liveAttachments.map((row) => row.id);
           const stored = liveAttachments.find((row) => row.id === attachmentId);
           const existingAttachment = stored
-            ? Schema.decodeUnknownOption(Schema.fromJsonString(ChatFileAttachment))(
-                stored.attachment_json,
-              )
+            ? compiledDecodeOption1(stored.attachment_json)
             : Option.none();
           if (Option.isSome(existingAttachment)) {
             if (!isChatFileAttachment(existingAttachment.value)) {
@@ -307,3 +305,5 @@ export const makeLegacyAttachmentUploads = Effect.gen(function* () {
     }),
   };
 });
+
+const compiledDecodeOption1 = Schema.decodeOption(Schema.fromJsonString(ChatFileAttachment));

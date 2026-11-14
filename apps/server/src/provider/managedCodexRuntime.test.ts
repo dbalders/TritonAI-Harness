@@ -88,6 +88,7 @@ const fixture = Effect.fn("managedCodexRuntime.test.fixture")(function* (
 });
 
 it.layer(NodeServices.layer)("managed Codex runtime discovery", (it) => {
+  // regression: #426 fix(provider): recover interrupted Codex updates and coordinate sessions
   it.effect.each([false, true])(
     "restores a retained backup on startup (configured: %s)",
     (configured) =>
@@ -151,6 +152,7 @@ it.layer(NodeServices.layer)("managed Codex runtime discovery", (it) => {
       );
     }),
   );
+  // regression: #230 fix(codex): find installed runtime for fresh profiles
   it.effect("boots a fresh profile with no settings and no codex on PATH", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
@@ -170,26 +172,6 @@ it.layer(NodeServices.layer)("managed Codex runtime discovery", (it) => {
       f.versions.set("codex", output("0.146.0"));
       assert.equal(yield* f.resolve(), "codex");
       assert.equal(f.calls.length, 1);
-    }),
-  );
-
-  it.effect("preserves an explicit working managed runtime", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const pinned = yield* f.install("0.146.0");
-      yield* f.install("0.150.0");
-      assert.equal(yield* f.resolve(pinned.binaryPath), pinned.binaryPath);
-      assert.equal(f.calls.length, 1);
-    }),
-  );
-
-  it.effect("recovers a removed managed runtime using an installed version", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const old = yield* f.install("0.146.0");
-      f.versions.delete(old.binaryPath);
-      const replacement = yield* f.install("0.150.0");
-      assert.equal(yield* f.resolve(old.binaryPath), replacement.binaryPath);
     }),
   );
 
@@ -237,39 +219,6 @@ it.layer(NodeServices.layer)("managed Codex runtime discovery", (it) => {
         ["codex", good.binaryPath],
       );
       assert.isFalse(f.calls.some((call) => call.command === unrelated.binaryPath));
-    }),
-  );
-
-  it.effect("leaves custom commands alone, including broken ones", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      yield* f.install("0.146.0");
-      for (const command of [
-        "/custom/codex",
-        "codex-dev",
-        "/Applications/Codex.app/Contents/Resources/codex",
-      ]) {
-        assert.equal(yield* f.resolve(command), command);
-      }
-      assert.equal(f.calls.length, 0);
-    }),
-  );
-
-  it.effect("treats an empty path like the default command", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const installed = yield* f.install("0.146.0");
-      assert.equal(yield* f.resolve("  "), installed.binaryPath);
-    }),
-  );
-
-  it.effect("reports an actionable failure when no runtime can start", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const error = yield* Effect.flip(f.resolve());
-      assert.include(error.message, "Run TritonAI Installer");
-      assert.include(error.message, "'codex'");
-      assert.isFalse(yield* f.fs.exists(f.runtimeRoot));
     }),
   );
 

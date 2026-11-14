@@ -8,9 +8,10 @@ import {
 import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+
 import { resolveStorage } from "./lib/storage";
 import { randomUUID } from "./lib/utils";
-import type { RightPanelSurface } from "./rightPanelStore";
+import { type RightPanelSurface } from "./rightPanelStore";
 
 export type ClosedView =
   | {

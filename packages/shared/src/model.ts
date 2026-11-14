@@ -62,7 +62,7 @@ function getProviderOptionSelectionValue(
   return getRawSelectionValueById(selections, id);
 }
 
-export function getProviderOptionStringSelectionValue(
+function getProviderOptionStringSelectionValue(
   selections: ReadonlyArray<ProviderOptionSelection> | null | undefined,
   id: string,
 ): string | undefined {
@@ -70,7 +70,7 @@ export function getProviderOptionStringSelectionValue(
   return typeof value === "string" ? value : undefined;
 }
 
-export function getProviderOptionBooleanSelectionValue(
+function getProviderOptionBooleanSelectionValue(
   selections: ReadonlyArray<ProviderOptionSelection> | null | undefined,
   id: string,
 ): boolean | undefined {
@@ -533,10 +533,7 @@ export function applyClaudePromptEffortPrefix(
   if (!trimmed) {
     return trimmed;
   }
-  // Prefixing a slash command turns it into plain prose, so Claude never
-  // runs it. Command names come from arbitrary file names ("/deploy.prod",
-  // "/plugin:skill"), so accept any first token without a second slash;
-  // absolute paths like "/home/theo/app.ts" keep the prefix.
+  // Prefixing slash commands prevents Claude invocation; command names allow any token without a second slash.
   if (effort !== "ultrathink" || /^\/[^\s/]+(?:\s|$)/u.test(trimmed)) {
     return trimmed;
   }

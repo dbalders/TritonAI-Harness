@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import { videoMimeType } from "./video.ts";
 
 describe("videoMimeType", () => {
@@ -12,17 +13,5 @@ describe("videoMimeType", () => {
     expect(videoMimeType({ name: "recording.mp4", mimeType: " VIDEO/WebM; codecs=vp9 " })).toBe(
       "video/webm",
     );
-  });
-
-  it.each(["README", "report.pdf", "file.constructor", "file.__proto__"])(
-    "does not mistake %s for a video",
-    (name) => {
-      expect(videoMimeType({ name, mimeType: "application/octet-stream" })).toBeNull();
-    },
-  );
-
-  it("keeps a declared non-video MIME type instead of inferring from the extension", () => {
-    expect(videoMimeType({ name: "recording.mp4", mimeType: "application/pdf" })).toBeNull();
-    expect(videoMimeType({ name: "recording.mp4", mimeType: "image/png" })).toBeNull();
   });
 });

@@ -93,6 +93,7 @@ for (const status of ["ERRORED", "CANCELED"]) {
     },
   );
 }
+// regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test(
   "a successful older version schedules the new version after only unrelated failures",
   posix,
@@ -103,6 +104,7 @@ test(
     assert.equal(result.calls.filter((args) => args[0] === "build").length, 2);
   },
 );
+// regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test(
   "looks beyond a full failed page without duplicating an already finished current version",
   posix,
@@ -119,6 +121,7 @@ test(
     assert.equal(result.calls.filter((args) => args[0] === "update").length, 2);
   },
 );
+// regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test("an active current-version build prevents duplicate store builds", posix, (t) => {
   const active = build("IN_PROGRESS");
   const result = reconcile(t, { matches: [active], recent: [active], current: [active] });

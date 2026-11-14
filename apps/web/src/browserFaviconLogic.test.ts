@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import {
   BROWSER_FAVICON_MAX_ENTRIES,
   type BrowserFaviconEntry,

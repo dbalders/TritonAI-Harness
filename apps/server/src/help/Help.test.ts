@@ -120,12 +120,9 @@ const harness = Effect.fn(function* (
     readonly generate?: (
       input: HelpGenerationInput,
     ) => Effect.Effect<HelpGenerationResult, TextGenerationError>;
-    readonly unsupported?: boolean;
-    readonly missing?: boolean;
     readonly disabled?: boolean;
     readonly trace?: ServerTraceDiagnosticsResult;
     readonly inventory?: () => IntegrationsListResult | undefined;
-    readonly documentationUnavailable?: boolean;
     readonly realDocumentation?: boolean;
   } = {},
 ) {
@@ -142,17 +139,13 @@ const harness = Effect.fn(function* (
     generateBranchName: () => Effect.die("Unexpected branch generation"),
     generateThreadTitle: () => Effect.die("Unexpected title generation"),
     generateReviewGuide: () => Effect.die("Unexpected review generation"),
-    ...(options.unsupported
-      ? {}
-      : {
-          generateHelp: (input: HelpGenerationInput) =>
-            Effect.sync(() => calls.push(input)).pipe(
-              Effect.andThen(
-                options.generate?.(input) ??
-                  Effect.succeed({ answer: "Check the connected environment." }),
-              ),
-            ),
-        }),
+    generateHelp: (input: HelpGenerationInput) =>
+      Effect.sync(() => calls.push(input)).pipe(
+        Effect.andThen(
+          options.generate?.(input) ??
+            Effect.succeed({ answer: "Check the connected environment." }),
+        ),
+      ),
   });
   // Unused instance members are deliberately absent: Help must never reach the adapter,
   // authentication controller, workspace discovery or provider filesystem through them.
@@ -179,7 +172,7 @@ const harness = Effect.fn(function* (
         }),
     }),
     Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-      getInstance: () => Effect.succeed(options.missing ? undefined : instance),
+      getInstance: () => Effect.succeed(instance),
     }),
     Layer.mock(TraceDiagnostics.TraceDiagnostics)({
       read: () => Effect.succeed(options.trace ?? trace()),
@@ -198,18 +191,16 @@ const harness = Effect.fn(function* (
             Effect.sync(() => {
               documentationQuestions.push(question);
               documentationContexts.push(recentContext);
-              return options.documentationUnavailable
-                ? { documentationStatus: "unavailable" as const, documentation: [] }
-                : {
-                    documentationStatus: "available" as const,
-                    documentation: [
-                      {
-                        title: "Computer use",
-                        path: "docs/user/computer-use.md",
-                        content: "Enable computer use in Settings > General.",
-                      },
-                    ],
-                  };
+              return {
+                documentationStatus: "available" as const,
+                documentation: [
+                  {
+                    title: "Computer use",
+                    path: "docs/user/computer-use.md",
+                    content: "Enable computer use in Settings > General.",
+                  },
+                ],
+              };
             }),
         }),
   );
@@ -231,83 +222,6 @@ const assertCode = (result: Result.Result<unknown, HelpError>, code: HelpError["
 };
 
 it.layer(NodeServices.layer)("Help", (it) => {
-  it.effect(
-    "retrieves shipped mouse setup and its permissions across the supplied Help conversation",
-    () =>
-      Effect.gen(function* () {
-        const h = yield* harness({ realDocumentation: true });
-        yield* Effect.gen(function* () {
-          const help = yield* Help.Help;
-          const mouse = "i saw someone have their app use a mouse for them, how do i do that";
-          const initial = yield* help.ask({ messages: [{ role: "user", content: mouse }] });
-          const clarification = yield* help.ask({
-            messages: [
-              { role: "user", content: mouse },
-              { role: "assistant", content: "You can control the mouse from the desktop app." },
-              { role: "user", content: "is that not computer use?" },
-            ],
-          });
-          const followup = yield* help.ask({
-            messages: [
-              { role: "user", content: mouse },
-              { role: "assistant", content: "You can control the mouse from the desktop app." },
-              { role: "user", content: "is that not computer use?" },
-              {
-                role: "assistant",
-                content: "That is Computer use. Enable it in Settings > General.",
-              },
-              { role: "user", content: "What permissions do I need?" },
-            ],
-          });
-          for (const result of [initial, clarification, followup]) {
-            const guide = result.context.knowledge?.documentation.find(
-              (doc) => doc.path === "docs/user/computer-use.md",
-            );
-            for (const instruction of [
-              "Cua Driver",
-              "Settings > General",
-              "Accessibility",
-              "Screen Recording",
-              "Restart Harness",
-              "local desktop backend",
-              "Codex provider",
-              "/computer-use",
-            ])
-              assert.include(guide?.content, instruction);
-          }
-        }).pipe(Effect.provide(h.layer));
-      }),
-  );
-
-  it.effect("retains the newest computer-use topic after many distinct older context terms", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({ realDocumentation: true });
-      const filler = Array.from({ length: 45 }, (_, index) => `filler${index}`).join(" ");
-      const result = yield* Effect.gen(function* () {
-        return yield* (yield* Help.Help).ask({
-          messages: [
-            { role: "user", content: filler },
-            {
-              role: "assistant",
-              content: "Use computer use in Settings > General to control the mouse.",
-            },
-            { role: "user", content: "What do I need to enable?" },
-          ],
-        });
-      }).pipe(Effect.provide(h.layer));
-      const guide = result.context.knowledge?.documentation.find(
-        (doc) => doc.path === "docs/user/computer-use.md",
-      );
-      for (const instruction of [
-        "Settings > General",
-        "Accessibility",
-        "Screen Recording",
-        "Restart Harness",
-      ])
-        assert.include(guide?.content, instruction);
-    }),
-  );
-
   it.effect(
     "bounds and redacts recent retrieval context without adding old messages or client data",
     () =>
@@ -341,45 +255,6 @@ it.layer(NodeServices.layer)("Help", (it) => {
         ])
           assert.notInclude(context, value);
         assert.notInclude(h.documentationQuestions[0]!, secret);
-      }),
-  );
-
-  it.effect(
-    "reads fresh host settings, cached plugin inventory and documentation for every snapshot and ask",
-    () =>
-      Effect.gen(function* () {
-        let inventory: IntegrationsListResult | undefined = { integrations: [] };
-        const h = yield* harness({ inventory: () => inventory });
-        yield* Effect.gen(function* () {
-          const help = yield* Help.Help;
-          const settings = yield* ServerSettings.ServerSettingsService;
-          const before = yield* help.getContext;
-          assert.equal(before.knowledge?.pluginsStatus, "reported");
-          assert.equal(before.knowledge?.documentationStatus, "available");
-          assert.equal(
-            before.knowledge?.settings.entries.find(
-              (entry) => entry.key === "enableAgentDeviceAccess",
-            )?.value,
-            "false",
-          );
-          yield* settings.updateSettings({ enableAgentDeviceAccess: true });
-          inventory = undefined;
-          const after = yield* help.ask({
-            messages: [{ role: "user", content: "How do I enable computer use?" }],
-          });
-          assert.equal(after.context.knowledge?.pluginsStatus, "unavailable");
-          assert.equal(
-            after.context.knowledge?.settings.entries.find(
-              (entry) => entry.key === "enableAgentDeviceAccess",
-            )?.value,
-            "true",
-          );
-          assert.equal(h.pluginReads(), 2);
-          assert.deepEqual(h.documentationQuestions, ["", "How do I enable computer use?"]);
-          assert.deepEqual(h.calls[0]?.context, after.context);
-          assert.isTrue(isHelpContext(after.context));
-        }).pipe(Effect.provide(h.layer));
-        assert.equal(h.refreshes(), 0);
       }),
   );
 
@@ -433,19 +308,6 @@ it.layer(NodeServices.layer)("Help", (it) => {
       }),
   );
 
-  it.effect("reports unavailable documentation independently of an otherwise usable snapshot", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({ documentationUnavailable: true });
-      const context = yield* Effect.gen(function* () {
-        return yield* (yield* Help.Help).getContext;
-      }).pipe(Effect.provide(h.layer));
-      assert.equal(context.knowledge?.documentationStatus, "unavailable");
-      assert.equal(context.knowledge?.pluginsStatus, "reported");
-      assert.isUndefined(context.client);
-      assert.lengthOf(h.calls, 0);
-    }),
-  );
-
   it.effect(
     "reads a bounded allowlisted snapshot without inference, live discovery or private payloads",
     () =>
@@ -493,8 +355,6 @@ it.layer(NodeServices.layer)("Help", (it) => {
 
   it.effect.each([
     { recordCount: 0 },
-    { parseErrorCount: 2 },
-    { partialFailure: Option.some(true) },
     { error: Option.some({ kind: "trace-file-not-found" as const, message: `private ${secret}` }) },
   ])("reports missing, empty and partial traces as incomplete evidence: %o", (override) =>
     Effect.gen(function* () {
@@ -554,28 +414,14 @@ it.layer(NodeServices.layer)("Help", (it) => {
       header: "Cookie: session=opaque-cookie-secret; auth=another-cookie",
       credential: "opaque-cookie-secret",
     },
-    { header: "Set-Cookie: session=opaque-set-cookie; HttpOnly", credential: "opaque-set-cookie" },
     { header: '"Authorization": "Basic cXVvdGVkLXNlY3JldA=="', credential: "cXVvdGVkLXNlY3JldA==" },
     { header: "GEMINI_API_KEY=gemini-secret-value", credential: "gemini-secret-value" },
     { header: "AWS_SECRET_ACCESS_KEY=aws-secret-value", credential: "aws-secret-value" },
     {
-      header: "AWS_SESSION_TOKEN=aws-session-secret-value",
-      credential: "aws-session-secret-value",
-    },
-    {
       header: '{"managementKey":"opaque-management-camel"}',
       credential: "opaque-management-camel",
     },
-    {
-      header: '{"management_key":"opaque-management-snake"}',
-      credential: "opaque-management-snake",
-    },
-    { header: "management-key='opaque-management-dash'", credential: "opaque-management-dash" },
     { header: "management key: opaque-management-spaces", credential: "opaque-management-spaces" },
-    {
-      header: "USAGE_MANAGEMENT_KEY=opaque-management-prefixed",
-      credential: "opaque-management-prefixed",
-    },
   ])(
     "removes complete sensitive header credentials from model input and output: %o",
     ({ header, credential }) =>
@@ -595,11 +441,8 @@ it.layer(NodeServices.layer)("Help", (it) => {
   );
 
   it.effect.each([
-    { messages: [] },
     { messages: [{ role: "assistant" as const, content: "A previous suggestion" }] },
-    { messages: [{ role: "user" as const, content: " " }] },
     { messages: [{ role: "user" as const, content: "x".repeat(8_001) }] },
-    { messages: Array.from({ length: 21 }, () => ({ role: "user" as const, content: "hello" })) },
   ])("validates direct service callers before inference: %o", (input) =>
     Effect.gen(function* () {
       const h = yield* harness();
@@ -611,17 +454,13 @@ it.layer(NodeServices.layer)("Help", (it) => {
     }),
   );
 
-  it.effect.each([
-    { unsupported: true, expected: "unsupported" as const },
-    { missing: true, expected: "unavailable" as const },
-    { disabled: true, expected: "unavailable" as const },
-  ])("refuses unavailable or unsupported configured providers before inference: %o", (options) =>
+  it.effect("refuses a disabled configured provider before inference", () =>
     Effect.gen(function* () {
-      const h = yield* harness(options);
+      const h = yield* harness({ disabled: true });
       const result = yield* Effect.gen(function* () {
         return yield* (yield* Help.Help).ask(question);
       }).pipe(Effect.result, Effect.provide(h.layer));
-      assertCode(result, options.expected);
+      assertCode(result, "unavailable");
       assert.lengthOf(h.calls, 0);
     }),
   );

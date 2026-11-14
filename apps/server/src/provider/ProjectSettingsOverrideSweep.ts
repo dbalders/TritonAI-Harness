@@ -1,10 +1,10 @@
-import type { ProjectId, ServerSettings } from "@t3tools/contracts";
+import { type ProjectId, type ServerSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as Settings from "../serverSettings.ts";
 
-export const findOrphanedProjectIds = (
+const findOrphanedProjectIds = (
   settings: Pick<ServerSettings, "projectSettingsOverrides">,
   liveProjectIds: ReadonlySet<ProjectId>,
 ): ReadonlyArray<ProjectId> =>

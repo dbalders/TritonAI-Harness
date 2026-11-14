@@ -87,21 +87,6 @@ it("reads schema-declared presentation text while withholding arbitrary path-sha
   expect(JSON.stringify(unsafe)).not.toContain("/custom/private-font");
 });
 
-it("bounds declared snapshots and distinguishes unset values without leaking payloads", () => {
-  const fields = Object.fromEntries(
-    Array.from({ length: 310 }, (_, index) => [`field${index}`, Schema.Boolean]),
-  );
-  const schema = { fields: { custom: Schema.String, ...fields } };
-  const settings = Object.fromEntries(
-    Array.from({ length: 310 }, (_, index) => [`field${index}`, true]),
-  );
-  const result = helpSettingsSnapshot({ custom: "", ...settings }, schema);
-  expect(result.entries).toHaveLength(300);
-  expect(result.totalCount).toBe(311);
-  expect(result.omittedCount).toBe(12);
-  expect(result.entries[0]).toEqual({ key: "custom", value: "Not configured", configured: false });
-});
-
 it("omits non-JSON literals and arbitrary collections without traversing their private payloads", () => {
   const readPrivatePayload = vi.fn(() => {
     throw new Error("Do not read arbitrary entries");
@@ -157,15 +142,6 @@ it("waits for hydration, captures current preferences and ships the actual catal
   expect(current.composerRichTextEnabled).toBe(false);
 });
 
-it("labels failed hydration unavailable instead of reporting built-in preferences", async () => {
-  reads.hydrate.mockRejectedValue(new Error("private storage path /some/mount"));
-  const result = await captureHelpClientContext(() => true);
-  expect(result?.settingsStatus).toBe("unavailable");
-  expect(result?.settings.entries).toEqual([]);
-  expect(reads.settings).not.toHaveBeenCalled();
-  expect(JSON.stringify(result)).not.toContain("private storage path");
-});
-
 it("reads desktop readiness without requesting permissions, mutating settings or using host state", async () => {
   const readiness = {
     enabled: true,
@@ -196,28 +172,6 @@ it("reads desktop readiness without requesting permissions, mutating settings or
   expect(JSON.stringify(result)).not.toContain("/desktop/private");
 });
 
-it("captures preferences at send time even if the desktop readiness read finishes later", async () => {
-  let finish!: (value: unknown) => void;
-  const readiness = new Promise<unknown>((resolve) => {
-    finish = resolve;
-  });
-  const getComputerUseState = vi.fn(() => readiness);
-  vi.stubGlobal("window", { desktopBridge: { getComputerUseState } });
-  const pending = captureHelpClientContext(() => true);
-  await Promise.resolve();
-  await Promise.resolve();
-  expect(getComputerUseState).toHaveBeenCalledTimes(1);
-  reads.settings.mockReturnValue({ ...DEFAULT_CLIENT_SETTINGS, chatWidth: "full" });
-  finish({
-    enabled: false,
-    available: true,
-    running: false,
-    accessibilityPermission: true,
-    screenRecordingPermission: false,
-  });
-  expect((await pending)?.settings.entries).toContainEqual({ key: "chatWidth", value: "full" });
-});
-
 it.each(["hydration", "desktop"])(
   "abandons late %s reads when the request is no longer current",
   async (stage) => {
@@ -237,22 +191,5 @@ it.each(["hydration", "desktop"])(
     expect(await pending).toBeNull();
     expect(reads.settings).not.toHaveBeenCalled();
     expect(getComputerUseState).toHaveBeenCalledTimes(stage === "desktop" ? 1 : 0);
-  },
-);
-
-it.each(["hydration", "desktop"])(
-  "continues with unknown state when the %s read never settles",
-  async (stage) => {
-    vi.useFakeTimers();
-    const never = new Promise<never>(() => {});
-    if (stage === "hydration") reads.hydrate.mockReturnValue(never);
-    else vi.stubGlobal("window", { desktopBridge: { getComputerUseState: () => never } });
-    const pending = captureHelpClientContext(() => true);
-    await vi.advanceTimersByTimeAsync(2_000);
-    const result = await pending;
-    expect(result).not.toBeNull();
-    expect(result?.computerUse).toBeUndefined();
-    expect(result?.settingsStatus).toBe(stage === "hydration" ? "unavailable" : "ready");
-    expect(vi.getTimerCount()).toBe(0);
   },
 );

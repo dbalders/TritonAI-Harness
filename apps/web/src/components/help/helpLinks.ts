@@ -1,3 +1,4 @@
+import { movedSettingsPath } from "../settings/settingsSearch";
 import {
   SETTINGS_SEARCH_ITEMS,
   SETTINGS_SECTION_LABELS,
@@ -21,7 +22,9 @@ export const HELP_ISSUE_TRACKER_URL = "https://github.com/dbalders/TritonAI-Harn
 export function resolveHelpLink(href: string | undefined) {
   if (!href) return null;
   const [pathname, hash, extra] = href.split("#");
-  const internal = [...SETTINGS_DESTINATIONS].find((destination) => destination === pathname);
+  const internal =
+    movedSettingsPath(pathname ?? "", hash ?? "") ??
+    [...SETTINGS_DESTINATIONS].find((destination) => destination === pathname);
   if (internal && extra === undefined) {
     if (hash === undefined) return { kind: "internal", to: internal, hash: "" } as const;
     const target = SEARCH_ITEMS.find(

@@ -6,9 +6,10 @@ import type {
   ResolvedKeybindingsConfig,
   ThreadId,
 } from "@t3tools/contracts";
+
 import type { DraftId } from "../../composerDraftStore";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
-import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
+import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
 import { BranchToolbar } from "../BranchToolbar";
 import BaseGitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
@@ -26,7 +27,7 @@ const GitActionsControl = memo(BaseGitActionsControl);
 
 export interface ThreadDetailsPanelProps extends Pick<
   ComponentProps<typeof ThreadDetailsCard>,
-  "anchor" | "handle" | "onPresentationChange"
+  "anchor" | "handle"
 > {
   forceNewWorktree?: boolean;
   environmentId: EnvironmentId;
@@ -104,7 +105,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       threadRef={{ environmentId: props.environmentId, threadId: props.threadId }}
       anchor={props.anchor}
       handle={props.handle}
-      onPresentationChange={props.onPresentationChange}
     >
       {(density) => (
         <>

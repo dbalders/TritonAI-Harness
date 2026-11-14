@@ -191,13 +191,13 @@ function notarize(file, label, notary, exec) {
   return receipt;
 }
 
-async function stapleAccepted(file, receipt, label, exec, wait = sleep) {
+async function runAcceptedStapler(action, file, receipt, label, exec, wait = sleep) {
   if (receipt?.status !== "Accepted")
-    throw new Error("Stapling requires an Accepted notarization receipt.");
+    throw new Error("Stapler requires an Accepted notarization receipt.");
   const delays = [10000, 30000, 60000];
   for (let attempt = 0; ; attempt++) {
     try {
-      const result = exec("xcrun", ["stapler", "staple", file], {
+      const result = exec("xcrun", ["stapler", action, file], {
         capture: true,
         timeout: 60000,
         killSignal: "SIGKILL",
@@ -226,6 +226,14 @@ async function stapleAccepted(file, receipt, label, exec, wait = sleep) {
       await wait(delays[attempt]);
     }
   }
+}
+
+function stapleAccepted(file, receipt, label, exec, wait) {
+  return runAcceptedStapler("staple", file, receipt, label, exec, wait);
+}
+
+function validateAccepted(file, receipt, label, exec, wait) {
+  return runAcceptedStapler("validate", file, receipt, label, exec, wait);
 }
 
 async function fileInfo(file) {
@@ -304,19 +312,6 @@ function verifyPluginPayload(appPath, composition, asar, version, parseImports) 
     })),
     fileCount: verified.files,
   };
-}
-
-function diskImageCapacityMib(source) {
-  const pending = [source];
-  let bytes = 0;
-  while (pending.length) {
-    const file = pending.pop();
-    const stat = fs.lstatSync(file);
-    bytes += Math.max(4096, stat.size, Number.isFinite(stat.blocks) ? stat.blocks * 512 : 0);
-    if (stat.isDirectory())
-      for (const child of fs.readdirSync(file)) pending.push(path.join(file, child));
-  }
-  return Math.max(512, Math.ceil((bytes * 1.3) / 1024 / 1024) + 128);
 }
 
 function detachAndClean(mountPoint, scratch, runCommand) {
@@ -619,6 +614,8 @@ async function verifyPackagedBoot({
   let child;
   let processes;
   let bootError;
+  let bootResult;
+  let cleanupError;
   let interruption;
   let loggedBytes = 0;
   const captureOutput = (chunk) => {
@@ -788,7 +785,7 @@ async function verifyPackagedBoot({
     if (!stillVisible)
       throw new Error("Packaged Harness window disappeared during the boot stability check.");
     if (interruption) throw interruption;
-    return {
+    bootResult = {
       ...result,
       keychain: "mock-for-isolated-boot",
       credentialStorage: "not-verified",
@@ -797,9 +794,7 @@ async function verifyPackagedBoot({
     };
   } catch (error) {
     bootError = error;
-    throw error;
   } finally {
-    let cleanupError;
     try {
       if (application && processes)
         await closeBootApplication(application, processes, closeTimeoutMs);
@@ -816,14 +811,14 @@ async function verifyPackagedBoot({
     } catch (error) {
       cleanupError ||= error;
     }
-    if (cleanupError) {
-      if (!bootError && !interruption) throw cleanupError;
+    if (cleanupError && (bootError || interruption)) {
       process.stderr.write(`[harness-mac] ${cleanupError.message}\n`);
     }
-    // A signal during shutdown must also cancel a pending successful return.
-    // Preserve its exit status even if evaluation or cleanup failed afterward.
-    if (interruption) throw interruption;
   }
+  if (interruption) throw interruption;
+  if (bootError) throw bootError;
+  if (cleanupError) throw cleanupError;
+  return bootResult;
 }
 
 async function finalizeMacRelease({
@@ -934,12 +929,9 @@ async function finalizeMacRelease({
   const zipName = `TritonAI-Harness-${version}-arm64.zip`;
   const zip = path.join(output, zipName);
   const dmg = path.join(output, `TritonAI-Harness-${version}-arm64.dmg`);
-  // Staple the app itself before packaging. The Installer copies it out of a DMG mounted with
-  // hdiutil (which never ingests the DMG's ticket), and the updater ZIP has no DMG at all, so an
-  // unstapled app needs Apple's online lookup on first launch and fails Gatekeeper offline.
-  // Electron Builder must still build its ZIP (it only writes app-update.yml for ZIP or DMG
-  // targets), so submit that archive of the signed app instead of compressing it again. Apple
-  // notarizes code hashes: stapling the app below fails if this ZIP held different code.
+  // Staple the app before packaging so offline Gatekeeper works for Installer and updater ZIPs.
+  // Notarize Electron Builder’s ZIP of that signed app; it also supplies app-update.yml.
+  // Stapling fails if the notarized archive contained different code hashes.
   const appSubmission = regularFile(path.join(dist, zipName));
   const appReceipt = notarize(appSubmission, "signed app", notary, exec);
   fs.writeFileSync(
@@ -948,7 +940,7 @@ async function finalizeMacRelease({
     { mode: 0o600 },
   );
   await stapleAccepted(signedApp, appReceipt, "Staple accepted signed app", exec, wait);
-  exec("xcrun", ["stapler", "validate", signedApp], { label: "Validate stapled app notarization" });
+  await validateAccepted(signedApp, appReceipt, "Validate stapled app notarization", exec, wait);
   verifySignedApp(signedApp, identity, exec);
   // Electron Builder's ZIP predates the staple; rebuild it (and its blockmap) from the stapled app.
   fs.rmSync(zip, { force: true });
@@ -981,7 +973,7 @@ async function finalizeMacRelease({
     { mode: 0o600 },
   );
   await stapleAccepted(dmg, receipt, "Staple accepted candidate DMG", exec, wait);
-  exec("xcrun", ["stapler", "validate", dmg], { label: "Validate stapled notarization" });
+  await validateAccepted(dmg, receipt, "Validate stapled notarization", exec, wait);
   exec(
     "spctl",
     ["--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=4", dmg],
@@ -994,9 +986,7 @@ async function finalizeMacRelease({
     exec,
     async (app) => {
       verifySignedApp(app, identity, exec);
-      exec("xcrun", ["stapler", "validate", app], {
-        label: "Validate stapled app inside final DMG",
-      });
+      await validateAccepted(app, appReceipt, "Validate stapled app inside final DMG", exec, wait);
       verifyPluginPayload(app, composition, tools.asar, version, tools.parseImports);
       return verifyBoot({
         appPath: app,
@@ -1016,9 +1006,13 @@ async function finalizeMacRelease({
     });
     const zipApp = path.join(zipScratch, `${productName}.app`);
     verifySignedApp(zipApp, identity, exec);
-    exec("xcrun", ["stapler", "validate", zipApp], {
-      label: "Validate stapled app inside final updater ZIP",
-    });
+    await validateAccepted(
+      zipApp,
+      appReceipt,
+      "Validate stapled app inside final updater ZIP",
+      exec,
+      wait,
+    );
     verifyPluginPayload(zipApp, composition, tools.asar, version, tools.parseImports);
     const [zipAsar, signedAsar] = await Promise.all(
       [zipApp, signedApp].map((app) =>
@@ -1097,6 +1091,7 @@ module.exports = {
   verifyPackagedBoot,
   finalizeMacRelease,
   stapleAccepted,
+  validateAccepted,
 };
 
 if (require.main === module) {

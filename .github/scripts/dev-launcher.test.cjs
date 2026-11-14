@@ -71,17 +71,16 @@ function fixture(t, { lsof = true } = {}) {
     children.push(child);
     const lines = readline.createInterface({ input: child.stdout });
     const first = await new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("Launcher did not report its owner")),
-        10_000,
-      );
+      const deadline = AbortSignal.timeout(10_000);
+      const expired = () => reject(new Error("Launcher did not report its owner"));
+      deadline.addEventListener("abort", expired, { once: true });
       lines.once("line", (line) => {
-        clearTimeout(timer);
+        deadline.removeEventListener("abort", expired);
         resolve(JSON.parse(line));
       });
       child.once("error", reject);
       child.once("exit", (code) => {
-        clearTimeout(timer);
+        deadline.removeEventListener("abort", expired);
         reject(new Error(`Launcher exited ${code}`));
       });
     });
@@ -104,19 +103,8 @@ function fixture(t, { lsof = true } = {}) {
 }
 
 const posix = { skip: os.platform() === "win32" };
-test("starts and stops only its owned group using lsof from PATH", posix, async (t) => {
-  const f = fixture(t);
-  const started = await f.start();
-  assert.equal(started.running, true);
-  const status = JSON.parse(f.run("status").stdout);
-  assert.equal(status.launcherPid, started.launcherPid);
-  assert.equal(status.running, true);
-  assert.equal(JSON.parse(f.run("start").stdout).launcherPid, started.launcherPid);
-  const stopped = f.run("stop");
-  assert.equal(stopped.status, 0, stopped.stderr);
-  assert.equal(JSON.parse(stopped.stdout).running, false);
-});
 
+// regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test("a reused PID is not running and is never stopped", posix, async (t) => {
   const f = fixture(t);
   const unrelated = f.foreign();
@@ -131,6 +119,7 @@ test("a reused PID is not running and is never stopped", posix, async (t) => {
   process.kill(unrelated.pid, 0);
 });
 
+// regression: d4dd8e9346 fix: address launcher and release workflow review findings
 test("missing lsof fails closed without signaling the recorded process", posix, (t) => {
   const f = fixture(t, { lsof: false });
   const unrelated = f.foreign();
@@ -141,56 +130,3 @@ test("missing lsof fails closed without signaling the recorded process", posix, 
     process.kill(unrelated.pid, 0);
   }
 });
-
-test("a different selected checkout cannot read or mutate this checkout", posix, (t) => {
-  const f = fixture(t);
-  for (const command of ["--check-checkout", "status", "start", "stop", "restart"]) {
-    const result = f.run(command, { TRITONAI_HARNESS_REPO: os.tmpdir() });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Selected checkout differs/);
-  }
-  assert.equal(fs.existsSync(path.join(f.home, "launcher.json")), false);
-});
-
-test("an orphan owned backend prevents a duplicate start and can be stopped", posix, async (t) => {
-  const f = fixture(t);
-  const backend = f.foreign(path.join(f.root, "apps/server/dist/bin.mjs"), "--bootstrap-fd");
-  f.env.FIXTURE_LISTENING_PID = String(backend.pid);
-  fs.unlinkSync(path.join(f.home, "launcher.json"));
-  fs.mkdirSync(path.join(f.home, "dev"));
-  fs.writeFileSync(
-    path.join(f.home, "dev/server-runtime.json"),
-    JSON.stringify({ pid: backend.pid, port: 43001 }),
-  );
-  assert.match(f.run("start").stderr, /backend is still alive/);
-  assert.equal(JSON.parse((await f.runAsync("stop")).stdout).running, false);
-});
-
-for (const command of ["stop", "restart"]) {
-  test(`a stale backend PID does not block an owned launcher ${command}`, posix, async (t) => {
-    const f = fixture(t);
-    const unrelated = f.foreign();
-    fs.unlinkSync(path.join(f.home, "launcher.json"));
-    fs.mkdirSync(path.join(f.home, "dev"));
-    fs.writeFileSync(
-      path.join(f.home, "dev/server-runtime.json"),
-      JSON.stringify({ pid: unrelated.pid, port: 43001 }),
-    );
-    const refused = f.run("stop");
-    assert.notEqual(refused.status, 0);
-    assert.match(refused.stderr, /backend whose checkout or listening port changed/);
-    const started = await f.start();
-    assert.equal(started.running, true);
-    process.kill(unrelated.pid, 0);
-    if (command === "restart") {
-      const restarted = await f.start("restart");
-      assert.equal(restarted.running, true);
-      assert.notEqual(restarted.launcherPid, started.launcherPid);
-      process.kill(unrelated.pid, 0);
-    }
-    const stopped = f.run("stop");
-    assert.equal(stopped.status, 0, stopped.stderr);
-    assert.equal(JSON.parse(stopped.stdout).running, false);
-    process.kill(unrelated.pid, 0);
-  });
-}

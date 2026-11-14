@@ -12,15 +12,9 @@ import { desktopProfileNames } from "./DesktopUserData.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
 /**
- * Carries the renderer's localStorage (prompt stash, unsent drafts, layout,
- * theme) over from the V1 desktop profile, which V2 replaced with its own
- * separate V2 profile. The V1 profile is only read, never opened by Chromium,
- * so this works while V1 is still running.
- *
- * `load` runs before the window opens; the preload takes the items once,
- * merges them into the new profile, and calls `complete`, which writes a
- * marker so later launches skip the read. A failed read or merge, or a window
- * that never completes, leaves no marker and retries next launch.
+ * Read V1 localStorage without opening its Chromium profile, even while V1 is running.
+ * Load before the window, merge in preload, and write the marker only after completion.
+ * Failed reads/merges retry on the next launch.
  */
 export class DesktopLegacyLocalStorage extends Context.Service<
   DesktopLegacyLocalStorage,

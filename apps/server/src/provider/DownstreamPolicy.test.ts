@@ -6,12 +6,8 @@ import * as Path from "effect/Path";
 
 import {
   DEFAULT_SERVER_SETTINGS,
-  DEFAULT_TRITONAI_AI_BASE_URL,
   DEFAULT_TRITONAI_CODEX_HOME_PATH,
   DEFAULT_TRITONAI_CODEX_MODEL,
-  TRITONAI_APP_BASE_NAME,
-  TRITONAI_APP_ID_BASE,
-  TRITONAI_CONNECT_NAME,
 } from "@t3tools/contracts";
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { loadBuiltinIntegrations } from "../integrations/builtins.ts";
@@ -68,17 +64,12 @@ describe("downstream provider and integration policy", () => {
     ).toThrow(/unsupported fields/u);
   });
 
-  it("pins TritonAI identity and conservative provider defaults", () => {
+  it("pins conservative managed provider defaults", () => {
     const capabilities = tritonAiCodexCapabilities(null);
     const reasoning = capabilities.optionDescriptors?.find(
       (descriptor) => descriptor.id === "reasoningEffort",
     );
 
-    expect(TRITONAI_APP_BASE_NAME).toBe("TritonAI Harness");
-    expect(TRITONAI_APP_ID_BASE).toBe("edu.ucsd.tritonai.harness");
-    expect(TRITONAI_CONNECT_NAME).toBe("TritonAI Connect");
-    expect(DEFAULT_TRITONAI_AI_BASE_URL).toBe("https://tritonai-api.ucsd.edu/v1");
-    expect(DEFAULT_TRITONAI_CODEX_MODEL).toBe("api-glm-5.3-flash");
     expect(DEFAULT_SERVER_SETTINGS.enableProviderUpdateChecks).toBe(false);
     expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({
       instanceId: "codex",

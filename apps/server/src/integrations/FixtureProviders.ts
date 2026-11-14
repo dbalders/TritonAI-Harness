@@ -13,7 +13,7 @@ import type {
 } from "./IntegrationRegistry.ts";
 import { EmptyIntegrationToolInput } from "./IntegrationTool.ts";
 
-export const API_KEY_FIXTURE_SECRET_NAME = "api-key";
+const API_KEY_FIXTURE_SECRET_NAME = "api-key";
 
 export const API_KEY_FIXTURE_TOOLS = [
   {

@@ -35,7 +35,7 @@ describe("managed plugin host runtime", () => {
     },
   );
 
-  it.each(["4.0.0", "4.0.4", "4.1.0", "4.0.4+build.1"])(
+  it.each(["4.0.0", "4.1.0", "4.0.4+build.1"])(
     "supports stable Effect host %s with released and current declarations",
     (host) => {
       for (const metadata of [

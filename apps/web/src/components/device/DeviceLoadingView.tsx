@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Smartphone } from "lucide-react";
+
 import { Spinner } from "~/components/ui/spinner";
 
 export function DeviceLoadingView(props: {

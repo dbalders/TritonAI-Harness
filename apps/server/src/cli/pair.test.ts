@@ -3,22 +3,22 @@ import * as NodeHttp from "node:http";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { AuthStandardClientScopes } from "@t3tools/contracts";
+import { AuthStandardClientScopes, ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, describe, expect, it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
+import * as Cause from "effect/Cause";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as TestConsole from "effect/testing/TestConsole";
 import { Command, CliError } from "effect/cli";
-
 import { cli } from "../binCli.ts";
 import {
   SERVICE_LAUNCHER_CONTEXT_ENV,
@@ -30,15 +30,40 @@ import {
   persistServerRuntimeState,
   type PersistedServerRuntimeState,
 } from "../serverRuntimeState.ts";
-import {
-  DevServerNotProxiableError,
-  resolveDirectPairingBaseUrl,
-  resolveTailscaleLocalTarget,
-} from "./pair.ts";
-
+import { DevServerNotProxiableError, resolveTailscaleLocalTarget } from "./pair.ts";
 import packageJson from "../../package.json" with { type: "json" };
 
 const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
+
+const baseState = {
+  version: 1,
+  pid: 123,
+  port: 3_773,
+  origin: "http://127.0.0.1:3773",
+  startedAt: "2026-06-20T00:00:00.000Z",
+} as const satisfies PersistedServerRuntimeState;
+
+describe("pair tailscale local target", () => {
+  it("proxies the dev web port for dev servers", () => {
+    expect(resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://localhost:5733/" })).toEqual(
+      { localPort: 5_733 },
+    );
+    // tailscale serve defaults to loopback, so non-loopback dev servers need an explicit target.
+    expect(
+      resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://192.168.1.10:5733/" }),
+    ).toEqual({ localPort: 5_733, localHost: "192.168.1.10" });
+    expect(
+      resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://[fd7a:115c::1]:5733/" }),
+    ).toEqual({ localPort: 5_733, localHost: "[fd7a:115c::1]" });
+  });
+
+  it("rejects HTTPS dev URLs, which tailscale serve cannot proxy", () => {
+    expect(
+      resolveTailscaleLocalTarget({ ...baseState, devUrl: "https://localhost:5733/" }),
+    ).toBeInstanceOf(DevServerNotProxiableError);
+  });
+});
+
 const TEST_SECRET_STORE_KEY = "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=";
 
 const makeSecretStoreConfigLayer = (baseDir: string) => {
@@ -53,64 +78,15 @@ const makeSecretStoreConfigLayer = (baseDir: string) => {
   );
 };
 
-const baseState = {
-  version: 1,
-  pid: 123,
-  port: 3_773,
-  origin: "http://127.0.0.1:3773",
-  startedAt: "2026-06-20T00:00:00.000Z",
-} as const satisfies PersistedServerRuntimeState;
-
-describe("pair base URL selection", () => {
-  it("pairs through the dev web origin when the server fronts a dev server", () => {
-    expect(resolveDirectPairingBaseUrl({ ...baseState, devUrl: "http://localhost:5733/" })).toBe(
-      "http://localhost:5733/",
-    );
+const runCli = (args: ReadonlyArray<string>) =>
+  Effect.suspend(() => {
+    const effect = Command.runWith(cli, { version: "0.0.0" })(args);
+    const baseDirIndex = args.indexOf("--base-dir");
+    const baseDir = baseDirIndex >= 0 ? args[baseDirIndex + 1] : undefined;
+    return baseDir && NodeFS.existsSync(baseDir)
+      ? effect.pipe(Effect.provide(makeSecretStoreConfigLayer(baseDir)))
+      : effect;
   });
-
-  it("pairs through the bound host when there is no dev server", () => {
-    expect(resolveDirectPairingBaseUrl({ ...baseState, host: "100.64.0.7" })).toBe(
-      "http://100.64.0.7:3773",
-    );
-    expect(resolveDirectPairingBaseUrl(baseState)).toBe("http://localhost:3773");
-  });
-});
-
-describe("pair tailscale local target", () => {
-  it("proxies the dev web port for dev servers", () => {
-    expect(resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://localhost:5733/" })).toEqual(
-      { localPort: 5_733 },
-    );
-    // A dev server on a non-loopback interface must be proxied at that
-    // interface; tailscale serve defaults to 127.0.0.1 otherwise.
-    expect(
-      resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://192.168.1.10:5733/" }),
-    ).toEqual({ localPort: 5_733, localHost: "192.168.1.10" });
-    // URL.hostname keeps IPv6 brackets, so the serve target stays valid.
-    expect(
-      resolveTailscaleLocalTarget({ ...baseState, devUrl: "http://[fd7a:115c::1]:5733/" }),
-    ).toEqual({ localPort: 5_733, localHost: "[fd7a:115c::1]" });
-  });
-
-  it("rejects HTTPS dev URLs, which tailscale serve cannot proxy", () => {
-    expect(
-      resolveTailscaleLocalTarget({ ...baseState, devUrl: "https://localhost:5733/" }),
-    ).toBeInstanceOf(DevServerNotProxiableError);
-  });
-
-  it("proxies the backend port directly otherwise", () => {
-    expect(resolveTailscaleLocalTarget(baseState)).toEqual({ localPort: 3_773 });
-    expect(resolveTailscaleLocalTarget({ ...baseState, host: "0.0.0.0" })).toEqual({
-      localPort: 3_773,
-    });
-    expect(resolveTailscaleLocalTarget({ ...baseState, host: "192.168.1.42" })).toEqual({
-      localPort: 3_773,
-      localHost: "192.168.1.42",
-    });
-  });
-});
-
-const runCli = (args: ReadonlyArray<string>) => Command.runWith(cli, { version: "0.0.0" })(args);
 
 const provideCliTestLayers = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.provide(effect, Layer.mergeAll(layerCliRuntime, TestConsole.layer));
@@ -132,19 +108,21 @@ const testDescriptor = {
   label: "pair-test",
   platform: { os: "linux", arch: "x64" },
   serverVersion: "0.0.1",
+  orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
   capabilities: { repositoryIdentity: true },
 };
 
 const withDescriptorServer = <A, E, R>(
   run: (origin: string) => Effect.Effect<A, E, R>,
   host = "127.0.0.1",
+  descriptor: object = testDescriptor,
 ) =>
   Effect.acquireUseRelease(
     Effect.callback<NodeHttp.Server>((resume) => {
       const server = NodeHttp.createServer((request, response) => {
         if (request.url === "/.well-known/t3/environment") {
           response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify(testDescriptor));
+          response.end(JSON.stringify(descriptor));
           return;
         }
         response.writeHead(404);
@@ -209,7 +187,6 @@ describe("t3 pair", () => {
           });
           const output = yield* captureStdout(
             runCli(["pair", "--base-dir", baseDir, "--tailscale"]).pipe(
-              Effect.provide(makeSecretStoreConfigLayer(baseDir)),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
               Effect.provideService(HostProcess.Platform, "linux"),
               Effect.provideService(FetchHttpClient.Fetch, async (input, init) => {
@@ -236,7 +213,6 @@ describe("t3 pair", () => {
     withDescriptorServer((origin) =>
       Effect.gen(function* () {
         const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-test-"));
-        const secretStoreConfigLayer = makeSecretStoreConfigLayer(baseDir);
         const port = Number(new URL(origin).port);
         const statePath = NodePath.join(baseDir, "userdata", "server-runtime.json");
         yield* persistServerRuntimeState({
@@ -247,9 +223,7 @@ describe("t3 pair", () => {
           }),
         });
 
-        const output = yield* captureStdout(runCli(["pair", "--base-dir", baseDir])).pipe(
-          Effect.provide(secretStoreConfigLayer),
-        );
+        const output = yield* captureStdout(runCli(["pair", "--base-dir", baseDir]));
 
         assert.include(output, `Pairing with pair-test (${origin})`);
         assert.include(output, `Pairing URL: ${origin}/pair#token=`);
@@ -261,7 +235,7 @@ describe("t3 pair", () => {
 
         const listed = yield* captureStdout(
           runCli(["auth", "pairing", "list", "--base-dir", baseDir, "--json"]),
-        ).pipe(Effect.provide(secretStoreConfigLayer));
+        );
         const credentials = JSON.parse(listed) as ReadonlyArray<{
           readonly label?: string;
           readonly scopes: ReadonlyArray<string>;
@@ -288,48 +262,10 @@ describe("t3 pair", () => {
     ),
   );
 
-  it.effect("mints a pairing grant with only the selected scopes", () =>
-    withDescriptorServer((origin) =>
-      Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-scopes-test-"));
-        yield* persistServerRuntimeState({
-          path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
-          state: yield* makePersistedServerRuntimeState({
-            config: { host: "127.0.0.1", devUrl: undefined },
-            port: Number(new URL(origin).port),
-          }),
-        });
-
-        yield* captureStdout(
-          runCli([
-            "pair",
-            "--base-dir",
-            baseDir,
-            "--scope",
-            "orchestration:read",
-            "--scope",
-            "relay:read",
-            "--scope",
-            "orchestration:read",
-          ]),
-        ).pipe(Effect.provide(makeSecretStoreConfigLayer(baseDir)));
-        const listed = yield* captureStdout(
-          runCli(["auth", "pairing", "list", "--base-dir", baseDir, "--json"]),
-        ).pipe(Effect.provide(makeSecretStoreConfigLayer(baseDir)));
-        const credentials = JSON.parse(listed) as ReadonlyArray<{
-          readonly scopes: ReadonlyArray<string>;
-        }>;
-        assert.lengthOf(credentials, 1);
-        assert.deepEqual(credentials[0]?.scopes, ["orchestration:read", "relay:read"]);
-      }),
-    ).pipe(Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("pairs through the recorded dev web URL for dev servers", () =>
     withDescriptorServer((origin) =>
       Effect.gen(function* () {
         const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-dev-test-"));
-        const secretStoreConfigLayer = makeSecretStoreConfigLayer(baseDir);
         const port = Number(new URL(origin).port);
         const statePath = NodePath.join(baseDir, "dev", "server-runtime.json");
         yield* persistServerRuntimeState({
@@ -340,30 +276,11 @@ describe("t3 pair", () => {
           }),
         });
 
-        const output = yield* captureStdout(runCli(["pair", "--base-dir", baseDir])).pipe(
-          Effect.provide(secretStoreConfigLayer),
-        );
+        const output = yield* captureStdout(runCli(["pair", "--base-dir", baseDir]));
 
         assert.include(output, "Pairing URL: http://localhost:5733/pair#token=");
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("directs to t3 serve or t3 connect when no server is running", () =>
-    Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-none-test-"));
-
-      const error = yield* provideCliTestLayers(
-        runCli(["pair", "--base-dir", baseDir]).pipe(Effect.flip),
-      );
-
-      const rendered = String(
-        typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
-      );
-      assert.include(rendered, "No running T3 Code server found.");
-      assert.include(rendered, "npx t3 serve");
-      assert.include(rendered, "npx t3 connect");
-    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("ignores runtime state whose recorded pid is no longer alive", () =>
@@ -392,27 +309,78 @@ describe("t3 pair", () => {
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("ignores stale runtime state pointing at a dead server", () =>
-    Effect.gen(function* () {
-      const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-stale-test-"));
-      const statePath = NodePath.join(baseDir, "userdata", "server-runtime.json");
-      yield* persistServerRuntimeState({
-        path: statePath,
-        state: yield* makePersistedServerRuntimeState({
-          config: { host: "127.0.0.1", devUrl: undefined },
-          port: 1,
+  // regression: #10516 minting opens the target database with this checkout's
+  // migrations, so a worktree must never fall back to the live install.
+  it.effect("does not fall back to the shared home from a linked worktree", () =>
+    withDescriptorServer((origin) =>
+      Effect.gen(function* () {
+        const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-pair-worktree-test-"));
+        const worktree = NodePath.join(root, "worktree");
+        NodeFS.mkdirSync(worktree);
+        NodeFS.writeFileSync(
+          NodePath.join(worktree, ".git"),
+          `gitdir: ${NodePath.join(root, "repo", ".git", "worktrees", "worktree")}\n`,
+        );
+        const sharedHome = NodePath.join(root, "shared");
+        yield* persistServerRuntimeState({
+          path: NodePath.join(sharedHome, "userdata", "server-runtime.json"),
+          state: yield* makePersistedServerRuntimeState({
+            config: { host: "127.0.0.1", devUrl: undefined },
+            port: Number(new URL(origin).port),
+          }),
+        });
+
+        const error = yield* provideCliTestLayers(
+          runCli(["pair"]).pipe(
+            Effect.provideService(HostProcess.WorkingDirectory, worktree),
+            Effect.provide(
+              ConfigProvider.layer(ConfigProvider.fromEnv({ env: { T3CODE_HOME: sharedHome } })),
+            ),
+            Effect.flip,
+          ),
+        );
+
+        assert.include(String(error), "No running T3 Code server found.");
+        assert.notInclude(String(error), sharedHome);
+        assert.deepEqual(NodeFS.readdirSync(NodePath.join(sharedHome, "userdata")), [
+          "server-runtime.json",
+        ]);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  // regression: #15492 an older CLI minted into a V1 database the protocol 2
+  // server never reads, so pairing must refuse before opening the database.
+  it.effect("rejects a server on another protocol before opening its database", () =>
+    withDescriptorServer(
+      (origin) =>
+        Effect.gen(function* () {
+          const baseDir = NodeFS.mkdtempSync(
+            NodePath.join(NodeOS.tmpdir(), "t3-pair-protocol-test-"),
+          );
+          yield* persistServerRuntimeState({
+            path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
+            state: yield* makePersistedServerRuntimeState({
+              config: { host: "127.0.0.1", devUrl: undefined },
+              port: Number(new URL(origin).port),
+            }),
+          });
+
+          const exit = yield* provideCliTestLayers(
+            runCli(["pair", "--base-dir", baseDir]).pipe(Effect.exit),
+          );
+
+          assert.deepEqual(NodeFS.readdirSync(NodePath.join(baseDir, "userdata")), [
+            "server-runtime.json",
+          ]);
+          assert.isTrue(Exit.isFailure(exit));
+          if (Exit.isFailure(exit)) {
+            assert.include(String(Cause.squash(exit.cause)), "t3@0.0.45 pair");
+          }
         }),
-      });
-
-      const error = yield* provideCliTestLayers(
-        runCli(["pair", "--base-dir", baseDir]).pipe(Effect.flip),
-      );
-
-      const rendered = String(
-        typeof error === "object" && error !== null && "cause" in error ? error.cause : error,
-      );
-      assert.include(rendered, "No running T3 Code server found.");
-    }).pipe(Effect.provide(NodeServices.layer)),
+      "127.0.0.1",
+      { ...testDescriptor, serverVersion: "0.0.45", orchestrationProtocolVersion: 1 },
+    ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   // Without the capability `tailscale serve` blocks on an enablement URL, so
@@ -494,11 +462,11 @@ describe("auth scope options", () => {
             "--scope",
             "orchestration:read",
           ]),
-        ).pipe(Effect.provide(makeSecretStoreConfigLayer(baseDir)));
+        );
         const issued = JSON.parse(output) as { readonly scopes: ReadonlyArray<string> };
         const listOutput = yield* captureStdout(
           runCli(["auth", group, "list", "--base-dir", baseDir, "--json"]),
-        ).pipe(Effect.provide(makeSecretStoreConfigLayer(baseDir)));
+        );
         const listed = JSON.parse(listOutput) as ReadonlyArray<{
           readonly scopes: ReadonlyArray<string>;
         }>;

@@ -23,8 +23,7 @@ export function statusForPhase(phase: RelayAgentActivityState["phase"]): string 
     case "failed":
       return "Failed";
     case "starting":
-      // Matches the web sidebar's pill wording (Sidebar.logic.ts) so the same
-      // thread reads the same across surfaces.
+      // Match the web sidebar's wording in Sidebar.logic.ts.
       return "Connecting";
     case "running":
       return "Working";
@@ -99,11 +98,8 @@ export function makeAggregateState(input: {
     if (input.terminalState !== null) {
       return terminalAggregateState(input.terminalState);
     }
-    // With no live work, recently finished threads keep the card showing
-    // Done/Failed content (an armed card never renders an empty state). The
-    // newly-terminal alert rules key off the previously delivered aggregate,
-    // so replays repaint this without buzzing. Once the terminal rows age
-    // out, the aggregate is null and the delivery layer ends the card.
+    // Recently terminal rows keep Done/Failed visible without live work; replay changes
+    // do not alert twice. Once those rows age out, null ends the delivered activity card.
     const recentTerminal = states
       .filter((state) => isRecentTerminalState(state, input.nowMs))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

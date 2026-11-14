@@ -40,12 +40,8 @@ function isSupportedEffectHostVersion(version: string): boolean {
 }
 
 /**
- * Resolves the single Harness-owned runtime admitted across the managed-plugin boundary.
- *
- * The first released v2 plugin used one exact `dependencies.effect` build pin. New packages use
- * the canonical peer range. Both execute against the one Effect instance supplied by Harness.
- * The legacy carve-out is intentionally exact; arbitrary prerelease pins are not a compatibility
- * promise.
+ * Managed plugins share the Harness Effect instance. Admit the canonical peer range
+ * and the exact legacy v2 dependency pin; arbitrary prerelease pins are unsupported.
  */
 export function resolvePluginHostRuntimeDependencies(
   packageJson: PluginPackageRuntimeMetadata,

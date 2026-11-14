@@ -28,6 +28,8 @@ export const withChatGptSessionLock = <A, E, R>(
           try: () =>
             lock(NodePath.join(directory, `${key}.bin`), {
               realpath: false,
+              // The encrypted store owns .bin.lock as a SQLite lock file, not a lease directory.
+              lockfilePath: NodePath.join(directory, `${key}.chatgpt-session.lock`),
               stale: 120_000,
               update: 10_000,
               retries: { retries: 80, factor: 1, minTimeout: 500, maxTimeout: 500 },

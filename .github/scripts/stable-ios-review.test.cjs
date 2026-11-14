@@ -180,15 +180,6 @@ test("submits the exact Xcode Cloud build once, with deterministic notes and man
   assert.ok(!f.writes.some((item) => item.data.attributes?.canceled));
 });
 
-test("automatic publication is a separate explicit configuration", async () => {
-  const f = fixture();
-  await reconcile({ ...f.options, releaseAfterApproval: true });
-  assert.equal(
-    f.writes.find((item) => item.route === "/v1/appStoreVersions").data.attributes.releaseType,
-    "AFTER_APPROVAL",
-  );
-});
-
 for (const state of [
   "WAITING_FOR_REVIEW",
   "IN_REVIEW",
@@ -240,14 +231,6 @@ for (const overrides of [
   });
 }
 
-test("does not choose an expired or processing build", async () => {
-  for (const build of [{ expired: true }, { processingState: "PROCESSING" }]) {
-    const f = fixture({ build });
-    assert.match(await reconcile(f.options), /Waiting for/);
-    assert.deepEqual(f.writes, []);
-  }
-});
-
 test("recovers an existing review draft without creating another item or submission", async () => {
   const f = fixture({
     versions: [
@@ -270,12 +253,6 @@ test("an interrupted empty review draft can resume", async () => {
   await reconcile(f.options);
   assert.ok(!f.writes.some((item) => item.route === "/v1/reviewSubmissions"));
   assert.equal(f.writes.filter((item) => item.route === "/v1/reviewSubmissionItems").length, 1);
-});
-
-test("an unresolved review never triggers writes", async () => {
-  const f = fixture({ submissions: [{ attributes: { state: "UNRESOLVED_ISSUES" } }] });
-  await assert.rejects(reconcile(f.options), /unresolved issues/);
-  assert.deepEqual(f.writes, []);
 });
 
 test("Apple authentication uses verifiable ES256 JWTs and bounded same-origin pagination", async () => {

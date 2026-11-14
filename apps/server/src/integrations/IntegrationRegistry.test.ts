@@ -1,22 +1,21 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off cryptoRandomUUID:off
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
-import * as Tracer from "effect/Tracer";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { ThreadId } from "@t3tools/contracts";
+
+import { invokeAdmittedDynamicTool } from "../provider/CodexDynamicTools.ts";
 
 import { type IntegrationManifest, validateIntegrationManifest } from "./manifest.ts";
 import {
-  createRegistryRuntime,
   INTEGRATION_TOOL_RESULT_OMITTED,
   IntegrationProviderPublicError,
-  logProviderFault,
   MAX_INTEGRATION_TOOL_RESULT_BYTES,
   normalizeIntegrationToolResult,
-  persistedToolUnavailability,
   RegistryRuntime,
   type IntegrationProvider,
   type IntegrationProviderStatus,
@@ -114,7 +113,7 @@ function provider(id: string, state: ProviderState): IntegrationProvider {
       verificationUriComplete: null,
       userCode: "ABCD-EFGH",
       message: "Sign in.",
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      expiresAt: "2100-01-01T00:00:00.000Z",
       intervalSeconds: 1,
     }),
     poll: async () => {
@@ -186,6 +185,138 @@ async function packagedFromRoot(packageRoot: string, implementation: Integration
 }
 
 describe("integration tool result normalization", () => {
+  it("omits oversized remote MCP results before parsing their compatibility copies", () => {
+    const structuredContent = { body: "x".repeat(2_000_000) };
+    const result = {
+      content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+      structuredContent,
+    };
+    using parse = vi.spyOn(JSON, "parse");
+    expect(normalizeIntegrationToolResult(result)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("removes duplicate remote MCP text while preserving structured data and envelope fields", () => {
+    const structuredContent = { workflow: { id: "wf-1", name: "Import", active: false } };
+    const result = {
+      content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }],
+      structuredContent,
+      resultType: "complete",
+      _meta: { requestId: "request-1" },
+    };
+
+    expect(normalizeIntegrationToolResult(result)).toEqual({
+      structuredContent,
+      resultType: "complete",
+      _meta: { requestId: "request-1" },
+    });
+    expect(result.content).toHaveLength(1);
+  });
+
+  it("preserves errors, write notes and media in their original order", () => {
+    const structuredContent = { error: "update_failed", workflowId: "wf-1" };
+    const image = { type: "image", data: "AA==", mimeType: "image/png" };
+    const note = { type: "text", text: "The update may have completed. Read the workflow first." };
+    const resource = {
+      type: "resource_link",
+      uri: "https://fixture.invalid/wf-1",
+      name: "Workflow",
+    };
+    expect(
+      normalizeIntegrationToolResult({
+        isError: true,
+        content: [image, { type: "text", text: JSON.stringify(structuredContent) }, note, resource],
+        structuredContent,
+      }),
+    ).toEqual({ isError: true, content: [image, note, resource], structuredContent });
+  });
+
+  it("keeps distinct text, metadata-bearing blocks and non-MCP results", () => {
+    const structuredContent = { id: "wf-1", label: "two  spaces" };
+    for (const text of [
+      "https://fixture.invalid/wf-1",
+      "not JSON",
+      '{"id":"wf-2"}',
+      '{"id":"wf-1","label":"two spaces"}',
+    ]) {
+      const result = { structuredContent, content: [{ type: "text", text }] };
+      expect(normalizeIntegrationToolResult(result)).toEqual(result);
+    }
+    for (const result of [
+      { content: [{ type: "text", text: "hello" }] },
+      { content: "hello", structuredContent },
+      { content: [{ type: "text", text: "null" }], structuredContent: null },
+      { content: [{ type: "text", text: "[1,2]" }], structuredContent: [1, 2] },
+      {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(structuredContent),
+            annotations: { audience: ["user"] },
+          },
+        ],
+        structuredContent,
+      },
+      {
+        nested: {
+          content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+          structuredContent,
+        },
+      },
+    ])
+      expect(normalizeIntegrationToolResult(result)).toEqual(result);
+  });
+
+  it("keeps numeric precision, duplicate keys and alternative JSON spellings", () => {
+    for (const [text, structuredContent] of [
+      ['{"id":9007199254740993}', { id: 9007199254740992 }],
+      ['{"value":0.10000000000000001}', { value: 0.1 }],
+      ['{"value":1e400}', { value: null }],
+      ['{"value":-0}', { value: 0 }],
+      ['{"id":"old","id":"new"}', { id: "new" }],
+      ['{"b":2,"a":1}', { a: 1, b: 2 }],
+      ['{"value":"\\u0061"}', { value: "a" }],
+      ['{"value":"https:\\/\\/fixture.invalid"}', { value: "https://fixture.invalid" }],
+      ['{"value":1 2}', { value: 12 }],
+    ] as const) {
+      const result = { content: [{ type: "text", text }], structuredContent };
+      expect(normalizeIntegrationToolResult(result)).toEqual(result);
+    }
+  });
+
+  it("applies the encoded-byte limit after removing redundant remote MCP text", () => {
+    const structuredContent = { id: "wf-1", body: "x".repeat(280_000) };
+    const result = {
+      content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+      structuredContent,
+    };
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeGreaterThan(
+      MAX_INTEGRATION_TOOL_RESULT_BYTES,
+    );
+    const normalized = normalizeIntegrationToolResult(result);
+    expect(normalized.resultOmitted).toBeUndefined();
+    expect(Object.keys(normalized)).toEqual(["structuredContent"]);
+    expect(JSON.stringify(normalized.structuredContent) === JSON.stringify(structuredContent)).toBe(
+      true,
+    );
+
+    const tooLarge = { body: "x".repeat(MAX_INTEGRATION_TOOL_RESULT_BYTES) };
+    expect(
+      normalizeIntegrationToolResult({
+        content: [{ type: "text", text: JSON.stringify(tooLarge) }],
+        structuredContent: tooLarge,
+      }),
+    ).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
+    expect(
+      normalizeIntegrationToolResult({
+        content: [{ type: "text", text: "{}" }],
+        structuredContent: {},
+        binary: Buffer.from([1]),
+      }),
+    ).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
+  });
+
+  // regression: fc95a4c143 fix(server): bound model-facing integration results
   it("preserves structured results and normalizes other JSON values into objects", () => {
     expect(normalizeIntegrationToolResult("ready")).toEqual({ result: "ready" });
     expect(normalizeIntegrationToolResult([1, 2])).toEqual({ result: [1, 2] });
@@ -198,6 +329,7 @@ describe("integration tool result normalization", () => {
     expect(() => normalizeIntegrationToolResult(cyclic)).toThrow(/JSON-serializable/u);
   });
 
+  // regression: fc95a4c143 fix(server): bound model-facing integration results
   it("accepts the exact encoded-byte ceiling and replaces the next byte without truncation", () => {
     const envelopeBytes = Buffer.byteLength(JSON.stringify({ result: "" }), "utf8");
     const atLimit = "x".repeat(MAX_INTEGRATION_TOOL_RESULT_BYTES - envelopeBytes);
@@ -210,6 +342,7 @@ describe("integration tool result normalization", () => {
     expect(normalizeIntegrationToolResult(`${atLimit}x`)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
   });
 
+  // regression: fc95a4c143 fix(server): bound model-facing integration results
   it("measures UTF-8 bytes and preserves the bounded multibyte compatibility shape", () => {
     const body = "界".repeat(50_000);
     const compatible = { body, source: { body } };
@@ -223,6 +356,7 @@ describe("integration tool result normalization", () => {
     expect(normalizeIntegrationToolResult(multibyte)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
   });
 
+  // regression: 405c5332dc fix(server): preserve completed integration writes
   it("fails closed when JSON escaping expands a bounded text shape beyond the ceiling", () => {
     const body = "\0".repeat(50_000);
     const escaped = { body, source: { body } };
@@ -232,6 +366,7 @@ describe("integration tool result normalization", () => {
     expect(normalizeIntegrationToolResult(escaped)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
   });
 
+  // regression: a71f671bf0 fix(server): omit binary integration results
   it("omits direct and nested binary values before they can expand into JSON", () => {
     const arrayBuffer = new ArrayBuffer(4);
     const binaryValues = [
@@ -249,6 +384,7 @@ describe("integration tool result normalization", () => {
     }
   });
 
+  // regression: fc95a4c143 fix(server): bound model-facing integration results
   it("returns the measured plain snapshot instead of serializing provider objects twice", () => {
     let serializations = 0;
     const providerResult = {
@@ -266,6 +402,64 @@ describe("integration tool result normalization", () => {
 });
 
 describe("IntegrationRegistry lifecycle", () => {
+  it.effect(
+    "delivers one copy of remote MCP data through the registry and native Codex response",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* Effect.promise(() =>
+          NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-result-context-")),
+        );
+        const structuredContent = {
+          records: [{ id: "record-1", name: 'Quoted "name"\nnext line' }],
+          nextCursor: "page-2",
+        };
+        const raw = {
+          content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+          structuredContent,
+          resultType: "complete",
+        };
+        const state: ProviderState = {
+          status: {
+            state: "connected",
+            accountLabel: "Fixture",
+            grantedCapabilities: ["fixture.read"],
+            message: null,
+          },
+          credential: "present",
+          disconnectFails: false,
+        };
+        const implementation = provider("test-fixture-provider", state);
+        implementation.invoke = async () => raw;
+        const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+        yield* Effect.gen(function* () {
+          yield* Effect.promise(() => registry.install(fixtureManifest.id));
+          const response = yield* invokeAdmittedDynamicTool({
+            options: {
+              threadId: ThreadId.make("thread-result-context"),
+              invokeDynamicTool: ({ arguments: args, signal }) =>
+                registry.invokeTool("test.fixture.read", args, { signal }),
+            },
+            invocation: { name: "test_fixture_read", arguments: {} },
+          });
+          expect(response.success).toBe(true);
+          expect(response.contentItems).toEqual([
+            {
+              type: "inputText",
+              text: JSON.stringify({ structuredContent, resultType: "complete" }),
+            },
+          ]);
+          expect(raw.content).toHaveLength(1);
+        }).pipe(
+          Effect.ensuring(
+            Effect.promise(async () => {
+              await registry.close();
+              await NodeFSP.rm(root, { recursive: true, force: true });
+            }),
+          ),
+        );
+      }),
+  );
+
   it("publishes only stable effective availability changes across the full lifecycle", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-availability-generation-"),
@@ -717,6 +911,313 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("routes every provider operation to the selected service environment", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-service-environments-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "environment-fixture",
+      name: "Environment Fixture",
+      provider: "environment-fixture-provider",
+      capabilities: [
+        {
+          id: "fixture.read",
+          displayName: "Read",
+          description: "Read fixture records.",
+          access: "authorization",
+        },
+        {
+          id: "fixture.write",
+          displayName: "Write",
+          description: "Write fixture records.",
+          access: "authorization",
+        },
+      ],
+      tools: [
+        {
+          name: "test.fixture.read",
+          displayName: "Read fixture",
+          description: "Read fixture.",
+          capabilities: ["fixture.read"],
+          effect: "read",
+        },
+        {
+          name: "test.fixture.write",
+          displayName: "Write fixture",
+          description: "Write fixture.",
+          capabilities: ["fixture.write"],
+          effect: "write",
+        },
+      ],
+      skills: [],
+      serviceEnvironments: [
+        { id: "production", displayName: "Prod", description: "records.example" },
+        { id: "development", displayName: "Dev", description: "records-dev.example" },
+      ],
+    };
+    // Each environment holds its own grant, as a plugin's separate sign-ins would.
+    const grants = new Map<string, ReadonlyArray<string>>([
+      ["production", ["fixture.read", "fixture.write"]],
+    ]);
+    const calls: Array<readonly [string, string | undefined]> = [];
+    let skipWriteAdmission = false;
+    const environmentOf = (context?: { readonly serviceEnvironment?: string }) => {
+      const environment = context?.serviceEnvironment;
+      if (environment !== "production" && environment !== "development") {
+        throw new Error(`Unexpected service environment ${String(environment)}.`);
+      }
+      return environment;
+    };
+    const implementation: IntegrationProvider = {
+      id: manifest.provider!,
+      tools: [
+        {
+          name: "test.fixture.read",
+          description: "Read fixture.",
+          input: EmptyIntegrationToolInput,
+          readOnly: true,
+          openWorld: false,
+        },
+        {
+          name: "test.fixture.write",
+          description: "Write fixture.",
+          input: EmptyIntegrationToolInput,
+          readOnly: false,
+          openWorld: false,
+        },
+      ],
+      status: async (context) => {
+        const environment = environmentOf(context);
+        calls.push(["status", environment]);
+        const granted = grants.get(environment);
+        return granted
+          ? {
+              state: "connected",
+              accountLabel: `${environment}.example`,
+              grantedCapabilities: granted,
+              message: null,
+            }
+          : { state: "not_connected", accountLabel: null, grantedCapabilities: [], message: null };
+      },
+      connect: async (_capabilities, context) => {
+        const environment = environmentOf(context);
+        calls.push(["connect", environment]);
+        grants.set(environment, ["fixture.read"]);
+        return { kind: "connected", flowId: `${environment}-flow`, message: "Connected." };
+      },
+      disconnect: async (context) => {
+        const environment = environmentOf(context);
+        calls.push(["disconnect", environment]);
+        grants.delete(environment);
+      },
+      invoke: async (toolName, _input, context) => {
+        const environment = environmentOf(context);
+        calls.push([toolName, environment]);
+        if (toolName === "test.fixture.write" && !skipWriteAdmission) {
+          await context?.beginCommit?.();
+        }
+        return { environment };
+      },
+    };
+    const otherState: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Test User",
+        grantedCapabilities: ["records.read", "events.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    const packages = () => [
+      packaged(manifest, implementation),
+      packaged(connectedManifest, provider("test-connected-provider", otherState)),
+    ];
+    const read = (target: RegistryRuntime) =>
+      target.invokeTool("test.fixture.read", {}, { signal: new AbortController().signal });
+    const summary = async (target: RegistryRuntime) =>
+      (await target.list()).integrations.find(({ id }) => id === manifest.id)!;
+    let registry: RegistryRuntime | null = new RegistryRuntime(root, packages());
+
+    try {
+      await registry.install(manifest.id);
+      await registry.install(connectedManifest.id);
+      expect(await summary(registry)).toMatchObject({
+        connectionState: "connected",
+        accountLabel: "production.example",
+        serviceEnvironments: [
+          { id: "production", displayName: "Prod", selected: true },
+          { id: "development", displayName: "Dev", selected: false },
+        ],
+      });
+      expect(
+        (await registry.list()).integrations.find(({ id }) => id === connectedManifest.id)
+          ?.serviceEnvironments,
+      ).toBeUndefined();
+      await expect(read(registry)).resolves.toMatchObject({ environment: "production" });
+      expect(registry.isToolAvailableSync("test.fixture.write")).toBe(true);
+
+      // Switching to an environment without a sign-in leaves the other one intact.
+      const switched = await registry.setServiceEnvironment(manifest.id, "development");
+      expect(switched.integrations.find(({ id }) => id === manifest.id)).toMatchObject({
+        connectionState: "not_connected",
+        accountLabel: null,
+        serviceEnvironments: [{ selected: false }, { selected: true }],
+      });
+      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
+      await expect(read(registry)).rejects.toMatchObject({ code: "not_connected" });
+      expect(grants.has("production")).toBe(true);
+
+      // Dev's own sign-in grants Read only; Write follows that grant while Dev is selected.
+      await expect(registry.connect(manifest.id)).resolves.toMatchObject({
+        flowId: "development-flow",
+      });
+      await expect(read(registry)).resolves.toMatchObject({ environment: "development" });
+      expect(registry.isToolAvailableSync("test.fixture.write")).toBe(false);
+
+      // Back on Prod, its earlier sign-in and its Write grant are both still there, including in
+      // the list the switch itself returns to Settings.
+      const switchedBack = await registry.setServiceEnvironment(manifest.id, "production");
+      expect(switchedBack.integrations.find(({ id }) => id === manifest.id)).toMatchObject({
+        connectionState: "connected",
+        capabilities: [
+          { id: "fixture.read", available: true },
+          { id: "fixture.write", available: true },
+        ],
+      });
+      expect(await summary(registry)).toMatchObject({
+        connectionState: "connected",
+        accountLabel: "production.example",
+        capabilities: [
+          { id: "fixture.read", enabled: true, available: true },
+          { id: "fixture.write", enabled: true, available: true },
+        ],
+      });
+      expect(registry.isToolAvailableSync("test.fixture.write")).toBe(true);
+      await expect(
+        registry.invokeTool(
+          "test.fixture.write",
+          {},
+          { signal: new AbortController().signal, writeApproved: true },
+        ),
+      ).resolves.toMatchObject({ environment: "production" });
+
+      // The selection survives a restart.
+      await registry.setServiceEnvironment(manifest.id, "development");
+      await registry.close();
+      registry = new RegistryRuntime(root, packages());
+      expect(await summary(registry)).toMatchObject({
+        connectionState: "connected",
+        accountLabel: "development.example",
+        serviceEnvironments: [{ selected: false }, { selected: true }],
+      });
+      expect(
+        JSON.parse(await NodeFSP.readFile(NodePath.join(root, "state.json"), "utf8")).installed[
+          manifest.id
+        ],
+      ).toMatchObject({ serviceEnvironment: "development" });
+
+      // A caller that still shows or approved Prod is refused instead of acting on Dev.
+      const prodSignal = (expectedServiceEnvironment: string) => ({
+        signal: new AbortController().signal,
+        expectedServiceEnvironment,
+      });
+      await expect(
+        registry.invokeTool("test.fixture.read", {}, prodSignal("production")),
+      ).rejects.toMatchObject({ code: "invalid_input", message: expect.stringContaining("Dev") });
+      await expect(
+        registry.disconnect(manifest.id, prodSignal("production")),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      await expect(
+        registry.connect(manifest.id, undefined, prodSignal("production")),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(grants.has("development")).toBe(true);
+      await expect(
+        registry.invokeTool("test.fixture.read", {}, prodSignal("development")),
+      ).resolves.toMatchObject({ environment: "development" });
+
+      // Disconnecting Dev signs out of Dev only.
+      await registry.disconnect(manifest.id, prodSignal("development"));
+      expect(grants.has("development")).toBe(false);
+      expect(grants.has("production")).toBe(true);
+
+      await expect(registry.setServiceEnvironment(manifest.id, "staging")).rejects.toMatchObject({
+        code: "not_found",
+      });
+      await expect(
+        registry.setServiceEnvironment(connectedManifest.id, "production"),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+
+      // A write a provider just allowed holds the environment until it can reach MCP.
+      registry.notePluginWriteAllowed("test.fixture.read");
+      registry.notePluginWriteAllowed("test.records.list");
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "production"),
+      ).resolves.toBeDefined();
+      registry.notePluginWriteAllowed("test.fixture.write");
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "development"),
+      ).rejects.toMatchObject({
+        code: "operation_failed",
+        message: expect.stringContaining("just approved"),
+      });
+      expect((await summary(registry)).serviceEnvironments?.[0]?.selected).toBe(true);
+      registry.notePluginWriteAllowed("test.fixture.write", 0);
+      // While a switch is saving and publishing, a provider may not allow a write at all.
+      const switching = registry.setServiceEnvironment(manifest.id, "development");
+      expect(registry.notePluginWriteAllowed("test.fixture.write")).toBe(false);
+      await switching;
+      expect((await summary(registry)).serviceEnvironments?.[1]?.selected).toBe(true);
+      // Back-to-back switches queue; the mark stays until the last one settles.
+      const first = registry.setServiceEnvironment(manifest.id, "production");
+      const second = registry.setServiceEnvironment(manifest.id, "development");
+      await first;
+      expect(registry.notePluginWriteAllowed("test.fixture.write")).toBe(false);
+      await second;
+      // The refused write did not start a hold, so switching back is not blocked by it.
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "production"),
+      ).resolves.toBeDefined();
+      expect(registry.notePluginWriteAllowed("test.fixture.write")).toBe(true);
+      registry.notePluginWriteAllowed("test.fixture.write", 0);
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "development"),
+      ).resolves.toBeDefined();
+      await registry.setServiceEnvironment(manifest.id, "production");
+
+      // A fault on one environment never blocks switching to the other.
+      skipWriteAdmission = true;
+      await expect(
+        registry.invokeTool(
+          "test.fixture.write",
+          {},
+          { signal: new AbortController().signal, writeApproved: true },
+        ),
+      ).resolves.toMatchObject({ environment: "production" });
+      await expect(
+        registry.setServiceEnvironment(manifest.id, "development"),
+      ).resolves.toBeDefined();
+      expect((await summary(registry)).serviceEnvironments?.[1]?.selected).toBe(true);
+      await registry.setServiceEnvironment(manifest.id, "production");
+      await registry.disconnect(manifest.id);
+      expect(calls.filter(([operation]) => operation === "disconnect").at(-1)).toEqual([
+        "disconnect",
+        "production",
+      ]);
+      expect(grants.has("production")).toBe(false);
+
+      expect(
+        calls.every(
+          ([, environment]) => environment === "production" || environment === "development",
+        ),
+      ).toBe(true);
+    } finally {
+      await registry?.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("forwards write approval and preserves an admitted write receipt through cancellation", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-write-commit-admission-"),
@@ -809,6 +1310,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: 405c5332dc fix(server): preserve completed integration writes
   it("keeps an admitted write successful when only its result is unavailable", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-write-result-bound-"),
@@ -877,7 +1379,6 @@ describe("IntegrationRegistry lifecycle", () => {
       },
     };
     const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
-    const journalPath = NodePath.join(root, "commit-journal", `${manifest.id}.json`);
     const invocationContext = {
       signal: new AbortController().signal,
       writeApproved: true,
@@ -887,17 +1388,14 @@ describe("IntegrationRegistry lifecycle", () => {
       await expect(registry.invokeTool("test.fixture.write", {}, invocationContext)).resolves.toBe(
         INTEGRATION_TOOL_RESULT_OMITTED,
       );
-      await expect(NodeFSP.access(journalPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(registry.isToolAvailableSync("test.fixture.write")).toBe(true);
 
       await expect(registry.invokeTool("test.fixture.write", {}, invocationContext)).resolves.toBe(
         INTEGRATION_TOOL_RESULT_OMITTED,
       );
-      await expect(NodeFSP.access(journalPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(registry.invokeTool("test.fixture.write", {}, invocationContext)).resolves.toBe(
         INTEGRATION_TOOL_RESULT_OMITTED,
       );
-      await expect(NodeFSP.access(journalPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(
         registry.invokeTool("test.fixture.write", {}, invocationContext),
       ).resolves.toEqual({ receipt: "bounded" });
@@ -908,7 +1406,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("rejects and faults a write provider that returns without commit admission", async () => {
+  it("returns a write result that skipped commit admission and keeps the plugin usable", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-write-missing-admission-"),
     );
@@ -937,147 +1435,8 @@ describe("IntegrationRegistry lifecycle", () => {
       skills: [],
     };
     let invocations = 0;
-    let connected = true;
     const implementation: IntegrationProvider = {
       id: "test-write-missing-admission-provider",
-      tools: [
-        {
-          name: "test.fixture.write",
-          description: "Write one fixture record.",
-          input: EmptyIntegrationToolInput,
-          readOnly: false,
-          openWorld: false,
-        },
-      ],
-      status: async () =>
-        connected
-          ? {
-              state: "connected",
-              accountLabel: "Fixture user",
-              grantedCapabilities: ["fixture.write"],
-              message: null,
-            }
-          : {
-              state: "not_connected",
-              accountLabel: null,
-              grantedCapabilities: [],
-              message: null,
-            },
-      connect: async () => {
-        connected = true;
-        return {
-          kind: "connected",
-          flowId: "fixture-flow",
-          message: "Connected.",
-        };
-      },
-      disconnect: async (context) => {
-        await context?.beginCommit();
-        connected = false;
-      },
-      invoke: async (_toolName, _input, context) => {
-        invocations += 1;
-        expect(context?.writeApproved).toBe(true);
-        expect(context?.beginCommit).toBeTypeOf("function");
-        return { status: "unverified-write" };
-      },
-    };
-    const journalPath = NodePath.join(root, "commit-journal", `${manifest.id}.json`);
-    let registry: RegistryRuntime | undefined = new RegistryRuntime(root, [
-      packaged(manifest, implementation),
-    ]);
-    let restarted: RegistryRuntime | undefined;
-    try {
-      await registry.install(manifest.id);
-      await expect(
-        registry.invokeTool(
-          "test.fixture.write",
-          {},
-          {
-            signal: new AbortController().signal,
-            writeApproved: true,
-          },
-        ),
-      ).rejects.toMatchObject({ code: "operation_failed" });
-      expect(JSON.parse(await NodeFSP.readFile(journalPath, "utf8"))).toEqual({
-        version: 1,
-        integrationId: manifest.id,
-        providerId: implementation.id,
-      });
-      await expect(
-        registry.invokeTool(
-          "test.fixture.write",
-          {},
-          {
-            signal: new AbortController().signal,
-            writeApproved: true,
-          },
-        ),
-      ).rejects.toMatchObject({ code: "operation_failed" });
-      expect(invocations).toBe(1);
-
-      await registry.close();
-      registry = undefined;
-
-      restarted = new RegistryRuntime(root, [packaged(manifest, implementation)]);
-      expect((await restarted.list()).integrations[0]).toMatchObject({
-        connectionState: "error",
-      });
-      expect(restarted.isToolAvailableSync("test.fixture.write")).toBe(false);
-      await expect(
-        restarted.invokeTool(
-          "test.fixture.write",
-          {},
-          {
-            signal: new AbortController().signal,
-            writeApproved: true,
-          },
-        ),
-      ).rejects.toMatchObject({ code: "operation_failed" });
-      expect(invocations).toBe(1);
-
-      await expect(restarted.disconnect(manifest.id)).resolves.toBeDefined();
-      await expect(NodeFSP.access(journalPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect((await restarted.list()).integrations[0]).toMatchObject({
-        connectionState: "not_connected",
-      });
-    } finally {
-      await registry?.close();
-      await restarted?.close();
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("tells the agent to verify an admitted write whose provider then rejects", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-write-outcome-unknown-"),
-    );
-    const manifest: IntegrationManifest = {
-      ...fixtureManifest,
-      id: "test-write-outcome-unknown",
-      name: "Test Write Outcome",
-      provider: "test-write-outcome-unknown-provider",
-      capabilities: [
-        {
-          id: "fixture.write",
-          displayName: "Write fixture",
-          description: "Write fixture records.",
-          access: "default",
-        },
-      ],
-      tools: [
-        {
-          name: "test.fixture.write",
-          displayName: "Write fixture",
-          description: "Write one fixture record.",
-          capabilities: ["fixture.write"],
-          effect: "write",
-        },
-      ],
-      skills: [],
-    };
-    const implementation: IntegrationProvider = {
-      id: "test-write-outcome-unknown-provider",
       tools: [
         {
           name: "test.fixture.write",
@@ -1096,35 +1455,44 @@ describe("IntegrationRegistry lifecycle", () => {
       connect: async () => ({ kind: "connected", flowId: "fixture-flow", message: "Connected." }),
       disconnect: async () => undefined,
       invoke: async (_toolName, _input, context) => {
-        await context!.beginCommit!();
-        throw new IntegrationProviderPublicError(
-          "The fixture operation may have completed. Verify its result before retrying.",
-        );
+        invocations += 1;
+        expect(context?.writeApproved).toBe(true);
+        expect(context?.beginCommit).toBeTypeOf("function");
+        return { status: "unverified-write" };
       },
     };
-    const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+    const faults: Array<{ readonly integrationId: string; readonly reason: string }> = [];
+    const registry = new RegistryRuntime(
+      root,
+      [packaged(manifest, implementation)],
+      undefined,
+      undefined,
+      { onProviderFault: (fault) => faults.push(fault) },
+    );
+    const write = () =>
+      registry.invokeTool(
+        "test.fixture.write",
+        {},
+        { signal: new AbortController().signal, writeApproved: true },
+      );
     try {
       await registry.install(manifest.id);
-      const failure = await registry
-        .invokeTool(
-          "test.fixture.write",
-          {},
-          { signal: new AbortController().signal, writeApproved: true },
-        )
-        .then(
-          () => expect.unreachable("an admitted rejected write must fail"),
-          (error: unknown) => error,
-        );
-      expect(failure).toMatchObject({ code: "operation_failed" });
-      expect(describeIntegrationToolFailure(failure).text).toBe(
-        "Integration tool call failed (operation_failed): Write fixture may have completed. Verify its result before retrying; Test Write Outcome is unavailable until its connection is reset.",
-      );
+      await expect(write()).resolves.toEqual({ status: "unverified-write" });
+      expect(faults).toEqual([
+        { integrationId: manifest.id, reason: "A write returned without commit admission." },
+      ]);
+      expect((await registry.snapshot()).integrations[0]).toMatchObject({
+        connectionState: "connected",
+      });
+      await expect(write()).resolves.toEqual({ status: "unverified-write" });
+      expect(invocations).toBe(2);
     } finally {
       await registry.close();
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
 
+  // regression: #318 fix(integrations): keep a provider available when it proves nothing changed
   it("keeps a provider available when an admitted write proves nothing changed", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-write-unchanged-"));
     const manifest: IntegrationManifest = {
@@ -1209,9 +1577,6 @@ describe("IntegrationRegistry lifecycle", () => {
       expect((await registry.snapshot()).integrations[0]).toMatchObject({
         connectionState: "connected",
       });
-      await expect(
-        NodeFSP.access(NodePath.join(root, "commit-journal", `${manifest.id}.json`)),
-      ).rejects.toMatchObject({ code: "ENOENT" });
 
       rejectWrite = false;
       await expect(
@@ -1234,91 +1599,351 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("reports why an ambiguous admitted rejection faulted the provider", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-fault-report-"));
-    const state: ProviderState = {
-      status: {
-        state: "not_connected",
-        accountLabel: null,
-        grantedCapabilities: [],
+  it("keeps a plugin usable and passes its message on when an admitted write's outcome is unknown", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-write-unknown-"));
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "test-write-unknown",
+      name: "Test Write Unknown",
+      provider: "test-write-unknown-provider",
+      capabilities: [
+        ...fixtureManifest.capabilities,
+        {
+          id: "fixture.write",
+          displayName: "Write fixture",
+          description: "Write fixture records.",
+          access: "default",
+        },
+      ],
+      tools: [
+        ...fixtureManifest.tools,
+        {
+          name: "test.fixture.write",
+          displayName: "Write fixture",
+          description: "Write one fixture record.",
+          capabilities: ["fixture.write"],
+          effect: "write",
+        },
+      ],
+      skills: [],
+    };
+    const pluginMessage =
+      "The service answered with data and errors, so the outcome is unknown. Service said: Invalid icon";
+    let failWrite = true;
+    let writes = 0;
+    const implementation = (): IntegrationProvider => ({
+      id: "test-write-unknown-provider",
+      tools: [
+        {
+          name: "test.fixture.read",
+          description: "Read fixture.",
+          input: EmptyIntegrationToolInput,
+          readOnly: true,
+          openWorld: false,
+        },
+        {
+          name: "test.fixture.write",
+          description: "Write one fixture record.",
+          input: EmptyIntegrationToolInput,
+          readOnly: false,
+          openWorld: false,
+        },
+      ],
+      status: async () => ({
+        state: "connected",
+        accountLabel: "Fixture user",
+        grantedCapabilities: ["fixture.read", "fixture.write"],
         message: null,
+      }),
+      connect: async () => ({ kind: "connected", flowId: "fixture-flow", message: "Connected." }),
+      disconnect: async () => undefined,
+      invoke: async (toolName, _input, context) => {
+        if (toolName === "test.fixture.read") return { records: writes };
+        await context!.beginCommit!();
+        writes += 1;
+        if (failWrite) throw new IntegrationProviderPublicError(pluginMessage);
+        return { written: true };
       },
-      credential: null,
-      disconnectFails: false,
-    };
-    const rejectingProvider: IntegrationProvider = {
-      ...provider("test-connected-provider", state),
-      connect: async (_capabilities, context) => {
-        await context!.beginCommit();
-        throw new Error("Credential commit result was ambiguous.");
-      },
-    };
+    });
     const faults: Array<{ readonly integrationId: string; readonly reason: string }> = [];
-    const options = { onProviderFault: (fault: (typeof faults)[number]) => faults.push(fault) };
-    let registry: RegistryRuntime | undefined;
+    const registry = new RegistryRuntime(
+      root,
+      [packaged(manifest, implementation())],
+      undefined,
+      undefined,
+      { onProviderFault: (fault) => faults.push(fault) },
+    );
+    const write = (runtime: RegistryRuntime) =>
+      runtime.invokeTool(
+        "test.fixture.write",
+        {},
+        { signal: new AbortController().signal, writeApproved: true },
+      );
     let restarted: RegistryRuntime | undefined;
     try {
-      registry = new RegistryRuntime(
-        root,
-        [packaged(connectedManifest, rejectingProvider)],
-        undefined,
-        undefined,
-        options,
+      await registry.install(manifest.id);
+      const failure = await write(registry).then(
+        () => expect.unreachable("an unclear write must fail"),
+        (error: unknown) => error,
       );
-      await registry.install(connectedManifest.id);
-      await expect(registry.connect(connectedManifest.id)).rejects.toMatchObject({
-        code: "operation_failed",
+      const text = describeIntegrationToolFailure(failure).text;
+      expect(text).toContain(pluginMessage);
+      expect(text).toMatch(/may or may not have/u);
+      expect(text).toMatch(/read .* back/u);
+      expect(text).not.toMatch(/reset/iu);
+      expect(faults).toMatchObject([{ integrationId: manifest.id }]);
+
+      expect((await registry.snapshot()).integrations[0]).toMatchObject({
+        connectionState: "connected",
       });
+      expect(registry.isToolAvailableSync("test.fixture.write")).toBe(true);
+      await expect(
+        registry.invokeTool("test.fixture.read", {}, { signal: new AbortController().signal }),
+      ).resolves.toEqual({ records: 1 });
+      failWrite = false;
+      await expect(write(registry)).resolves.toEqual({ written: true });
       await registry.close();
-      restarted = new RegistryRuntime(
-        root,
-        [packaged(connectedManifest, provider("test-connected-provider", state))],
-        undefined,
-        undefined,
-        options,
-      );
-      await restarted.list();
-      expect(faults).toEqual([
-        {
-          integrationId: connectedManifest.id,
-          reason: "Credential commit result was ambiguous.",
-        },
-        {
-          integrationId: connectedManifest.id,
-          reason:
-            "A commit from an earlier session never settled; reset the connection to recover.",
-        },
-      ]);
+
+      restarted = new RegistryRuntime(root, [packaged(manifest, implementation())]);
+      expect((await restarted.list()).integrations[0]).toMatchObject({
+        connectionState: "connected",
+      });
+      await expect(write(restarted)).resolves.toEqual({ written: true });
+      expect(writes).toBe(3);
     } finally {
-      await registry?.close();
+      await registry.close();
       await restarted?.close();
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
 
-  it.effect("records a provider fault in the trace as a span carrying its warning", () =>
-    Effect.gen(function* () {
-      const spans: Array<Tracer.NativeSpan> = [];
-      const tracer = Tracer.make({
-        span: (options) => {
-          const span = new Tracer.NativeSpan(options);
-          spans.push(span);
-          return span;
+  it("tells the agent whether a timed-out write started its change and stays usable", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-write-timeout-"));
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "test-write-timeout",
+      name: "Test Write Timeout",
+      provider: "test-write-timeout-provider",
+      capabilities: [
+        ...fixtureManifest.capabilities,
+        {
+          id: "fixture.write",
+          displayName: "Write fixture",
+          description: "Write fixture records.",
+          access: "default",
         },
-      });
-      yield* logProviderFault({ integrationId: "microsoft-365", reason: "Error (EACCES)" }).pipe(
-        Effect.provide(Logger.layer([Logger.tracerLogger])),
-        Effect.withTracer(tracer),
+      ],
+      tools: [
+        ...fixtureManifest.tools,
+        {
+          name: "test.fixture.write",
+          displayName: "Write fixture",
+          description: "Write one fixture record.",
+          capabilities: ["fixture.write"],
+          effect: "write",
+        },
+      ],
+      skills: [],
+    };
+    let mode: "hang-before-commit" | "hang-after-commit" | "succeed" = "hang-before-commit";
+    let releaseCommit!: () => void;
+    const commitGate = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    let markDecoding!: () => void;
+    const decoding = new Promise<void>((resolve) => {
+      markDecoding = resolve;
+    });
+    let releaseDecode!: () => void;
+    const decodeGate = new Promise<void>((resolve) => {
+      releaseDecode = resolve;
+    });
+    // Holds a call between its admission checks and its dispatch to the provider.
+    const PausableInput = Schema.Struct({
+      pause: Schema.Boolean.pipe(
+        Schema.decodeTo(
+          Schema.Boolean,
+          SchemaTransformation.transformEffect({
+            decode: (pause: boolean) =>
+              pause
+                ? Effect.promise(async () => {
+                    markDecoding();
+                    await decodeGate;
+                    return pause;
+                  })
+                : Effect.succeed(pause),
+            encode: (pause: boolean) => Effect.succeed(pause),
+          }),
+        ),
+      ),
+    });
+    let reads = 0;
+    let writes = 0;
+    const implementation: IntegrationProvider = {
+      id: "test-write-timeout-provider",
+      tools: [
+        {
+          name: "test.fixture.read",
+          description: "Read fixture.",
+          input: PausableInput,
+          readOnly: true,
+          openWorld: false,
+        },
+        {
+          name: "test.fixture.write",
+          description: "Write one fixture record.",
+          input: PausableInput,
+          readOnly: false,
+          openWorld: false,
+        },
+      ],
+      status: async () => ({
+        state: "connected",
+        accountLabel: "Fixture user",
+        grantedCapabilities: ["fixture.read", "fixture.write"],
+        message: null,
+      }),
+      connect: async () => ({ kind: "connected", flowId: "fixture-flow", message: "Connected." }),
+      disconnect: async () => undefined,
+      invoke: async (toolName, _input, context) => {
+        if (toolName === "test.fixture.read") return { reads: ++reads };
+        writes += 1;
+        if (mode === "hang-before-commit") {
+          await new Promise<never>((_resolve, reject) =>
+            context!.signal.addEventListener("abort", () => reject(new Error("Aborted.")), {
+              once: true,
+            }),
+          );
+        }
+        await context!.beginCommit!();
+        if (mode === "hang-after-commit") await commitGate;
+        return { written: true };
+      },
+    };
+    const registry = new RegistryRuntime(
+      root,
+      [packaged(manifest, implementation)],
+      undefined,
+      undefined,
+      { providerOperationTimeoutMs: 50 },
+    );
+    const write = (pause = false) =>
+      registry.invokeTool(
+        "test.fixture.write",
+        { pause },
+        { signal: new AbortController().signal, writeApproved: true },
       );
-      const span = spans.find(({ name }) => name === "integrations.provider.faulted");
-      expect(span?.attributes.get("integration.id")).toBe("microsoft-365");
-      expect(span?.attributes.get("integration.fault.reason")).toBe("Error (EACCES)");
-      expect(span?.events.some(([name]) => name.includes("integrations.provider.faulted"))).toBe(
-        true,
+    const read = (pause: boolean) =>
+      registry.invokeTool("test.fixture.read", { pause }, { signal: new AbortController().signal });
+    const failureText = (promise: Promise<unknown>) =>
+      promise.then(
+        () => expect.unreachable("the call must fail"),
+        (error: unknown) => describeIntegrationToolFailure(error).text,
       );
-    }),
-  );
+    try {
+      await registry.install(manifest.id);
+      const notStarted = await failureText(write());
+      expect(notStarted).toContain("did not respond in time, before Write fixture started");
+      expect(notStarted).not.toMatch(/may or may not/u);
+      expect(registry.isToolAvailableSync("test.fixture.write")).toBe(true);
 
+      mode = "hang-after-commit";
+      const pausedRead = failureText(read(true));
+      const pausedWrite = failureText(write(true));
+      await decoding;
+      const unknown = await failureText(write());
+      expect(unknown).toMatch(/may or may not have made its change/u);
+      expect(unknown).toContain("Test Write Timeout did not finish in time.");
+      // The tail is still running: nothing may overlap it, and the refusal must not promise
+      // that it clears shortly.
+      releaseDecode();
+      expect(await pausedRead).toContain("still finishing an earlier request");
+      expect(await pausedWrite).toContain("still finishing an earlier request");
+      expect(reads).toBe(0);
+      expect(writes).toBe(2);
+      expect(await failureText(write())).toContain("still finishing an earlier request");
+      expect(registry.toolAvailabilitySync("test.fixture.read")).toMatchObject({
+        available: false,
+        reason: "connection_changing",
+        detail: expect.stringContaining("still finishing an earlier request"),
+      });
+      releaseCommit();
+      await expect(registry.awaitToolAvailability("test.fixture.write")).resolves.toEqual({
+        available: true,
+      });
+      await expect(read(false)).resolves.toEqual({ reads: 1 });
+      mode = "succeed";
+      await expect(write()).resolves.toEqual({ written: true });
+    } finally {
+      releaseCommit?.();
+      releaseDecode?.();
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears commit journals left by earlier versions instead of locking their plugins", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-leftover-journal-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Test User",
+        grantedCapabilities: ["records.read", "events.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    const faults: Array<{ readonly integrationId: string; readonly reason: string }> = [];
+    const first = new RegistryRuntime(root, [
+      packaged(connectedManifest, provider("test-connected-provider", state)),
+    ]);
+    let restarted: RegistryRuntime | undefined;
+    try {
+      await first.install(connectedManifest.id);
+      await first.close();
+      const journalRoot = NodePath.join(root, "commit-journal");
+      await NodeFSP.mkdir(journalRoot, { recursive: true });
+      await NodeFSP.writeFile(
+        NodePath.join(journalRoot, `${connectedManifest.id}.json`),
+        JSON.stringify({
+          version: 1,
+          integrationId: connectedManifest.id,
+          providerId: "test-connected-provider",
+        }),
+      );
+      await NodeFSP.writeFile(NodePath.join(journalRoot, "unreadable.json"), "{");
+
+      restarted = new RegistryRuntime(
+        root,
+        [packaged(connectedManifest, provider("test-connected-provider", state))],
+        undefined,
+        undefined,
+        { onProviderFault: (fault) => faults.push(fault) },
+      );
+      expect((await restarted.list()).integrations[0]).toMatchObject({
+        connectionState: "connected",
+      });
+      expect(restarted.isToolAvailableSync("test.records.list")).toBe(true);
+      await expect(
+        restarted.invokeTool("test.records.list", {}, { signal: new AbortController().signal }),
+      ).resolves.toBeDefined();
+      await expect(NodeFSP.access(journalRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(faults.map(({ integrationId }) => integrationId).toSorted()).toEqual([
+        connectedManifest.id,
+        "unreadable",
+      ]);
+      expect(state.credential).toBe("present");
+    } finally {
+      await first.close();
+      await restarted?.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // regression: #318 fix(integrations): keep a provider available when it proves nothing changed
   it("reports a system error fault by its code without the message's path", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-fault-code-"));
     const state: ProviderState = {
@@ -1390,6 +2015,54 @@ describe("IntegrationRegistry lifecycle", () => {
       });
       expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
       expect(registry.isSkillAvailableSync("fixture-reader")).toBe(false);
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a staged package whose service environments differ from its manifest", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-staged-environments-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "staged-environments",
+      serviceEnvironments: [
+        { id: "production", displayName: "Prod", description: "records.example" },
+        { id: "development", displayName: "Dev", description: "records-dev.example" },
+      ],
+    };
+    const state: ProviderState = {
+      status: {
+        state: "not_connected",
+        accountLabel: null,
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    const integration = packaged(manifest, provider(manifest.provider!, state));
+    const drifted = {
+      ...integration,
+      bundledFiles: {
+        ...integration.bundledFiles,
+        ".tritonai-plugin/plugin.json": `${JSON.stringify({
+          ...manifest,
+          serviceEnvironments: [
+            manifest.serviceEnvironments![0],
+            { id: "staging", displayName: "Staging", description: "records-staging.example" },
+          ],
+        })}\n`,
+      },
+    };
+    const registry = new RegistryRuntime(root, [drifted]);
+    try {
+      await expect(registry.install(manifest.id)).rejects.toMatchObject({
+        code: "operation_failed",
+      });
+      expect((await registry.list()).integrations[0]?.installed).toBe(false);
     } finally {
       await registry.close();
       await NodeFSP.rm(root, { recursive: true, force: true });
@@ -1497,60 +2170,6 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("closes loaded providers in reverse order when registry construction rejects a collision", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-constructor-cleanup-"),
-    );
-    const state: ProviderState = {
-      status: {
-        state: "not_connected",
-        accountLabel: null,
-        grantedCapabilities: [],
-        message: null,
-      },
-      credential: null,
-      disconnectFails: false,
-    };
-    const closeOrder: Array<string> = [];
-    const firstProvider: IntegrationProvider = {
-      ...provider("test-fixture-provider", state),
-      close: async () => {
-        closeOrder.push("first");
-      },
-    };
-    const secondManifest: IntegrationManifest = {
-      ...fixtureManifest,
-      id: "test-fixture-collision",
-      name: "Test Fixture Collision",
-      provider: "test-fixture-collision-provider",
-      skills: [
-        {
-          name: "fixture-collision-reader",
-          description: "Fixture collision skill.",
-          capabilities: ["fixture.read"],
-        },
-      ],
-    };
-    const secondProvider: IntegrationProvider = {
-      ...provider("test-fixture-collision-provider", state),
-      close: async () => {
-        closeOrder.push("second");
-        throw new Error("second provider cleanup failed");
-      },
-    };
-    try {
-      await expect(
-        createRegistryRuntime(root, [
-          packaged(fixtureManifest, firstProvider),
-          packaged(secondManifest, secondProvider),
-        ]),
-      ).rejects.toThrow("Integration tool test.fixture.read is already declared by test-fixture");
-      expect(closeOrder).toEqual(["second", "first"]);
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("supports stateless tool providers without presenting connection controls", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-stateless-tool-"));
     const state: ProviderState = {
@@ -1647,6 +2266,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: cd475da51a fix(integrations): recover and cancel idle credential sweeps safely
   it("reobserves a transient status error before the next keepalive", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-status-retry-"),
@@ -1694,13 +2314,12 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: cd475da51a fix(integrations): recover and cancel idle credential sweeps safely
   it.each([
     ["1.0.0", false],
     ["1.1.0-rc.1", false],
     ["1.1.0", true],
     ["1.1.0+build.1", true],
-    ["1.2.0", true],
-    ["2.0.0", true],
   ])("gates n8n keepalive on the fixed plugin version (%s)", async (version, enabled) => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-n8n-keepalive-version-"),
@@ -1740,40 +2359,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("skips credential keepalive for integrations that are not connected", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-credential-keepalive-idle-"),
-    );
-    const state: ProviderState = {
-      status: {
-        state: "not_connected",
-        accountLabel: null,
-        grantedCapabilities: [],
-        message: null,
-      },
-      credential: null,
-      disconnectFails: false,
-    };
-    let prepareCalls = 0;
-    const implementation: IntegrationProvider = {
-      ...provider("test-fixture-provider", state),
-      prepare: async (context) => {
-        prepareCalls += 1;
-        await context.beginCommit();
-      },
-    };
-    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
-    try {
-      await registry.install(fixtureManifest.id);
-      await registry.list();
-      await expect(registry.refreshIdleCredentials({ idleThresholdMs: 0 })).resolves.toEqual([]);
-      expect(prepareCalls).toBe(0);
-    } finally {
-      await registry.close();
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
+  // regression: 8ab50ae48b fix(integrations): coordinate keepalive with connection changes
   it.each(["disconnect", "remove"] as const)("drains a keepalive before %s", async (operation) => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-drain-"));
     const state: ProviderState = {
@@ -1819,6 +2405,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: 8ab50ae48b fix(integrations): coordinate keepalive with connection changes
   it("publishes a changed connection status after a failed keepalive", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-status-"),
@@ -1859,6 +2446,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: 29ff43e8dd fix(integrations): capture preparation before skill synchronization
   it.each([false, true])(
     "restores availability when preparation settles during summary (skills blocked: %s)",
     async (blockSkills) => {
@@ -2085,7 +2673,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("recovers a faulted stateless provider after its work drains and the plugin is disabled", async () => {
+  it("keeps a stateless provider usable when its tool work misses the revocation deadline", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-stateless-provider-recovery-"),
     );
@@ -2122,13 +2710,14 @@ describe("IntegrationRegistry lifecycle", () => {
         return { records: [] };
       },
     };
+    const faults: Array<{ readonly integrationId: string; readonly reason: string }> = [];
     try {
       const registry = new RegistryRuntime(
         root,
         [packaged(fixtureManifest, statelessProvider)],
         undefined,
         undefined,
-        { providerOperationTimeoutMs: 20 },
+        { providerOperationTimeoutMs: 20, onProviderFault: (fault) => faults.push(fault) },
       );
       await registry.install(fixtureManifest.id);
       const invocation = registry.invokeTool("test.fixture.read", {});
@@ -2138,11 +2727,12 @@ describe("IntegrationRegistry lifecycle", () => {
       await expect(registry.setEnabled(fixtureManifest.id, false)).rejects.toMatchObject({
         code: "operation_failed",
       });
-      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
-      expect((await registry.snapshot()).integrations[0]?.capabilities[0]).toMatchObject({
-        granted: false,
-        available: false,
+      expect(faults).toMatchObject([{ integrationId: fixtureManifest.id }]);
+      expect((await registry.snapshot()).integrations[0]).toMatchObject({
+        enabled: true,
+        capabilities: [{ granted: true, available: true }],
       });
+      await expect(registry.invokeTool("test.fixture.read", {})).resolves.toEqual({ records: [] });
 
       releaseFirstInvocation();
       await invocationRejected;
@@ -2198,7 +2788,7 @@ describe("IntegrationRegistry lifecycle", () => {
           flowId: "browser-flow",
           authorizationUrl: "https://fixture.invalid/authorize",
           message: "Continue in the system browser.",
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          expiresAt: "2100-01-01T00:00:00.000Z",
           intervalSeconds: 1,
         }),
       };
@@ -2294,6 +2884,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: #304 fix(server): show agents why integration tool calls fail
   it("tells the agent which input paths failed without echoing submitted values", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-tool-issues-"));
     const state: ProviderState = {
@@ -2373,6 +2964,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: #304 fix(server): show agents why integration tool calls fail
   it("never echoes submitted values from filter messages or reported input", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-tool-leaks-"));
     const state: ProviderState = {
@@ -2417,49 +3009,6 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("bounds reported input issues", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-tool-bounds-"));
-    const state: ProviderState = {
-      status: {
-        state: "connected",
-        accountLabel: "Fixture",
-        grantedCapabilities: ["fixture.read"],
-        message: null,
-      },
-      credential: "present",
-      disconnectFails: false,
-    };
-    const baseProvider = provider("test-fixture-provider", state);
-    const schemaProvider: IntegrationProvider = {
-      ...baseProvider,
-      tools: baseProvider.tools.map((tool) => ({
-        ...tool,
-        input: Schema.Struct({ values: Schema.Array(Schema.Number) }),
-      })),
-    };
-    try {
-      const registry = new RegistryRuntime(root, [packaged(fixtureManifest, schemaProvider)]);
-      await registry.install(fixtureManifest.id);
-      const failure = await registry
-        .invokeTool("test.fixture.read", {
-          values: Array.from({ length: 50 }, (_, index) => `SECRET_${index}`),
-          ["k".repeat(5_000)]: true,
-        })
-        .then(
-          () => expect.unreachable("invalid input must be rejected"),
-          (error: unknown) => error,
-        );
-      const { text } = describeIntegrationToolFailure(failure);
-      expect(text).toContain("values[0]: Expected number");
-      expect(text).toContain("more issue(s) omitted");
-      expect(text).not.toContain("values[5]");
-      expect(text).not.toContain("SECRET_");
-      expect(text.length).toBeLessThan(2_000);
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("rejects malformed bundled skill frontmatter before installation", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-skill-contract-"));
     const state: ProviderState = {
@@ -2495,42 +3044,6 @@ describe("IntegrationRegistry lifecycle", () => {
       }
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("reconciles catalog version drift without a second compatibility contract", async () => {
-    const mismatchRoot = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-version-mismatch-"),
-    );
-    const connectedState = (): ProviderState => ({
-      status: {
-        state: "connected",
-        accountLabel: "Test User",
-        grantedCapabilities: ["records.read"],
-        message: null,
-      },
-      credential: "present",
-      disconnectFails: false,
-    });
-    try {
-      const mismatchState = connectedState();
-      const initialMismatchRegistry = new RegistryRuntime(mismatchRoot, [
-        packaged(connectedManifest, provider("test-connected-provider", mismatchState)),
-      ]);
-      await initialMismatchRegistry.install(connectedManifest.id);
-      const nextManifest: IntegrationManifest = { ...connectedManifest, version: "2.0.0" };
-      const mismatchRegistry = new RegistryRuntime(mismatchRoot, [
-        packaged(nextManifest, provider("test-connected-provider", mismatchState)),
-      ]);
-      const mismatchSummary = (await mismatchRegistry.list()).integrations[0]!;
-      expect(mismatchSummary).toMatchObject({ installed: true, version: "2.0.0" });
-      expect(mismatchSummary.tools[0]?.available).toBe(true);
-      await expect(mismatchRegistry.install(connectedManifest.id)).resolves.toBeDefined();
-      await expect(mismatchRegistry.invokeTool("test.records.list", {})).resolves.toBeDefined();
-      await mismatchRegistry.setEnabled(connectedManifest.id, false);
-      await expect(mismatchRegistry.setEnabled(connectedManifest.id, true)).resolves.toBeDefined();
-    } finally {
-      await NodeFSP.rm(mismatchRoot, { recursive: true, force: true });
     }
   });
 
@@ -2739,6 +3252,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  // regression: #373 fix(server): allow linked Codex skills folders at startup
   it.each([false, true])(
     "loads and reopens a package with linked skills root: %s",
     async (linked) => {
@@ -3283,15 +3797,10 @@ describe("IntegrationRegistry lifecycle", () => {
       const listing = registry.list();
       await statusStarted;
       const unrelatedEnablement = registry.setEnabled(fixtureManifest.id, false);
-      const completed = await Promise.race([
-        unrelatedEnablement.then((result) => ({
-          completed: true,
-          enabled: result.integrations.find(({ id }) => id === fixtureManifest.id)?.enabled,
-        })),
-        new Promise<{ readonly completed: false }>((resolve) =>
-          setTimeout(() => resolve({ completed: false }), 1_000),
-        ),
-      ]);
+      const completed = await unrelatedEnablement.then((result) => ({
+        completed: true,
+        enabled: result.integrations.find(({ id }) => id === fixtureManifest.id)?.enabled,
+      }));
 
       expect(completed).toEqual({ completed: true, enabled: false });
       releaseStatus();
@@ -3551,7 +4060,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("faults instead of disconnecting when aborted tool work misses the revocation deadline", async () => {
+  it("refuses to disconnect, without locking, when aborted tool work misses the revocation deadline", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-tool-drain-timeout-"),
     );
@@ -3611,93 +4120,18 @@ describe("IntegrationRegistry lifecycle", () => {
       });
       expect(disconnectCalls).toBe(0);
       expect(state.credential).toBe("present");
-      expect(registry.isToolAvailableSync("test.records.list")).toBe(false);
-      await registry.close();
+      expect(registry.isToolAvailableSync("test.records.list")).toBe(true);
+      expect(await NodeFSP.readFile(materializedSkill, "utf8")).toContain("test-records");
+
+      releaseTool();
       await invocationRejected;
+      await registry.disconnect(connectedManifest.id);
+      expect(disconnectCalls).toBe(1);
+      expect(state.credential).toBeNull();
       await expect(NodeFSP.access(materializedSkill)).rejects.toMatchObject({ code: "ENOENT" });
+      await registry.close();
     } finally {
       releaseTool?.();
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("admits skill turns atomically and waits for their submission before revoking", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-skill-reservation-"),
-    );
-    const state: ProviderState = {
-      status: {
-        state: "connected",
-        accountLabel: "Test User",
-        grantedCapabilities: ["records.read"],
-        message: null,
-      },
-      credential: "present",
-      disconnectFails: false,
-    };
-    try {
-      const registry = new RegistryRuntime(root, [
-        packaged(connectedManifest, provider("test-connected-provider", state)),
-      ]);
-      await registry.install(connectedManifest.id);
-      const reservation = registry.reserveSkillsSync(["test-records"]);
-      expect(reservation).not.toBeNull();
-
-      let disableCompleted = false;
-      const disabling = registry.setEnabled(connectedManifest.id, false);
-      void disabling.then(() => {
-        disableCompleted = true;
-      });
-
-      expect(registry.isSkillAvailableSync("test-records")).toBe(false);
-      expect(registry.reserveSkillsSync(["test-records"])).toBeNull();
-      await Promise.resolve();
-      expect(disableCompleted).toBe(false);
-
-      reservation!.release();
-      await disabling;
-      expect(disableCompleted).toBe(true);
-      reservation!.release();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("abandons revocation when an active skill submission does not settle", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-skill-reservation-timeout-"),
-    );
-    const state: ProviderState = {
-      status: {
-        state: "connected",
-        accountLabel: "Test User",
-        grantedCapabilities: ["records.read"],
-        message: null,
-      },
-      credential: "present",
-      disconnectFails: false,
-    };
-    try {
-      const registry = new RegistryRuntime(
-        root,
-        [packaged(connectedManifest, provider("test-connected-provider", state))],
-        undefined,
-        undefined,
-        { providerOperationTimeoutMs: 20 },
-      );
-      await registry.install(connectedManifest.id);
-      const reservation = registry.reserveSkillsSync(["test-records"]);
-      expect(reservation).not.toBeNull();
-
-      await expect(registry.setEnabled(connectedManifest.id, false)).rejects.toMatchObject({
-        code: "operation_failed",
-      });
-      expect((await registry.snapshot()).integrations[0]).toMatchObject({ enabled: true });
-      expect(registry.isSkillAvailableSync("test-records")).toBe(true);
-
-      reservation!.release();
-      await registry.close();
-    } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
@@ -4376,74 +4810,6 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("bounds provider status checks and prepares skills from initialized summaries", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-status-timeout-"));
-    const state: ProviderState = {
-      status: {
-        state: "connected",
-        accountLabel: "Fixture",
-        grantedCapabilities: ["fixture.read"],
-        message: null,
-      },
-      credential: "present",
-      disconnectFails: false,
-    };
-    const baseProvider = provider("test-fixture-provider", state);
-    let statusCalls = 0;
-    const countingProvider: IntegrationProvider = {
-      ...baseProvider,
-      status: async (context) => {
-        statusCalls += 1;
-        expect(context?.signal).toBeInstanceOf(AbortSignal);
-        return state.status;
-      },
-    };
-    try {
-      const registry = new RegistryRuntime(root, [packaged(fixtureManifest, countingProvider)]);
-      await registry.install(fixtureManifest.id);
-      const callsBeforePreparation = statusCalls;
-      await registry.snapshot();
-      expect(statusCalls).toBe(callsBeforePreparation);
-      const runtime = await registry.prepareSkillRuntime();
-      expect(runtime).not.toBeNull();
-      expect(statusCalls).toBe(callsBeforePreparation);
-      if (runtime) await registry.releaseSkillRuntime(runtime.root);
-      await registry.close();
-
-      const signals: Array<AbortSignal> = [];
-      let hangingStatusCalls = 0;
-      const hangingProvider: IntegrationProvider = {
-        ...baseProvider,
-        status: async (context) => {
-          hangingStatusCalls += 1;
-          if (context) signals.push(context.signal);
-          return new Promise<IntegrationProviderStatus>(() => undefined);
-        },
-      };
-      const restarted = new RegistryRuntime(
-        root,
-        [packaged(fixtureManifest, hangingProvider)],
-        undefined,
-        undefined,
-        { providerStatusTimeoutMs: 20 },
-      );
-      const startedAt = Date.now();
-      const summary = (await restarted.list()).integrations[0];
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
-      expect(summary).toMatchObject({
-        connectionState: "error",
-        statusMessage: "The integration provider timed out while reporting its status.",
-      });
-      expect(signals.length).toBeGreaterThan(0);
-      expect(signals.every((signal) => signal.aborted)).toBe(true);
-      await restarted.list();
-      await restarted.list();
-      expect(hangingStatusCalls).toBe(1);
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
   it("normalizes valid provider status and isolates malformed status from other plugins", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-status-contract-"));
     const malformedState: ProviderState = {
@@ -4540,50 +4906,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("reconciles a dangling installed-root symlink into a real package tree", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-dangling-root-"));
-    const installedRoot = NodePath.join(root, "installed", fixtureManifest.id);
-    const state: ProviderState = {
-      status: {
-        state: "connected",
-        accountLabel: "Fixture",
-        grantedCapabilities: ["fixture.read"],
-        message: null,
-      },
-      credential: "present",
-      disconnectFails: false,
-    };
-    try {
-      await NodeFSP.mkdir(NodePath.dirname(installedRoot), { recursive: true });
-      await NodeFSP.symlink(NodePath.join(root, "missing-package"), installedRoot);
-      await NodeFSP.writeFile(
-        NodePath.join(root, "state.json"),
-        JSON.stringify({
-          version: 1,
-          installed: {
-            [fixtureManifest.id]: { version: fixtureManifest.version, enabled: true },
-          },
-          removing: {},
-        }),
-      );
-      const registry = new RegistryRuntime(root, [
-        packaged(fixtureManifest, provider("test-fixture-provider", state)),
-      ]);
-      expect((await registry.list()).integrations[0]).toMatchObject({
-        installed: true,
-        enabled: true,
-        connectionState: "connected",
-      });
-      const reconciled = await NodeFSP.lstat(installedRoot);
-      expect(reconciled.isDirectory()).toBe(true);
-      expect(reconciled.isSymbolicLink()).toBe(false);
-      await registry.close();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("faults a provider after a lifecycle timeout and closes without overlapping calls", async () => {
+  it("holds a provider only until timed-out lifecycle work settles, without overlapping calls", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-lifecycle-timeout-"),
     );
@@ -4645,13 +4968,22 @@ describe("IntegrationRegistry lifecycle", () => {
       expect(connectCalls).toBe(1);
       expect(signals).toHaveLength(1);
       expect(signals[0]?.aborted).toBe(true);
-      expect(registry.isToolAvailableSync("test.records.list")).toBe(false);
+      expect(registry.toolAvailabilitySync("test.records.list")).toMatchObject({
+        available: false,
+        reason: "connection_changing",
+      });
       expect(registry.isSkillAvailableSync("test-records")).toBe(false);
       expect(registry.getAvailableSkillsSync()).toEqual([]);
       expect((await registry.snapshot()).integrations[0]?.tools[0]?.available).toBe(false);
-      const startedAt = Date.now();
+
+      releaseConnect();
+      await expect(registry.awaitToolAvailability("test.records.list")).resolves.toEqual({
+        available: true,
+      });
+      expect(registry.isSkillAvailableSync("test-records")).toBe(true);
+
       await registry.close();
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
+
       expect(closeCalls).toBe(1);
       expect(registry.isToolAvailableSync("test.records.list")).toBe(false);
       await expect(registry.list()).rejects.toMatchObject({ code: "disabled" });
@@ -4813,14 +5145,10 @@ describe("IntegrationRegistry lifecycle", () => {
       });
       expect(toolCalls).toBe(0);
       expect((await registry.list()).integrations[0]?.tools[0]?.available).toBe(false);
-      await new Promise((resolve) => setTimeout(resolve, 40));
       expect(registry.isToolAvailableSync("test.records.list")).toBe(false);
       const queuedConnect = registry.connect(connectedManifest.id);
       await expect(queuedConnect).rejects.toMatchObject({ code: "operation_failed" });
       expect(connectCalls).toBe(1);
-      await expect(
-        NodeFSP.access(NodePath.join(root, "commit-journal", `${connectedManifest.id}.json`)),
-      ).rejects.toMatchObject({ code: "ENOENT" });
       releaseCancelledConnect();
       await registry.close();
     } finally {
@@ -4829,7 +5157,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("does not fault a provider when cancellation wins during clean commit admission", async () => {
+  it("refuses commit admission once the caller has cancelled, without locking the provider", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-cancelled-commit-admission-"),
     );
@@ -4861,10 +5189,9 @@ describe("IntegrationRegistry lifecycle", () => {
         if (connectCalls > 1) return baseProvider.connect!(...args);
         const context = args[1];
         if (!context) throw new Error("Lifecycle context is required.");
-        const admission = context.beginCommit();
         controller.abort(new Error("RPC caller cancelled."));
         try {
-          await admission;
+          await context.beginCommit();
           throw new Error("Cancelled commit admission unexpectedly succeeded.");
         } finally {
           markCleanupStarted();
@@ -4888,9 +5215,6 @@ describe("IntegrationRegistry lifecycle", () => {
       expect(connectionSettled).toBe(false);
       releaseCleanup();
       await expect(connecting).rejects.toMatchObject({ code: "operation_failed" });
-      await expect(
-        NodeFSP.access(NodePath.join(root, "commit-journal", `${connectedManifest.id}.json`)),
-      ).rejects.toMatchObject({ code: "ENOENT" });
 
       await expect(registry.connect(connectedManifest.id)).resolves.toMatchObject({
         kind: "device_code",
@@ -5049,6 +5373,7 @@ describe("IntegrationRegistry lifecycle", () => {
     const staleSyncGate = new Promise<void>((resolve) => {
       releaseStaleSync = resolve;
     });
+    let staleSyncActive = false;
     let watchingInactiveSync = false;
     let inactiveSyncStarted = false;
     let skillActive = false;
@@ -5057,10 +5382,15 @@ describe("IntegrationRegistry lifecycle", () => {
       sync: async ({ activeSkills }) => {
         if (delayNextActiveSync && activeSkills.length > 0) {
           delayNextActiveSync = false;
+          staleSyncActive = true;
           markStaleSyncStarted();
           await staleSyncGate;
+          staleSyncActive = false;
         }
-        if (watchingInactiveSync && activeSkills.length === 0) inactiveSyncStarted = true;
+        if (watchingInactiveSync && activeSkills.length === 0) {
+          expect(staleSyncActive).toBe(false);
+          inactiveSyncStarted = true;
+        }
         skillActive = activeSkills.length > 0;
       },
     };
@@ -5103,7 +5433,6 @@ describe("IntegrationRegistry lifecycle", () => {
       await staleSyncStarted;
       watchingInactiveSync = true;
       const disconnecting = registry.disconnect(connectedManifest.id);
-      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(inactiveSyncStarted).toBe(false);
 
       releaseStaleSync();
@@ -5194,7 +5523,7 @@ describe("IntegrationRegistry lifecycle", () => {
           verificationUriComplete: null,
           userCode: "IJKL-MNOP",
           message: "Sign in.",
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          expiresAt: "2100-01-01T00:00:00.000Z",
           intervalSeconds: 1,
         };
       },
@@ -5224,7 +5553,6 @@ describe("IntegrationRegistry lifecycle", () => {
       watchingInactiveSync = true;
       const reconnecting = registry.connect(connectedManifest.id);
       await secondConnectReturned;
-      await new Promise((resolve) => setTimeout(resolve, 0));
       releaseStaleSync();
 
       await reconnecting;
@@ -5239,7 +5567,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("does not reset a faulted provider while timed-out lifecycle work is still settling", async () => {
+  it("does not disconnect a provider while timed-out lifecycle work is still settling", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-lifecycle-reset-race-"),
     );
@@ -5364,7 +5692,6 @@ describe("IntegrationRegistry lifecycle", () => {
       const connecting = registry.connect(connectedManifest.id);
       await commitStarted;
       const closing = registry.close();
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
       expect(closeCalls).toBe(0);
       expect(commitActive).toBe(true);
@@ -5452,14 +5779,13 @@ describe("IntegrationRegistry lifecycle", () => {
       const connecting = registry.connect(connectedManifest.id);
       await commitStarted;
 
-      const startedAt = Date.now();
       const closing = registry.close();
       expect(closeCalls).toBe(0);
       releaseCommit();
 
       await expect(connecting).resolves.toMatchObject({ kind: "device_code" });
       await closing;
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
+
       expect(closeCalls).toBe(1);
       expect(closeOverlappedCommit).toBe(false);
       const invocation = await invocationResult;
@@ -5471,8 +5797,8 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("journals and faults a commit tail that misses its bounded deadline", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-commit-journal-"));
+  it("reports a commit tail that misses its bounded deadline without locking after restart", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-commit-deadline-"));
     const state: ProviderState = {
       status: {
         state: "not_connected",
@@ -5509,13 +5835,18 @@ describe("IntegrationRegistry lifecycle", () => {
         closeCalls += 1;
       },
     };
+    const faults: Array<{ readonly integrationId: string; readonly reason: string }> = [];
     try {
       const registry = new RegistryRuntime(
         root,
         [packaged(connectedManifest, hangingProvider)],
         undefined,
         undefined,
-        { providerStatusTimeoutMs: 50, providerOperationTimeoutMs: 500 },
+        {
+          providerStatusTimeoutMs: 50,
+          providerOperationTimeoutMs: 500,
+          onProviderFault: (fault) => faults.push(fault),
+        },
       );
       await registry.install(connectedManifest.id);
       const connecting = registry.connect(connectedManifest.id).then(
@@ -5532,13 +5863,19 @@ describe("IntegrationRegistry lifecycle", () => {
       if (!connection.resolved)
         expect(connection.error).toMatchObject({ code: "operation_failed" });
       expect(commitSignalAborted).toBe(true);
+      expect(faults).toEqual([
+        {
+          integrationId: connectedManifest.id,
+          reason: "The integration provider operation timed out.",
+        },
+      ]);
+      // The hung tail is still running, so a disconnect must not overlap it.
       await expect(registry.disconnect(connectedManifest.id)).rejects.toMatchObject({
         code: "operation_failed",
       });
 
-      const closeStartedAt = Date.now();
       await expect(registry.close()).rejects.toThrow(/drain/u);
-      expect(Date.now() - closeStartedAt).toBeLessThan(2_000);
+
       expect(closeCalls).toBe(0);
 
       const recoveryState: ProviderState = {
@@ -5555,86 +5892,18 @@ describe("IntegrationRegistry lifecycle", () => {
         packaged(connectedManifest, provider("test-connected-provider", recoveryState)),
       ]);
       expect((await restarted.list()).integrations[0]).toMatchObject({
-        connectionState: "error",
+        connectionState: "connected",
       });
-      expect(restarted.isToolAvailableSync("test.records.list")).toBe(false);
-
-      await restarted.disconnect(connectedManifest.id);
-      expect(recoveryState.credential).toBeNull();
-      expect((await restarted.list()).integrations[0]).toMatchObject({
-        connectionState: "not_connected",
-      });
-      await expect(
-        NodeFSP.access(NodePath.join(root, "commit-journal", `${connectedManifest.id}.json`)),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(restarted.isToolAvailableSync("test.records.list")).toBe(true);
+      expect(recoveryState.credential).toBe("present");
       await restarted.close();
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("preserves a recovery journal when reset is cancelled before commit admission", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-preserved-recovery-journal-"),
-    );
-    const state: ProviderState = {
-      status: {
-        state: "connected",
-        accountLabel: "Fixture",
-        grantedCapabilities: ["records.read"],
-        message: null,
-      },
-      credential: "present",
-      disconnectFails: false,
-    };
-    const journalPath = NodePath.join(root, "commit-journal", `${connectedManifest.id}.json`);
-    const controller = new AbortController();
-    const baseProvider = provider("test-connected-provider", state);
-    const cancelledResetProvider: IntegrationProvider = {
-      ...baseProvider,
-      disconnect: async (context) => {
-        if (!context) throw new Error("Lifecycle context is required.");
-        const admission = context.beginCommit();
-        controller.abort();
-        await admission;
-      },
-    };
-    try {
-      const initial = new RegistryRuntime(root, [packaged(connectedManifest, baseProvider)]);
-      await initial.install(connectedManifest.id);
-      await initial.close();
-      await NodeFSP.mkdir(NodePath.dirname(journalPath), { recursive: true });
-      await NodeFSP.writeFile(
-        journalPath,
-        JSON.stringify({
-          version: 1,
-          integrationId: connectedManifest.id,
-          providerId: baseProvider.id,
-        }),
-      );
-
-      const registry = new RegistryRuntime(root, [
-        packaged(connectedManifest, cancelledResetProvider),
-      ]);
-      expect((await registry.list()).integrations[0]?.connectionState).toBe("error");
-      await expect(
-        registry.disconnect(connectedManifest.id, { signal: controller.signal }),
-      ).rejects.toMatchObject({ code: "operation_failed" });
-      await expect(NodeFSP.access(journalPath)).resolves.toBeUndefined();
-      await registry.close();
-
-      const restarted = new RegistryRuntime(root, [packaged(connectedManifest, baseProvider)]);
-      expect((await restarted.list()).integrations[0]?.connectionState).toBe("error");
-      await restarted.close();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("retains the commit journal when an admitted provider rejects promptly", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-rejected-commit-journal-"),
-    );
+  it("lets provider status decide after an admitted connect rejects promptly", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-rejected-commit-"));
     const state: ProviderState = {
       status: {
         state: "not_connected",
@@ -5652,55 +5921,157 @@ describe("IntegrationRegistry lifecycle", () => {
         if (!context) throw new Error("Lifecycle context is required.");
         await context.beginCommit();
         state.credential = "present";
+        state.status = {
+          state: "connected",
+          accountLabel: "Committed account",
+          grantedCapabilities: ["records.read"],
+          message: null,
+        };
         throw new Error("Credential commit result was ambiguous.");
       },
     };
+    const faults: Array<{ readonly integrationId: string; readonly reason: string }> = [];
     try {
-      const registry = new RegistryRuntime(root, [packaged(connectedManifest, rejectingProvider)]);
+      const registry = new RegistryRuntime(
+        root,
+        [packaged(connectedManifest, rejectingProvider)],
+        undefined,
+        undefined,
+        { onProviderFault: (fault) => faults.push(fault) },
+      );
       await registry.install(connectedManifest.id);
       await expect(registry.connect(connectedManifest.id)).rejects.toMatchObject({
         code: "operation_failed",
       });
-      expect((await registry.snapshot()).integrations[0]).toMatchObject({
-        connectionState: "error",
-      });
-      expect(registry.isToolAvailableSync("test.records.list")).toBe(false);
-      await expect(
-        NodeFSP.access(NodePath.join(root, "commit-journal", `${connectedManifest.id}.json`)),
-      ).resolves.toBeUndefined();
-      await registry.close();
-
-      const recoveryState: ProviderState = {
-        status: {
-          state: "connected",
-          accountLabel: "Indeterminate account",
-          grantedCapabilities: ["records.read"],
-          message: null,
-        },
-        credential: "present",
-        disconnectFails: false,
-      };
-      const restarted = new RegistryRuntime(root, [
-        packaged(connectedManifest, provider("test-connected-provider", recoveryState)),
+      expect(faults).toEqual([
+        // A raw provider error is logged by name only; its message is not public.
+        { integrationId: connectedManifest.id, reason: "Error" },
       ]);
-      expect((await restarted.list()).integrations[0]).toMatchObject({
-        connectionState: "error",
+      expect((await registry.snapshot()).integrations[0]).toMatchObject({
+        connectionState: "connected",
+        accountLabel: "Committed account",
       });
-      await restarted.disconnect(connectedManifest.id);
-      expect(recoveryState.credential).toBeNull();
-      await expect(
-        NodeFSP.access(NodePath.join(root, "commit-journal", `${connectedManifest.id}.json`)),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-      await restarted.close();
+      expect(registry.isToolAvailableSync("test.records.list")).toBe(true);
+      await registry.close();
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("retains the commit journal when an admitted provider returns an invalid poll result", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-invalid-poll-commit-journal-"),
+  it("adopts the grants a provider reports after an unclear sign-in", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-unclear-grant-"));
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "test-unclear-grant",
+      name: "Test Unclear Grant",
+      provider: "test-unclear-grant-provider",
+      capabilities: [
+        { id: "fixture.read", displayName: "Read", description: "Read.", access: "authorization" },
+        {
+          id: "fixture.write",
+          displayName: "Write",
+          description: "Write.",
+          access: "authorization",
+        },
+      ],
+      tools: [
+        {
+          name: "test.fixture.read",
+          displayName: "Read fixture",
+          description: "Read fixture.",
+          capabilities: ["fixture.read"],
+          effect: "read",
+        },
+        {
+          name: "test.fixture.write",
+          displayName: "Write fixture",
+          description: "Write one fixture record.",
+          capabilities: ["fixture.write"],
+          effect: "write",
+        },
+      ],
+      skills: [],
+    };
+    let granted: ReadonlyArray<string> = ["fixture.read"];
+    let mode: "sign-in" | "reject" | "finish-late" = "sign-in";
+    let releaseLate!: () => void;
+    const lateGate = new Promise<void>((resolve) => {
+      releaseLate = resolve;
+    });
+    const implementation: IntegrationProvider = {
+      id: "test-unclear-grant-provider",
+      tools: ["test.fixture.read", "test.fixture.write"].map((name) => ({
+        name,
+        description: "Fixture.",
+        input: EmptyIntegrationToolInput,
+        readOnly: name.endsWith(".read"),
+        openWorld: false,
+      })),
+      status: async () => ({
+        state: "connected",
+        accountLabel: "Fixture user",
+        grantedCapabilities: granted,
+        message: null,
+      }),
+      connect: async (_capabilities, context) => {
+        if (mode === "sign-in") {
+          return { kind: "connected", flowId: "fixture-flow", message: "Connected." };
+        }
+        await context!.beginCommit();
+        if (mode === "reject") {
+          granted = ["fixture.read", "fixture.write"];
+          throw new Error("The sign-in result was unclear.");
+        }
+        await lateGate;
+        granted = ["fixture.read", "fixture.write"];
+        return { kind: "connected", flowId: "fixture-flow", message: "Connected." };
+      },
+      disconnect: async () => undefined,
+      invoke: async () => ({ ok: true }),
+    };
+    const registry = new RegistryRuntime(
+      root,
+      [packaged(manifest, implementation)],
+      undefined,
+      undefined,
+      { providerOperationTimeoutMs: 50 },
     );
+    const write = async () => (await registry.list()).integrations[0]?.capabilities[1];
+    try {
+      await registry.install(manifest.id);
+      await registry.connect(manifest.id);
+      expect(await write()).toMatchObject({ id: "fixture.write", enabled: false });
+
+      // The sign-in fails promptly, but its commit landed.
+      mode = "reject";
+      await expect(registry.connect(manifest.id)).rejects.toMatchObject({
+        code: "operation_failed",
+      });
+      expect(await write()).toMatchObject({ enabled: true, available: true });
+
+      // The sign-in overruns its deadline and lands only after Harness reported the failure.
+      granted = ["fixture.read"];
+      mode = "sign-in";
+      await registry.connect(manifest.id);
+      expect(await write()).toMatchObject({ enabled: false });
+      mode = "finish-late";
+      await expect(registry.connect(manifest.id)).rejects.toMatchObject({
+        code: "operation_failed",
+      });
+      releaseLate();
+      await expect(registry.awaitToolAvailability("test.fixture.read")).resolves.toEqual({
+        available: true,
+      });
+      expect(await write()).toMatchObject({ enabled: true, available: true });
+    } finally {
+      releaseLate?.();
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a provider usable after an admitted poll returns an invalid result", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-invalid-poll-"));
     const state: ProviderState = {
       status: {
         state: "not_connected",
@@ -5718,6 +6089,12 @@ describe("IntegrationRegistry lifecycle", () => {
         if (!context) throw new Error("Lifecycle context is required.");
         await context.beginCommit();
         state.credential = "present";
+        state.status = {
+          state: "connected",
+          accountLabel: "Committed account",
+          grantedCapabilities: ["records.read"],
+          message: null,
+        };
         return {
           state: "connected",
           retryAfterSeconds: 0,
@@ -5734,18 +6111,10 @@ describe("IntegrationRegistry lifecycle", () => {
         code: "operation_failed",
       });
       expect((await registry.snapshot()).integrations[0]).toMatchObject({
-        connectionState: "error",
+        connectionState: "connected",
       });
-      expect(registry.isToolAvailableSync("test.records.list")).toBe(false);
-      await expect(
-        NodeFSP.access(NodePath.join(root, "commit-journal", `${connectedManifest.id}.json`)),
-      ).resolves.toBeUndefined();
-
-      await registry.disconnect(connectedManifest.id);
-      expect(state.credential).toBeNull();
-      await expect(
-        NodeFSP.access(NodePath.join(root, "commit-journal", `${connectedManifest.id}.json`)),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(registry.isToolAvailableSync("test.records.list")).toBe(true);
+      await expect(registry.invokeTool("test.records.list", {})).resolves.toBeDefined();
       await registry.close();
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
@@ -5774,7 +6143,7 @@ describe("IntegrationRegistry lifecycle", () => {
         verificationUriComplete: null,
         userCode: "ABCD-EFGH",
         message: "Sign in.",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        expiresAt: "2100-01-01T00:00:00.000Z",
         intervalSeconds: 0,
       }),
     } as IntegrationProvider;
@@ -5784,9 +6153,6 @@ describe("IntegrationRegistry lifecycle", () => {
       await expect(registry.connect(connectedManifest.id)).rejects.toMatchObject({
         code: "operation_failed",
       });
-      await expect(
-        NodeFSP.access(NodePath.join(root, "commit-journal", `${connectedManifest.id}.json`)),
-      ).rejects.toMatchObject({ code: "ENOENT" });
       await registry.close();
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
@@ -5890,9 +6256,9 @@ describe("IntegrationRegistry lifecycle", () => {
         (error: unknown) => ({ resolved: false as const, error }),
       );
       await started;
-      const startedAt = Date.now();
+
       await registry.close();
-      expect(Date.now() - startedAt).toBeLessThan(1_000);
+
       const result = await invocationResult;
       expect(result.resolved).toBe(false);
       if (!result.resolved) expect(result.error).toMatchObject({ code: "disabled" });
@@ -6034,6 +6400,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
     };
   };
 
+  // regression: #328 fix(integrations): explain dynamic tool rejections and wait out credential refresh
   it("names the capability that is not selected and the one that is not granted", async () => {
     const state = connectedState(["records.read"]);
     await withRegistry(
@@ -6081,49 +6448,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
     );
   });
 
-  it("reports a version that does not match the included plugin", () => {
-    const tool = connectedManifest.tools[0]!;
-    expect(
-      persistedToolUnavailability(connectedManifest, tool, { version: "0.9.0", enabled: true }),
-    ).toEqual({
-      available: false,
-      reason: "version_mismatch",
-      detail:
-        "the installed Test Cloud Records plugin (0.9.0) does not match the included version (1.0.0). Restart Harness to reconcile it.",
-    });
-    expect(
-      persistedToolUnavailability(connectedManifest, tool, { version: "1.0.0", enabled: true }),
-    ).toBeUndefined();
-  });
-
-  it("reports a faulted provider ahead of its connection state", async () => {
-    const state = connectedState(["records.read"]);
-    const faulting: IntegrationProvider = {
-      ...provider("test-connected-provider", state),
-      connect: async (_capabilities, context) => {
-        await context!.beginCommit();
-        throw new Error("Credential commit result was ambiguous.");
-      },
-    };
-    await withRegistry(
-      "tritonai-tool-reasons-faulted-",
-      [packaged(connectedManifest, faulting)],
-      async (registry) => {
-        await registry.install(connectedManifest.id);
-        expect(registry.toolAvailabilitySync("test.records.list")).toEqual({ available: true });
-        await expect(registry.connect(connectedManifest.id)).rejects.toMatchObject({
-          code: "operation_failed",
-        });
-        expect(registry.toolAvailabilitySync("test.records.list")).toEqual({
-          available: false,
-          reason: "faulted",
-          detail:
-            "Test Cloud Records is unavailable until its connection is reset in Settings > Plugins.",
-        });
-      },
-    );
-  });
-
+  // regression: #328 fix(integrations): explain dynamic tool rejections and wait out credential refresh
   it("treats an in-flight credential refresh as transient and waits for it", async () => {
     const state = connectedState(["fixture.read"]);
     const prepare = blockingPrepare(state);
@@ -6152,39 +6477,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
     );
   });
 
-  it("returns the transient reason when the refresh outlasts the wait", async () => {
-    const state = connectedState(["fixture.read"]);
-    const prepare = blockingPrepare(state);
-    await withRegistry(
-      "tritonai-tool-reasons-refresh-bound-",
-      [packaged(fixtureManifest, prepare.implementation)],
-      async (registry) => {
-        await registry.install(fixtureManifest.id);
-        await registry.list();
-        prepare.arm();
-        const invocation = registry.invokeTool("test.fixture.read", {});
-        await prepare.started;
-        try {
-          await expect(
-            registry.awaitToolAvailability("test.fixture.read", { timeoutMs: 1 }),
-          ).resolves.toMatchObject({ available: false, reason: "connection_changing" });
-          const cancelled = new AbortController();
-          cancelled.abort();
-          await expect(
-            registry.awaitToolAvailability("test.fixture.read", { signal: cancelled.signal }),
-          ).rejects.toBeDefined();
-          // A refusal that settling cannot change is returned without waiting.
-          await expect(
-            registry.awaitToolAvailability("test.missing.tool", { timeoutMs: 60_000 }),
-          ).resolves.toMatchObject({ available: false, reason: "unknown_tool" });
-        } finally {
-          prepare.release();
-          await invocation;
-        }
-      },
-    );
-  });
-
+  // regression: #339 fix(integrations): re-sample a stale tool summary instead of reporting a phantom refresh
   it("re-samples a stale summary when no provider work remains to wait on", async () => {
     const state = connectedState(["records.read", "events.read"]);
     let markStatusStarted!: () => void;

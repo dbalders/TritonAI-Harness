@@ -1,11 +1,6 @@
 /**
- * The Microsoft Graph calls memory sync makes against the user's OneDrive.
- *
- * Items are addressed by id once found, so a renamed parent never redirects a
- * write. Writes are conditional: an upload either creates a file that must not
- * exist yet or replaces the exact version sync last saw (`If-Match`), and a
- * delete only removes that version. OneDrive rejects anything else with 409 or
- * 412, which sync treats as "look again next pass".
+ * Address known OneDrive items by ID. Create only if absent; update/delete with If-Match.
+ * Treat 409/412 as a request to inspect again next pass, never overwrite a competing change.
  */
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -90,10 +85,9 @@ export const makeOneDrive = Effect.gen(function* () {
   /** Sends a request, signing in again once if Graph rejects the token. */
   const send = (build: (token: string) => HttpClientRequest.HttpClientRequest) =>
     sendOnce(build).pipe(
-      Effect.flatMap((response) =>
-        response.status === 401
-          ? signIn.invalidateAccessToken.pipe(Effect.andThen(sendOnce(build)))
-          : Effect.succeed(response),
+      Effect.filterOrElse(
+        (response) => response.status !== 401,
+        () => signIn.invalidateAccessToken.pipe(Effect.andThen(sendOnce(build))),
       ),
     );
 

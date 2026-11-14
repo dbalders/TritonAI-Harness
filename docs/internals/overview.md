@@ -50,6 +50,13 @@ connections and project membership. An unavailable target must not fall back to 
 default or a promise to synchronize offline or future environments. Project-group targets similarly
 select known environment-local checkouts; the group itself does not store inherited defaults.
 
+Release experiments use the [shared feature policy](../../packages/shared/src/features.ts).
+Availability follows the running build's release environment, never its display name or selected
+update feed. Opt-in and defaults stay in existing settings; availability can veto an opt-in.
+The web adapter gates client features. A server feature must check the same policy against its
+own build before doing work; a Nightly client cannot enable an experiment on a stable server.
+These gates control behavior, not authorization or exclusion of code from release packages.
+
 ## Durable intent and side effects
 
 The event log is the source of truth for orchestration state. The
@@ -89,7 +96,8 @@ Thread settlement is server-owned. The
 and inactivity settings without a connected client. Merge notifications invalidate cached PR state
 and trigger a check. A merge outside T3, such as an agent running `gh pr merge`, sends no
 notification, so the [PR sync reactor](../../apps/server/src/orchestration-v2/PullRequestSyncReactor.ts)
-re-reads a thread's open links when a run that ran a merge or close command ends. The guarded
+re-reads a thread's open links when a run that ran a merge or close command ends. Each forge's
+definition names its CLI's commands in `changeRequestCloseCommand`. The guarded
 `thread.auto-settle` command rejects newer activity, explicit settlement overrides, and live or
 blocked work. It records the activity timestamp for stable
 sorting and detaches idle provider sessions. Clients render the persisted result; they do not

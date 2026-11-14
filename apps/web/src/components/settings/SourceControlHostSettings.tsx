@@ -1,6 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import type { SourceControlClientDefinition } from "@t3tools/client-runtime/source-control-clients";
+import type { SourceControlDefinition } from "@t3tools/client-runtime/source-control-clients";
 import { useState } from "react";
+
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -13,8 +14,8 @@ export function SourceControlHostSettings({
   onSaved,
 }: {
   readonly environmentId: EnvironmentId;
-  readonly definition: SourceControlClientDefinition & {
-    readonly settings: NonNullable<SourceControlClientDefinition["settings"]>;
+  readonly definition: SourceControlDefinition & {
+    readonly settings: NonNullable<SourceControlDefinition["settings"]>;
   };
   readonly onSaved: () => void;
 }) {

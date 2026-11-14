@@ -7,6 +7,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
 import * as Scope from "effect/Scope";
+
 import { makeDrainableWorker } from "./DrainableWorker.ts";
 
 const captureErrorLogs = () => {

@@ -1,4 +1,5 @@
 import type { ComponentProps } from "react";
+
 import { cn } from "../../lib/utils";
 
 export function SettingsGroup({
@@ -12,6 +13,7 @@ export function SettingsGroup({
 }) {
   return (
     <div
+      data-slot="settings-group"
       {...props}
       className={cn(
         "relative overflow-visible text-foreground",

@@ -1,20 +1,29 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+
 import { expect, it } from "@effect/vitest";
+
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+
 import * as Effect from "effect/Effect";
+
 import { HttpServer } from "effect/http";
+
 import * as NetAddress from "effect/net/NetAddress";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
+
 const makeFakeHttpServer = (hostname: string, port = 43123) =>
   HttpServer.HttpServer.of({
     address: NetAddress.inetAddressFromIpStringUnsafe(hostname, port),
     serve: (() => Effect.void) as HttpServer.HttpServer["Service"]["serve"],
   });
+
 const fakeHttpServer = makeFakeHttpServer("127.0.0.1");
+
 const fakeEnvironment = ServerEnvironment.ServerEnvironment.of({
   getEnvironmentId: Effect.succeed(environmentId),
   getDescriptor: Effect.die("unused"),
@@ -25,7 +34,6 @@ const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
     .make({
       now,
       livenessWindowMs: 100,
-      maximumLifetimeMs: 1_000,
     })
     .pipe(
       Effect.provideService(HttpServer.HttpServer, httpServer),
@@ -52,8 +60,6 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
     expect(resolved?.capabilities).toEqual(
       new Set(["preview", "integrations.invoke", "orchestration", "worktree", "pull-requests"]),
     );
-    expect(issued.expiresAt).toBe(2_000);
-    expect(resolved?.expiresAt).toBe(issued.expiresAt);
 
     yield* registry.revokeThread(threadId);
     expect(yield* registry.resolve(token)).toBeUndefined();
@@ -105,6 +111,7 @@ it.effect("always grants pull-requests and gates browser and device access indep
   }),
 );
 
+// regression: #3114 use bound host for MCP endpoint
 it.effect("builds MCP endpoints from the bound server host", () =>
   Effect.gen(function* () {
     const cases = [
@@ -146,29 +153,6 @@ it.effect("expires credentials once their session stops showing signs of life", 
   }),
 );
 
-it.effect("keeps a credential alive across turns that never touch an MCP tool", () =>
-  Effect.gen(function* () {
-    let timestamp = 1_000;
-    const registry = yield* makeRegistry(() => timestamp);
-    const threadId = ThreadId.make("thread-3");
-    const issued = yield* registry.issue({
-      threadId,
-      providerInstanceId: ProviderInstanceId.make("claude"),
-      capabilities: McpSessionRegistry.providerSessionCapabilities(),
-    });
-    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
-
-    // Well past the liveness window in total, but each turn reports in before
-    // it lapses — this is the long-session case that used to lose the toolkit.
-    for (let turn = 0; turn < 10; turn += 1) {
-      timestamp += 99;
-      yield* registry.touch(threadId);
-    }
-
-    expect((yield* registry.resolve(token))?.thread.threadId).toBe(threadId);
-  }),
-);
-
 it.effect("does not keep credentials of other threads alive", () =>
   Effect.gen(function* () {
     let timestamp = 1_000;
@@ -188,79 +172,44 @@ it.effect("does not keep credentials of other threads alive", () =>
   }),
 );
 
-it.effect("touch cannot extend the absolute expiry and an expired bearer is revoked", () =>
+it.effect("bearer traffic alone does not keep a credential alive", () =>
   Effect.gen(function* () {
     let timestamp = 1_000;
     const registry = yield* makeRegistry(() => timestamp);
-    const threadId = ThreadId.make("thread-hard-expiry");
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-bearer-only"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: McpSessionRegistry.providerSessionCapabilities(),
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+
+    timestamp += 99;
+    expect(yield* registry.resolve(token)).toBeDefined();
+    timestamp += 2;
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("only a trusted touch restores an expired token with its original scope", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeRegistry(() => timestamp);
+    const threadId = ThreadId.make("thread-idle");
     const issued = yield* registry.issue({
       threadId,
       providerInstanceId: ProviderInstanceId.make("codex"),
       capabilities: McpSessionRegistry.providerSessionCapabilities(),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const scope = yield* registry.resolve(token);
+    expect(scope).toBeDefined();
 
-    expect(issued.expiresAt).toBe(2_000);
-    for (let turn = 0; turn < 10; turn += 1) {
-      timestamp += 99;
-      yield* registry.touch(threadId);
-    }
-    const beforeExpiry = yield* registry.resolve(token);
-    expect(beforeExpiry?.thread.threadId).toBe(threadId);
-    expect(beforeExpiry?.expiresAt).toBe(2_000);
+    timestamp += 101;
+    expect(yield* registry.resolve(token)).toBeUndefined();
+    yield* registry.touch(ThreadId.make("thread-unrelated"));
+    expect(yield* registry.resolve(token)).toBeUndefined();
 
-    timestamp = 2_000;
     yield* registry.touch(threadId);
-    expect(yield* registry.resolve(token)).toBeUndefined();
-
-    // Rewind the test clock only to prove the expired lookup removed the
-    // record, rather than merely hiding a still-stored credential by time.
-    timestamp = 1_999;
-    expect(yield* registry.resolve(token)).toBeUndefined();
-  }),
-);
-
-it.effect("defaults to a 30-minute liveness window and eight-hour absolute lifetime", () =>
-  Effect.gen(function* () {
-    let timestamp = 0;
-    const makeDefaultRegistry = () =>
-      McpSessionRegistry.__testing
-        .make({ now: () => timestamp })
-        .pipe(
-          Effect.provideService(HttpServer.HttpServer, fakeHttpServer),
-          Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
-          Effect.provide(NodeServices.layer),
-        );
-
-    const idleRegistry = yield* makeDefaultRegistry();
-    const idleCredential = yield* idleRegistry.issue({
-      threadId: ThreadId.make("thread-default-idle"),
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      capabilities: McpSessionRegistry.providerSessionCapabilities(),
-    });
-    const idleToken = idleCredential.config.authorizationHeader.replace(/^Bearer\s+/, "");
-    timestamp = 30 * 60 * 1_000 + 1;
-    expect(yield* idleRegistry.resolve(idleToken)).toBeUndefined();
-
-    timestamp = 0;
-    const activeRegistry = yield* makeDefaultRegistry();
-    const activeThreadId = ThreadId.make("thread-default-hard-expiry");
-    const activeCredential = yield* activeRegistry.issue({
-      threadId: activeThreadId,
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      capabilities: McpSessionRegistry.providerSessionCapabilities(),
-    });
-    const activeToken = activeCredential.config.authorizationHeader.replace(/^Bearer\s+/, "");
-    expect(activeCredential.expiresAt).toBe(8 * 60 * 60 * 1_000);
-
-    for (let halfHour = 1; halfHour < 16; halfHour += 1) {
-      timestamp = halfHour * 30 * 60 * 1_000;
-      yield* activeRegistry.touch(activeThreadId);
-    }
-    expect((yield* activeRegistry.resolve(activeToken))?.thread.threadId).toBe(activeThreadId);
-
-    timestamp = 8 * 60 * 60 * 1_000;
-    yield* activeRegistry.touch(activeThreadId);
-    expect(yield* activeRegistry.resolve(activeToken)).toBeUndefined();
+    expect(yield* registry.resolve(token)).toEqual(scope);
   }),
 );

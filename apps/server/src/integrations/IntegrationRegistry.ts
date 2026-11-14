@@ -28,6 +28,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { loadBuiltinIntegrations } from "./builtins.ts";
 import {
   isIntegrationId,
+  isIntegrationServiceEnvironmentId,
   isIntegrationSkillName,
   isIntegrationVersion,
   type IntegrationManifest,
@@ -67,6 +68,17 @@ export interface IntegrationProviderStatus {
 
 export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
+  /**
+   * The user-selected service environment (such as Prod or Dev). Present on every provider
+   * operation, including status, for plugins whose manifest declares `serviceEnvironments`.
+   */
+  readonly serviceEnvironment?: string;
+  /**
+   * Host-only. The service environment a caller approved or displayed. Registry operations reject
+   * the call instead of running it when the plugin's selection no longer matches. Never forwarded
+   * to providers.
+   */
+  readonly expectedServiceEnvironment?: string;
   /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
   /**
@@ -84,26 +96,31 @@ export interface IntegrationInvocationContext {
 
 export interface IntegrationLifecycleContext extends IntegrationInvocationContext {
   /**
-   * Admit the provider's final external commit point. The provider must await this immediately
-   * before a narrow, internally bounded commit tail and recover before rejecting that tail. The
-   * host journals admission first, rejects admission when cancellation already won, and faults the
-   * provider if the admitted tail outlives its watchdog. Fallible commit-tail work must use the
-   * returned signal, which aborts shortly before that watchdog fires.
+   * Await admission immediately before a bounded external commit tail; recover before rejection.
+   * The host rejects prior cancellation and reports a watchdog overrun as an unknown outcome.
+   * Use the returned signal for fallible tail work; it aborts before the watchdog.
    */
   beginCommit(): Promise<AbortSignal>;
 }
 
+/** Longest provider message passed to agents and users; longer messages are cut, not dropped. */
+const MAX_PROVIDER_PUBLIC_MESSAGE_LENGTH = 1_024;
+
 export class IntegrationProviderPublicError extends Error {
   readonly _tag = "IntegrationProviderPublicError";
   /**
-   * The external service definitively refused the operation, so nothing changed. An admitted
-   * commit rejected this way settles like a success: Harness clears its journal and keeps the
-   * provider available instead of faulting it as an ambiguous outcome.
+   * The external service definitively refused the operation, so nothing changed. The agent is
+   * told the write was refused instead of being asked to check an unknown outcome.
    */
   readonly unchanged: boolean;
 
   constructor(message: string, options?: { readonly unchanged?: boolean }) {
-    super(message.trim() || "Integration provider operation failed.");
+    const trimmed = message.trim();
+    super(
+      trimmed.length > MAX_PROVIDER_PUBLIC_MESSAGE_LENGTH
+        ? `${trimmed.slice(0, MAX_PROVIDER_PUBLIC_MESSAGE_LENGTH - 1)}…`
+        : trimmed || "Integration provider operation failed.",
+    );
     this.name = "IntegrationProviderPublicError";
     this.unchanged = options?.unchanged === true;
   }
@@ -127,7 +144,7 @@ export interface IntegrationProvider {
   status(context?: IntegrationInvocationContext): Promise<IntegrationProviderStatus>;
   /**
    * Prepare ephemeral provider state needed for invocation, such as refreshing an access token.
-   * Credential mutations must use beginCommit so the host can journal and bound the commit tail.
+   * Credential mutations must use beginCommit so the host can bound the commit tail.
    */
   prepare?(context: IntegrationLifecycleContext): Promise<void>;
   connect?(
@@ -209,6 +226,8 @@ interface PersistedIntegrationState {
       readonly version: string;
       readonly enabled: boolean;
       readonly enabledCapabilities?: ReadonlyArray<string>;
+      /** The selected service environment; absent or no longer declared means the default. */
+      readonly serviceEnvironment?: string;
       /** Legacy v1 state accepted only for migration; capability access now owns availability. */
       readonly disabledSkills?: ReadonlyArray<string>;
     }
@@ -230,9 +249,9 @@ export interface IntegrationProviderFault {
  * Records a provider fault in the server trace. Server logs reach the trace file only as events on
  * an active span, and a fault is reported from outside any span, so the warning gets its own.
  */
-export const logProviderFault = (fault: IntegrationProviderFault) =>
-  Effect.logWarning("integrations.provider.faulted", fault).pipe(
-    Effect.withSpan("integrations.provider.faulted", {
+const logProviderFault = (fault: IntegrationProviderFault) =>
+  Effect.logWarning("integrations.provider.fault", fault).pipe(
+    Effect.withSpan("integrations.provider.fault", {
       attributes: {
         "integration.id": fault.integrationId,
         "integration.fault.reason": fault.reason,
@@ -255,7 +274,6 @@ export type IntegrationToolUnavailableReason =
   | "capability_not_granted"
   | "not_connected"
   | "revoking"
-  | "faulted"
   | "connection_changing";
 
 export type IntegrationToolAvailability =
@@ -272,14 +290,20 @@ export interface RegistryRuntimeOptions {
   readonly providerOperationTimeoutMs?: number;
   /** Defaults to the isolated `__document-text` process extractor. */
   readonly documentText?: IntegrationDocumentTextExtractor;
-  /** Observes every provider fault, which otherwise surfaces only as a reset prompt. */
+  /**
+   * Observes provider faults: unknown write outcomes, timeouts, and contract violations. Faults are
+   * recorded and returned to the caller as errors; they never make a plugin unavailable.
+   */
   readonly onProviderFault?: (fault: IntegrationProviderFault) => void;
 }
 
 const DEFAULT_PROVIDER_STATUS_TIMEOUT_MS = 5_000;
 const DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS = 30_000;
 
-/** Maximum UTF-8 bytes in normalized JSON returned to a model-facing tool surface. */
+/**
+ * Maximum UTF-8 bytes in normalized model-facing JSON. A 256 KiB ceiling rejects compatibility
+ * payloads that repeat a 50,000-character, three-byte UTF-8 field.
+ */
 export const MAX_INTEGRATION_TOOL_RESULT_BYTES = 512 * 1024;
 
 export const INTEGRATION_TOOL_RESULT_OMITTED = Object.freeze({
@@ -292,11 +316,35 @@ function isBinaryIntegrationToolResultValue(value: unknown): boolean {
   return Buffer.isBuffer(value) || value instanceof ArrayBuffer || ArrayBuffer.isView(value);
 }
 
-/**
- * Normalize provider output once at the shared registry boundary. The 512 KiB ceiling preserves
- * the ordinary compatibility shape that repeats a 50,000-code-unit, unescaped three-byte UTF-8
- * field plus JSON metadata; 256 KiB would reject it. Larger JSON escape expansion fails closed.
- */
+function withoutDuplicateMcpText(result: Record<string, unknown>): Record<string, unknown> {
+  const structured = result.structuredContent;
+  if (structured === null || typeof structured !== "object" || Array.isArray(structured))
+    return result;
+  if (!Array.isArray(result.content)) return result;
+  const structuredJson = JSON.stringify(structured);
+  const content = result.content.filter((item: unknown) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return true;
+    const block = item as Record<string, unknown>;
+    if (block.type !== "text" || typeof block.text !== "string" || Object.keys(block).length !== 2)
+      return true;
+    try {
+      JSON.parse(block.text);
+    } catch {
+      return true;
+    }
+    // Compare JSON spelling, not parsed values: rounding and duplicate keys must not lose text.
+    const compact = block.text.replace(
+      /("(?:\\.|[^"\\])*")|[\t\n\r ]+/gu,
+      (_match, token: string | undefined) => token ?? "",
+    );
+    return compact !== structuredJson;
+  });
+  if (content.length === result.content.length) return result;
+  const { content: _content, ...rest } = result;
+  return content.length === 0 ? rest : { ...rest, content };
+}
+
+/** Snapshot provider JSON once, remove redundant MCP text, then enforce the encoded-byte limit. */
 export function normalizeIntegrationToolResult(value: unknown): Record<string, unknown> {
   if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol") {
     throw new Error("Integration tool results must be JSON-serializable.");
@@ -324,15 +372,17 @@ export function normalizeIntegrationToolResult(value: unknown): Record<string, u
   }
   if (containsBinary) return INTEGRATION_TOOL_RESULT_OMITTED;
   if (!serialized) throw new Error("Integration tool results must be JSON-serializable.");
-  if (Buffer.byteLength(serialized, "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
+  // Budget extra parsing for the structured object plus its escaped MCP compatibility copy.
+  if (Buffer.byteLength(serialized, "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES * 3) {
     return INTEGRATION_TOOL_RESULT_OMITTED;
   }
   const parsed: unknown = JSON.parse(serialized);
-  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return parsed as Record<string, unknown>;
-  }
-  const normalized = { result: parsed };
-  if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
+  const normalized =
+    parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? withoutDuplicateMcpText(parsed as Record<string, unknown>)
+      : { result: parsed };
+  const normalizedJson = normalized === parsed ? serialized : JSON.stringify(normalized);
+  if (Buffer.byteLength(normalizedJson, "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
     return INTEGRATION_TOOL_RESULT_OMITTED;
   }
   return normalized;
@@ -403,11 +453,20 @@ function decodePersistedState(value: unknown): PersistedIntegrationState {
     const entry = raw as Record<string, unknown>;
     const disabledSkills = entry.disabledSkills;
     const enabledCapabilities = entry.enabledCapabilities;
+    const serviceEnvironment = entry.serviceEnvironment;
     if (
       !hasOnlyKeys(
         entry,
-        new Set(["version", "enabled", "enabledCapabilities", "disabledSkills"]),
+        new Set([
+          "version",
+          "enabled",
+          "enabledCapabilities",
+          "serviceEnvironment",
+          "disabledSkills",
+        ]),
       ) ||
+      (serviceEnvironment !== undefined &&
+        !isIntegrationServiceEnvironmentId(serviceEnvironment)) ||
       !isIntegrationVersion(entry.version) ||
       typeof entry.enabled !== "boolean" ||
       (enabledCapabilities !== undefined &&
@@ -428,6 +487,9 @@ function decodePersistedState(value: unknown): PersistedIntegrationState {
         ? {
             enabledCapabilities: [...(enabledCapabilities as ReadonlyArray<string>)].toSorted(),
           }
+        : {}),
+      ...(serviceEnvironment !== undefined
+        ? { serviceEnvironment: serviceEnvironment as string }
         : {}),
       ...(disabledSkills
         ? { disabledSkills: [...(disabledSkills as ReadonlyArray<string>)].toSorted() }
@@ -498,6 +560,40 @@ function connectionCapabilityIds(
     .map(({ id }) => id);
 }
 
+/** The environment provider operations use: the saved choice when still declared, else the first. */
+function selectedServiceEnvironmentId(
+  manifest: IntegrationManifest,
+  installed: InstalledIntegrationState | undefined,
+): string | undefined {
+  const environments = manifest.serviceEnvironments;
+  if (!environments || environments.length === 0) return undefined;
+  const saved = installed?.serviceEnvironment;
+  return environments.some(({ id }) => id === saved) ? saved : environments[0]!.id;
+}
+
+/**
+ * Claude allows a plugin write in its permission callback and dispatches it to MCP right after,
+ * outside Harness's admission check. Switching environments waits this long after such a write is
+ * allowed, so the write cannot reach the newly selected environment.
+ */
+const PLUGIN_WRITE_SETTLE_MS = 15_000;
+
+function assertExpectedServiceEnvironment(
+  manifest: IntegrationManifest,
+  installed: InstalledIntegrationState | undefined,
+  expected: string | undefined,
+  action: string,
+): void {
+  if (expected === undefined || !manifest.serviceEnvironments) return;
+  const selected = selectedServiceEnvironmentId(manifest, installed);
+  if (selected === expected) return;
+  const current = manifest.serviceEnvironments.find(({ id }) => id === selected);
+  throw operationError(
+    "invalid_input",
+    `${manifest.name} switched to ${current?.displayName ?? "another environment"}, so ${action} was not run. Try again.`,
+  );
+}
+
 const EMPTY_STATE: PersistedIntegrationState = {
   version: 1,
   installed: emptyRecord(),
@@ -525,33 +621,10 @@ class ProviderOperationTimeoutError extends Error {
   }
 }
 
-class ProviderFaultedError extends Error {
-  constructor() {
-    super("The integration provider is faulted until its connection is reset.");
-    this.name = "ProviderFaultedError";
-  }
-}
-
-class ProviderWriteAdmissionError extends Error {
-  constructor(cause?: unknown) {
-    super(
-      "The integration provider returned a write result without commit admission.",
-      cause === undefined ? undefined : { cause },
-    );
-    this.name = "ProviderWriteAdmissionError";
-  }
-}
-
 interface ProviderStatusAttempt {
   readonly controller: AbortController;
   readonly result: Promise<IntegrationProviderStatus>;
   timedOut: boolean;
-}
-
-interface ProviderCommitJournal {
-  readonly version: 1;
-  readonly integrationId: string;
-  readonly providerId: string;
 }
 
 function validateProviderStatus(value: unknown): IntegrationProviderStatus {
@@ -597,31 +670,18 @@ function operationError(
   return new IntegrationOperationError({ code, message });
 }
 
-const TRANSIENT_LOCK_CODES = new Set(["EBUSY", "EPERM", "EACCES"]);
-
 /**
- * Windows antivirus and search indexers briefly lock a file that was just written. A commit
- * journal that cannot be removed faults its provider on every launch, so ride out that lock.
+ * A fault reason for logs. Only host messages and messages a provider marked public are kept;
+ * other errors log their name or system code, since raw messages can carry paths or remote text.
  */
-async function removeFileThroughTransientLocks(path: string): Promise<void> {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await NodeFSP.rm(path, { force: true });
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (attempt >= 5 || code === undefined || !TRANSIENT_LOCK_CODES.has(code)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, attempt * 50));
-    }
-  }
-}
-
-/** A fault reason for logs: system errors by code only, since their messages carry paths. */
 function faultReason(error: unknown): string {
   if (!(error instanceof Error)) return "Unknown failure.";
   const code = (error as NodeJS.ErrnoException).code;
   if (typeof code === "string") return `${error.name} (${code})`;
-  const message = error.message.trim() || error.name;
+  const message =
+    error instanceof ProviderOperationTimeoutError
+      ? error.message
+      : providerPublicMessage(error, error.name);
   return message.length > 200 ? `${message.slice(0, 199)}…` : message;
 }
 
@@ -637,6 +697,10 @@ function cancellationError(signal: AbortSignal): Error {
     : new Error("Integration tool invocation was cancelled.");
 }
 
+function overdueProviderDetail(pluginName: string): string {
+  return `${pluginName} is still finishing an earlier request that did not finish in time. It becomes available again when that request ends or after Harness restarts.`;
+}
+
 function providerPublicMessage(error: unknown, fallback: string): string {
   return error instanceof Error &&
     "_tag" in error &&
@@ -644,6 +708,20 @@ function providerPublicMessage(error: unknown, fallback: string): string {
     error.message.trim()
     ? error.message
     : fallback;
+}
+
+/**
+ * Only success proves an admitted write settled, so any other failure leaves its outcome unknown.
+ * The plugin stays usable; the agent gets the plugin's own explanation and is told to check first.
+ */
+function unknownWriteOutcomeMessage(toolName: string, pluginName: string, error: unknown): string {
+  const check =
+    "read the record back to check whether the change happened before you retry or adjust the request.";
+  if (error instanceof ProviderOperationTimeoutError) {
+    return `${toolName} may or may not have made its change. ${pluginName} did not finish in time. It becomes available again when that change finishes; then ${check}`;
+  }
+  const said = providerPublicMessage(error, "");
+  return `${toolName} may or may not have made its change. Before you retry or adjust the request, read the record back to check whether the change happened. ${pluginName} ${said ? `said: ${said}` : "did not confirm the outcome."}`;
 }
 
 function assertCurrentPackageVersion(
@@ -673,7 +751,7 @@ function capabilityNames(manifest: IntegrationManifest, ids: ReadonlyArray<strin
  * The refusal, if any, that the persisted install state alone imposes on a tool: not installed,
  * a version that does not match the catalog, disabled, or none of its capabilities selected.
  */
-export function persistedToolUnavailability(
+function persistedToolUnavailability(
   manifest: IntegrationManifest,
   tool: IntegrationManifest["tools"][number],
   installed: InstalledIntegrationState | undefined,
@@ -827,7 +905,9 @@ async function validateStagedPackage(root: string, expected: IntegrationManifest
     installed.provider !== expected.provider ||
     JSON.stringify(installed.capabilities) !== JSON.stringify(expected.capabilities) ||
     JSON.stringify(installed.tools) !== JSON.stringify(expected.tools) ||
-    JSON.stringify(installed.skills) !== JSON.stringify(expected.skills)
+    JSON.stringify(installed.skills) !== JSON.stringify(expected.skills) ||
+    JSON.stringify(installed.serviceEnvironments ?? null) !==
+      JSON.stringify(expected.serviceEnvironments ?? null)
   ) {
     throw new Error("The staged manifest changed after discovery.");
   }
@@ -890,7 +970,6 @@ async function packageTreeDigest(root: string): Promise<string> {
 export class RegistryRuntime {
   readonly #root: string;
   readonly #statePath: string;
-  readonly #commitJournalRoot: string;
   readonly #catalog = new Map<string, IntegrationPackage>();
   #state: PersistedIntegrationState = EMPTY_STATE;
   #ready: Promise<void>;
@@ -918,7 +997,8 @@ export class RegistryRuntime {
   readonly #activeStatusChecks = new Set<AbortController>();
   readonly #activeStatusWork = new Set<Promise<IntegrationProviderStatus>>();
   readonly #providerStatusAttempts = new Map<IntegrationProvider, ProviderStatusAttempt>();
-  readonly #faultedProviders = new Set<IntegrationProvider>();
+  /** Providers whose operation passed its deadline and has not settled yet. */
+  readonly #overdueProviders = new Set<IntegrationProvider>();
   readonly #activeInvocationWork = new Set<Promise<unknown>>();
   readonly #activeInvocationCompletions = new Set<Promise<void>>();
   readonly #activeInvocationCompletionsByIntegration = new Map<string, Set<Promise<void>>>();
@@ -931,6 +1011,10 @@ export class RegistryRuntime {
   readonly #activeProviderCommitWork = new Map<IntegrationProvider, Set<Promise<unknown>>>();
   readonly #providerPreparationWork = new Map<IntegrationProvider, Promise<void>>();
   readonly #providerLastPreparedAt = new Map<IntegrationProvider, number>();
+  /** When a provider last allowed a write for each plugin before dispatching it to MCP. */
+  readonly #pluginWritesAllowedAt = new Map<string, number>();
+  /** Switches in progress per plugin (queued ones included), from their start until they settle. */
+  readonly #serviceEnvironmentSwitches = new Map<string, number>();
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
   readonly #providerSummaryRefreshWork = new Map<IntegrationProvider, Set<Promise<void>>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
@@ -948,7 +1032,6 @@ export class RegistryRuntime {
   ) {
     this.#root = root;
     this.#statePath = NodePath.join(root, "state.json");
-    this.#commitJournalRoot = NodePath.join(root, "commit-journal");
     this.#skills = skills;
     this.#removeInstalledPackage = removeInstalledPackage;
     this.#providerStatusTimeoutMs =
@@ -1006,7 +1089,7 @@ export class RegistryRuntime {
         !hasConnectionLifecycle(provider)
       ) {
         throw new Error(
-          `Provider ${provider.id} must implement connect and disconnect to recover write admission faults.`,
+          `Provider ${provider.id} must implement connect and disconnect to offer write tools.`,
         );
       }
       if (
@@ -1150,11 +1233,9 @@ export class RegistryRuntime {
     await NodeFSP.rm(stagingRoot, { recursive: true, force: true });
     for (const integration of this.#catalog.values()) {
       const { manifest } = integration;
-      // Only this reviewed included plugin starts on. Manifest capability defaults alone
-      // never install another integration, and an explicit removal always wins.
-      // Migration policy: this new package ID has no previously shipped uninstall history.
-      // Legacy state without an installed record or removal marker means first appearance;
-      // old state cannot distinguish an unpublished experimental removal from no install.
+      // Only this reviewed included plugin starts enabled; capability defaults install nothing.
+      // Explicit removal wins. For this new package ID, absent install/removal records mean
+      // first appearance; unpublished experimental removals cannot be inferred from legacy state.
       const installed =
         ownRecordValue(this.#state.installed, manifest.id) ??
         (manifest.id === "ucsd-assistant" && !this.#state.uninstalled?.includes(manifest.id)
@@ -1259,7 +1340,7 @@ export class RegistryRuntime {
   async #load(): Promise<void> {
     await ensureManagedDirectory(this.#root);
     await Promise.all(
-      ["installed", ".trash", ".staging", "commit-journal"].map((name) =>
+      ["installed", ".trash", ".staging"].map((name) =>
         ensureManagedDirectory(NodePath.join(this.#root, name)),
       ),
     );
@@ -1283,6 +1364,9 @@ export class RegistryRuntime {
         version: installed.version,
         enabled: installed.enabled,
         enabledCapabilities: [...selectedCapabilityIds(manifest, installed)].toSorted(),
+        ...(installed.serviceEnvironment !== undefined
+          ? { serviceEnvironment: installed.serviceEnvironment }
+          : {}),
       };
       capabilityMigrationRequired = true;
     }
@@ -1292,7 +1376,7 @@ export class RegistryRuntime {
     await this.#reconcileRemovals();
     await this.#pruneOrphanedInstalledPackages();
     await this.#reconcileInstalledCatalogPackages();
-    await this.#loadProviderCommitJournals();
+    await this.#clearLegacyCommitJournals();
     await this.#skills.reconcileCatalog(new Set(this.#catalog.keys()));
     const trashRoot = NodePath.join(this.#root, ".trash");
     try {
@@ -1304,71 +1388,24 @@ export class RegistryRuntime {
     );
   }
 
-  #commitJournalPath(integrationId: string): string {
-    return NodePath.join(this.#commitJournalRoot, `${integrationId}.json`);
-  }
-
-  async #writeProviderCommitJournal(integrationId: string, providerId: string): Promise<void> {
-    await atomicJson(this.#commitJournalPath(integrationId), {
-      version: 1,
-      integrationId,
-      providerId,
-    } satisfies ProviderCommitJournal);
-  }
-
-  async #clearProviderCommitJournal(integrationId: string): Promise<void> {
-    await removeFileThroughTransientLocks(this.#commitJournalPath(integrationId));
-    if ((await lstatOrNull(this.#commitJournalRoot)) !== null) {
-      await syncDirectory(this.#commitJournalRoot);
-    }
-  }
-
-  async #providerCommitJournalExists(integrationId: string): Promise<boolean> {
-    return (await lstatOrNull(this.#commitJournalPath(integrationId))) !== null;
-  }
-
-  async #loadProviderCommitJournals(): Promise<void> {
-    const entries = await NodeFSP.readdir(this.#commitJournalRoot, { withFileTypes: true }).catch(
-      (error) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-        throw error;
-      },
-    );
-    for (const entry of entries) {
-      const path = NodePath.join(this.#commitJournalRoot, entry.name);
-      if (entry.isFile() && entry.name.endsWith(".tmp")) {
-        await NodeFSP.rm(path, { force: true });
-        continue;
-      }
-      if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".json")) {
-        throw new Error("Integration provider commit journal contains an unsupported entry.");
-      }
-      const value = JSON.parse(await NodeFSP.readFile(path, "utf8")) as unknown;
-      if (!value || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error(`Invalid provider commit journal ${entry.name}.`);
-      }
-      const journal = value as Record<string, unknown>;
-      const integrationId = entry.name.slice(0, -".json".length);
-      if (
-        !hasOnlyKeys(journal, new Set(["version", "integrationId", "providerId"])) ||
-        journal.version !== 1 ||
-        journal.integrationId !== integrationId ||
-        !isIntegrationId(integrationId) ||
-        !isIntegrationId(journal.providerId)
-      ) {
-        throw new Error(`Invalid provider commit journal ${entry.name}.`);
-      }
-      const integration = this.#catalog.get(integrationId);
-      if (!integration?.provider) continue;
-      if (integration.provider.id !== journal.providerId) {
-        throw new Error(`Provider commit journal ${entry.name} does not match the fixed catalog.`);
-      }
-      this.#faultedProviders.add(integration.provider);
+  /**
+   * Older builds kept a journal per unsettled write and locked that plugin on every launch until
+   * the user reset it. Record each one as a fault, then delete them all.
+   */
+  async #clearLegacyCommitJournals(): Promise<void> {
+    const journalRoot = NodePath.join(this.#root, "commit-journal");
+    const entries = await NodeFSP.readdir(journalRoot).catch(() => []);
+    for (const name of entries) {
+      const integrationId = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+      if (!isIntegrationId(integrationId)) continue;
       this.#reportProviderFault(
         integrationId,
-        "A commit from an earlier session never settled; reset the connection to recover.",
+        "A change from an earlier session never confirmed its outcome; it may or may not have happened.",
       );
     }
+    await NodeFSP.rm(journalRoot, { recursive: true, force: true, maxRetries: 4 }).catch(
+      () => undefined,
+    );
   }
 
   async #pruneOrphanedInstalledPackages(): Promise<void> {
@@ -1530,8 +1567,7 @@ export class RegistryRuntime {
         : new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
               const integration = this.#catalog.get(id);
-              const provider = integration?.provider;
-              if (provider) this.#faultProvider(provider, new ProviderOperationTimeoutError());
+              this.#reportProviderFault(id, faultReason(new ProviderOperationTimeoutError()));
               reject(
                 operationError(
                   "operation_failed",
@@ -1620,8 +1656,10 @@ export class RegistryRuntime {
         ? Promise.resolve()
         : new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
-              const provider = this.#catalog.get(manifest.id)?.provider;
-              if (provider) this.#faultProvider(provider, new ProviderOperationTimeoutError());
+              this.#reportProviderFault(
+                manifest.id,
+                faultReason(new ProviderOperationTimeoutError()),
+              );
               reject(
                 operationError(
                   "operation_failed",
@@ -1694,49 +1732,40 @@ export class RegistryRuntime {
     try {
       this.#onProviderFault?.({ integrationId, reason });
     } catch {
-      // Fault reporting is diagnostic and must never change fault handling.
+      // Fault reporting is diagnostic and must never change the operation it observes.
     }
   }
 
-  #faultProvider(provider: IntegrationProvider, cause?: unknown): void {
-    if (this.#faultedProviders.has(provider)) return;
-    this.#faultedProviders.add(provider);
-    for (const { manifest, provider: registeredProvider } of this.#catalog.values()) {
-      if (registeredProvider !== provider) continue;
-      this.#reportProviderFault(manifest.id, faultReason(cause));
-      this.#summaryGenerations.set(
-        manifest.id,
-        (this.#summaryGenerations.get(manifest.id) ?? 0) + 1,
-      );
-      for (const controller of this.#activeInvocations.get(manifest.id) ?? []) {
-        controller.abort();
-      }
-      for (const { name } of manifest.tools) this.#availableTools.delete(name);
-      const summary = this.#summaries.get(manifest.id);
-      if (summary) {
-        this.#summaries.set(manifest.id, {
-          ...summary,
-          connectionState: "error",
-          accountLabel: null,
-          statusMessage: "The integration provider is faulted. Reset its connection to recover.",
-          capabilities: summary.capabilities.map((capability) => ({
-            ...capability,
-            granted: false,
-            available: false,
-          })),
-          tools: summary.tools.map((tool) => ({ ...tool, available: false })),
-          skills: summary.skills.map((skill) => ({ ...skill, available: false })),
-        });
-      }
-      this.#publishAvailabilityChangeIfNeeded();
-      const cleanup = this.#syncSkills({
-        integrationId: manifest.id,
-        packageRoot: null,
-        activeSkills: [],
-      });
-      void cleanup.catch(() => undefined);
-      return;
+  #recordProviderFault(provider: IntegrationProvider, cause: unknown): void {
+    for (const { manifest, provider: registered } of this.#catalog.values()) {
+      if (registered === provider) this.#reportProviderFault(manifest.id, faultReason(cause));
     }
+  }
+
+  /** Why a provider with unsettled work refuses calls; a hung one must not promise "shortly". */
+  #settlingDetail(
+    manifest: IntegrationManifest,
+    provider: IntegrationProvider | undefined,
+    fallback: string,
+  ): string {
+    return provider && this.#overdueProviders.has(provider)
+      ? overdueProviderDetail(manifest.name)
+      : fallback;
+  }
+
+  /** Bind a provider operation to the plugin's currently selected service environment. */
+  #serviceEnvironmentContext(provider: IntegrationProvider): {
+    readonly serviceEnvironment?: string;
+  } {
+    for (const { manifest, provider: registered } of this.#catalog.values()) {
+      if (registered !== provider) continue;
+      const serviceEnvironment = selectedServiceEnvironmentId(
+        manifest,
+        ownRecordValue(this.#state.installed, manifest.id),
+      );
+      return serviceEnvironment === undefined ? {} : { serviceEnvironment };
+    }
+    return {};
   }
 
   #invalidateProviderStatus(provider: IntegrationProvider): void {
@@ -1750,7 +1779,6 @@ export class RegistryRuntime {
     parentSignal?: AbortSignal,
   ): Promise<IntegrationProviderStatus> {
     if (this.#closing) throw new Error("The integration provider status check was cancelled.");
-    if (this.#faultedProviders.has(provider)) throw new ProviderFaultedError();
     const pending = this.#providerStatusAttempts.get(provider);
     if (pending) return this.#awaitProviderStatus(pending, parentSignal);
 
@@ -1777,7 +1805,10 @@ export class RegistryRuntime {
         if (controller.signal.aborted || this.#closing) {
           throw new Error("The integration provider status check was cancelled.");
         }
-        return provider.status({ signal: controller.signal });
+        return provider.status({
+          signal: controller.signal,
+          ...this.#serviceEnvironmentContext(provider),
+        });
       })
       .then(validateProviderStatus);
     this.#activeStatusWork.add(statusWork);
@@ -1833,21 +1864,17 @@ export class RegistryRuntime {
   async #providerOperation<A>(
     provider: IntegrationProvider,
     operation: (context: IntegrationLifecycleContext) => Promise<A>,
-    options: { readonly allowFaulted?: boolean; readonly signal?: AbortSignal } = {},
+    options: { readonly signal?: AbortSignal } = {},
   ): Promise<A> {
     if (this.#closing) {
       throw new Error("The integration provider operation was cancelled.");
     }
-    if (this.#faultedProviders.has(provider) && !options.allowFaulted) {
-      throw new ProviderFaultedError();
-    }
     if (this.#activeProviderLifecycleWork.has(provider)) {
       throw new Error("The integration provider operation is still settling.");
     }
-    const integration = [...this.#catalog.values()].find(
-      ({ provider: candidate }) => candidate === provider,
-    );
-    if (!integration) throw new Error("Integration provider is not registered.");
+    if (![...this.#catalog.values()].some(({ provider: candidate }) => candidate === provider)) {
+      throw new Error("Integration provider is not registered.");
+    }
     this.#invalidateProviderStatus(provider);
     const controller = new AbortController();
     this.#activeLifecycleControllers.add(controller);
@@ -1865,17 +1892,12 @@ export class RegistryRuntime {
     let commitStarted = false;
     const commitController = new AbortController();
     let rejectOperation: (error: Error) => void = () => undefined;
-    let commitAdmission: Promise<AbortSignal> | null = null;
-    let preAdmissionCancelled = false;
-    const operationDeadline = Date.now() + this.#providerOperationTimeoutMs;
-    let timeout = setTimeout(
-      () => {
-        timedOut = true;
-        if (!commitAdmission) this.#faultProvider(provider, new ProviderOperationTimeoutError());
-        controller.abort();
-      },
-      Math.max(0, operationDeadline - Date.now()),
-    );
+    let timeout = setTimeout(() => {
+      timedOut = true;
+      this.#overdueProviders.add(provider);
+      if (!commitStarted) this.#recordProviderFault(provider, new ProviderOperationTimeoutError());
+      controller.abort();
+    }, this.#providerOperationTimeoutMs);
     let commitAbortTimeout: ReturnType<typeof setTimeout> | undefined;
     let removeAbortListener: () => void = () => undefined;
     const aborted = new Promise<never>((_resolve, reject) => {
@@ -1901,86 +1923,44 @@ export class RegistryRuntime {
       }
       return operation({
         signal: controller.signal,
-        beginCommit: () => {
-          if (commitAdmission) return commitAdmission;
+        ...this.#serviceEnvironmentContext(provider),
+        beginCommit: async () => {
+          if (commitStarted) return commitController.signal;
           if (controller.signal.aborted || this.#closing) {
-            return Promise.reject(new Error("The integration provider operation was cancelled."));
+            throw new Error("The integration provider operation was cancelled.");
           }
-          commitAdmission = (async () => {
-            const preserveJournal = await this.#providerCommitJournalExists(
-              integration.manifest.id,
-            );
-            if (controller.signal.aborted || this.#closing) {
-              preAdmissionCancelled = true;
-              throw new Error("The integration provider operation was cancelled.");
-            }
-            try {
-              await this.#writeProviderCommitJournal(integration.manifest.id, provider.id);
-            } catch (error) {
-              if (!controller.signal.aborted && !this.#closing) throw error;
-              if (!preserveJournal) {
-                try {
-                  await this.#clearProviderCommitJournal(integration.manifest.id);
-                } catch (cleanupError) {
-                  this.#faultProvider(provider, cleanupError);
-                  throw cleanupError;
-                }
-              }
-              preAdmissionCancelled = true;
-              throw new Error("The integration provider operation was cancelled.", {
-                cause: error,
-              });
-            }
-            if (controller.signal.aborted || this.#closing) {
-              if (!preserveJournal) {
-                try {
-                  await this.#clearProviderCommitJournal(integration.manifest.id);
-                } catch (error) {
-                  this.#faultProvider(provider, error);
-                  throw error;
-                }
-              }
-              preAdmissionCancelled = true;
-              throw new Error("The integration provider operation was cancelled.");
-            }
-            commitStarted = true;
-            clearTimeout(timeout);
-            this.#committingLifecycleControllers.add(controller);
-            const commits = this.#activeProviderCommitWork.get(provider) ?? new Set();
-            commits.add(work);
-            this.#activeProviderCommitWork.set(provider, commits);
-            void work.then(
-              () => {
-                commits.delete(work);
-                if (commits.size === 0) this.#activeProviderCommitWork.delete(provider);
-              },
-              () => {
-                commits.delete(work);
-                if (commits.size === 0) this.#activeProviderCommitWork.delete(provider);
-              },
-            );
-            const abortHeadroomMs = Math.min(
-              250,
-              Math.max(1, Math.floor(this.#providerOperationTimeoutMs / 10)),
-            );
-            commitAbortTimeout = setTimeout(
-              () => commitController.abort(),
-              Math.max(0, this.#providerOperationTimeoutMs - abortHeadroomMs),
-            );
-            timeout = setTimeout(() => {
-              timedOut = true;
-              const timeoutError = new ProviderOperationTimeoutError();
-              this.#faultProvider(provider, timeoutError);
-              rejectOperation(timeoutError);
-            }, this.#providerOperationTimeoutMs);
-            return commitController.signal;
-          })();
-          return commitAdmission;
+          commitStarted = true;
+          clearTimeout(timeout);
+          this.#committingLifecycleControllers.add(controller);
+          const commits = this.#activeProviderCommitWork.get(provider) ?? new Set();
+          commits.add(work);
+          this.#activeProviderCommitWork.set(provider, commits);
+          const forgetCommit = () => {
+            commits.delete(work);
+            if (commits.size === 0) this.#activeProviderCommitWork.delete(provider);
+          };
+          void work.then(forgetCommit, forgetCommit);
+          const abortHeadroomMs = Math.min(
+            250,
+            Math.max(1, Math.floor(this.#providerOperationTimeoutMs / 10)),
+          );
+          commitAbortTimeout = setTimeout(
+            () => commitController.abort(),
+            Math.max(0, this.#providerOperationTimeoutMs - abortHeadroomMs),
+          );
+          timeout = setTimeout(() => {
+            timedOut = true;
+            this.#overdueProviders.add(provider);
+            const timeoutError = new ProviderOperationTimeoutError();
+            this.#recordProviderFault(provider, timeoutError);
+            rejectOperation(timeoutError);
+          }, this.#providerOperationTimeoutMs);
+          return commitController.signal;
         },
       });
     });
-    // Waiters must observe finalization, not the already-settled provider promise:
-    // journal cleanup can still need I/O after the external operation returns.
+    // Waiters must observe finalization, not the already-settled provider promise, so the work
+    // stays tracked (and blocks overlapping operations) until it has truly finished.
     let resolveSettlement!: () => void;
     const settlement = new Promise<void>((resolve) => {
       resolveSettlement = resolve;
@@ -1999,7 +1979,10 @@ export class RegistryRuntime {
       this.#activeLifecycleWork.delete(settlement);
       providerWork.delete(settlement);
       resolveSettlement();
-      if (providerWork.size === 0) this.#activeProviderLifecycleWork.delete(provider);
+      if (providerWork.size === 0) {
+        this.#activeProviderLifecycleWork.delete(provider);
+        this.#overdueProviders.delete(provider);
+      }
       this.#activeLifecycleControllers.delete(controller);
       this.#committingLifecycleControllers.delete(controller);
       this.#invalidateProviderStatus(provider);
@@ -2010,52 +1993,12 @@ export class RegistryRuntime {
     };
     void work.then(workSettled, workSettled);
     try {
-      const result = await Promise.race([work, aborted]);
-      if (commitAdmission) await commitAdmission;
-      if (commitStarted) {
-        clearTimeout(timeout);
-        try {
-          await this.#clearProviderCommitJournal(integration.manifest.id);
-        } catch (error) {
-          this.#faultProvider(provider, error);
-          throw error;
-        }
-      }
-      return result;
+      return await Promise.race([work, aborted]);
     } catch (error) {
-      let commitAdmissionDrainTimedOut = false;
-      if (commitAdmission) {
-        try {
-          await this.#waitForClosePhase(
-            Promise.allSettled([commitAdmission, work]).then(() => undefined),
-            operationDeadline,
-          );
-        } catch {
-          commitAdmissionDrainTimedOut = true;
-        }
-      }
-      // A provider that proves the external service refused the commit settles it like a
-      // success: nothing changed, so there is no ambiguous outcome to reset.
-      if (
-        commitStarted &&
-        !commitAdmissionDrainTimedOut &&
-        !timedOut &&
-        !this.#faultedProviders.has(provider) &&
-        isUnchangedProviderError(error)
-      ) {
-        try {
-          await this.#clearProviderCommitJournal(integration.manifest.id);
-        } catch (clearError) {
-          this.#faultProvider(provider, clearError);
-          throw clearError;
-        }
-        throw error;
-      }
-      // Otherwise success is the only generic proof that an admitted external commit settled. A
-      // provider rejection may be ambiguous even when it returns promptly, so retain the durable
-      // journal and require the verified disconnect/reset path to clear it.
-      if (commitAdmission && (commitAdmissionDrainTimedOut || !preAdmissionCancelled)) {
-        this.#faultProvider(provider, error);
+      // Only success proves an admitted commit settled. Record the unknown outcome; the caller
+      // reports it, and the provider stays available for the next status check or call.
+      if (commitStarted && !timedOut && !isUnchangedProviderError(error)) {
+        this.#recordProviderFault(provider, error);
       }
       throw error;
     } finally {
@@ -2091,15 +2034,8 @@ export class RegistryRuntime {
   }
 
   /**
-   * Refresh credentials for connected integrations that no tool call has touched recently.
-   *
-   * Providers only renew inside `prepare`, which runs on invocation, so an integration nobody
-   * calls never rotates its credential. Remote grants with a finite refresh-token lifetime
-   * expire on exactly that silence and send the user back through a browser sign-in. Touching
-   * an idle provider keeps the grant rolling without waiting for someone to use it.
-   *
-   * Opportunistic by design: a provider that cannot refresh right now reports through its own
-   * status, and the next real invocation surfaces it.
+   * Refresh idle credentials via prepare so finite-lived remote grants keep rotating.
+   * Failures remain opportunistic: provider status and the next invocation surface them.
    */
   async refreshIdleCredentials(options: {
     readonly idleThresholdMs: number;
@@ -2119,16 +2055,11 @@ export class RegistryRuntime {
         // n8n 1.1.0 is the first shipped bundle with durable rotation and bounded cleanup.
         // Keep an older Installer composition from activating background refresh prematurely.
         if (manifest.id === "n8n" && compareSemverVersions(manifest.version, "1.1.0") < 0) return;
-        if (this.#faultedProviders.has(provider)) return;
         if (this.#activeProviderLifecycleWork.has(provider)) return;
         if (this.#summaries.get(manifest.id)?.connectionState === "error") {
           await this.#summarize(integration).catch(() => undefined);
           if (this.#closing || options.signal?.aborted || this.#isRevoking(manifest.id)) return;
-          if (
-            this.#faultedProviders.has(provider) ||
-            this.#activeProviderLifecycleWork.has(provider)
-          )
-            return;
+          if (this.#activeProviderLifecycleWork.has(provider)) return;
         }
         if (this.#summaries.get(manifest.id)?.connectionState !== "connected") return;
         const lastPreparedAt = this.#providerLastPreparedAt.get(provider);
@@ -2151,11 +2082,19 @@ export class RegistryRuntime {
   #refreshSummaryAfterProviderSettlement(
     integration: IntegrationPackage,
     provider: IntegrationProvider,
+    options: { readonly adoptGrants?: boolean } = {},
   ): void {
     const active = [...(this.#activeProviderLifecycleWork.get(provider) ?? [])];
     const refresh = Promise.allSettled(active)
       .then(async () => {
-        if (!this.#closing) await this.#summarize(integration);
+        if (this.#closing) return;
+        if (options.adoptGrants) {
+          // Serialized so a disconnect or environment switch cannot interleave with the adoption.
+          await this.#serializeIntegration(integration.manifest.id, () =>
+            this.#adoptProviderAuthorizedCapabilities(integration).catch(() => undefined),
+          );
+        }
+        await this.#summarize(integration);
       })
       .catch(() => undefined);
     this.#activeSummaryRefreshWork.add(refresh);
@@ -2228,6 +2167,16 @@ export class RegistryRuntime {
         ),
         available: dependencyCapabilityIds(skill).some(available),
       })),
+      ...(manifest.serviceEnvironments
+        ? {
+            serviceEnvironments: manifest.serviceEnvironments.map((environment) => ({
+              id: environment.id,
+              displayName: environment.displayName,
+              description: environment.description,
+              selected: environment.id === selectedServiceEnvironmentId(manifest, installed),
+            })),
+          }
+        : {}),
     };
   }
 
@@ -2299,7 +2248,7 @@ export class RegistryRuntime {
             accountLabel: null,
             grantedCapabilities: [],
             message:
-              error instanceof ProviderStatusTimeoutError || error instanceof ProviderFaultedError
+              error instanceof ProviderStatusTimeoutError
                 ? error.message
                 : "The integration provider could not report its status.",
           };
@@ -2421,12 +2370,13 @@ export class RegistryRuntime {
         const provider = this.#catalog.get(manifest.id)?.provider;
         if (
           this.#isRevoking(manifest.id) ||
-          (provider &&
-            (this.#faultedProviders.has(provider) ||
-              this.#activeProviderLifecycleWork.has(provider)))
+          (provider && this.#activeProviderLifecycleWork.has(provider))
         ) {
           return {
             ...current,
+            ...(provider && this.#overdueProviders.has(provider)
+              ? { statusMessage: overdueProviderDetail(manifest.name) }
+              : {}),
             capabilities: current.capabilities.map((capability) => ({
               ...capability,
               available: false,
@@ -2478,12 +2428,14 @@ export class RegistryRuntime {
     if (this.#closing) throw operationError("disabled", "Integration registry is closing.");
     await this.#ready;
     if (this.#closing) throw operationError("disabled", "Integration registry is closing.");
-    const integrations = await Promise.all(
+    await Promise.all(
       [...this.#catalog.values()].map((integration) =>
         this.#serializeIntegration(integration.manifest.id, () => this.#summarize(integration)),
       ),
     );
-    return { integrations };
+    // Return the state as of now, not each summary as captured while slower plugins were still
+    // reporting; an environment switch can complete in between.
+    return this.#cachedList();
   }
 
   list(): Promise<IntegrationsListResult> {
@@ -2538,10 +2490,9 @@ export class RegistryRuntime {
     }
     const { manifest, provider } = integration;
     const toolCapabilities = dependencyCapabilityIds(tool);
-    const faulted = provider ? this.#faultedProviders.has(provider) : false;
     const revoking = this.#isSurfaceRevoking(manifest, toolCapabilities);
     const settling = provider ? this.#activeProviderLifecycleWork.has(provider) : false;
-    if (this.#availableTools.has(name) && !revoking && !faulted && !settling) {
+    if (this.#availableTools.has(name) && !revoking && !settling) {
       return { available: true };
     }
     const unavailable = (reason: IntegrationToolUnavailableReason, detail: string) =>
@@ -2551,18 +2502,16 @@ export class RegistryRuntime {
     if (refusal) return refusal;
     const selected = selectedCapabilityIds(manifest, installed);
     const selectedToolCapabilities = toolCapabilities.filter((id) => selected.has(id));
-    if (faulted) {
-      return unavailable(
-        "faulted",
-        `${manifest.name} is unavailable until its connection is reset in ${PLUGIN_SETTINGS}.`,
-      );
-    }
     if (revoking) {
       return unavailable("revoking", `${manifest.name} access is being revoked.`);
     }
     const changing = unavailable(
       "connection_changing",
-      `${manifest.name} is refreshing its connection. Try again shortly.`,
+      this.#settlingDetail(
+        manifest,
+        provider,
+        `${manifest.name} is refreshing its connection. Try again shortly.`,
+      ),
     );
     if (settling) return changing;
     const summary = this.#summaries.get(manifest.id);
@@ -2589,8 +2538,8 @@ export class RegistryRuntime {
   /**
    * Like `toolAvailabilitySync`, but waits out transient provider work (a shared credential
    * refresh, a write commit) before deciding, and re-samples a stale cached summary once when no
-   * such work remains. Bounded by the provider operation timeout, which also bounds that work,
-   * and by the caller's signal and registry shutdown.
+   * such work remains. Bounded by the provider operation timeout (overdue work can outlast it),
+   * the caller's signal, and registry shutdown.
    */
   async awaitToolAvailability(
     name: string,
@@ -2655,11 +2604,7 @@ export class RegistryRuntime {
     for (const { manifest, provider } of this.#catalog.values()) {
       const declaredSkill = manifest.skills.find((skill) => skill.name === name);
       if (!declaredSkill) continue;
-      if (
-        provider &&
-        (this.#faultedProviders.has(provider) || this.#activeProviderLifecycleWork.has(provider))
-      )
-        return false;
+      if (provider && this.#activeProviderLifecycleWork.has(provider)) return false;
       if (this.#isSurfaceRevoking(manifest, dependencyCapabilityIds(declaredSkill))) return false;
       return (
         this.#summaries
@@ -2710,6 +2655,53 @@ export class RegistryRuntime {
     return this.toolDefinitions().filter(({ name }) => this.isToolAvailableSync(name));
   }
 
+  /**
+   * Records that a provider is about to dispatch this plugin write (see PLUGIN_WRITE_SETTLE_MS).
+   * Returns false while the plugin's environment is switching; the provider must refuse the write
+   * then. This and a switch's start run one at a time, so an allowed write blocks a later switch.
+   */
+  notePluginWriteAllowed(toolName: string, now = Date.now()): boolean {
+    for (const { manifest } of this.#catalog.values()) {
+      if (!manifest.serviceEnvironments) continue;
+      if (!manifest.tools.some((tool) => tool.name === toolName && tool.effect === "write"))
+        continue;
+      if ((this.#serviceEnvironmentSwitches.get(manifest.id) ?? 0) > 0) return false;
+      this.#pluginWritesAllowedAt.set(manifest.id, now);
+      return true;
+    }
+    return true;
+  }
+
+  #assertPluginWritesSettled(manifest: IntegrationManifest): void {
+    const allowedAt = this.#pluginWritesAllowedAt.get(manifest.id);
+    if (allowedAt === undefined || Date.now() - allowedAt >= PLUGIN_WRITE_SETTLE_MS) return;
+    throw operationError(
+      "operation_failed",
+      `${manifest.name} is starting a change you just approved. Try switching again in a few seconds.`,
+    );
+  }
+
+  /**
+   * For a tool whose plugin offers service environments, the environment a call would reach now,
+   * labeled for approval prompts (for example "n8n Dev"). Undefined for single-environment plugins.
+   */
+  toolServiceEnvironmentSync(
+    name: string,
+  ): { readonly id: string; readonly label: string } | undefined {
+    for (const { manifest } of this.#catalog.values()) {
+      if (!manifest.tools.some((tool) => tool.name === name)) continue;
+      const id = selectedServiceEnvironmentId(
+        manifest,
+        ownRecordValue(this.#state.installed, manifest.id),
+      );
+      const environment = manifest.serviceEnvironments?.find((candidate) => candidate.id === id);
+      return environment
+        ? { id: environment.id, label: `${manifest.name} ${environment.displayName}` }
+        : undefined;
+    }
+    return undefined;
+  }
+
   toolRequiresApprovalSync(name: string): boolean {
     return [...this.#catalog.values()].some(({ manifest }) =>
       manifest.tools.some((tool) => tool.name === name && tool.effect === "write"),
@@ -2718,8 +2710,7 @@ export class RegistryRuntime {
 
   getAvailableSkillsSync(): ReadonlyArray<IntegrationRuntimeSkill> {
     if (this.#closing) return [];
-    return [...this.#catalog.values()].flatMap(({ manifest, provider }) => {
-      if (provider && this.#faultedProviders.has(provider)) return [];
+    return [...this.#catalog.values()].flatMap(({ manifest }) => {
       const installed = ownRecordValue(this.#state.installed, manifest.id);
       const summary = this.#summaries.get(manifest.id);
       if (!installed || !summary) return [];
@@ -2865,16 +2856,13 @@ export class RegistryRuntime {
       await this.#ready;
       await revocation?.ready;
       const integration = this.#package(id);
-      const { manifest, provider } = integration;
+      const { manifest } = integration;
       const installed = ownRecordValue(this.#state.installed, id);
       if (!installed) throw operationError("not_installed", `Integration ${id} is not installed.`);
       assertCurrentPackageVersion(manifest, installed.version);
       try {
         if (!enabled) {
           await this.#syncSkills({ integrationId: id, packageRoot: null, activeSkills: [] });
-          if (provider && !hasConnectionLifecycle(provider)) {
-            this.#faultedProviders.delete(provider);
-          }
         }
         await this.#updateState((state) => ({
           ...state,
@@ -2965,6 +2953,9 @@ export class RegistryRuntime {
         version: installed.version,
         enabled: installed.enabled,
         enabledCapabilities: [...enabledCapabilities].toSorted(),
+        ...(installed.serviceEnvironment !== undefined
+          ? { serviceEnvironment: installed.serviceEnvironment }
+          : {}),
       };
       try {
         await this.#updateState((state) => ({
@@ -2999,6 +2990,108 @@ export class RegistryRuntime {
     return revocation ? result.finally(revocation.finish) : result;
   }
 
+  /**
+   * Switch which service environment (such as Prod or Dev) a plugin uses. Each environment keeps
+   * its own connection inside the provider, so switching never signs the user out of the other.
+   * In-flight tool calls stop first, the same as for connect and disconnect.
+   */
+  setServiceEnvironment(id: string, serviceEnvironment: string): Promise<IntegrationsListResult> {
+    const registered = this.#catalog.get(id);
+    if (!registered) {
+      return Promise.reject(operationError("not_found", `Integration ${id} was not found.`));
+    }
+    const environments = registered.manifest.serviceEnvironments;
+    if (!environments) {
+      return Promise.reject(
+        operationError(
+          "invalid_input",
+          `${registered.manifest.name} does not offer service environments.`,
+        ),
+      );
+    }
+    if (!environments.some(({ id: candidate }) => candidate === serviceEnvironment)) {
+      return Promise.reject(
+        operationError(
+          "not_found",
+          `${registered.manifest.name} has no ${serviceEnvironment} environment.`,
+        ),
+      );
+    }
+    try {
+      this.#assertPluginWritesSettled(registered.manifest);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    // From here until the switch settles, providers refuse new writes for this plugin.
+    this.#serviceEnvironmentSwitches.set(id, (this.#serviceEnvironmentSwitches.get(id) ?? 0) + 1);
+    const revocation = this.#beginRevocation(id);
+    const operation = this.#serializeIntegration(id, async () => {
+      await this.#ready;
+      await revocation.ready;
+      const integration = this.#package(id);
+      const { manifest, provider } = integration;
+      const installed = ownRecordValue(this.#state.installed, id);
+      if (!installed) throw operationError("not_installed", `Integration ${id} is not installed.`);
+      assertCurrentPackageVersion(manifest, installed.version);
+      if (selectedServiceEnvironmentId(manifest, installed) === serviceEnvironment) {
+        await this.#summarize(integration);
+        return;
+      }
+      if (provider && this.#activeProviderLifecycleWork.has(provider)) {
+        throw operationError(
+          "operation_failed",
+          `${manifest.name} is still finishing a connection change. Try again in a moment.`,
+        );
+      }
+      const next: InstalledIntegrationState = { ...installed, serviceEnvironment };
+      try {
+        await this.#updateState((state) => ({
+          ...state,
+          installed: { ...state.installed, [id]: next },
+        }));
+        if (provider) {
+          this.#invalidateProviderStatus(provider);
+          this.#providerLastPreparedAt.delete(provider);
+        }
+      } catch (error) {
+        let rollbackFailure: unknown;
+        try {
+          await this.#updateState((state) => ({
+            ...state,
+            installed: { ...state.installed, [id]: installed },
+          }));
+        } catch (rollbackError) {
+          rollbackFailure = rollbackError;
+        }
+        await this.#summarize(integration).catch(() => undefined);
+        if (rollbackFailure !== undefined) {
+          throw operationError(
+            "operation_failed",
+            `Environment change failed and its rollback could not be persisted: ${safeMessage(error)} Rollback failure: ${safeMessage(rollbackFailure)}`,
+          );
+        }
+        throw operationError(
+          "operation_failed",
+          `Environment change was rolled back: ${safeMessage(error)}`,
+        );
+      }
+      // Read and Write are chosen during each environment's own sign-in. Follow the newly
+      // selected environment's grant; availability still requires that grant either way.
+      await this.#adoptProviderAuthorizedCapabilities(this.#package(id)).catch(() => undefined);
+      await this.#summarize(this.#package(id));
+    });
+    // Build the returned list only after the switch's revocation ends; a list taken while it is
+    // still active shows every capability and tool as unavailable.
+    return operation
+      .finally(() => {
+        const remaining = (this.#serviceEnvironmentSwitches.get(id) ?? 1) - 1;
+        if (remaining > 0) this.#serviceEnvironmentSwitches.set(id, remaining);
+        else this.#serviceEnvironmentSwitches.delete(id);
+        revocation.finish();
+      })
+      .then(() => this.#cachedList());
+  }
+
   /** Compatibility for pre-capability callers; the referenced Access bundle remains authoritative. */
   async setSkillEnabled(
     id: string,
@@ -3020,6 +3113,21 @@ export class RegistryRuntime {
     return this.setCapabilityEnabled(id, capabilities[0]!, enabled);
   }
 
+  /**
+   * After a failed sign-in the provider's status decides: an unclear commit may have landed, so
+   * once its work settles, adopt the grants it reports, as a successful sign-in would.
+   */
+  async #refreshAfterFailedSignIn(id: string, provider: IntegrationProvider): Promise<void> {
+    if (this.#activeProviderLifecycleWork.has(provider)) {
+      this.#refreshSummaryAfterProviderSettlement(this.#package(id), provider, {
+        adoptGrants: true,
+      });
+      return;
+    }
+    await this.#adoptProviderAuthorizedCapabilities(this.#package(id)).catch(() => undefined);
+    await this.#summarize(this.#package(id)).catch(() => undefined);
+  }
+
   connect(
     id: string,
     submission?: IntegrationConnectionSubmission,
@@ -3036,6 +3144,12 @@ export class RegistryRuntime {
       if (!installed.enabled) {
         throw operationError("disabled", `Enable ${manifest.name} before connecting.`);
       }
+      assertExpectedServiceEnvironment(
+        manifest,
+        installed,
+        context?.expectedServiceEnvironment,
+        "sign-in",
+      );
       if (!hasConnectionLifecycle(provider)) {
         throw operationError("operation_failed", `${manifest.name} does not require a connection.`);
       }
@@ -3071,11 +3185,7 @@ export class RegistryRuntime {
         await this.#summarize(this.#package(id));
         return result;
       } catch (error) {
-        if (this.#activeProviderLifecycleWork.has(provider)) {
-          this.#refreshSummaryAfterProviderSettlement(this.#package(id), provider);
-        } else {
-          await this.#summarize(this.#package(id)).catch(() => undefined);
-        }
+        await this.#refreshAfterFailedSignIn(id, provider);
         throw operationError(
           "operation_failed",
           providerPublicMessage(
@@ -3121,6 +3231,7 @@ export class RegistryRuntime {
         }
         return { ...result, integration: await this.#summarize(this.#package(id)) };
       } catch (error) {
+        await this.#refreshAfterFailedSignIn(id, provider);
         throw operationError(
           "operation_failed",
           providerPublicMessage(
@@ -3145,18 +3256,19 @@ export class RegistryRuntime {
       if (!hasConnectionLifecycle(provider)) {
         throw operationError("operation_failed", `${manifest.name} does not have a connection.`);
       }
+      assertExpectedServiceEnvironment(
+        manifest,
+        ownRecordValue(this.#state.installed, id),
+        context?.expectedServiceEnvironment,
+        "disconnect",
+      );
       try {
         await this.#syncSkills({ integrationId: id, packageRoot: null, activeSkills: [] });
         await this.#providerOperation(
           provider,
           (providerContext) => provider.disconnect(providerContext),
-          {
-            allowFaulted: true,
-            ...(context ? { signal: context.signal } : {}),
-          },
+          context ? { signal: context.signal } : {},
         );
-        await this.#clearProviderCommitJournal(id);
-        this.#faultedProviders.delete(provider);
         this.#providerLastPreparedAt.delete(provider);
         await this.#summarize(integration);
       } catch (error) {
@@ -3188,13 +3300,7 @@ export class RegistryRuntime {
       try {
         await this.#syncSkills({ integrationId: id, packageRoot: null, activeSkills: [] });
         if (hasConnectionLifecycle(provider)) {
-          await this.#providerOperation(provider, (context) => provider.disconnect(context), {
-            allowFaulted: true,
-          });
-          await this.#clearProviderCommitJournal(id);
-          this.#faultedProviders.delete(provider);
-        } else if (provider) {
-          this.#faultedProviders.delete(provider);
+          await this.#providerOperation(provider, (context) => provider.disconnect(context));
         }
       } catch (error) {
         await this.#summarize(integration).catch(() => undefined);
@@ -3435,12 +3541,6 @@ export class RegistryRuntime {
       if (!provider) {
         throw operationError("not_found", `Integration tool ${name} has no provider.`);
       }
-      if (this.#faultedProviders.has(provider)) {
-        throw operationError(
-          "operation_failed",
-          `${manifest.name} is unavailable until its connection is reset.`,
-        );
-      }
       const toolCapabilities = dependencyCapabilityIds(tool);
       if (this.#isSurfaceRevoking(manifest, toolCapabilities)) {
         throw operationError("disabled", `${manifest.name} access is being revoked.`);
@@ -3449,6 +3549,14 @@ export class RegistryRuntime {
       if (!installed?.enabled) {
         throw operationError("disabled", `${manifest.name} is not enabled.`);
       }
+      // Checked synchronously before this call registers as active work: a later switch then
+      // revokes it, and an earlier one is caught here.
+      assertExpectedServiceEnvironment(
+        manifest,
+        installed,
+        context?.expectedServiceEnvironment,
+        `${tool.displayName}`,
+      );
       if (tool.effect === "write" && context?.writeApproved !== true) {
         throw operationError(
           "operation_failed",
@@ -3469,7 +3577,11 @@ export class RegistryRuntime {
       ) {
         throw operationError(
           "operation_failed",
-          `${manifest.name} is unavailable while its connection is changing.`,
+          this.#settlingDetail(
+            manifest,
+            provider,
+            `${manifest.name} is unavailable while its connection is changing.`,
+          ),
         );
       }
       const controller = new AbortController();
@@ -3496,7 +3608,11 @@ export class RegistryRuntime {
         if (this.#activeProviderLifecycleWork.has(provider)) {
           throw operationError(
             "operation_failed",
-            `${manifest.name} is unavailable while its connection is changing.`,
+            this.#settlingDetail(
+              manifest,
+              provider,
+              `${manifest.name} is unavailable while its connection is changing.`,
+            ),
           );
         }
         const status = await this.#providerStatus(provider, signal);
@@ -3543,7 +3659,6 @@ export class RegistryRuntime {
           );
         }
         const invokeProvider = (providerContext?: IntegrationLifecycleContext) => {
-          if (this.#faultedProviders.has(provider)) throw new ProviderFaultedError();
           if (
             signal.aborted ||
             this.#closing ||
@@ -3558,6 +3673,7 @@ export class RegistryRuntime {
             tool.effect === "write" && providerContext
               ? {
                   signal: providerContext.signal,
+                  ...this.#serviceEnvironmentContext(provider),
                   writeApproved: true,
                   beginCommit: async () => {
                     const commitSignal = await providerContext.beginCommit();
@@ -3567,16 +3683,32 @@ export class RegistryRuntime {
                 }
               : {
                   signal,
+                  ...this.#serviceEnvironmentContext(provider),
                   extractDocumentText: (request: DocumentTextRequest) =>
                     this.#documentText(request, signal),
                 },
           );
         };
-        const invocationWork = Promise.resolve().then(() =>
-          tool.effect === "write"
+        const invocationWork = Promise.resolve().then(() => {
+          // Nothing may overlap a write or credential change still in flight, and a read must not
+          // observe one. Only reads may run beside a shared credential refresh.
+          if (
+            this.#activeProviderLifecycleWork.has(provider) &&
+            (tool.effect === "write" || !this.#providerPreparationWork.has(provider))
+          ) {
+            throw operationError(
+              "operation_failed",
+              this.#settlingDetail(
+                manifest,
+                provider,
+                `${manifest.name} is finishing another change. Try again shortly.`,
+              ),
+            );
+          }
+          return tool.effect === "write"
             ? this.#providerOperation(provider, invokeProvider, { signal })
-            : invokeProvider(),
-        );
+            : invokeProvider();
+        });
         this.#activeInvocationWork.add(invocationWork);
         void invocationWork.then(
           () => this.#activeInvocationWork.delete(invocationWork),
@@ -3584,15 +3716,9 @@ export class RegistryRuntime {
         );
         const result = await invocationWork;
         if (tool.effect === "write" && !writeCommitAdmitted) {
-          let journalFailure: unknown;
-          try {
-            await this.#writeProviderCommitJournal(manifest.id, provider.id);
-          } catch (error) {
-            journalFailure = error;
-          }
-          const admissionError = new ProviderWriteAdmissionError(journalFailure);
-          this.#faultProvider(provider, admissionError);
-          throw admissionError;
+          // The plugin skipped beginCommit, a contract violation worth recording. Its result is
+          // still its account of the write; dropping it would invite a duplicate retry.
+          this.#reportProviderFault(manifest.id, "A write returned without commit admission.");
         }
         if (controller.signal.aborted && !writeCommitAdmitted) {
           throw operationError("disabled", `${manifest.name} access was revoked.`);
@@ -3602,19 +3728,13 @@ export class RegistryRuntime {
         try {
           return normalizeIntegrationToolResult(result);
         } catch (error) {
-          // The provider has already returned and an admitted write may already be externally
-          // committed. Omit its unusable result without reporting that completed mutation as a
-          // failed call or faulting the provider. Read-result contract failures still reject.
-          if (writeCommitAdmitted) return INTEGRATION_TOOL_RESULT_OMITTED;
+          // The provider has already returned and the write may already be externally committed.
+          // Omit its unusable result rather than report a completed mutation as a failed call.
+          // Read-result contract failures still reject.
+          if (tool.effect === "write") return INTEGRATION_TOOL_RESULT_OMITTED;
           throw error;
         }
       } catch (error) {
-        if (error instanceof ProviderWriteAdmissionError) {
-          throw operationError(
-            "operation_failed",
-            `${manifest.name} returned a write result without commit admission and is unavailable until its connection is reset.`,
-          );
-        }
         if (controller.signal.aborted && !writeCommitAdmitted) {
           throw operationError("disabled", `${manifest.name} access was revoked.`);
         }
@@ -3626,19 +3746,24 @@ export class RegistryRuntime {
             `${manifest.name} did not become ready before the status timeout.`,
           );
         }
-        if (
-          error instanceof ProviderStatusContractError ||
-          error instanceof ProviderFaultedError ||
-          this.#faultedProviders.has(provider)
-        ) {
+        if (error instanceof ProviderStatusContractError) {
           throw operationError(
             "operation_failed",
-            error instanceof ProviderStatusContractError
-              ? `${manifest.name} returned an invalid provider status.`
-              : writeCommitAdmitted
-                ? // Only success proves an admitted write settled, so a rejection is ambiguous.
-                  `${tool.displayName} may have completed. Verify its result before retrying; ${manifest.name} is unavailable until its connection is reset.`
-                : `${manifest.name} is unavailable until its connection is reset.`,
+            `${manifest.name} returned an invalid provider status.`,
+          );
+        }
+        if (writeCommitAdmitted && !isUnchangedProviderError(error)) {
+          throw operationError(
+            "operation_failed",
+            unknownWriteOutcomeMessage(tool.displayName, manifest.name, error),
+          );
+        }
+        if (error instanceof ProviderOperationTimeoutError) {
+          throw operationError(
+            "operation_failed",
+            tool.effect === "write"
+              ? `${manifest.name} did not respond in time, before ${tool.displayName} started its change. Try again.`
+              : `${manifest.name} did not respond in time. Try again.`,
           );
         }
         throw error;
@@ -3797,7 +3922,7 @@ export const startupLayer = Layer.effectDiscard(
             await registry.list();
           },
           catch: () => undefined,
-        }).pipe(Effect.catch(() => Effect.void)),
+        }).pipe(Effect.ignore),
       ),
       Effect.forkScoped,
     );

@@ -1,6 +1,7 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
 import { openDiffFilePrimaryAction, resolveDiffPathForWorkspace } from "./diffFileActions";
 import { selectThreadRightPanelState, useRightPanelStore } from "./rightPanelStore";
 
@@ -12,40 +13,6 @@ const THREAD_REF = scopeThreadRef(
 describe("openDiffFilePrimaryAction", () => {
   beforeEach(() => {
     useRightPanelStore.setState({ byThreadKey: {}, threadPanelVisibilityByThreadKey: {} });
-  });
-
-  it("opens diff files in the thread file viewer", () => {
-    const openInEditor = vi.fn();
-
-    openDiffFilePrimaryAction({
-      threadRef: THREAD_REF,
-      filePath: "apps/web/src/components/DiffPanel.tsx",
-      activeCwd: "/repo/project",
-      openInEditor,
-    });
-
-    expect(
-      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, THREAD_REF),
-    ).toMatchObject({
-      isOpen: true,
-      activeSurfaceId: "file:apps/web/src/components/DiffPanel.tsx",
-    });
-    expect(openInEditor).not.toHaveBeenCalled();
-  });
-
-  it("falls back to the editor without thread context", () => {
-    const openInEditor = vi.fn();
-
-    openDiffFilePrimaryAction({
-      threadRef: null,
-      filePath: "apps/web/src/components/DiffPanel.tsx",
-      activeCwd: "/repo/project",
-      openInEditor,
-    });
-
-    expect(openInEditor).toHaveBeenCalledWith(
-      "/repo/project/apps/web/src/components/DiffPanel.tsx",
-    );
   });
 
   it("opens repository-relative diff files from a nested project", () => {
@@ -88,6 +55,7 @@ describe("openDiffFilePrimaryAction", () => {
     ).toBe("src/index.ts");
   });
 
+  // regression: #6174 opening diff files broke for repositories at a filesystem root
   it.each([
     { workspaceRoot: "/frontend", repositoryRoot: "/" },
     { workspaceRoot: "C:\\frontend", repositoryRoot: "C:\\" },

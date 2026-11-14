@@ -54,10 +54,17 @@ tool. Choosing **Always allow this session** or Full access skips later prompts 
 The Registry passes that approval only to declared write tools and runs each write through the same
 bounded commit-admission machinery used by provider lifecycle mutations. A write provider must call
 `beginCommit()` immediately before its external mutation and use the returned commit-tail signal.
-After admission, cancellation cannot replace a settled write receipt with a false failure; an
-ambiguous admitted write retains the durable provider journal and faults the connection until reset.
-Production write providers therefore require a connection lifecycle whose disconnect path can clear
-that fault; the current stateless-provider support is read-only.
+After admission, cancellation cannot replace a settled write receipt with a false failure.
+
+A plugin error never locks the plugin. Recovery would mean a reset, and resetting deletes saved API
+keys and sign-ins. An admitted write that fails without proving nothing changed has an unknown
+outcome. The agent gets an error that says so, includes the plugin's own message (bounded to 1,024
+characters), and tells it to read the record back before it retries or adjusts the request. The
+plugin stays connected. Harness never retries a write itself, so each retry goes through the same
+approval policy.
+A provider proves a refusal with `IntegrationProviderPublicError` and `unchanged: true`, or for SDK
+plugins with `details.committed === false`. Harness records unknown outcomes, timeouts, and contract
+violations as `integrations.provider.fault` warnings. Stateless-provider support remains read-only.
 
 The Harness-specific manifest name is intentional. These packages are curated, server-executed
 Harness components rather than user-installable Codex marketplace plugins. Their `skills/`
@@ -188,6 +195,31 @@ system-browser button before the secure key field. A successful API-key submissi
 extend the union with their own secure submission contract and rendering instead of pretending to
 use another flow's fields.
 
+Host contract level 3 adds service environments. A plugin whose service has more than one
+deployment, such as n8n Prod and Dev, lists two to four `serviceEnvironments` (`id`, `displayName`,
+`description`) in its manifest; the first is the default. Settings → Plugins shows them as a
+segmented control above the connection row. The user's choice is saved per plugin in `state.json` as
+`serviceEnvironment`, and every provider call (`status`, `prepare`, `connect`, `poll`, `disconnect`,
+and `invoke`) receives it as `context.serviceEnvironment`. The provider keeps a separate connection
+for each environment, so switching never signs the user out of the other one. Switching stops the
+plugin's in-flight tool calls and then follows the selected environment's sign-in grant for
+provider-authorized abilities such as Read and Write. Only the user can switch; there is no
+agent tool for it. Switching stops polling a sign-in still pending in the previous environment, and
+level-3 providers cancel such sign-ins when the next operation arrives for the new environment.
+Connect and disconnect requests carry the environment the client showed, and the registry refuses
+them if the selection has changed. "Allow for this session" for such a write applies to that
+environment only, on both the Codex and Claude providers. Codex plugin writes also carry the
+environment they were approved for, and the registry refuses them if the selection changed before
+they started. Claude allows a write in its permission callback and sends it to MCP afterwards
+without that binding, so Harness instead holds the plugin's environment: while a switch is in
+progress, Claude's plugin writes are refused ("ask again once the switch finishes"), and for 15
+seconds after Claude is allowed such a write, switching is refused ("try again in a few seconds").
+The hold expires after 15 seconds, so a Claude call delayed longer than that is not covered, and
+writes Claude's own Auto classifier allows without Harness's callback start no hold. The idle
+credential keepalive refreshes only the selected environment, so a sign-in left unused for longer
+than the service's refresh-token lifetime may need to reconnect. Hosts below level 3 refuse such
+plugins.
+
 Some providers only issue confidential OAuth clients that require a client secret on every token
 request (UCSD Jira Data Center is one). That secret cannot ship in Harness, because configuration
 embedded in a desktop build is extractable. Such a provider registers a private HTTPS relay as its
@@ -217,8 +249,8 @@ abilities; opt-in abilities never become active from provider scopes alone.
 
 Disable, disconnect, and internal removal immediately revoke new tool and skill admission, abort
 active tool work, and wait for its cleanup before their serialized lifecycle mutation runs. If tool
-work does not drain within the revocation deadline, the provider is faulted and credential or state
-mutation does not begin. Disconnect preserves the installed package and its
+work does not drain within the revocation deadline, the request fails without changing credentials
+or state, and the user can try again once the work stops. Disconnect preserves the installed package and its
 preferences. Provider-authorized abilities cannot be toggled through the capability RPC; changing
 them requires disconnecting and completing the provider's sign-in flow again. Removal remains a
 migration/recovery primitive rather than a public RPC in the fixed catalog product. It first
@@ -229,32 +261,35 @@ deterministically.
 Provider status checks have a host timeout and receive an abort signal, so one unhealthy provider
 cannot block startup, listing, or task creation indefinitely. Providers may implement `prepare` to
 restore ephemeral invocation state, such as an OAuth access token, from persisted credentials. The
-Harness coalesces concurrent preparation, journals any admitted credential commit, and runs it before
+Harness coalesces concurrent preparation, bounds any admitted credential commit, and runs it before
 tool status and invocation checks. MCP and Codex task cancellation is propagated through Registry to
 provider work. Connection lifecycle work is bounded and abortable.
-Immediately before its final external commit, a provider must await `beginCommit()`. The host first
-writes a durable commit journal and rechecks cancellation, then admits only the provider's narrow,
-internally bounded commit tail under a fresh watchdog. Admission returns a commit-tail signal that
-aborts shortly before the watchdog, and providers must pass it to fallible storage or network work
-so mutations stop before the host reports a timeout. Cancellation or timeout before admission wins.
-Only a settled success clears the journal. Any provider rejection, crash, or watchdog expiry leaves
-it in place, so both the current process and the next start fail closed rather than trusting a generic
-recovery claim or guessing whether credentials committed. A verified disconnect clears the uncertain
-credential state and journal; it cannot run concurrently with any still-settling lifecycle call in
-the same process.
+Immediately before its final external commit, a provider must await `beginCommit()`. The host
+rechecks cancellation, then admits only the provider's narrow, internally bounded commit tail under a
+fresh watchdog. Admission returns a commit-tail signal that aborts shortly before the watchdog, and
+providers must pass it to fallible storage or network work so mutations stop before the host reports
+a timeout. Cancellation or timeout before admission wins. Only a settled success proves the commit
+happened; a rejection or watchdog expiry is reported as an unknown outcome and never locks the
+provider. Until the provider's work actually settles, Harness refuses overlapping operations and
+reads for that provider, so a read-back cannot observe a half-finished change, and tools report
+`connection_changing`. Work that overran its deadline says so in that refusal and in Settings,
+instead of promising it clears shortly. Afterwards the next status check decides whether the
+provider is connected, and a failed sign-in adopts whatever grants that status reports. Older builds left `commit-journal/` files that locked a plugin on every launch; startup
+records each one as a fault and deletes them.
 
 Shutdown never calls `close` concurrently with admitted commit work. It first closes providers that
 have no admitted commit, boundedly waits only for protected commit promises, closes the newly safe
-providers, and then drains remaining work. It reports failure if any phase cannot settle. Providers
-that cross a lifecycle boundary remain unavailable until their connection is reset, preventing a
-late mutating call from overlapping a retry. Included providers must honor their `AbortSignal`;
-forcibly terminating arbitrary in-process code requires a future process-isolation boundary.
-Authenticated providers must make credential transitions transactional: a rejected or cancelled
-connect/poll operation cannot leave a newly active credential. Provider work should complete in
-memory before one serialized final commit. If a provider cannot prove that a credential commit or
-rollback settled, it must expose an error state with no capabilities until a verified reset. Registry
-shutdown aborts outstanding non-committing provider work, boundedly drains admitted commit tails,
-and then invokes each safe provider's optional idempotent `close` hook.
+providers, and then drains remaining work. It reports failure if any phase cannot settle. Included
+providers must honor their `AbortSignal`; forcibly terminating arbitrary in-process code requires a
+future process-isolation boundary. Authenticated providers must make credential transitions
+transactional: a rejected or cancelled connect/poll operation cannot leave a newly active credential.
+Provider work should complete in memory before one serialized final commit. A provider whose stored
+credential is actually unusable reports an error or `not_connected` status, so the user reconnects;
+that is a real sign-in problem, not a lock after an unclear write. After an unclear credential
+commit, a provider should re-check its stored credential on the next status check rather than refuse
+calls until the user disconnects. Registry shutdown aborts
+outstanding non-committing provider work, boundedly drains admitted commit tails, and then invokes
+each safe provider's optional idempotent `close` hook.
 
 Bundled skills are materialized into each configured Codex home only while their plugin, connection,
 and at least one referenced capability are active. Ownership markers prevent a plugin

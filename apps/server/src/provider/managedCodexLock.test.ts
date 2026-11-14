@@ -45,6 +45,7 @@ const success = (version = ""): ProcessRunOutput => ({
   stderrInvalidUtf8: false,
 });
 
+// regression: #426 fix(provider): recover interrupted Codex updates and coordinate sessions
 it.layer(NodeServices.layer)("managed Codex activation ownership", (it) => {
   it.effect.each(["release", "admission error"])(
     "preserves the caller's outcome when lease cleanup is locked during %s",

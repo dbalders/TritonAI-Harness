@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
+
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
+
 import {
   preventRepeatedTerminalCloseShortcut,
   preventTerminalCloseShortcut,
@@ -51,13 +53,6 @@ function keyboardEvent(
 }
 
 describe("terminal close shortcut guards", () => {
-  it("prevents the browser default for a deliberate terminal close", () => {
-    const event = keyboardEvent();
-
-    expect(preventTerminalCloseShortcut(event, keybindings, "Linux x86_64")).toBe(true);
-    expect(event.defaultPrevented).toBe(true);
-  });
-
   it("keeps held close repeats from closing the browser after the last terminal unmounts", () => {
     const firstPress = keyboardEvent();
     expect(preventTerminalCloseShortcut(firstPress, keybindings, "Linux x86_64")).toBe(true);

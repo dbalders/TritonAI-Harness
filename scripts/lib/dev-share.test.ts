@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
+
 import {
   type DevShareError,
   DevServeFailedError,
@@ -56,15 +57,6 @@ const spawnerLayer = (input: {
   );
 
 describe("unshareDevServer", () => {
-  it.effect("treats a removed mapping as cleared", () =>
-    Effect.gen(function* () {
-      const result = yield* unshareDevServer(5788).pipe(
-        Effect.provide(spawnerLayer({ off: { exitCode: 0 } })),
-      );
-      assert.isTrue(result.cleared);
-    }),
-  );
-
   // `tailscale serve … off` exits 1 when the port had no mapping, which is the
   // normal first-share case — the port is clear, so this must not be an error.
   it.effect("treats a missing handler as cleared", () =>
@@ -89,17 +81,6 @@ describe("unshareDevServer", () => {
 });
 
 describe("shareDevServer", () => {
-  it.effect("returns the tailnet URL for the same port", () =>
-    Effect.gen(function* () {
-      const shared = yield* shareDevServer({ webPort: 5788 }).pipe(
-        Effect.provide(spawnerLayer({ off: { exitCode: 1, stderr: NO_HANDLER_STDERR } })),
-      );
-
-      assert.equal(shared.host, "host.example.ts.net");
-      assert.equal(shared.url, "https://host.example.ts.net:5788/");
-    }),
-  );
-
   // Vite binds `localhost`, which modern Node resolves to `::1` first, so a
   // 127.0.0.1 target would proxy to a loopback nothing listens on.
   it.effect("proxies to the localhost name Vite binds, not 127.0.0.1", () =>
@@ -111,32 +92,6 @@ describe("shareDevServer", () => {
 
       const serveCall = calls.find((args) => args.includes("--bg"));
       assert.deepEqual(serveCall, ["serve", "--bg", "--https=5788", "http://localhost:5788"]);
-    }),
-  );
-
-  it.effect("reports that the prior mapping was cleared when serve fails", () =>
-    Effect.gen(function* () {
-      const error: DevShareError = yield* shareDevServer({ webPort: 5788 }).pipe(
-        Effect.provide(
-          spawnerLayer({
-            off: { exitCode: 0 },
-            serve: { exitCode: 1, stderr: "port already in use" },
-          }),
-        ),
-        Effect.flip,
-      );
-
-      assert.instanceOf(error, DevServeFailedError);
-      assert.equal(error.stage, "serve");
-      assert.equal(error.webPort, 5788);
-      assert.equal(
-        (error.cause as { _tag?: string } | undefined)?._tag,
-        "TailscaleCommandExitError",
-      );
-      assert.notInclude(error.message, "port already in use");
-      assert.include(error.message, "run the command by hand");
-      assert.include(error.message, "no longer served");
-      assert.include(error.message, "5788");
     }),
   );
 

@@ -6,6 +6,7 @@ import {
   type EnvironmentId,
   type ServerConfig,
 } from "@t3tools/contracts";
+
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentScope } from "../../state/session";
 import { ENVIRONMENT_MACHINE_KIND_LABELS, EnvironmentMachineIcon } from "../EnvironmentMachineIcon";

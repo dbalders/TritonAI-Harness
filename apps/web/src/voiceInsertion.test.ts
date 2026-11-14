@@ -3,7 +3,6 @@ import { insertVoiceTranscript } from "./voiceInsertion";
 
 describe("insertVoiceTranscript", () => {
   it.each([
-    ["Summarize this", "and include risks", "Summarize this and include risks"],
     ["Summarize this ", "  and include risks  ", "Summarize this and include risks"],
     ["Summarize this\n", "and include risks", "Summarize this\nand include risks"],
     ["", "  New draft  ", "New draft"],

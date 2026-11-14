@@ -1,11 +1,7 @@
 // @effect-diagnostics globalDate:off - thread times are shown in host-local time.
 /**
- * Markdown for the general memory vault.
- *
- * Notes use Obsidian wiki links so the vault opens cleanly in Obsidian, but
- * everything is plain Markdown that any editor or agent can read. The model
- * only supplies prose; links, thread lists, and file names are built here so
- * they always point at real notes.
+ * Keep notes plain Markdown with Obsidian wiki links. The model writes prose;
+ * code owns filenames and links so references always identify real notes.
  */
 import type { DailyMemoryGenerationResult } from "../textGeneration/TextGeneration.ts";
 

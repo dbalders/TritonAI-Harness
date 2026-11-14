@@ -54,13 +54,12 @@ export function scopeIntegrationSecretStore(
   const get = (suffix: string) =>
     scopedName(suffix).pipe(
       Effect.flatMap(({ canonical, legacy }) =>
-        store
-          .get(canonical)
-          .pipe(
-            Effect.flatMap((value) =>
-              Option.isSome(value) || legacy === null ? Effect.succeed(value) : store.get(legacy),
-            ),
+        store.get(canonical).pipe(
+          Effect.filterOrElse(
+            (value) => Option.isSome(value) || legacy === null,
+            () => store.get(legacy!),
           ),
+        ),
       ),
     );
 

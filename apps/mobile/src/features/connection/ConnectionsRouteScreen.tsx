@@ -1,3 +1,4 @@
+import { PullRequestRoutingSettings } from "./PullRequestRoutingSettings";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 
@@ -10,7 +11,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { LocalEnvironmentList } from "./LocalEnvironmentList";
-import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
+
 import { UcsdAccountSettings } from "./UcsdAccountSettings";
 
 export function ConnectionsRouteScreen() {
@@ -73,7 +74,7 @@ export function ConnectionsRouteScreen() {
             <UcsdAccountSettings environmentId={environmentId} />
           )}
         />
-        <GitHubRoutingSettings />
+        <PullRequestRoutingSettings />
       </ScrollView>
     </View>
   );

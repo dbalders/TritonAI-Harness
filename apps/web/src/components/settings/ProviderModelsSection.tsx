@@ -1,5 +1,3 @@
-"use client";
-
 import { ArrowDownIcon, ArrowUpIcon, PencilIcon, PlusIcon, StarIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -56,9 +54,7 @@ function describeModelCapabilities(model: ServerProviderModel): string[] {
   return labels;
 }
 
-export function groupModelsForDisplay<
-  T extends { readonly slug: string; readonly isCustom: boolean },
->(
+function groupModelsForDisplay<T extends { readonly slug: string; readonly isCustom: boolean }>(
   models: ReadonlyArray<T>,
   options: {
     readonly favoriteModels: ReadonlySet<string>;
@@ -79,7 +75,7 @@ export function groupModelsForDisplay<
   ];
 }
 
-export function nextHiddenModelsForBulkToggle(
+function nextHiddenModelsForBulkToggle(
   models: ReadonlyArray<Pick<ServerProviderModel, "slug" | "isCustom">>,
   hiddenModels: ReadonlyArray<string>,
 ): string[] {
@@ -173,8 +169,7 @@ export function ProviderModelsSection({
     row.scrollIntoView({ block: "nearest" });
   });
 
-  // CustomModelEditor keys its option list on this array. Derived after the effect and
-  // checked against `hiddenModels` rather than the set built above it, so it stays cached.
+  // Derive after the effect and use hiddenModels directly to preserve the editor's option-array cache.
   const builtInModels = models.filter((model) => !model.isCustom);
   const allBuiltInModelsHidden =
     builtInModels.length > 0 && builtInModels.every((model) => hiddenModels.includes(model.slug));
@@ -340,7 +335,8 @@ export function ProviderModelsSection({
             type="button"
             size="xs"
             variant="ghost-muted"
-            className="ml-auto"
+            // The ghost padding would inset the label from the column edge the toggles align to.
+            className="ml-auto redesign:-me-2"
             onClick={() => setIsAdding(true)}
           >
             <PlusIcon className="size-3" />
@@ -437,8 +433,6 @@ export function ProviderModelsSection({
   );
 }
 
-// A row gets its flags as primitives and handlers that never change, so toggling,
-// starring or moving one model re-renders that row and leaves the others cached.
 function ProviderModelRow({
   model,
   isHidden,
@@ -608,8 +602,7 @@ function ProviderModelRow({
           </>
         ) : null}
       </span>
-      {/* The trigger is a wrapper span: a disabled switch gets no pointer events,
-          so it could not open the tooltip itself. */}
+      {/* Disabled switches receive no pointer events; wrap the tooltip trigger. */}
       <Tooltip>
         <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
           <Switch

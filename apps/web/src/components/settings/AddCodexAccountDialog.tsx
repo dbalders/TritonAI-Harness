@@ -17,7 +17,10 @@ import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { WizardFooter, WizardHeader, WizardPanel, WizardPopup } from "../ui/wizard";
+import { MultipleAccountsNote } from "./MultipleAccountsNote";
 import { SettingsRow } from "./settingsLayout";
+
+const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 
 export function AddCodexAccountDialog({
   environmentId,
@@ -51,7 +54,6 @@ export function AddCodexAccountDialog({
     if (pending || !name.trim() || !readEnvironmentScope(environmentId, AuthProvidersManageScope))
       return;
     setPending(true);
-    // The ID is routing identity; the name is editable and need not be unique.
     const id = ProviderInstanceId.make(`codex_${randomUUID()}`);
     const result = await update({
       environmentId,
@@ -60,7 +62,7 @@ export function AddCodexAccountDialog({
           providerInstances: {
             ...settings.providerInstances,
             [id]: {
-              driver: ProviderDriverKind.make("codex"),
+              driver: CODEX_DRIVER_KIND,
               displayName,
               enabled: true,
               config: { enabled: true, setupMode: "managed" },
@@ -102,6 +104,7 @@ export function AddCodexAccountDialog({
           ) : (
             <form
               id="add-codex-account"
+              className="grid gap-3"
               onSubmit={(event) => {
                 event.preventDefault();
                 void createAccount();
@@ -120,6 +123,7 @@ export function AddCodexAccountDialog({
                   />
                 }
               />
+              <MultipleAccountsNote environmentId={environmentId} driver={CODEX_DRIVER_KIND} />
             </form>
           )}
         </WizardPanel>

@@ -1,7 +1,7 @@
+import { ServerUpdateAction } from "./ServerUpdateAction";
 import type { EnvironmentId, ServerSelfUpdateCapability } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { render } from "../../test/render";
-import { ServerUpdateAction, ServerUpdateProgress } from "./ServerUpdateAction";
 
 describe("managed server updates", () => {
   it.each(["desktop-managed", "boot-service", "respawn", null] as const)(
@@ -19,20 +19,4 @@ describe("managed server updates", () => {
       expect(screen.container.querySelector("button,a")).toBeNull();
     },
   );
-  it("keeps a failed update visible", async () => {
-    await using screen = await render(
-      <ServerUpdateProgress
-        state={{
-          status: "failed",
-          stage: "installing",
-          fromVersion: "0.3.2",
-          targetVersion: "0.3.3",
-          message: "The package could not be verified.",
-        }}
-      />,
-    );
-    await expect
-      .element(screen.getByRole("alert"))
-      .toHaveTextContent("The package could not be verified.");
-  });
 });

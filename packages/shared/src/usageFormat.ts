@@ -1,5 +1,6 @@
 // @effect-diagnostics globalDate:off -- Usage windows are calendar days in the viewer's zone, derived from wall-clock "now" via Intl.
 import { UsageDay, type UsageResolution, type UsageSummaryInput } from "@t3tools/contracts";
+
 import type { UsageContractMismatch } from "./usageMerge.ts";
 
 const CURRENCY = new Intl.NumberFormat("en-US", {
@@ -114,7 +115,7 @@ export function enumerateHourStarts(sinceTime: string, untilTime: string): reado
 }
 
 function hourOptions(hour12: boolean): Intl.DateTimeFormatOptions {
-  return hour12 ? { hour: "numeric" } : { hour: "2-digit", hourCycle: "h23" };
+  return hour12 ? { hour: "numeric" } : { hour: "2-digit", minute: "2-digit", hourCycle: "h23" };
 }
 
 function formatHour(formatter: Intl.DateTimeFormat, date: Date, hour12: boolean): string {
@@ -122,7 +123,7 @@ function formatHour(formatter: Intl.DateTimeFormat, date: Date, hour12: boolean)
   // Rolling buckets can start between whole hours, but their labels always name the hour.
   return formatter
     .formatToParts(date)
-    .map((part) => (part.type === "hour" ? `${part.value}:00` : part.value))
+    .map((part) => (part.type === "minute" ? "00" : part.value))
     .join("");
 }
 
@@ -238,9 +239,7 @@ export function makeWindow(
       untilTime: untilTime.toISOString(),
     };
   }
-  // Subtracting fixed milliseconds from `now` lands on the wrong calendar day
-  // around a DST transition. The window start is pure calendar arithmetic on
-  // the local end day, done in UTC where days are uniform.
+  // Use calendar arithmetic in UTC; fixed millisecond subtraction crosses DST days incorrectly.
   const [year = 0, month = 1, dayOfMonth = 1] = untilDay
     .split("-")
     .map((part) => Number.parseInt(part, 10));

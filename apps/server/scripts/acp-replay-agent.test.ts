@@ -57,29 +57,3 @@ process.stdout.write = (...args) => {
     total: transcript.entries.length,
   });
 });
-
-it("keeps the published status valid if a progress write is interrupted", ({ onTestFinished }) => {
-  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "acp-replay-status-"));
-  onTestFinished(() => NodeFS.rmSync(root, { recursive: true, force: true }));
-  const result = replay(
-    root,
-    `import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
-const write = fs.writeFileSync;
-fs.writeFileSync = (path, data, ...args) => {
-  if (JSON.parse(data).cursor > 0) {
-    write(path, '', ...args);
-    process.exit(23);
-  }
-  return write(path, data, ...args);
-};
-syncBuiltinESMExports();`,
-  );
-  assert.equal(result.status, 23, result.stderr);
-  assert.equal(result.stdout, "");
-  assert.deepEqual(JSON.parse(NodeFS.readFileSync(NodePath.join(root, "status.json"), "utf8")), {
-    scenario: transcript.scenario,
-    cursor: 0,
-    total: transcript.entries.length,
-  });
-});

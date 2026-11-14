@@ -2,13 +2,9 @@ import * as NodeAssert from "node:assert/strict";
 
 import { describe, it } from "vite-plus/test";
 
-import {
-  DEFAULT_TRITONAI_AI_BASE_URL,
-  DEFAULT_TRITONAI_CODEX_MODEL,
-  TRITONAI_API_KEY_ENV,
-} from "@t3tools/contracts";
+import { DEFAULT_TRITONAI_CODEX_MODEL, TRITONAI_API_KEY_ENV } from "@t3tools/contracts";
 import { TRITONAI_CLIENT_VERSION } from "../../tritonAiClientHeaders.ts";
-import { makeTritonAiCodexConfigArgs, resolveTritonAiCodexBaseUrl } from "./TritonAiCodexConfig.ts";
+import { makeTritonAiCodexConfigArgs } from "./TritonAiCodexConfig.ts";
 
 function configValues(args: ReadonlyArray<string>): ReadonlyArray<string> {
   const values: string[] = [];
@@ -22,6 +18,7 @@ function configValues(args: ReadonlyArray<string>): ReadonlyArray<string> {
 }
 
 describe("TritonAiCodexConfig", () => {
+  // Keep planning enabled and route plugin-aware subagents through Harness.
   it("builds Codex config overrides for the UCSD provider", () => {
     const values = configValues(
       makeTritonAiCodexConfigArgs({
@@ -39,13 +36,9 @@ describe("TritonAiCodexConfig", () => {
       `model_providers.ucsd.http_headers={"X-TritonAI-Client"="harness","X-TritonAI-Client-Version"="${TRITONAI_CLIENT_VERSION}"}`,
       "model_providers.ucsd.requires_openai_auth=false",
       "model_providers.ucsd.stream_idle_timeout_ms=300000",
-      "features.multi_agent=true",
-      "agents.max_threads=5",
+      "features.multi_agent=false",
+      "features.multi_agent_v2=false",
       "tools.update_plan.enabled=true",
     ]);
-  });
-
-  it("falls back to the default TritonAI base URL", () => {
-    NodeAssert.equal(resolveTritonAiCodexBaseUrl({}), DEFAULT_TRITONAI_AI_BASE_URL);
   });
 });

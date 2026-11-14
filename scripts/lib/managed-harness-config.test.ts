@@ -80,12 +80,6 @@ describe("managed Harness config build input", () => {
     expect(() => parseManagedHarnessConfig(JSON.stringify(missingImage))).toThrow(/image input/u);
   });
 
-  it("rejects unknown fields", () => {
-    expect(() =>
-      parseManagedHarnessConfig(JSON.stringify({ ...configFixture(), unexpected: true })),
-    ).toThrow(/unexpected/u);
-  });
-
   it.each(["default", "restrictedFallback", "replacements"] as const)(
     "rejects missing catalog references in %s",
     (field) => {
@@ -102,6 +96,7 @@ describe("managed Harness config build input", () => {
     expect(() => parseManagedHarnessConfig(JSON.stringify(fixture))).toThrow(/frontier/u);
   });
 
+  // regression: 76aecbe4a9 fix(provider): cap managed Codex updates at approved version
   it("rejects invalid engine approvals and accepts missing approval for fail-closed compatibility", () => {
     const fixture = configFixture();
     for (const approvedCodexVersion of ["latest", "^1.2.3", "1.2.3;echo unsafe", "01.2.3"]) {

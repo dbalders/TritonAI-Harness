@@ -22,11 +22,9 @@ export const installAccountLoginHandlers = Effect.fn("desktop.ipc.installAccount
     ) {
       const main = yield* windows.main;
       if (!event || Option.isNone(main) || main.value.webContents.id !== event.sender.id)
-        return yield* Effect.fail(
-          new AccountLoginIpcError({
-            message: "Account sign-in is only available in the Harness window.",
-          }),
-        );
+        return yield* new AccountLoginIpcError({
+          message: "Account sign-in is only available in the Harness window.",
+        });
       return main.value;
     });
     yield* ipc.handle(

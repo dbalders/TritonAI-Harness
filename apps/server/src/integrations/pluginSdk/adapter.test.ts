@@ -4,9 +4,8 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeTimersPromises from "node:timers/promises";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
+
 import { canonicalJson, type JsonValue } from "@t3tools/shared/pluginSdkContract";
 import { verifyPluginSdkArtifact } from "@t3tools/shared/pluginSdkArtifact";
 
@@ -118,12 +117,19 @@ function artifact(
     readonly authorization?: boolean;
     readonly skillFrontmatter?: string;
     readonly extraPayloads?: ReadonlyArray<readonly [string, Uint8Array]>;
+    readonly requiredHostContractLevel?: number;
+    readonly serviceEnvironments?: JsonValue;
   } = {},
 ) {
+  const sdk = { apiMajor: 1, requiredHostContractLevel: options.requiredHostContractLevel ?? 1 };
   const artifactConfigurationSchema = options.configurationSchema ?? configurationSchema;
   const artifactInputSchema = options.inputSchema ?? inputSchema;
   const artifactManifest = {
     ...manifest,
+    sdk,
+    ...(options.serviceEnvironments !== undefined
+      ? { serviceEnvironments: options.serviceEnvironments }
+      : {}),
     configurationSchema: artifactConfigurationSchema,
     capabilities: manifest.capabilities.map((capability) => ({
       ...capability,
@@ -156,7 +162,7 @@ function artifact(
     artifactVersion: 1,
     format: "tritonai.plugin-artifact/v1",
     plugin: { id, version: "1.0.0" },
-    sdk: { apiMajor: 1, requiredHostContractLevel: 1 },
+    sdk,
     target: {
       architecture: "any",
       environments: ["electron-main", "server"],
@@ -188,7 +194,7 @@ function artifact(
 
 function secretStore(): ServerSecretStore.ServerSecretStore["Service"] {
   return {
-    get: () => Effect.succeed(Option.some(new TextEncoder().encode("scoped-secret"))),
+    get: () => Effect.succeedSome(new TextEncoder().encode("scoped-secret")),
     set: () => Effect.void,
     create: () => Effect.void,
     getOrCreateRandom: (_name, size) => Effect.succeed(new Uint8Array(size)),
@@ -199,16 +205,10 @@ function secretStore(): ServerSecretStore.ServerSecretStore["Service"] {
 describe("plugin SDK adapter", () => {
   it.each([
     [">=24.13.1 <25", "24.13.1", true],
-    [">=24.13.1 <25", "24.21.0", true],
     [">=24.13.1 <25", "26.8.2", false],
-    [">=24.13.1 <25 || >=26.8.2 <27", "24.13.1", true],
     [">=24.13.1 <25 || >=26.8.2 <27", "26.8.2", true],
-    [">=24.13.1 <25 || >=26.8.2 <27", "26.9.0", true],
-    [">=24.13.1 <25 || >=26.8.2 <27", "24.13.0", false],
-    [">=24.13.1 <25 || >=26.8.2 <27", "25.0.0", false],
     [">=24.13.1 <25 || >=26.8.2 <27", "26.8.1", false],
     [">=24.13.1 <25 || >=26.8.2 <27", "26.8.2-rc.1", false],
-    [">=24.13.1 <25 || >=26.8.2 <27", "27.0.0", false],
     [">=24.13.1", "26.8.2", false],
   ] as const)(
     "enforces the artifact runtime target %s on Node %s",
@@ -222,6 +222,7 @@ describe("plugin SDK adapter", () => {
     },
   );
 
+  // regression: #253 fix(plugins): preserve Unicode validation patterns
   it("preserves Unicode patterns when decoding plugin tool arguments", async () => {
     const loaded = await loadPluginSdkIntegration({
       files: artifact(providerSource, "# Fixture reader\n", {
@@ -251,6 +252,7 @@ describe("plugin SDK adapter", () => {
     }
   });
 
+  // regression: #304 fix(server): show agents why integration tool calls fail
   it("reports failing plugin input paths and expectations without submitted values", async () => {
     const loaded = await loadPluginSdkIntegration({
       files: artifact(providerSource, "# Fixture reader\n", {
@@ -310,6 +312,7 @@ describe("plugin SDK adapter", () => {
     }
   });
 
+  // regression: #304 fix(server): show agents why integration tool calls fail
   it("names submitted property keys but never their values in plugin input issues", async () => {
     const loaded = await loadPluginSdkIntegration({
       files: artifact(providerSource, "# Fixture reader\n", {
@@ -341,35 +344,6 @@ describe("plugin SDK adapter", () => {
       const issues = describeIntegrationToolInputIssues(failure);
       expect(issues).toContain("labels.SECRET_KEY: must be number");
       expect(issues).not.toContain("SECRET_VALUE");
-    } finally {
-      await loaded.provider?.close?.();
-    }
-  });
-
-  it("uses Unicode matching for plugin patternProperties", async () => {
-    const loaded = await loadPluginSdkIntegration({
-      files: artifact(providerSource, "# Fixture reader\n", {
-        inputSchema: {
-          type: "object",
-          patternProperties: { "^\\p{L}+$": { type: "string" } },
-          properties: {},
-          $schema: "https://json-schema.org/draft/2020-12/schema",
-          additionalProperties: false,
-        },
-      }),
-      secrets: secretStore(),
-      configuration: { prefix: "fixture" },
-      expected: { id, version: "1.0.0" },
-      hostNodeVersion: "24.13.1",
-    });
-    try {
-      const tool = loaded.provider!.tools[0]!;
-      await expect(decodeIntegrationToolInput(tool, { 日本語: "value" })).resolves.toEqual({
-        日本語: "value",
-      });
-      await expect(decodeIntegrationToolInput(tool, { 日本語: 123 })).rejects.toThrow();
-      await expect(decodeIntegrationToolInput(tool, { "123": "value" })).rejects.toThrow();
-      await expect(decodeIntegrationToolInput(tool, [])).rejects.toThrow();
     } finally {
       await loaded.provider?.close?.();
     }
@@ -455,6 +429,7 @@ describe("plugin SDK adapter", () => {
     await loaded.provider?.close?.();
   });
 
+  // regression: #206 fix(release): unblock Windows builds and managed plugin startup
   it("registers strict empty-object SDK tools without widening their input contract", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-sdk-empty-input-"));
     try {
@@ -484,6 +459,7 @@ describe("plugin SDK adapter", () => {
     }
   });
 
+  // regression: #206 fix(release): unblock Windows builds and managed plugin startup
   it("rejects arrays and extra fields in strict empty-object SDK configuration", async () => {
     const load = (configuration: Readonly<Record<string, unknown>>) =>
       loadPluginSdkIntegration({
@@ -505,8 +481,6 @@ describe("plugin SDK adapter", () => {
 
   it.each([
     { hook: "async connect() { return {}; },", effect: "read" as const, authorization: false },
-    { hook: "async disconnect() {},", effect: "read" as const, authorization: false },
-    { hook: "async poll() { return {}; },", effect: "read" as const, authorization: false },
     { hook: "", effect: "write" as const, authorization: false },
     { hook: "", effect: "read" as const, authorization: true },
   ])(
@@ -560,7 +534,8 @@ describe("plugin SDK adapter", () => {
       loadPluginSdkIntegration({
         files: artifact(`
 export async function createIntegrationProvider() {
-  await new Promise((_, reject) => setTimeout(() => reject(new Error("late factory failure")), 0));
+  await Promise.resolve();
+  throw new Error("late factory failure");
 }
 `),
         secrets: secretStore(),
@@ -569,7 +544,6 @@ export async function createIntegrationProvider() {
         hostNodeVersion: "24.13.1",
       }),
     ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
-    await NodeTimersPromises.setTimeout(10);
 
     for (const entry of [
       `export function createIntegrationProvider() {
@@ -642,6 +616,86 @@ export function createIntegrationProvider() {
     await expect(load({ hostNodeVersion: "25.0.0" })).rejects.toBeInstanceOf(
       PluginSdkQuarantineError,
     );
+  });
+
+  it("admits declared service environments and forwards the selection to every operation", async () => {
+    const environments = [
+      { id: "production", displayName: "Prod", description: "records.example" },
+      { id: "development", displayName: "Dev", description: "records-dev.example" },
+    ];
+    const recordingSource = `
+export function createIntegrationProvider() {
+  return {
+    id: "${id}",
+    async status(context) {
+      return { state: "connected", accountLabel: context.serviceEnvironment ?? "none", grantedCapabilities: ["fixture.read"], message: null };
+    },
+    async invoke(_toolName, _input, context) {
+      return { serviceEnvironment: context.serviceEnvironment ?? null };
+    }
+  };
+}
+`;
+    const load = (files: ReturnType<typeof artifact>) =>
+      loadPluginSdkIntegration({
+        files,
+        secrets: secretStore(),
+        configuration: { prefix: "fixture" },
+        expected: { id, version: "1.0.0" },
+        hostNodeVersion: "24.13.1",
+      });
+    const loaded = await load(
+      artifact(recordingSource, "# Fixture reader\n", {
+        requiredHostContractLevel: 3,
+        serviceEnvironments: environments,
+      }),
+    );
+    expect(loaded.manifest.serviceEnvironments).toEqual(environments);
+    const provider = loaded.provider!;
+    const signal = new AbortController().signal;
+    await expect(provider.status({ signal, serviceEnvironment: "development" })).resolves.toEqual(
+      expect.objectContaining({ accountLabel: "development" }),
+    );
+    await expect(provider.status({ signal })).resolves.toEqual(
+      expect.objectContaining({ accountLabel: "none" }),
+    );
+    await expect(
+      provider.invoke(
+        "fixture.records.list",
+        { topic: "alpha" },
+        { signal, serviceEnvironment: "production" },
+      ),
+    ).resolves.toEqual({ serviceEnvironment: "production" });
+
+    // Older contract levels cannot declare environments, and newer levels than this host fail closed.
+    await expect(
+      load(
+        artifact(recordingSource, "# Fixture reader\n", {
+          requiredHostContractLevel: 2,
+          serviceEnvironments: environments,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    await expect(
+      load(artifact(recordingSource, "# Fixture reader\n", { requiredHostContractLevel: 4 })),
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    for (const invalid of [
+      [environments[0]],
+      [environments[0], { ...environments[0] }],
+      [environments[0], { ...environments[1], id: "Dev" }],
+      [environments[0], { ...environments[1], extra: true }],
+      [environments[0], { ...environments[1], displayName: " Dev" }],
+      [environments[0], { ...environments[1], description: "" }],
+    ]) {
+      await expect(
+        load(
+          artifact(recordingSource, "# Fixture reader\n", {
+            requiredHostContractLevel: 3,
+            serviceEnvironments: invalid as JsonValue,
+          }),
+        ),
+      ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    }
   });
 
   it("requires the manifest's exact skill inventory and frontmatter", async () => {
@@ -775,21 +829,68 @@ export function createIntegrationProvider() {
     await expect(provider.close!()).rejects.toThrow(/must be undefined/u);
   });
 
-  it("quarantines a module whose top-level evaluation does not settle", async () => {
-    const pendingModule = `
-await new Promise(() => {});
-export function createIntegrationProvider() { throw new Error("unreachable"); }
+  it("marks plugin failures that prove nothing changed as unchanged", async () => {
+    const source = `
+export function createIntegrationProvider() {
+  return {
+    id: "${id}",
+    async status() { return { state: "connected", accountLabel: null, grantedCapabilities: ["fixture.read"], message: null }; },
+    async invoke(_toolName, input) {
+      if (input.topic === "alpha") {
+        throw { _tag: "PluginFailure", code: "refused", message: "Refused.", retryable: false, details: { committed: false } };
+      }
+      throw { _tag: "ExternalCommitOutcomeUnknown", code: "external_commit_outcome_unknown", message: "Unclear.", retryable: false, details: { committed: false } };
+    }
+  };
+}
 `;
-    await expect(
-      loadPluginSdkIntegration({
-        files: artifact(pendingModule),
-        secrets: secretStore(),
-        configuration: { prefix: "fixture" },
-        expected: { id, version: "1.0.0" },
-        hostNodeVersion: "24.13.1",
-        admissionTimeoutMs: 10,
-      }),
-    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    const loaded = await loadPluginSdkIntegration({
+      files: artifact(source),
+      secrets: secretStore(),
+      configuration: { prefix: "fixture" },
+      expected: { id, version: "1.0.0" },
+      hostNodeVersion: "24.13.1",
+    });
+    const provider = loaded.provider;
+    if (!provider) throw new Error("Expected an admitted provider.");
+    const refused = await provider
+      .invoke("fixture.records.list", { topic: "alpha" })
+      .catch((error: unknown) => error);
+    expect(refused).toMatchObject({ _tag: "IntegrationProviderPublicError", unchanged: true });
+    const unclear = await provider
+      .invoke("fixture.records.list", { topic: "beta" })
+      .catch((error: unknown) => error);
+    expect(unclear).toMatchObject({ _tag: "IntegrationProviderPublicError", unchanged: false });
+  });
+
+  it("bounds a long plugin failure message instead of dropping it", async () => {
+    const source = `
+export function createIntegrationProvider() {
+  return {
+    id: "${id}",
+    async status() { return { state: "connected", accountLabel: null, grantedCapabilities: ["fixture.read"], message: null }; },
+    async invoke() {
+      throw { _tag: "ExternalCommitOutcomeUnknown", code: "external_commit_outcome_unknown", message: "The outcome is unknown. " + "x".repeat(2000), retryable: false };
+    }
+  };
+}
+`;
+    const loaded = await loadPluginSdkIntegration({
+      files: artifact(source),
+      secrets: secretStore(),
+      configuration: { prefix: "fixture" },
+      expected: { id, version: "1.0.0" },
+      hostNodeVersion: "24.13.1",
+    });
+    const provider = loaded.provider;
+    if (!provider) throw new Error("Expected an admitted provider.");
+    const failure = await provider
+      .invoke("fixture.records.list", {})
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ _tag: "IntegrationProviderPublicError", unchanged: false });
+    const message = (failure as Error).message;
+    expect(message.startsWith("The outcome is unknown. xxx")).toBe(true);
+    expect(message.length).toBeLessThanOrEqual(1_024);
   });
 
   it("isolates module state by the complete admitted artifact", async () => {

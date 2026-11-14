@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+
 import { ProjectId, ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { ProviderOptionDescriptor } from "./model.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -269,8 +270,7 @@ export type AcpRegistryProbeModel = typeof AcpRegistryProbeModel.Type;
 
 export const AcpRegistryProbeResult = Schema.Struct({
   instanceId: ProviderInstanceId,
-  // `ready` is only returned after a disposable ACP session/new probe completes.
-  // It does not imply that authentication was passively detected.
+  // `ready` requires a disposable ACP session/new probe, not passive auth detection.
   ready: Schema.Literal(true),
   icon: Schema.NullOr(AcpRegistryUrl),
   authMethods: Schema.Array(AcpRegistryProbeAuthMethod).check(Schema.isMaxLength(32)),

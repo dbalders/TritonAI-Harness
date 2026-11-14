@@ -13,9 +13,7 @@ export async function publishSubscriptionUsage(snapshot: SubscriptionUsageSnapsh
   ]);
   tapUrl = snapshot.url;
   if (!listening) {
-    // expo-widgets has no Android counterpart to widgetURL: the card is a
-    // button whose tap is delivered to this process, so opening the app needs
-    // a live JS runtime.
+    // expo-widgets lacks Android widgetURL. Button events need a live JS runtime to open the app.
     listening = true;
     addUserInteractionListener((event) => {
       if (event.source === "SubscriptionUsage" && tapUrl) void Linking.openURL(tapUrl);

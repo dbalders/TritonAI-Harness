@@ -1,6 +1,7 @@
 import {
   DEFAULT_GETTING_STARTED_PROGRESS,
   type EnvironmentId,
+  type GettingStartedAnalyticsInput,
   type GettingStartedChapterId,
   type GettingStartedProgress,
   type ThreadId,
@@ -10,12 +11,18 @@ export const GETTING_STARTED_CHAPTERS = [
   { id: "welcome", title: "Meet your assistant", description: "See what it can help you do." },
   { id: "conversation", title: "Talk to AI", description: "Ask, follow up, and check an answer." },
   {
+    id: "approvals",
+    title: "Stay in control",
+    description: "Approve or decline what it wants to do.",
+  },
+  {
     id: "connect",
     title: "Connect your work",
     description: "Connect Outlook or Gmail on your terms.",
   },
   { id: "connected-work", title: "Try connected work", description: "Put your connection to use." },
   { id: "files", title: "Use files & projects", description: "Give it material to work with." },
+  { id: "skills", title: "Use a skill", description: "Try a saved recipe for common work." },
   { id: "ideas", title: "Explore Ideas", description: "Find a useful request ready to review." },
   {
     id: "computer-use",
@@ -39,6 +46,125 @@ Practice notes (fictional):
 - Kim will compare room options.
 - Dev will prepare the laptops by Friday.
 - Jordan will check the travel budget.`;
+
+/** Practice chapters that finish from a prepared conversation's observed run. */
+const TASK_CHAPTERS: ReadonlySet<GettingStartedChapterId> = new Set([
+  "conversation",
+  "approvals",
+  "connected-work",
+  "files",
+  "skills",
+  "ideas",
+]);
+
+export const GETTING_STARTED_APPROVAL_PRACTICE = `Turn these practice meeting notes into a to-do list with an owner and a deadline for each item, and save it as a file named practice-to-do.md in this folder. Mark missing details as "Not specified". If I decline the save, don't try again; show me the list here instead.
+
+Practice notes (fictional):
+- Kim will compare room options.
+- Dev will prepare the laptops by Friday.
+- Jordan will check the travel budget.`;
+
+export const GETTING_STARTED_SAMPLE_EMAILS = `These are practice emails, not real ones. Find the messages that ask me a question. List who sent each one and what they need from me. Answer here in chat; don't draft, save, or send anything.
+
+Practice emails (fictional):
+1. From Priya Shah, "Room for Thursday": Can you confirm whether we still need the large conference room on Thursday afternoon?
+2. From the Campus Newsletter, "This week at UC San Diego": Five events happening on campus this week.
+3. From Marco Diaz, "Budget numbers": Could you send me the final travel budget by Wednesday so I can submit it?
+4. From IT Service Desk, "Ticket closed": Your request for a new monitor has been completed.`;
+
+export interface GettingStartedSkillRecipe {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  /** Ready-to-review request, starting with the `$skill` names it uses. */
+  readonly prompt: string;
+}
+
+/**
+ * Everyday starter recipes, best first. Each option lists the skills that run it
+ * and, for account work, the plugin that must provide them. `skill-creator`
+ * ships with Codex, so there is always at least one card.
+ */
+const STARTER_SKILL_RECIPES: ReadonlyArray<{
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly options: ReadonlyArray<{
+    readonly plugin?: string;
+    readonly skills: ReadonlyArray<string>;
+  }>;
+  readonly request: string;
+}> = [
+  {
+    id: "morning-brief",
+    title: "Morning brief",
+    description: "Today's meetings and the emails waiting on you.",
+    options: [
+      { plugin: "microsoft-365", skills: ["outlook-calendar", "outlook-mail"] },
+      { plugin: "google-workspace", skills: ["google-calendar", "gmail"] },
+    ],
+    request:
+      "Give me a short morning brief: today's meetings with their times, then up to five emails from the last day that need my reply. Only read; don't draft, change, move, or send anything.",
+  },
+  {
+    id: "recent-files",
+    title: "Find a recent file",
+    description: "See what you've been working on lately.",
+    options: [
+      { plugin: "microsoft-365", skills: ["onedrive-files"] },
+      { plugin: "google-workspace", skills: ["google-drive"] },
+    ],
+    request:
+      "List the five files I changed most recently, with one line on what each seems to be. Only read; don't change anything.",
+  },
+  {
+    id: "campus-answer",
+    title: "Look up a campus answer",
+    description: "Find official UC San Diego guidance, with links.",
+    options: [{ plugin: "ucsd-assistant", skills: ["ucsd-campus-search"] }],
+    request:
+      "Find the official UC San Diego guidance on getting a campus parking permit and summarize it in three short bullets, with links to the original pages.",
+  },
+  {
+    id: "jira-plate",
+    title: "What's on my plate in Jira",
+    description: "Your open issues, newest first.",
+    options: [{ plugin: "jira-data-center", skills: ["ucsd-jira"] }],
+    request:
+      "List my open Jira issues, newest first, with each one's status. Only read; don't change anything.",
+  },
+  {
+    id: "make-a-skill",
+    title: "Make your own skill",
+    description: "Turn work you repeat into a saved recipe.",
+    options: [{ skills: ["skill-creator"] }],
+    request:
+      "Help me plan a skill for a task I repeat every week. Ask me what the task is first, and don't create any files yet.",
+  },
+];
+
+/**
+ * Up to three starter recipes the person can run now: the assistant has the
+ * skills, and account skills come from a plugin that is connected. A personal
+ * copy of a plugin's skill doesn't count; it would have no account to use.
+ */
+export function gettingStartedSkillRecipes(
+  assistantSkills: ReadonlySet<string>,
+  pluginSkills: ReadonlyMap<string, ReadonlySet<string>>,
+): ReadonlyArray<GettingStartedSkillRecipe> {
+  return STARTER_SKILL_RECIPES.flatMap(({ options, request, ...recipe }) => {
+    const option = options.find(({ plugin, skills }) =>
+      skills.every(
+        (name) =>
+          assistantSkills.has(name) &&
+          (plugin === undefined || pluginSkills.get(plugin)?.has(name) === true),
+      ),
+    );
+    return option
+      ? [{ ...recipe, prompt: `${option.skills.map((name) => `$${name}`).join(" ")} ${request}` }]
+      : [];
+  }).slice(0, 3);
+}
 
 export type GettingStartedEvent = (
   | { type: "start"; environmentId: EnvironmentId; at: string }
@@ -72,6 +198,8 @@ export type GettingStartedEvent = (
       userMessageId?: string;
       connectedToolSucceeded: boolean;
       usedFile: boolean;
+      answeredApproval: boolean;
+      usedSkill: boolean;
     }
 ) & { readonly generation?: number; readonly fromChapter?: GettingStartedChapterId };
 
@@ -162,8 +290,7 @@ export function reduceGettingStarted(
         : state;
     case "track": {
       if (state.startedAt === null || event.environmentId !== state.environmentId) return state;
-      if (!["conversation", "connected-work", "files", "ideas"].includes(event.chapter))
-        return state;
+      if (!TASK_CHAPTERS.has(event.chapter)) return state;
       const previous = state.tasks.find((task) => task.chapter === event.chapter);
       if (previous?.environmentId === event.environmentId && previous.threadId === event.threadId)
         return state;
@@ -224,8 +351,7 @@ export function reduceGettingStarted(
       let changed = false;
       const newlyCompleted: GettingStartedChapterId[] = [];
       const tasks = state.tasks.map((task) => {
-        if (!["conversation", "connected-work", "files", "ideas"].includes(task.chapter))
-          return task;
+        if (!TASK_CHAPTERS.has(task.chapter)) return task;
         if (state.completed.includes(task.chapter) || task.runIds.length >= 2) return task;
         if (
           task.environmentId !== event.environmentId ||
@@ -242,8 +368,16 @@ export function reduceGettingStarted(
           (!Number.isFinite(runTime) || !Number.isFinite(after) || runTime < after)
         )
           return task;
-        if (task.chapter === "connected-work" && !event.connectedToolSucceeded) return task;
+        // A connected-work task prepared without email tools is the sample-email practice.
+        if (
+          task.chapter === "connected-work" &&
+          task.toolNames.length > 0 &&
+          !event.connectedToolSucceeded
+        )
+          return task;
         if (task.chapter === "files" && !event.usedFile) return task;
+        if (task.chapter === "approvals" && !event.answeredApproval) return task;
+        if (task.chapter === "skills" && !event.usedSkill) return task;
         changed = true;
         if (task.chapter !== "conversation") newlyCompleted.push(task.chapter);
         return { ...task, runIds: [...task.runIds, event.runId].slice(-2) };
@@ -258,4 +392,20 @@ export function reduceGettingStarted(
         : state;
     }
   }
+}
+
+/** Usage events for one saved progress change: a first start, and chapters newly finished or saved for later. */
+export function gettingStartedAnalyticsEvents(
+  before: GettingStartedProgress,
+  after: GettingStartedProgress,
+): GettingStartedAnalyticsInput[] {
+  const events: GettingStartedAnalyticsInput[] = [];
+  if (before.startedAt === null && after.startedAt !== null) events.push({ event: "started" });
+  for (const chapter of after.completed) {
+    if (!before.completed.includes(chapter)) events.push({ event: "chapter-completed", chapter });
+  }
+  for (const chapter of after.deferred) {
+    if (!before.deferred.includes(chapter)) events.push({ event: "chapter-later", chapter });
+  }
+  return events;
 }

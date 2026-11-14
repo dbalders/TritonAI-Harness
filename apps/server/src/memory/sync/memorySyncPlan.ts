@@ -1,16 +1,7 @@
 /**
- * Decides what one sync pass does to each file in the memory vault.
- *
- * Generated paths route by short code, but short codes can collide before sync.
- * Remote full-ID records must be checked before applying any planned action.
- * This computer only uploads its own files and only downloads everyone
- * else's, so two computers never write the same file. `Notes/` is the one
- * folder the user edits by hand on any computer; it syncs both ways and keeps
- * both copies when both sides changed.
- *
- * Nothing here deletes a file without a surviving copy. A missing local file
- * is only treated as deleted when the last sync saw it and Harness removed it
- * on purpose; otherwise it is downloaded again.
+ * Verify full remote device IDs before applying short-code plans. Each device writes
+ * only its generated files; Notes syncs both ways with conflict copies.
+ * Delete only with a surviving copy and an explicit Harness removal recorded since last sync.
  */
 
 export type VaultPathClass = "own" | "other" | "notes" | "ignored";
@@ -265,14 +256,8 @@ export function planMemorySync(input: SyncPlanInput): ReadonlyArray<SyncAction> 
 }
 
 /**
- * Re-keys local and synced paths to the cloud's spelling when they differ
- * only in letter case. OneDrive and most desktop file systems ignore case, so
- * `Notes/plans.md` renamed to `Notes/Plans.md` is one file, not a new file and
- * a deleted one. Without this, a case-only rename would plan a download of
- * the new name and a delete of the old name that removes the same file.
- *
- * Two local files that differ only in case (possible on Linux) cannot both
- * exist in OneDrive; the later one is left out of sync.
+ * Canonicalize cloud spelling before planning case-only renames to avoid deleting
+ * the same file after downloading it. Leave a second Linux case-colliding file unsynced.
  */
 export function alignPathCase<L, C, S>(input: {
   readonly local: ReadonlyMap<string, L>;

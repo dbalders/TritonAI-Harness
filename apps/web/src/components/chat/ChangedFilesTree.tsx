@@ -1,6 +1,6 @@
-import type { RunId } from "@t3tools/contracts";
+import { type RunId } from "@t3tools/contracts";
 import { type MouseEvent, type ReactNode, memo, useLayoutEffect, useRef, useState } from "react";
-import type { TurnDiffFileChange } from "../../types";
+import { type TurnDiffFileChange } from "../../types";
 import {
   buildTurnDiffTree,
   summarizeTurnDiffStats,
@@ -130,7 +130,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard(props: {
   );
 });
 
-export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
+const ChangedFilesTree = memo(function ChangedFilesTree(props: {
   runId: RunId;
   files: ReadonlyArray<TurnDiffFileChange>;
   allDirectoriesExpanded: boolean;
@@ -140,9 +140,7 @@ export const ChangedFilesTree = memo(function ChangedFilesTree(props: {
 }) {
   const { files, allDirectoriesExpanded, onOpenTurnDiff, resolvedTheme, runId, onFileContextMenu } =
     props;
-  // Overrides apply only while their key matches the current one, so starting from no key is
-  // the same as starting with no overrides. That lets this hook run before the tree is built,
-  // and the compiler caches the tree on `files`.
+  // Place state before tree derivation to preserve its compiler cache.
   const [directoryExpansionState, setDirectoryExpansionState] = useState<{
     key: string | null;
     overrides: Record<string, boolean>;

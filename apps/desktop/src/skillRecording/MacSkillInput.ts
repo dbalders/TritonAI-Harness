@@ -1,8 +1,5 @@
-// Native macOS reads for the recorder child: which app is in front, mouse and
-// modifier state, and the accessibility element under the pointer. Only the
-// recorder's helper process loads this, so its process-wide AX timeout and
-// background activation policy never touch the main app. Load it once, then
-// make one reader per recorded app with `forApp`.
+// Load native macOS recorder hooks only in the helper process so AX timeouts and
+// activation policy cannot affect the main app. Use one reader per recorded app.
 import type { SkillInputApi } from "./skillRecordingInput.ts";
 
 const LIBRARIES = {

@@ -34,11 +34,9 @@ export interface Request<S extends Schema.Top> {
   readonly modelSelection: ModelSelection;
   readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
   /**
-   * Set when the model must investigate `cwd` before answering: it may read files and run
-   * read-only commands there, over as many turns as it needs, and must change nothing. Absent,
-   * the prompt carries everything; this alone does not enforce tool or context isolation.
-   * Help separately requires an explicit prompt-only capability. A runner that cannot guarantee
-   * read-only tools fails rather than answering an investigation blind.
+   * Investigation requires read-only tools in cwd or fails rather than answering blind.
+   * Absent cwd, the prompt carries context; this flag alone provides no isolation.
+   * Help separately requires an explicit prompt-only capability.
    */
   readonly investigate?: { readonly timeoutMs: number } | undefined;
 }
@@ -187,8 +185,10 @@ export function fromRunner(
       ...buildThreadTitlePrompt({
         message: input.message,
         previousTitle: input.previousTitle,
+        forkSource: input.forkSource,
         linkedContext: input.linkedContext,
         attachments: input.attachments,
+        instructions: input.instructions,
       }),
     });
     return {

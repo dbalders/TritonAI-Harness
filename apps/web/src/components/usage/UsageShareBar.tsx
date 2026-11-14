@@ -1,5 +1,6 @@
 import { formatPercent } from "@t3tools/shared/usageFormat";
 import type { ReactNode } from "react";
+
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export interface ShareSegment {

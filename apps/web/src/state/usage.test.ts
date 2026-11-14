@@ -3,6 +3,7 @@ import { mergeUsage } from "@t3tools/shared/usageMerge";
 import { describe, expect, it } from "vite-plus/test";
 
 describe("mergeUsage provider selection", () => {
+  // regression: 4085dcf4b8 fix(usage): keep transcript totals Codex-only
   it("keeps buckets and source session totals for only the selected provider", () => {
     const summary = {
       contractVersion: USAGE_CONTRACT_VERSION,

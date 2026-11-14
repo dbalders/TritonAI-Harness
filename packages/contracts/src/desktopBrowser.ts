@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 const TabKey = {
@@ -23,6 +24,12 @@ export const DesktopBrowserCommand = Schema.Union([
     phase: Schema.Literals(["move", "click"]),
     x: Schema.Finite,
     y: Schema.Finite,
+  }),
+  /** Whether an agent turn runs on the thread, so the tabs it uses stay focused between steps. */
+  Schema.Struct({
+    type: Schema.Literal("turn"),
+    threadId: TrimmedNonEmptyString,
+    active: Schema.Boolean,
   }),
 ]);
 export type DesktopBrowserCommand = typeof DesktopBrowserCommand.Type;

@@ -35,6 +35,7 @@ function fixture(t) {
   };
 }
 
+// regression: cfcb27b40d fix(ci): validate vendored gitlink mappings before nightly builds
 test("detects the moved vendored gitlink even when its directory is absent", (t) => {
   const repo = fixture(t);
   repo.add(".repos/alchemy-effect/submodules/distilled");
@@ -54,6 +55,7 @@ test("detects the moved vendored gitlink even when its directory is absent", (t)
   repo.git("submodule", "foreach", "--recursive", "true");
 });
 
+// regression: cfcb27b40d fix(ci): validate vendored gitlink mappings before nightly builds
 test("rejects missing .gitmodules and missing or empty URLs", (t) => {
   const repo = fixture(t);
   repo.add("references/new-agent");
@@ -64,6 +66,7 @@ test("rejects missing .gitmodules and missing or empty URLs", (t) => {
   assert.match(checkGitlinks(repo.root).errors.join("\n"), /nonempty URL/);
 });
 
+// regression: cfcb27b40d fix(ci): validate vendored gitlink mappings before nightly builds
 test("rejects duplicate mappings and stale entries after a gitlink is removed", (t) => {
   const repo = fixture(t);
   repo.add("references/agent");
@@ -75,6 +78,7 @@ test("rejects duplicate mappings and stale entries after a gitlink is removed", 
   assert.match(checkGitlinks(repo.root).errors.join("\n"), /Stale .gitmodules path/);
 });
 
+// regression: cfcb27b40d fix(ci): validate vendored gitlink mappings before nightly builds
 test("accepts paths with whitespace and a repository without submodules", (t) => {
   const repo = fixture(t);
   assert.deepEqual(checkGitlinks(repo.root), { count: 0, errors: [] });
@@ -83,6 +87,7 @@ test("accepts paths with whitespace and a repository without submodules", (t) =>
   assert.deepEqual(checkGitlinks(repo.root), { count: 1, errors: [] });
 });
 
+// regression: cfcb27b40d fix(ci): validate vendored gitlink mappings before nightly builds
 test("CLI fails closed on malformed .gitmodules", (t) => {
   const repo = fixture(t);
   fs.writeFileSync(path.join(repo.root, ".gitmodules"), "[submodule broken\n");

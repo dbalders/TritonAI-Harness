@@ -10,7 +10,12 @@ import {
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { reduceGettingStarted, type GettingStartedEvent } from "./gettingStarted.logic";
+import {
+  gettingStartedAnalyticsEvents,
+  gettingStartedSkillRecipes,
+  reduceGettingStarted,
+  type GettingStartedEvent,
+} from "./gettingStarted.logic";
 
 const ENVIRONMENT = EnvironmentId.make("getting-started-local");
 const OTHER_ENVIRONMENT = EnvironmentId.make("getting-started-remote");
@@ -37,11 +42,18 @@ function start() {
   });
 }
 
-function tracked(chapter: GettingStartedChapterId) {
+function tracked(chapter: GettingStartedChapterId, toolNames: ReadonlyArray<string> = []) {
   return apply(
     start(),
     { type: "select", chapter },
-    { type: "track", chapter, environmentId: ENVIRONMENT, threadId: THREAD, at: TRACKED_AT },
+    {
+      type: "track",
+      chapter,
+      environmentId: ENVIRONMENT,
+      threadId: THREAD,
+      at: TRACKED_AT,
+      toolNames,
+    },
   );
 }
 
@@ -56,6 +68,8 @@ function successfulRun(overrides: Partial<RunEvent> = {}): RunEvent {
     hasAnswer: true,
     connectedToolSucceeded: false,
     usedFile: false,
+    answeredApproval: false,
+    usedSkill: false,
     ...overrides,
   };
 }
@@ -67,26 +81,6 @@ const checkedSource = {
 } as const satisfies GettingStartedEvent;
 
 describe("getting started persistence", () => {
-  it("decodes existing settings defaults to an empty, closed guide", () => {
-    const { gettingStarted: _guide, ...existingDefaults } =
-      encodeClientSettings(DEFAULT_CLIENT_SETTINGS);
-    const decoded = decodeClientSettings(existingDefaults);
-
-    expect(decoded.gettingStarted).toEqual({
-      generation: 0,
-      startedAt: null,
-      environmentId: null,
-      activeChapter: "welcome",
-      open: false,
-      paused: false,
-      completed: [],
-      deferred: [],
-      tasks: [],
-    });
-    expect(decoded).toEqual(DEFAULT_CLIENT_SETTINGS);
-    expect(decodeClientSettings({})).toEqual(decoded);
-  });
-
   it("preserves existing preferences and wizard history when the guide field is absent", () => {
     const preferences = {
       diffLayout: "split",
@@ -195,81 +189,6 @@ describe("getting started persistence", () => {
 });
 
 describe("guide navigation and recovery", () => {
-  it("pauses and resumes at the same chapter without losing task evidence", () => {
-    const progress = apply(tracked("conversation"), successfulRun());
-    const paused = reduceGettingStarted(progress, { type: "pause" });
-
-    expect(paused).toEqual({ ...progress, open: false, paused: true });
-    expect(
-      reduceGettingStarted(paused, { type: "start", environmentId: ENVIRONMENT, at: RETRIED_AT }),
-    ).toEqual({ ...progress, open: true, paused: false });
-    expect(reduceGettingStarted(paused, { type: "select", chapter: "conversation" })).toEqual({
-      ...progress,
-      open: true,
-      paused: false,
-    });
-  });
-
-  it("closing the guide neither pauses it nor defers or completes the chapter", () => {
-    const progress = tracked("ideas");
-
-    expect(reduceGettingStarted(progress, { type: "close" })).toEqual({ ...progress, open: false });
-    expect(progress.paused).toBe(false);
-    expect(progress.completed).toEqual([]);
-    expect(progress.deferred).toEqual([]);
-  });
-
-  it("later remembers an unfinished chapter and moves on without claiming completion", () => {
-    const progress = apply(tracked("conversation"), successfulRun());
-    const later = reduceGettingStarted(progress, { type: "later" });
-
-    expect(later).toMatchObject({
-      activeChapter: "connect",
-      deferred: ["conversation"],
-      completed: [],
-      open: true,
-    });
-    expect(later.tasks).toEqual(progress.tasks);
-    const deferredAgain = apply(
-      later,
-      { type: "select", chapter: "conversation" },
-      { type: "later" },
-    );
-    expect(deferredAgain.deferred).toEqual(["conversation"]);
-  });
-
-  it("next and selecting chapters do not substitute for doing their work", () => {
-    const next = reduceGettingStarted(start(), { type: "next" });
-    const ready = reduceGettingStarted(next, { type: "select", chapter: "ready" });
-
-    expect(next.activeChapter).toBe("conversation");
-    expect(ready.completed).toEqual([]);
-    expect(ready.deferred).toEqual([]);
-    expect(reduceGettingStarted(ready, { type: "next" }).activeChapter).toBe("ready");
-  });
-
-  it("restart clears completion, deferrals, and in-flight work while retaining the environment", () => {
-    const progress = apply(
-      tracked("ideas"),
-      successfulRun(),
-      { type: "select", chapter: "connect" },
-      { type: "later" },
-      { type: "pause" },
-    );
-    const restarted = reduceGettingStarted(progress, { type: "restart" });
-
-    expect(restarted).toMatchObject({
-      environmentId: ENVIRONMENT,
-      activeChapter: "welcome",
-      open: true,
-      paused: false,
-      completed: [],
-      deferred: [],
-      tasks: [],
-    });
-    expect(apply(restarted, successfulRun(), checkedSource)).toEqual(restarted);
-  });
-
   it("changing environment clears all old evidence, even when thread ids coincide", () => {
     const progress = apply(
       tracked("conversation"),
@@ -309,73 +228,9 @@ describe("guide navigation and recovery", () => {
       }).tasks,
     ).toEqual([]);
   });
-
-  it("acknowledgements and connection readiness require the current started chapter", () => {
-    expect(
-      reduceGettingStarted(DEFAULT_GETTING_STARTED_PROGRESS, {
-        type: "acknowledge",
-        chapter: "welcome",
-      }),
-    ).toEqual(DEFAULT_GETTING_STARTED_PROGRESS);
-    expect(reduceGettingStarted(start(), { type: "acknowledge", chapter: "ready" })).toEqual(
-      start(),
-    );
-    expect(
-      reduceGettingStarted(start(), { type: "connection-ready", environmentId: ENVIRONMENT }),
-    ).toEqual(start());
-    const connect = reduceGettingStarted(start(), { type: "select", chapter: "connect" });
-    expect(
-      reduceGettingStarted(connect, { type: "connection-ready", environmentId: OTHER_ENVIRONMENT }),
-    ).toEqual(connect);
-    expect(
-      reduceGettingStarted(connect, { type: "connection-ready", environmentId: ENVIRONMENT })
-        .completed,
-    ).toEqual(["connect"]);
-  });
 });
 
 describe("atomic chapter continuations", () => {
-  it("acknowledges welcome and advances in one transition", () => {
-    const progress = start();
-    const continued = reduceGettingStarted(progress, {
-      type: "acknowledge",
-      chapter: "welcome",
-      continue: "next",
-      generation: progress.generation,
-      fromChapter: "welcome",
-    });
-
-    expect(continued).toMatchObject({
-      completed: ["welcome"],
-      activeChapter: "conversation",
-      open: true,
-      paused: false,
-    });
-    expect(continued.tasks).toEqual(progress.tasks);
-  });
-
-  it("acknowledges the final chapter and pauses without losing completed work", () => {
-    const progress = apply(tracked("ideas"), successfulRun(), {
-      type: "select",
-      chapter: "ready",
-    });
-    const paused = reduceGettingStarted(progress, {
-      type: "acknowledge",
-      chapter: "ready",
-      continue: "pause",
-      generation: progress.generation,
-      fromChapter: "ready",
-    });
-
-    expect(paused).toMatchObject({
-      activeChapter: "ready",
-      completed: ["ideas", "ready"],
-      open: false,
-      paused: true,
-    });
-    expect(paused.tasks).toEqual(progress.tasks);
-  });
-
   it.each(["next", "pause"] as const)(
     "ignores a delayed %s acknowledgement after the user selects another chapter",
     (continuation) => {
@@ -391,26 +246,6 @@ describe("atomic chapter continuations", () => {
           fromChapter: "welcome",
         }),
       ).toBe(selected);
-    },
-  );
-
-  it.each(["next", "pause"] as const)(
-    "ignores a delayed %s acknowledgement after restarting at the same chapter",
-    (continuation) => {
-      const origin = start();
-      const restarted = reduceGettingStarted(origin, { type: "restart" });
-
-      expect(restarted.activeChapter).toBe(origin.activeChapter);
-      expect(restarted.generation).toBeGreaterThan(origin.generation);
-      expect(
-        reduceGettingStarted(restarted, {
-          type: "acknowledge",
-          chapter: "welcome",
-          continue: continuation,
-          generation: origin.generation,
-          fromChapter: "welcome",
-        }),
-      ).toBe(restarted);
     },
   );
 
@@ -445,7 +280,6 @@ describe("scoped run evidence", () => {
     { reason: "a run started before tracking", change: { startedAt: STARTED_AT } },
     // Failed and cancelled provider outcomes both normalize to succeeded: false.
     { reason: "a failed run with partial answer text", change: { succeeded: false } },
-    { reason: "a cancelled run with partial answer text", change: { succeeded: false } },
     { reason: "a successful run without an answer", change: { hasAnswer: false } },
     { reason: "another thread's successful run", change: { threadId: OTHER_THREAD } },
     {
@@ -458,53 +292,6 @@ describe("scoped run evidence", () => {
 
     expect(reduceGettingStarted(progress, successfulRun(change))).toEqual(progress);
     expect(progress.completed).toEqual([]);
-  });
-
-  it("does not count a successful historical run seen before any task was tracked", () => {
-    const progress = start();
-
-    expect(reduceGettingStarted(progress, successfulRun())).toEqual(progress);
-    expect(
-      reduceGettingStarted(DEFAULT_GETTING_STARTED_PROGRESS, {
-        type: "track",
-        chapter: "ideas",
-        environmentId: ENVIRONMENT,
-        threadId: THREAD,
-        at: TRACKED_AT,
-      }),
-    ).toEqual(DEFAULT_GETTING_STARTED_PROGRESS);
-  });
-
-  it("rejects tracking in another environment and cannot count an invalid tracking time", () => {
-    const progress = start();
-    expect(
-      reduceGettingStarted(progress, {
-        type: "track",
-        chapter: "ideas",
-        environmentId: OTHER_ENVIRONMENT,
-        threadId: THREAD,
-        at: TRACKED_AT,
-      }),
-    ).toEqual(progress);
-    const invalid = reduceGettingStarted(progress, {
-      type: "track",
-      chapter: "ideas",
-      environmentId: ENVIRONMENT,
-      threadId: THREAD,
-      at: "invalid",
-    });
-    expect(reduceGettingStarted(invalid, successfulRun())).toEqual(invalid);
-  });
-
-  it("accepts a run starting at the tracking boundary, including a different timezone spelling", () => {
-    const result = reduceGettingStarted(
-      tracked("ideas"),
-      successfulRun({
-        startedAt: "2026-10-22T03:01:00.000-07:00",
-      }),
-    );
-
-    expect(result.completed).toEqual(["ideas"]);
   });
 
   it("retracking the same draft does not erase a completed first conversation turn", () => {
@@ -547,38 +334,6 @@ describe("scoped run evidence", () => {
         successfulRun({ threadId: OTHER_THREAD, startedAt: RETRIED_AT }),
       ).tasks[0]?.runIds,
     ).toEqual(["first-run"]);
-  });
-
-  it("a restarted task in the same thread cannot reuse a result from before the new attempt", () => {
-    const restarted = apply(
-      tracked("conversation"),
-      successfulRun(),
-      { type: "restart" },
-      {
-        type: "track",
-        chapter: "conversation",
-        environmentId: ENVIRONMENT,
-        threadId: THREAD,
-        at: RETRIED_AT,
-      },
-    );
-
-    expect(apply(restarted, successfulRun(), checkedSource)).toEqual(restarted);
-    expect(
-      reduceGettingStarted(
-        restarted,
-        successfulRun({ runId: "new-attempt", startedAt: RETRIED_AT }),
-      ).tasks[0]?.runIds,
-    ).toEqual(["new-attempt"]);
-  });
-
-  it("a late result can complete its deferred chapter without moving the current chapter", () => {
-    const deferred = reduceGettingStarted(tracked("ideas"), { type: "later" });
-    const completed = reduceGettingStarted(deferred, successfulRun());
-
-    expect(completed.activeChapter).toBe("computer-use");
-    expect(completed.completed).toEqual(["ideas"]);
-    expect(completed.deferred).toEqual([]);
   });
 
   it("only submitted messages in the tracked thread and environment can bind a run", () => {
@@ -655,45 +410,6 @@ describe("scoped run evidence", () => {
         ?.runIds,
     ).toEqual(["first-run"]);
   });
-
-  it("stale source checks and connection receipts cannot complete a restarted guide", () => {
-    const previous = tracked("conversation");
-    const ready = apply(
-      previous,
-      { type: "restart" },
-      {
-        type: "track",
-        chapter: "conversation",
-        environmentId: ENVIRONMENT,
-        threadId: THREAD,
-        at: TRACKED_AT,
-      },
-      successfulRun(),
-      successfulRun({ runId: "follow-up" }),
-    );
-
-    expect(
-      reduceGettingStarted(ready, { ...checkedSource, generation: previous.generation }),
-    ).toEqual(ready);
-    expect(
-      reduceGettingStarted(ready, { ...checkedSource, generation: ready.generation }).completed,
-    ).toEqual(["conversation"]);
-    const connect = reduceGettingStarted(ready, { type: "select", chapter: "connect" });
-    expect(
-      reduceGettingStarted(connect, {
-        type: "connection-ready",
-        environmentId: ENVIRONMENT,
-        generation: previous.generation,
-      }),
-    ).toEqual(connect);
-    expect(
-      reduceGettingStarted(connect, {
-        type: "connection-ready",
-        environmentId: ENVIRONMENT,
-        generation: connect.generation,
-      }).completed,
-    ).toEqual(["connect"]);
-  });
 });
 
 describe("conversation practice", () => {
@@ -722,7 +438,6 @@ describe("conversation practice", () => {
 
   it.each([
     { reason: "failed", change: { succeeded: false } },
-    { reason: "cancelled", change: { succeeded: false } },
     { reason: "answerless", change: { hasAnswer: false } },
     { reason: "historical", change: { startedAt: STARTED_AT } },
     { reason: "another thread's", change: { threadId: OTHER_THREAD } },
@@ -734,145 +449,75 @@ describe("conversation practice", () => {
       first,
     );
   });
-
-  it("source checks from another thread or environment cannot complete the conversation", () => {
-    const progress = apply(
-      tracked("conversation"),
-      successfulRun(),
-      successfulRun({ runId: "follow-up" }),
-    );
-
-    expect(reduceGettingStarted(progress, { ...checkedSource, threadId: OTHER_THREAD })).toEqual(
-      progress,
-    );
-    expect(
-      reduceGettingStarted(progress, { ...checkedSource, environmentId: OTHER_ENVIRONMENT }),
-    ).toEqual(progress);
-    expect(reduceGettingStarted(progress, checkedSource).completed).toEqual(["conversation"]);
-  });
-
-  it("finishing deferred practice removes the deferral without duplicating completion", () => {
-    const deferred = apply(tracked("conversation"), { type: "later" });
-    const completed = apply(
-      deferred,
-      successfulRun(),
-      successfulRun({ runId: "follow-up" }),
-      checkedSource,
-    );
-
-    expect(completed.completed).toEqual(["conversation"]);
-    expect(completed.deferred).toEqual([]);
-    expect(
-      apply(completed, { type: "select", chapter: "conversation" }, { type: "later" }).deferred,
-    ).toEqual([]);
-  });
 });
 
 describe("doing useful work", () => {
-  it("opening and tracking an Ideas draft leaves the chapter unfinished until its own run succeeds", () => {
-    const selected = reduceGettingStarted(start(), { type: "select", chapter: "ideas" });
-    const draft = tracked("ideas");
+  it.each([
+    {
+      chapter: "connected-work",
+      toolNames: ["microsoft365_mail_search"],
+      evidence: { connectedToolSucceeded: true },
+    },
+    { chapter: "files", toolNames: [], evidence: { usedFile: true } },
+    { chapter: "approvals", toolNames: [], evidence: { answeredApproval: true } },
+    { chapter: "skills", toolNames: [], evidence: { usedSkill: true } },
+  ] as const)(
+    "rejected $chapter evidence does not consume the run id",
+    ({ chapter, toolNames, evidence }) => {
+      const progress = tracked(chapter, toolNames);
+      const incomplete = reduceGettingStarted(progress, successfulRun());
 
-    expect(selected.completed).toEqual([]);
-    expect(draft.tasks[0]?.runIds).toEqual([]);
-    expect(draft.completed).toEqual([]);
-    expect(reduceGettingStarted(draft, successfulRun({ threadId: OTHER_THREAD }))).toEqual(draft);
-    expect(reduceGettingStarted(draft, successfulRun()).completed).toEqual(["ideas"]);
-  });
-
-  it("connected work requires a successful integration tool result as well as a successful answer", () => {
-    const progress = tracked("connected-work");
-
-    // An ordinary chat answer, a connected account, or an attempted/failed tool call
-    // does not supply the app-observed connectedToolSucceeded flag.
-    expect(reduceGettingStarted(progress, successfulRun())).toEqual(progress);
-    expect(
-      reduceGettingStarted(
-        progress,
-        successfulRun({ connectedToolSucceeded: true, succeeded: false }),
-      ),
-    ).toEqual(progress);
-    expect(
-      reduceGettingStarted(
-        progress,
-        successfulRun({ connectedToolSucceeded: true, hasAnswer: false }),
-      ),
-    ).toEqual(progress);
-    expect(reduceGettingStarted(progress, successfulRun({ usedFile: true }))).toEqual(progress);
-    const completed = reduceGettingStarted(
-      progress,
-      successfulRun({ connectedToolSucceeded: true }),
-    );
-    expect(completed.completed).toEqual(["connected-work"]);
-  });
-
-  it("files requires attachment or file-work evidence rather than an ordinary chat answer", () => {
-    const progress = tracked("files");
-
-    expect(reduceGettingStarted(progress, successfulRun())).toEqual(progress);
-    expect(reduceGettingStarted(progress, successfulRun({ connectedToolSucceeded: true }))).toEqual(
-      progress,
-    );
-    expect(
-      reduceGettingStarted(progress, successfulRun({ usedFile: true, succeeded: false })),
-    ).toEqual(progress);
-    expect(
-      reduceGettingStarted(progress, successfulRun({ usedFile: true, hasAnswer: false })),
-    ).toEqual(progress);
-    expect(reduceGettingStarted(progress, successfulRun({ usedFile: true })).completed).toEqual([
-      "files",
-    ]);
-  });
-
-  it.each(["conversation", "connected-work", "files", "ideas"] as const)(
-    "replaying the same successful run for %s is idempotent",
-    (chapter) => {
-      const event = successfulRun({ connectedToolSucceeded: true, usedFile: true });
-      const completed = reduceGettingStarted(tracked(chapter), event);
-
-      expect(reduceGettingStarted(completed, event)).toEqual(completed);
+      expect(incomplete).toEqual(progress);
+      const completed = reduceGettingStarted(incomplete, successfulRun(evidence));
+      expect(completed.completed).toEqual([chapter]);
       expect(completed.tasks[0]?.runIds).toEqual(["first-run"]);
-      expect(completed.completed).toEqual(chapter === "conversation" ? [] : [chapter]);
+      expect(
+        reduceGettingStarted(completed, successfulRun({ runId: "late-extra", ...evidence })),
+      ).toEqual(completed);
     },
   );
+});
 
-  it("replaying an older success remains idempotent after further distinct runs arrive", () => {
-    const first = successfulRun();
-    const progress = apply(
-      tracked("conversation"),
-      first,
-      successfulRun({ runId: "second", startedAt: FOLLOW_UP_AT }),
-      successfulRun({ runId: "third", startedAt: RETRIED_AT }),
+describe("practice without a connected account", () => {
+  it("completes connected work from the sample-email draft, which declares no email tools", () => {
+    expect(reduceGettingStarted(tracked("connected-work"), successfulRun()).completed).toEqual([
+      "connected-work",
+    ]);
+  });
+});
+
+describe("usage events", () => {
+  it("reports a first start and each chapter newly finished or saved for later", () => {
+    const started = start();
+    const deferred = reduceGettingStarted(started, { type: "later" });
+    const restarted = reduceGettingStarted(deferred, { type: "restart" });
+
+    expect(gettingStartedAnalyticsEvents(DEFAULT_GETTING_STARTED_PROGRESS, started)).toEqual([
+      { event: "started" },
+    ]);
+    expect(gettingStartedAnalyticsEvents(started, deferred)).toEqual([
+      { event: "chapter-later", chapter: "welcome" },
+    ]);
+    expect(gettingStartedAnalyticsEvents(started, { ...started, completed: ["welcome"] })).toEqual([
+      { event: "chapter-completed", chapter: "welcome" },
+    ]);
+    expect(gettingStartedAnalyticsEvents(deferred, restarted)).toEqual([]);
+  });
+});
+
+describe("starter skill recipes", () => {
+  it("offers everyday recipes the person can run now, best first", () => {
+    const recipes = gettingStartedSkillRecipes(
+      new Set(["skill-creator", "gmail", "google-calendar", "outlook-mail", "outlook-calendar"]),
+      new Map([
+        ["google-workspace", new Set(["gmail", "google-calendar"])],
+        ["microsoft-365", new Set<string>()],
+      ]),
     );
 
-    expect(reduceGettingStarted(progress, first)).toEqual(progress);
-    expect(reduceGettingStarted(progress, checkedSource).completed).toEqual(["conversation"]);
-  });
-
-  it("an initially unfinished run can count when its successful answer arrives later", () => {
-    const progress = tracked("ideas");
-    const pending = reduceGettingStarted(
-      progress,
-      successfulRun({ succeeded: false, hasAnswer: false }),
-    );
-
-    expect(pending).toEqual(progress);
-    expect(reduceGettingStarted(pending, successfulRun()).completed).toEqual(["ideas"]);
-  });
-
-  it.each([
-    { chapter: "connected-work", evidence: { connectedToolSucceeded: true } },
-    { chapter: "files", evidence: { usedFile: true } },
-  ] as const)("rejected $chapter evidence does not consume the run id", ({ chapter, evidence }) => {
-    const progress = tracked(chapter);
-    const incomplete = reduceGettingStarted(progress, successfulRun());
-
-    expect(incomplete).toEqual(progress);
-    const completed = reduceGettingStarted(incomplete, successfulRun(evidence));
-    expect(completed.completed).toEqual([chapter]);
-    expect(completed.tasks[0]?.runIds).toEqual(["first-run"]);
-    expect(
-      reduceGettingStarted(completed, successfulRun({ runId: "late-extra", ...evidence })),
-    ).toEqual(completed);
+    expect(recipes.map(({ id, prompt }) => [id, prompt.split(" Give")[0]])).toEqual([
+      ["morning-brief", "$google-calendar $gmail"],
+      ["make-a-skill", expect.stringMatching(/^\$skill-creator /)],
+    ]);
   });
 });

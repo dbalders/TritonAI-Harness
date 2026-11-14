@@ -128,12 +128,10 @@ const make = Effect.gen(function* () {
   const read = Effect.fn("ProjectBriefService.read")(function* (projectId: ProjectId) {
     const rows = yield* sql<{
       state_json: string;
-    }>`SELECT state_json FROM project_briefs WHERE project_id=${projectId}`.pipe(
-      Effect.mapError(unavailable),
-    );
+    }>`SELECT state_json FROM project_briefs WHERE project_id=${projectId}`;
     if (!rows[0]) return initial(projectId);
-    return yield* decodeStored(rows[0].state_json).pipe(Effect.mapError(unavailable));
-  });
+    return yield* decodeStored(rows[0].state_json);
+  }, Effect.mapError(unavailable));
   const replay = Effect.fn("ProjectBriefService.replay")(function* (
     projectId: ProjectId,
     requestId: string,
@@ -187,9 +185,7 @@ const make = Effect.gen(function* () {
           }
         }),
       )
-      .pipe(
-        Effect.mapError((error) => (Schema.is(ProjectBriefError)(error) ? error : unavailable())),
-      );
+      .pipe(Effect.mapError((error) => (compiledIs1(error) ? error : unavailable())));
     yield* PubSub.publish(changes, state.projectId);
     return state;
   });
@@ -206,21 +202,18 @@ const make = Effect.gen(function* () {
   const refreshSources = Effect.fn("ProjectBriefService.refreshSources")(function* (
     state: ProjectBriefState,
   ) {
-    let next = state;
+    const next = { ...state, sources: [...state.sources], snapshots: [...state.snapshots] };
     for (const source of state.sources) {
       const captured = yield* runtime
         .capture({ projectId: state.projectId, selection: source.selection })
         .pipe(
           Effect.map((value) => ({ value })),
-          Effect.catch(() => Effect.succeed({ value: null })),
+          Effect.orElseSucceed(() => ({ value: null })),
         );
       if (!captured.value) {
-        next = {
-          ...next,
-          sources: next.sources.map((item) =>
-            item.id === source.id ? { ...item, status: "unavailable" as const } : item,
-          ),
-        };
+        next.sources = next.sources.map((item) =>
+          item.id === source.id ? { ...item, status: "unavailable" as const } : item,
+        );
         continue;
       }
       const previous = next.snapshots.find((snapshot) => snapshot.id === source.snapshotId)!;
@@ -235,20 +228,16 @@ const make = Effect.gen(function* () {
           return yield* fail("invalid_request", "This project has reached its 200-snapshot limit.");
         snapshotId = `snapshot:${digest([source.id, value.revision, value.digest, value.text])}`;
         if (!next.snapshots.some((snapshot) => snapshot.id === snapshotId))
-          next = {
-            ...next,
-            snapshots: [
-              ...next.snapshots,
-              { ...value, id: snapshotId, sourceId: source.id, capturedAt: yield* now },
-            ],
-          };
+          next.snapshots.push({
+            ...value,
+            id: snapshotId,
+            sourceId: source.id,
+            capturedAt: yield* now,
+          });
       }
-      next = {
-        ...next,
-        sources: next.sources.map((item) =>
-          item.id === source.id ? { ...item, snapshotId, status: "available" as const } : item,
-        ),
-      };
+      next.sources = next.sources.map((item) =>
+        item.id === source.id ? { ...item, snapshotId, status: "available" as const } : item,
+      );
     }
     return { ...next, sourceDigest: sourceDigest(next) };
   });
@@ -265,7 +254,7 @@ const make = Effect.gen(function* () {
           threadId: synthesis.threadId,
           runId: synthesis.runId,
         })
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (observation)
         next = {
           ...next,
@@ -289,7 +278,7 @@ const make = Effect.gen(function* () {
           threadId: execution.threadId,
           runId: execution.runId,
         })
-        .pipe(Effect.catch(() => Effect.succeed(null)));
+        .pipe(Effect.orElseSucceed(() => null));
       if (!observation) continue;
       const status: ProjectBriefExecution["status"] =
         observation.status === "completed"
@@ -481,7 +470,7 @@ const make = Effect.gen(function* () {
                 threadId: synthesis.threadId,
                 runId: synthesis.runId,
               })
-              .pipe(Effect.catch(() => Effect.succeed(null)));
+              .pipe(Effect.orElseSucceed(() => null));
             if (run && ["running", "queued"].includes(run.status))
               yield* runtime
                 .cancel({
@@ -825,7 +814,7 @@ const make = Effect.gen(function* () {
                 threadId: execution.threadId,
                 runId: execution.runId,
               })
-              .pipe(Effect.catch(() => Effect.succeed(null)));
+              .pipe(Effect.orElseSucceed(() => null));
             if (observed) {
               const refreshed = yield* observe(state);
               if (canonical(refreshed) !== canonical(state)) yield* save(state, refreshed);
@@ -1104,7 +1093,7 @@ const make = Effect.gen(function* () {
     );
   yield* runtime.changes.pipe(
     Stream.runForEach((projectId) => get({ projectId }).pipe(Effect.ignore)),
-    Effect.catch(() => Effect.void),
+    Effect.ignore,
     Effect.forkIn(scope),
   );
   return ProjectBriefService.of({
@@ -1117,3 +1106,5 @@ const make = Effect.gen(function* () {
   });
 });
 export const layer = Layer.effect(ProjectBriefService, make);
+
+const compiledIs1 = Schema.is(ProjectBriefError);

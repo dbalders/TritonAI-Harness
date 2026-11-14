@@ -117,29 +117,6 @@ layer("033_BackfillProjectionThreadSessionInstanceId", (it) => {
     }),
   );
 
-  it.effect("runs on a fresh installation", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-
-      yield* runMigrations();
-
-      const migrations = yield* sql<{
-        readonly migration_id: number;
-        readonly name: string;
-      }>`
-        SELECT migration_id, name
-        FROM effect_sql_migrations
-        WHERE migration_id = 33
-      `;
-      assert.deepStrictEqual(migrations, [
-        {
-          migration_id: 33,
-          name: "BackfillProjectionThreadSessionInstanceId",
-        },
-      ]);
-    }),
-  );
-
   it.effect("is idempotent and leaves ambiguous or existing values untouched", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

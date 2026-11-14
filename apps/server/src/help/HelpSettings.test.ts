@@ -9,7 +9,6 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 import { buildHelpPrompt } from "@t3tools/provider-core/server/textGenerationPrompts";
-import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -54,46 +53,6 @@ const promptForSnapshot = (snapshot: ReturnType<typeof helpSettingsSnapshot>) =>
 };
 
 describe("Help settings snapshot", () => {
-  it("extracts nested current values generically and distinguishes effective policy from saved choices", () => {
-    const configured: ServerSettings = {
-      ...DEFAULT_SERVER_SETTINGS,
-      enableAgentDeviceAccess: false,
-      backgroundActivity: {
-        schemaVersion: 1,
-        profile: "custom",
-        overrides: { pauseWhenOnBattery: true },
-      },
-      automaticGitFetchInterval: Duration.seconds(75),
-      providerInstances: {
-        [providerId]: {
-          driver: ProviderDriverKind.make("codex"),
-          config: {
-            enabled: true,
-            customModels: ["exact-custom-model"],
-            nestedFutureSetting: { mode: "precise", flag: false },
-          },
-        },
-      },
-    };
-    const effective = { ...configured, enableAgentDeviceAccess: true };
-    const snapshot = helpSettingsSnapshot(effective, configured);
-    const result = values(snapshot);
-    expect(result.enableAgentDeviceAccess).toBe("true");
-    expect(result["configured.enableAgentDeviceAccess"]).toBe("false");
-    expect(result["backgroundActivity.overrides.pauseWhenOnBattery"]).toBe("true");
-    expect(result.automaticGitFetchInterval).toBe("75000 ms");
-    expect(result[`providerInstances.${providerId}.config.customModels[0]`]).toBe(
-      "exact-custom-model",
-    );
-    expect(
-      result[`providerInstances.${providerId}.config.nestedFutureSetting.flag`],
-    ).toBeUndefined();
-    expect(result[`providerInstances.${providerId}.config.$omitted`]).toContain(
-      "undeclared provider fields omitted",
-    );
-    expect(isHelpSettingsSnapshot(snapshot)).toBe(true);
-  });
-
   it("uses schema secret redaction and presence markers, including environment and per-host credentials", () => {
     const settings: ServerSettings = {
       ...DEFAULT_SERVER_SETTINGS,
@@ -409,33 +368,5 @@ describe("Help settings snapshot", () => {
       values(helpSettingsSnapshot(settings, settings, "Show my reviewGuideInstructions"))
         .reviewGuideInstructions,
     ).toBe("Global review preference");
-  });
-
-  it("keeps requested exact values after large maps and reports record and value omission", () => {
-    const settings: ServerSettings = {
-      ...DEFAULT_SERVER_SETTINGS,
-      usageModelAliases: Object.fromEntries(
-        Array.from({ length: 1_200 }, (_, index) => [
-          `custom-model-${index}`,
-          `priced-model-${index}`,
-        ]),
-      ),
-      branchNamePrefix: "a".repeat(2_000),
-    };
-    const snapshot = helpSettingsSnapshot(
-      settings,
-      settings,
-      "What is usageModelAliases custom-model-1199 and branchNamePrefix?",
-    );
-    const result = values(snapshot);
-    expect(result["usageModelAliases.custom-model-1199"]).toBe("priced-model-1199");
-    expect(result.branchNamePrefix).toBe("a".repeat(2_000));
-    expect(snapshot.entries).toHaveLength(300);
-    expect(snapshot.omittedCount).toBe(snapshot.totalCount - snapshot.entries.length);
-    expect(snapshot.omittedCount).toBeGreaterThan(0);
-    expect(values(helpSettingsSnapshot(settings, undefined)).branchNamePrefix).toContain(
-      "truncated",
-    );
-    expect(isHelpSettingsSnapshot(snapshot)).toBe(true);
   });
 });

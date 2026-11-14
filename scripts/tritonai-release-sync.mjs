@@ -198,9 +198,10 @@ function createWorktree({ branch, downstreamRef, worktree, cwd }) {
   if (existing.status === 0) {
     // Reuse the preserved candidate; Git refuses a branch owned by another worktree.
     run("git", ["worktree", "add", worktree, branch], { cwd });
-    run("git", ["merge", "--no-edit", downstreamRef], { cwd: worktree });
+    return mergeRelease({ releaseSha: downstreamRef, worktree });
   } else {
     run("git", ["worktree", "add", "-b", branch, worktree, downstreamRef], { cwd });
+    return "clean";
   }
 }
 
@@ -208,10 +209,8 @@ function mergeRelease({ releaseSha, worktree }) {
   const cleanMerge = gitStatus(["merge", "--no-edit", releaseSha], { cwd: worktree });
   if (cleanMerge.status === 0) return "clean";
 
-  run("git", ["merge", "--abort"], { cwd: worktree, check: false });
-  const oursMerge = gitStatus(["merge", "--no-edit", "-X", "ours", releaseSha], { cwd: worktree });
-  if (oursMerge.status === 0) return "conflict-auto-resolved-with-downstream";
-
+  // Retain both sides for semantic reconciliation; preference merges can produce
+  // valid syntax while silently dropping new upstream behavior.
   return "conflicted";
 }
 
@@ -243,7 +242,7 @@ ${report.summary}
 ## Review Notes
 
 - Preserve downstream TritonAI Harness branding and release-control behavior.
-- Review any \`-X ours\` conflict resolutions before merging.
+- Resolve conflicts against both parents and verify retained downstream and new upstream behavior.
 
 ## Labels
 
@@ -357,6 +356,7 @@ function main() {
     downstreamBranch,
     downstreamSha,
     syncBranch: branch,
+    worktree,
     mergeStatus: "not-run",
     installStatus: args.skipChecks ? "skipped" : "not-run",
     checkStatus: args.skipChecks ? "skipped" : "not-run",
@@ -364,12 +364,11 @@ function main() {
   };
 
   try {
-    createWorktree({ branch, downstreamRef, worktree, cwd: repoRoot });
-
-    report.mergeStatus = mergeRelease({ releaseSha, worktree });
+    report.mergeStatus = createWorktree({ branch, downstreamRef, worktree, cwd: repoRoot });
+    if (report.mergeStatus === "clean") report.mergeStatus = mergeRelease({ releaseSha, worktree });
     if (report.mergeStatus === "conflicted") {
       report.summary =
-        "Parent release merge still has unresolved conflicts after retrying with downstream conflict preference.";
+        "Sync merge has conflicts. Reconcile both parents in the retained worktree before checks or publication.";
       console.log(JSON.stringify(report, null, 2));
       return 2;
     }
@@ -386,15 +385,10 @@ function main() {
       }
     }
 
-    const checksOk =
-      (report.installStatus === "passed" || report.installStatus === "skipped") &&
-      (report.checkStatus === "passed" || report.checkStatus === "skipped");
+    const checksOk = report.installStatus === "passed" && report.checkStatus === "passed";
     report.status =
       report.mergeStatus === "clean" && checksOk ? "review-ready" : "needs-human-review";
-    report.summary =
-      report.mergeStatus === "clean"
-        ? "Parent release merged cleanly into TritonAI Harness."
-        : "Parent release was merged with downstream-preferred conflict resolutions.";
+    report.summary = "Parent release merged cleanly into TritonAI Harness.";
 
     const labels = labelsFor(report);
     if (args.push) {
@@ -420,7 +414,7 @@ function main() {
     console.log(JSON.stringify({ ...report, labels, pr: prUrl }, null, 2));
     return report.status === "review-ready" ? 0 : 2;
   } finally {
-    if (args.keepWorktree) {
+    if (args.keepWorktree || report.mergeStatus === "conflicted") {
       console.error(`Kept sync worktree at ${worktree}`);
     } else if (NodeFS.existsSync(worktreeRoot)) {
       run("git", ["worktree", "remove", "--force", worktree], { cwd: repoRoot, check: false });

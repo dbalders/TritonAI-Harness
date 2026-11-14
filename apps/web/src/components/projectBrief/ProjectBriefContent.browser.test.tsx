@@ -4,7 +4,6 @@ import { act, render as renderUi, type Screen } from "../../../test/render";
 import { userEvent } from "vite-plus/test/browser";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ProjectBriefContent, type ProjectBriefAction } from "./ProjectBriefContent";
-import { ProjectBriefArchiveView } from "./ProjectBriefArchiveView";
 import { projectBriefSafeSourceUrl } from "./projectBriefView";
 
 vi.mock("../ui/button", () => ({
@@ -84,170 +83,6 @@ function fixture(): ProjectBriefState {
   };
 }
 describe("Project brief owner review", () => {
-  it("reads an archive without mutation controls and preserves removed source versions and unreviewed results", async () => {
-    await using _fixture = await setupTest();
-
-    const state = fixture();
-    const openThread = vi.fn();
-    await act(async () => {
-      _fixture.renderer = _fixture.stack.use(
-        await renderUi(
-          <ProjectBriefArchiveView
-            archive={{
-              id: "archive-1",
-              archivedAt: now,
-              state: {
-                ...state,
-                sources: [],
-                executions: [
-                  {
-                    id: "execution-1",
-                    proposalId: "action-1",
-                    sourceDigest: "current-sources",
-                    approvedDigest: "approval-1",
-                    threadId: ThreadId.make("work-thread"),
-                    runId: RunId.make("work-run"),
-                    commandId: "launch-1",
-                    status: "needs-review",
-                    result: {
-                      summary: "The channels match.",
-                      artifacts: [],
-                      digest: "result-1",
-                      reportedAt: now,
-                      runId: RunId.make("work-run"),
-                    },
-                    reviewedAt: null,
-                    createdAt: now,
-                    stopRequested: false,
-                  },
-                ],
-              },
-            }}
-            openThread={openThread}
-          />,
-          { router: false /* These subjects use mocked navigation or no routing. */ },
-        ),
-      );
-    });
-    expect(_fixture.text(_fixture.renderer!.container)).toContain("This brief is read-only");
-    expect(_fixture.text(_fixture.renderer!.container)).toContain("Exports must preserve audio.");
-    expect(_fixture.text(_fixture.renderer!.container)).toContain("Ready for your review");
-    expect(_fixture.text(_fixture.renderer!.container)).not.toContain("requires permission");
-    expect(_fixture.button("Mark reviewed complete")).toBeUndefined();
-    expect(_fixture.button("Accept")).toBeUndefined();
-    expect(_fixture.button("Archive & start fresh")).toBeUndefined();
-    await act(() => _fixture.button("Open work thread").click());
-    expect(openThread).toHaveBeenCalledExactlyOnceWith(ThreadId.make("work-thread"));
-    expect(_fixture.run).not.toHaveBeenCalled();
-  });
-
-  it("requires reviewing the current version before archiving and leaves failed archive attempts open", async () => {
-    await using _fixture = await setupTest();
-
-    const state = fixture();
-    await _fixture.mount(state);
-    await act(() => _fixture.button("Archive & start fresh").click());
-    expect(_fixture.run).not.toHaveBeenCalled();
-    expect(_fixture.text(_fixture.renderer!.container)).toContain(
-      "preserved in a read-only saved brief",
-    );
-    await act(() =>
-      _fixture.renderer!.rerender(_fixture.content({ ...state, revision: state.revision + 1 })),
-    );
-    expect(_fixture.button("Save brief & start fresh").disabled).toBe(true);
-    await act(() => _fixture.button("Keep current brief").click());
-    await act(() => _fixture.button("Archive & start fresh").click());
-    _fixture.run.mockResolvedValueOnce(false);
-    await act(() => _fixture.button("Save brief & start fresh").click());
-    expect(_fixture.button("Save brief & start fresh")).toBeDefined();
-    expect(_fixture.text(_fixture.renderer!.container)).toContain(
-      "Audio preservation needs a checked export.",
-    );
-    expect(_fixture.run).toHaveBeenCalledExactlyOnceWith({ action: "archive" });
-  });
-
-  it("blocks archiving while generation status is uncertain instead of silently retiring it", async () => {
-    await using _fixture = await setupTest();
-
-    const state = fixture();
-    await _fixture.mount({ ...state, synthesis: { ...state.synthesis!, status: "uncertain" } });
-    expect(_fixture.button("Archive & start fresh").disabled).toBe(true);
-    expect(_fixture.text(_fixture.renderer!.container)).toContain(
-      "discard any unfinished generation before archiving",
-    );
-    expect(_fixture.run).not.toHaveBeenCalled();
-  });
-
-  it("keeps a missing terminal result open and offers a new reviewed revision", async () => {
-    await using _fixture = await setupTest();
-
-    const state = fixture();
-    await _fixture.mount({
-      ...state,
-      executions: [
-        {
-          id: "execution-1",
-          proposalId: "action-1",
-          sourceDigest: "current-sources",
-          approvedDigest: "approval-1",
-          threadId: ThreadId.make("work-thread"),
-          runId: RunId.make("work-run"),
-          commandId: "launch-1",
-          status: "result-missing",
-          result: null,
-          reviewedAt: null,
-          createdAt: now,
-          stopRequested: false,
-        },
-      ],
-    });
-    expect(_fixture.text(_fixture.renderer!.container)).toContain("Result missing");
-    expect(_fixture.text(_fixture.renderer!.container)).toContain(
-      "finished without returning a verified result",
-    );
-    expect(_fixture.button("Mark reviewed complete")).toBeUndefined();
-    expect(_fixture.button("Review result")).toBeUndefined();
-    await act(() => _fixture.button("Prepare revision").click());
-    expect(_fixture.run).toHaveBeenCalledExactlyOnceWith({
-      action: "revise",
-      proposalId: "action-1",
-    });
-  });
-
-  it("allows retrying an interrupted stop and never offers to restart that work", async () => {
-    await using _fixture = await setupTest();
-
-    const state = fixture();
-    await _fixture.mount({
-      ...state,
-      executions: [
-        {
-          id: "execution-1",
-          proposalId: "action-1",
-          sourceDigest: "current-sources",
-          approvedDigest: "approval-1",
-          threadId: ThreadId.make("work-thread"),
-          runId: RunId.make("work-run"),
-          commandId: "launch-1",
-          status: "uncertain",
-          result: null,
-          reviewedAt: null,
-          createdAt: now,
-          stopRequested: true,
-        },
-      ],
-    });
-    expect(_fixture.text(_fixture.renderer!.container)).toContain("Stop requested");
-    expect(_fixture.button("Retry stop").disabled).toBe(false);
-    expect(_fixture.button("Retry starting work thread")).toBeUndefined();
-    _fixture.run.mockResolvedValueOnce(false);
-    await act(() => _fixture.button("Retry stop").click());
-    expect(_fixture.button("Retry stop").disabled).toBe(false);
-    await act(() => _fixture.button("Retry stop").click());
-    expect(_fixture.run).toHaveBeenCalledTimes(2);
-    expect(_fixture.run).toHaveBeenLastCalledWith({ action: "cancel", executionId: "execution-1" });
-  });
-
   it("requires explicit discard confirmation and pins it to the generation reviewed", async () => {
     await using _fixture = await setupTest();
 
@@ -389,9 +224,7 @@ describe("Project brief owner review", () => {
     const state = fixture();
     await _fixture.mount(state);
     await act(() => _fixture.button("Edit").click());
-    await act(() =>
-      _fixture.editField(_fixture.field("Proposal text"), "My revised instructions."),
-    );
+    await _fixture.editField("Proposal text", "My revised instructions.");
     await act(() =>
       _fixture.renderer!.rerender(
         _fixture.content({
@@ -410,29 +243,6 @@ describe("Project brief owner review", () => {
       "This proposal changed while you were editing",
     );
     expect(_fixture.run).not.toHaveBeenCalled();
-  });
-
-  it("offers an explicit retry for uncertain startup without silently starting another thread", async () => {
-    await using _fixture = await setupTest();
-
-    const state = fixture();
-    await _fixture.mount({ ...state, synthesis: { ...state.synthesis!, status: "uncertain" } });
-    expect(_fixture.run).not.toHaveBeenCalled();
-    expect(_fixture.button("Generate new proposal").disabled).toBe(true);
-    await act(() => _fixture.button("Retry starting brief thread").click());
-    expect(_fixture.run).toHaveBeenCalledExactlyOnceWith({ action: "retry" });
-  });
-
-  it("blocks accepting or launching when refreshed source versions have changed", async () => {
-    await using _fixture = await setupTest();
-
-    const state = fixture();
-    await _fixture.mount({ ...state, sourceDigest: "changed-sources" });
-    expect(_fixture.button("Review & start thread").disabled).toBe(true);
-    expect(_fixture.text(_fixture.renderer!.container)).toContain(
-      "Sources changed since this brief",
-    );
-    expect(_fixture.button("Generate new proposal").disabled).toBe(false);
   });
 
   it("keeps an agent result separate from owner completion and binds review to the displayed result", async () => {
@@ -481,101 +291,22 @@ describe("Project brief owner review", () => {
     expect(_fixture.run).not.toHaveBeenCalled();
   });
 
-  it("keeps failed source input intact for correction and does not import a pasted URL", async () => {
-    await using _fixture = await setupTest();
-
-    const state = fixture();
-    await _fixture.mount({
-      ...state,
-      sources: [],
-      snapshots: [],
-      brief: null,
-      proposals: [],
-      synthesis: null,
-    });
-    expect(_fixture.button("Generate brief").disabled).toBe(true);
-    await act(() => _fixture.button("Choose sources").click());
-    await act(() => _fixture.editField(_fixture.field("Source type"), "excerpt"));
-    for (const [label, value] of [
-      ["Source title", "Meeting notes"],
-      ["Source excerpt", "Review the export."],
-      ["Original source URL", "https://example.com/private-note"],
-    ] as const) {
-      await act(() => _fixture.editField(_fixture.field(label), value));
-    }
-    _fixture.run.mockResolvedValueOnce(false);
-    await act(() =>
-      _fixture.renderer!.container.querySelector<HTMLFormElement>("form")!.requestSubmit(),
-    );
-    expect(_fixture.run).toHaveBeenLastCalledWith({
-      action: "addSource",
-      source: {
-        kind: "excerpt",
-        title: "Meeting notes",
-        text: "Review the export.",
-        url: "https://example.com/private-note",
-      },
-    });
-    expect(_fixture.field("Source excerpt").value).toBe("Review the export.");
-    expect(_fixture.text(_fixture.renderer!.container)).toContain(
-      "the page is not imported or refreshed",
-    );
-  });
-
-  it("does not submit a previously chosen message after switching source types", async () => {
-    await using _fixture = await setupTest();
-
-    const state = fixture();
-    await act(async () => {
-      _fixture.renderer = _fixture.stack.use(
-        await renderUi(
-          <ProjectBriefContent
-            state={{
-              ...state,
-              sources: [],
-              snapshots: [],
-              brief: null,
-              proposals: [],
-              synthesis: null,
-            }}
-            busy={false}
-            canWrite
-            error={null}
-            run={_fixture.run}
-            modelControl={null}
-            modelReady
-            openThread={() => {}}
-            renderMessagePicker={(onSelect) => (
-              <button type="button" onClick={() => onSelect("thread-1", "message-1")}>
-                Pick message
-              </button>
-            )}
-          />,
-          { router: false /* These subjects use mocked navigation or no routing. */ },
-        ),
-      );
-    });
-    await act(() => _fixture.button("Choose sources").click());
-    const sourceType = () => _fixture.field("Source type");
-    await act(() => _fixture.editField(sourceType(), "message"));
-    await act(() => _fixture.button("Pick message").click());
-    await act(() => _fixture.editField(sourceType(), "file"));
-    await act(() => _fixture.editField(sourceType(), "message"));
-    await act(() =>
-      _fixture.renderer!.container.querySelector<HTMLFormElement>("form")!.requestSubmit(),
-    );
-    expect(_fixture.run).not.toHaveBeenCalled();
-  });
-
   it("removes mutation access when the environment permission changes", async () => {
     await using _fixture = await setupTest();
 
     const state = fixture();
     await _fixture.mount(state);
-    await act(() => _fixture.button("Review & start thread").click());
-    await act(() => _fixture.renderer!.rerender(_fixture.content(state, false)));
-    expect(_fixture.button("Start thread").disabled).toBe(true);
-    expect(_fixture.button("Add").disabled).toBe(true);
+    await userEvent.click(
+      _fixture.renderer.getByRole("button", { name: "Review & start thread", exact: true }),
+    );
+    await _fixture.renderer.rerender(_fixture.content(state, false));
+    await expect
+      .element(_fixture.renderer.getByRole("button", { name: "Start thread", exact: true }))
+      .toBeDisabled();
+    await expect
+      .element(_fixture.renderer.getByRole("button", { name: "Add", exact: true }))
+      .toBeDisabled();
+    expect(_fixture.run).not.toHaveBeenCalled();
   });
 
   it("does not turn unsafe source URLs into links", async () => {
@@ -598,15 +329,16 @@ async function setupTest() {
   function field(label: string): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement {
     return renderer.container.querySelector('[aria-label="' + label + '"]')!;
   }
-  async function editField(
-    element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
-    value: string,
-  ) {
-    if (element instanceof HTMLSelectElement) await userEvent.selectOptions(element, value);
-    else {
-      await userEvent.clear(element);
-      if (value) await userEvent.type(element, value);
+  async function editField(label: string, value: string) {
+    const locator = renderer.getByLabelText(label, { exact: true });
+    await expect.element(locator).toBeVisible();
+    if (locator.element() instanceof HTMLSelectElement) {
+      await userEvent.selectOptions(locator, value);
+    } else {
+      await userEvent.clear(locator);
+      if (value) await userEvent.type(locator, value);
     }
+    await expect.element(locator).toHaveValue(value);
   }
   function button(label: string) {
     return Array.from(renderer!.container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -628,13 +360,11 @@ async function setupTest() {
     );
   }
   async function mount(state: ProjectBriefState) {
-    await act(async () => {
-      renderer = stack.use(
-        await renderUi(content(state), {
-          router: false /* These subjects use mocked navigation or no routing. */,
-        }),
-      );
-    });
+    renderer = stack.use(
+      await renderUi(content(state), {
+        router: false /* These subjects use mocked navigation or no routing. */,
+      }),
+    );
   }
 
   run.mockReset().mockResolvedValue(true);

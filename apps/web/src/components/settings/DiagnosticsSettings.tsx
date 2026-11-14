@@ -19,7 +19,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { cn } from "../../lib/utils";
@@ -779,17 +779,6 @@ export function DiagnosticsSettingsPanel() {
   const [openLogsDirectoryError, setOpenLogsDirectoryError] = useState<string | null>(null);
   const [signalingPid, setSignalingPid] = useState<number | null>(null);
   const signalingPidRef = useRef<number | null>(null);
-  const environmentIdRef = useRef(environmentId);
-  const processDataRef = useRef(processData);
-  useEffect(() => {
-    processDataRef.current = processData;
-  }, [processData]);
-  useEffect(() => {
-    environmentIdRef.current = environmentId;
-    return () => {
-      environmentIdRef.current = null;
-    };
-  }, [environmentId]);
 
   const openLogsDirectory = () => {
     const logsDirectoryPath = observability?.logsDirectoryPath ?? null;
@@ -833,8 +822,7 @@ export function DiagnosticsSettingsPanel() {
   const isInitialLoading = isPending && data === null;
   const isProcessInitialLoading = isProcessPending && processData === null;
   const isResourceInitialLoading = isResourcePending && resourceData === null;
-  // The export form waits for each environment's first tables so a search target below them
-  // stays in view. Later loads, such as a new resource window, must not remount it and drop drafts.
+  // Wait for initial tables to stabilize search targets; later loads must preserve export drafts.
   const [exportFormEnvironmentId, setExportFormEnvironmentId] =
     useState<typeof environmentId>(null);
   if (
@@ -847,8 +835,8 @@ export function DiagnosticsSettingsPanel() {
     setExportFormEnvironmentId(environmentId);
   }
   const signalProcess = async (pid: number, signal: ServerProcessSignal) => {
-    const targetEnvironmentId = environmentIdRef.current;
-    const process = processDataRef.current?.processes.find((entry) => entry.pid === pid);
+    const targetEnvironmentId = environmentId;
+    const process = processData?.processes.find((entry) => entry.pid === pid);
     if (
       targetEnvironmentId === null ||
       process === undefined ||
@@ -883,19 +871,9 @@ export function DiagnosticsSettingsPanel() {
         return;
       }
     }
-    const currentEnvironmentId = environmentIdRef.current;
-    if (
-      currentEnvironmentId === null ||
-      currentEnvironmentId !== targetEnvironmentId ||
-      !readEnvironmentScope(currentEnvironmentId, AuthEnvironmentMaintainScope)
-    ) {
-      clearSignaling();
-      return;
-    }
-    if (
-      processDataRef.current?.processes.find((entry) => entry.pid === pid)?.startTimeMs !==
-      process.startTimeMs
-    ) {
+    // The server rejects a pid whose start time no longer matches, so a process that exited
+    // during confirmation is never signaled by mistake.
+    if (!readEnvironmentScope(targetEnvironmentId, AuthEnvironmentMaintainScope)) {
       clearSignaling();
       return;
     }

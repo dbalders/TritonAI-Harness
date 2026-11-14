@@ -7,6 +7,7 @@ import {
 import type { DesktopSshEnvironmentTarget, EnvironmentMachineKind } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import type { ReactNode } from "react";
+
 import { cn } from "~/lib/utils";
 import type { EnvironmentPresentation } from "~/state/environments";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
@@ -73,8 +74,7 @@ export function EnvironmentRow({
         className,
       )}
     >
-      {/* Dim only the identity so a switched-off row's controls stay readable
-          and distinct from disabled ones. */}
+      {/* Dim only identity so switched-off controls remain readable and distinct from disabled controls. */}
       <EnvironmentMachineIcon
         aria-hidden
         kind={kind}

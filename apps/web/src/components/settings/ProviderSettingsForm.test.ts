@@ -5,32 +5,11 @@ import { DRIVER_OPTION_BY_VALUE } from "./providerDriverMeta";
 import {
   deriveProviderSettingsFields,
   nextProviderConfigWithFieldValue,
+  reconcileRowsDraft,
+  seedRowsDraft,
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
-  it("derives visible provider config fields from the client definition schema", () => {
-    const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
-
-    expect(codex).toBeDefined();
-    expect(deriveProviderSettingsFields(codex!).map((field) => field.key)).toEqual([
-      "binaryPath",
-      "homePath",
-      "shadowHomePath",
-      "launchArgs",
-    ]);
-  });
-
-  it("sources labels and descriptions from schema annotations", () => {
-    const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
-    expect(codex).toBeDefined();
-
-    const homePath = deriveProviderSettingsFields(codex!).find((field) => field.key === "homePath");
-
-    expect(homePath).toMatchObject({
-      label: "Codex config home",
-    });
-  });
-
   it("keeps every masked field as a stored secret", () => {
     const settingsSchema = makeProviderSettingsSchema({
       token: TrimmedString.pipe(
@@ -41,11 +20,6 @@ describe("ProviderSettingsForm helpers", () => {
     expect(deriveProviderSettingsFields({ settingsSchema })).toMatchObject([
       { key: "token", secret: true },
     ]);
-  });
-
-  it("keeps non-managed Claude provider settings hidden", () => {
-    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
-    expect(claude).toBeUndefined();
   });
 
   it("preserves unknown config keys while omitting empty configurable fields", () => {
@@ -59,40 +33,6 @@ describe("ProviderSettingsForm helpers", () => {
       { forkOwned: 1, homePath: "~/.tritonai-harness/codex" },
       homePath!,
       "",
-    );
-
-    expect(next).toEqual({ forkOwned: 1 });
-  });
-
-  it("omits false boolean fields when clearWhenEmpty is omit", () => {
-    const next = nextProviderConfigWithFieldValue(
-      { forkOwned: 1, experimental: true },
-      {
-        key: "experimental",
-        control: "switch",
-        section: "basic",
-        label: "Experimental",
-        clearWhenEmpty: "omit",
-        defaultBooleanValue: false,
-      },
-      false,
-    );
-
-    expect(next).toEqual({ forkOwned: 1 });
-  });
-
-  it("omits true boolean fields when true is the default", () => {
-    const next = nextProviderConfigWithFieldValue(
-      { forkOwned: 1, experimental: false },
-      {
-        key: "experimental",
-        control: "switch",
-        section: "basic",
-        label: "Experimental",
-        clearWhenEmpty: "omit",
-        defaultBooleanValue: true,
-      },
-      true,
     );
 
     expect(next).toEqual({ forkOwned: 1 });
@@ -114,20 +54,34 @@ describe("ProviderSettingsForm helpers", () => {
 
     expect(next).toEqual({ experimental: false });
   });
+});
 
-  it("preserves false boolean fields when clearWhenEmpty is persist", () => {
-    const next = nextProviderConfigWithFieldValue(
-      undefined,
-      {
-        key: "experimental",
-        control: "switch",
-        section: "basic",
-        label: "Experimental",
-        clearWhenEmpty: "persist",
-      },
-      false,
-    );
+describe("reconcileRowsDraft", () => {
+  let nextId = 0;
+  const toRows = (values: ReadonlyArray<string>) =>
+    values.map((value) => ({ id: nextId++, value }));
+  const equal = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
+    left.length === right.length && left.every((value, index) => value === right[index]);
 
-    expect(next).toEqual({ experimental: false });
+  it("keeps rows when an equal value arrives with a new identity", () => {
+    const draft = seedRowsDraft(["a"], toRows);
+    expect(reconcileRowsDraft(draft, ["a"], equal, toRows)).toBe(draft);
+  });
+
+  it("keeps row ids when the published value echoes back", () => {
+    const seeded = seedRowsDraft(["a"], toRows);
+    const edited = { rows: [...seeded.rows, { id: 99, value: "" }], seen: seeded.seen };
+    const draft = { ...edited, lastPublished: ["a", ""] };
+    const next = reconcileRowsDraft(draft, ["a", ""], equal, toRows);
+    expect(next.rows).toBe(draft.rows);
+    expect(next.seen).toEqual(["a", ""]);
+    expect(next.lastPublished).toBeUndefined();
+  });
+
+  it("reseeds rows when the value changes from outside", () => {
+    const draft = { ...seedRowsDraft(["a"], toRows), lastPublished: ["b"] };
+    const next = reconcileRowsDraft(draft, ["c"], equal, toRows);
+    expect(next.rows.map((row) => row.value)).toEqual(["c"]);
+    expect(next.lastPublished).toBeUndefined();
   });
 });

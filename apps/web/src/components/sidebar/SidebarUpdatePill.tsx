@@ -1,6 +1,6 @@
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 import { TriangleAlertIcon } from "lucide-react";
-import { type ComponentProps, useEffect, useId, useRef, useState } from "react";
+import { type ComponentProps, useId, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { isElectron } from "../../env";
@@ -49,21 +49,21 @@ type SidebarUpdatePopoverChangeDetails = Parameters<
 >[1];
 type SidebarUpdatePopoverHandle = ReturnType<typeof PopoverCreateHandle>;
 
-export function shouldUseSidebarUpdateReleaseNotesPopover(
+function shouldUseSidebarUpdateReleaseNotesPopover(
   showUpdateDetails: boolean,
   state: DesktopUpdateState | null,
 ): boolean {
   return showUpdateDetails && state?.channel === "nightly" && state.releaseNotes.length > 0;
 }
 
-export function handleSidebarUpdateReleaseNotesPopoverOpenChange(
+function handleSidebarUpdateReleaseNotesPopoverOpenChange(
   _open: boolean,
   details: Pick<SidebarUpdatePopoverChangeDetails, "reason" | "cancel">,
 ): void {
   if (details.reason === "trigger-press") details.cancel();
 }
 
-export function openSidebarUpdateReleaseNotesPopoverOnForwardTab(
+function openSidebarUpdateReleaseNotesPopoverOnForwardTab(
   event: { readonly key: string; readonly shiftKey: boolean },
   handle: Pick<SidebarUpdatePopoverHandle, "open">,
   triggerId: string,
@@ -114,7 +114,7 @@ export function SidebarUpdateArchitectureWarning() {
   return isElectron ? <SidebarUpdateArchitectureWarningContent /> : null;
 }
 
-export function SidebarUpdateArchitectureWarningContent() {
+function SidebarUpdateArchitectureWarningContent() {
   const state = useDesktopUpdateState();
   const visible = shouldShowArm64IntelBuildWarning(state);
   const description = state && visible ? getArm64IntelBuildWarningDescription(state) : null;
@@ -189,7 +189,7 @@ export function SidebarUpdatePill() {
   return <SidebarUpdateControl />;
 }
 
-export function SidebarUpdateControl() {
+function SidebarUpdateControl() {
   const state = useDesktopUpdateState();
   const [isActionPending, setIsActionPending] = useState(false);
   const [isConfirmingEverything, setIsConfirmingEverything] = useState(false);
@@ -259,17 +259,15 @@ export function SidebarUpdateControl() {
   const showReleaseNotesPopover =
     !isRunningEverything && shouldUseSidebarUpdateReleaseNotesPopover(showUpdateDetails, state);
 
-  useEffect(() => {
-    if (!showReleaseNotesPopover) {
-      releaseNotesPopoverHandle.close();
-      return;
-    }
-
-    const trigger = document.getElementById(releaseNotesTriggerId);
-    if (trigger?.matches(":focus-visible")) {
-      releaseNotesPopoverHandle.open(releaseNotesTriggerId);
-    }
-  }, [releaseNotesPopoverHandle, releaseNotesTriggerId, showReleaseNotesPopover]);
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
+  const [releaseNotesTriggerFocusVisible, setReleaseNotesTriggerFocusVisible] = useState(false);
+  // Release notes close when they stop applying, and open when they start
+  // applying while the trigger already holds keyboard focus.
+  const [releaseNotesShownBefore, setReleaseNotesShownBefore] = useState(showReleaseNotesPopover);
+  if (releaseNotesShownBefore !== showReleaseNotesPopover) {
+    setReleaseNotesShownBefore(showReleaseNotesPopover);
+    setReleaseNotesOpen(showReleaseNotesPopover && releaseNotesTriggerFocusVisible);
+  }
 
   const handleAction = async () => {
     const bridge = window.desktopBridge;
@@ -463,9 +461,12 @@ export function SidebarUpdateControl() {
       onClick={handleAction}
       onBlur={() => {
         suppressReleaseNotesFocusOpen.current = false;
+        setReleaseNotesTriggerFocusVisible(false);
       }}
       onFocus={(event) => {
-        if (!showReleaseNotesPopover || !event.currentTarget.matches(":focus-visible")) return;
+        const focusVisible = event.currentTarget.matches(":focus-visible");
+        setReleaseNotesTriggerFocusVisible(focusVisible);
+        if (!showReleaseNotesPopover || !focusVisible) return;
         if (suppressReleaseNotesFocusOpen.current) {
           suppressReleaseNotesFocusOpen.current = false;
           return;
@@ -489,12 +490,15 @@ export function SidebarUpdateControl() {
     <SidebarMenuItem className="ml-auto shrink-0">
       <Popover
         handle={releaseNotesPopoverHandle}
+        open={releaseNotesOpen && showReleaseNotesPopover}
+        triggerId={releaseNotesTriggerId}
         onOpenChange={(open, details) => {
           if (open && !showReleaseNotesPopover) {
             details.cancel();
             return;
           }
           handleSidebarUpdateReleaseNotesPopoverOpenChange(open, details);
+          if (!details.isCanceled) setReleaseNotesOpen(open);
         }}
       >
         <Tooltip disabled={showReleaseNotesPopover}>

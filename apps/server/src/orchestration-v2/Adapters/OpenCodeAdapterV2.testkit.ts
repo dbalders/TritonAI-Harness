@@ -13,7 +13,7 @@ import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEve
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { ProviderAdapterDriverCreateError } from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
-import type { OrchestratorV2ProviderReplayHarness } from "../testkit/ProviderReplayHarness.ts";
+import { type OrchestratorV2ProviderReplayHarness } from "../testkit/ProviderReplayHarness.ts";
 import {
   OPENCODE_DEFAULT_INSTANCE_ID,
   OPENCODE_PROVIDER,
@@ -232,11 +232,7 @@ export class OpenCodeReplayController {
     }
   }
 
-  /**
-   * Like {@link untilEventsDelivered}, but also waits for recorded responses to
-   * be taken: over HTTP a request can start while an earlier one's answer is
-   * still in flight, and must not be matched against that answer.
-   */
+  /** Waits for events and responses to be consumed so concurrent HTTP requests cannot match earlier answers. */
   async untilInboundDelivered(): Promise<void> {
     while (true) {
       this.throwFailure();

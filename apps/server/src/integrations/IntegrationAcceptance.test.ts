@@ -93,7 +93,7 @@ function fixtureProvider(state: FixtureState): IntegrationProvider {
         verificationUriComplete: null,
         userCode: "FIXTURE-CODE",
         message: "Authorize the test fixture.",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        expiresAt: "2100-01-01T00:00:00.000Z",
         intervalSeconds: 1,
       };
     },

@@ -1,7 +1,9 @@
 import { Check, Copy } from "lucide";
+
 import { MorphIcon } from "~/components/MorphIcon";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
+
 import { Button } from "./ui/button";
 
 export function CommandBlock({

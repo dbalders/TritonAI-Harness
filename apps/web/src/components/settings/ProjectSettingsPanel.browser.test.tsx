@@ -51,6 +51,7 @@ const state = vi.hoisted(() => ({
   confirm: vi.fn<() => Promise<boolean>>(),
   releaseUploads: vi.fn(),
   clearDraft: vi.fn(),
+  toast: vi.fn(),
 }));
 
 // Session grants come from the server; each test drives them through these atoms.
@@ -105,6 +106,11 @@ vi.mock(import("~/lib/composerDraftUploads"), async (original) => ({
   ...(await original()),
   releaseProjectDraftUploads: state.releaseUploads,
 }));
+// No toaster is mounted in these tests; the guard's error toast is read at this seam.
+vi.mock(import("../ui/toast"), async (original) => {
+  const actual = await original();
+  return { ...actual, toastManager: { ...actual.toastManager, add: state.toast } };
+});
 // These sections have separate data sources and their own tests.
 vi.mock(import("./ProjectDefaultsSettings"), async (original) => ({
   ...(await original()),
@@ -241,9 +247,9 @@ async function mountPanel(search: Omit<SettingsScopeSearch, "project"> = {}) {
     history: createMemoryHistory({ initialEntries: [`/settings/projects?${query}`] }),
   });
   await router.load();
-  // The panel's own route tree validates settings search params, which the default router lacks.
   await using stack = new AsyncDisposableStack();
   const screen = stack.use(
+    // The panel's own route tree validates settings search params, which the default router lacks.
     await render(
       <RegistryContext.Provider value={appAtomRegistry}>
         <RouterProvider router={router} />
@@ -278,6 +284,7 @@ async function mountSettings(search: SettingsScopeSearch) {
     }),
   });
   await router.load();
+  // The settings route tree above validates scope search params, which the default router lacks.
   const screen = await render(
     <RegistryContext.Provider value={appAtomRegistry}>
       <RouterProvider router={router} />
@@ -305,6 +312,20 @@ async function rename(screen: Screen, title: string) {
   await userEvent.keyboard("{Enter}");
 }
 
+// The recheck reports the denial by toast; seeing it proves the recheck ran.
+async function expectProjectAccessDeniedToast(title: string) {
+  await vi.waitFor(() =>
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title,
+        description: "This connection cannot change projects in remote.",
+      }),
+    ),
+  );
+  expect(state.toast).toHaveBeenCalledOnce();
+}
+
 describe("project settings permissions", () => {
   it("disables shared edits when any member lacks project access", async () => {
     setup();
@@ -327,7 +348,7 @@ describe("project settings permissions", () => {
       primaryId,
       remoteId,
     ]);
-    expect(state.projects.map((project) => project.title)).toEqual(["Renamed", "Renamed"]);
+    expect(nameInput(screen).value).toBe("Renamed");
   });
 
   it("stops before the next member if its grant is revoked during an earlier update", async () => {
@@ -343,6 +364,7 @@ describe("project settings permissions", () => {
       firstUpdate.resolve(AsyncResult.success(undefined));
       await firstUpdate.promise;
     });
+    await expectProjectAccessDeniedToast("Failed to rename project");
     expect(state.update).toHaveBeenCalledOnce();
     expect(state.update.mock.calls[0]![0].environmentId).toBe(primaryId);
   });
@@ -386,6 +408,7 @@ describe("project settings permissions", () => {
       confirmed.resolve(true);
       await confirmed.promise;
     });
+    await expectProjectAccessDeniedToast("Failed to remove project");
     expect(state.delete).not.toHaveBeenCalled();
     expect(state.releaseUploads).not.toHaveBeenCalled();
     expect(state.clearDraft).not.toHaveBeenCalled();
@@ -396,14 +419,20 @@ describe("project settings permissions", () => {
     await using screen = await mountPanel();
     await userEvent.fill(nameInput(screen), "Renamed");
     await grant(remoteId, AsyncResult.success(session([])));
-    await act(async () => nameInput(screen).blur());
+    // Chromium takes focus off a newly disabled input without firing blur. Send the
+    // focusout so the save attempt runs and hits the same recheck as a real blur.
+    await act(async () => {
+      nameInput(screen).dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+    await expectProjectAccessDeniedToast("Failed to rename project");
     expect(state.update).not.toHaveBeenCalled();
     expect(nameInput(screen).disabled).toBe(true);
 
     await grant(remoteId, writable());
     expect(nameInput(screen).disabled).toBe(false);
-    await rename(screen, "Renamed");
-    expect(state.projects.map((project) => project.title)).toEqual(["Renamed", "Renamed"]);
+    await rename(screen, "Recovered");
+    await vi.waitFor(() => expect(state.update).toHaveBeenCalledTimes(2));
+    expect(nameInput(screen).value).toBe("Recovered");
   });
 
   it.each([
@@ -429,35 +458,36 @@ describe("project settings permissions", () => {
 });
 
 describe("project settings scope", () => {
-  it("offers project checkout environments while keeping unselected and unknown projects recoverable", async () => {
+  const environmentMenu = () => page.getByRole("button", { name: /^Environment scope:/ });
+  const primaryOption = () => page.getByRole("menuitemradio", { name: /^primary/ });
+  const remoteOption = () => page.getByRole("menuitemradio", { name: /^remote/ });
+
+  it("offers every environment while no project is selected", async () => {
     setup();
     state.projects = state.projects.filter((project) => project.environmentId === primaryId);
-    const key = projectKey();
-    await using screen = await mountSettings({});
-    const environmentMenu = () => page.getByRole("button", { name: /^Environment scope:/ });
-    const primaryOption = () => page.getByRole("menuitemradio", { name: /^primary/ });
-    const remoteOption = () => page.getByRole("menuitemradio", { name: /^remote/ });
+    await using _screen = await mountSettings({});
 
     await userEvent.click(environmentMenu());
     await expect.element(primaryOption()).toBeVisible();
     await expect.element(remoteOption()).toBeVisible();
-    await userEvent.keyboard("{Escape}");
+  });
 
-    await act(async () =>
-      screen.router.navigate({ to: "/settings/projects", search: () => ({ project: key }) }),
-    );
+  it("offers only the selected project's checkout environments", async () => {
+    setup();
+    state.projects = state.projects.filter((project) => project.environmentId === primaryId);
+    await using _screen = await mountSettings({ project: projectKey() });
+
     await expect.element(page.getByRole("textbox", { name: "Project name" })).toBeVisible();
     await userEvent.click(environmentMenu());
     await expect.element(primaryOption()).toBeVisible();
     await expect.element(remoteOption()).not.toBeInTheDocument();
-    await userEvent.keyboard("{Escape}");
+  });
 
-    await act(async () =>
-      screen.router.navigate({
-        to: "/settings/projects",
-        search: () => ({ project: "removed-project" }),
-      }),
-    );
+  it("keeps an unknown project recoverable from any environment", async () => {
+    setup();
+    state.projects = state.projects.filter((project) => project.environmentId === primaryId);
+    await using screen = await mountSettings({ project: "removed-project" });
+
     await userEvent.click(environmentMenu());
     await expect.element(primaryOption()).toBeVisible();
     await expect.element(remoteOption()).toBeVisible();

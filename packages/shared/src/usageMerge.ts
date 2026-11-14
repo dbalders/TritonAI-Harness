@@ -66,10 +66,7 @@ export interface ModelTotals {
   readonly tokenShare: number;
 }
 
-/**
- * A model whose every record lacked rates has an unknown cost, not a zero one.
- * Clients must not present its `costUsd` as a real dollar figure.
- */
+/** When every record lacks rates, costUsd is unknown and must not be displayed as a dollar figure. */
 export function isModelCostUnknown(model: ModelTotals): boolean {
   return model.records > 0 && model.unpricedRecords >= model.records;
 }
@@ -147,12 +144,8 @@ export interface MergedUsage {
 }
 
 /**
- * Two sources are the same physical transcript directory only when host,
- * provider, path and filesystem identity all agree.
- *
- * `volumeId` is what stops two machines that happen to share a hostname and a
- * home path, which is every Mac in a fleet, from collapsing into one source and
- * having one of them silently dropped.
+ * A physical transcript source matches host, provider, path, and filesystem identity.
+ * volumeId keeps fleet machines with identical hostnames and home paths distinct.
  */
 function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
   return [
@@ -180,14 +173,8 @@ function bucketKey(bucket: UsageBucket): string {
 }
 
 /**
- * Decides which environment owns each physical transcript directory.
- *
- * Several environments on one machine (worktree servers, for instance) resolve
- * the same provider home and would otherwise double count every token. The
- * Complete scans claim a fingerprint ahead of partial scans, then the most
- * recently read scan wins within each status. A newer partial scan can still
- * contribute cells absent from an older complete scan. Environment ids break
- * ties so the result is stable when summaries have the same read time.
+ * Complete scans own a source before partial scans; newest wins within each status.
+ * Newer partial scans can fill missing cells. Environment IDs break ties deterministically.
  */
 function claimSources(environments: readonly EnvironmentUsage[]): {
   readonly ownerByFingerprint: ReadonlyMap<string, EnvironmentId>;
@@ -229,9 +216,7 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
     }
   }
 
-  // A newer partial scan may contain usage recorded after an older complete
-  // scan. Keep cells absent from the complete scan. Aggregated cells do not
-  // reveal enough to reconcile overlapping records without double counting.
+  // Keep cells unique to newer partial scans; aggregates cannot reconcile overlapping records without double-counting.
   for (const environment of ordered) {
     for (const source of environment.summary.sources) {
       if (source.status !== "partial") continue;
@@ -295,8 +280,7 @@ function ownedContribution(
       const provider = source.fingerprint.provider;
       ownedProviders.add(provider);
       ownedSources.add(`${provider}\u0000${source.fingerprint.resolvedHomePath}`);
-      // Distinct within a directory. Summing per-bucket session counts instead
-      // would count a session once per day and model it spans.
+      // Count distinct sessions per directory; bucket sums overcount sessions spanning days/models.
       sessionsByProvider.set(
         provider,
         (sessionsByProvider.get(provider) ?? 0) +
@@ -358,15 +342,9 @@ const EMPTY_MERGED: MergedUsage = {
 };
 
 /**
- * Merges every connected environment's summary.
- *
- * `expectedContractVersion` guards against incompatible server code: rather
- * than blocking the page, its data is excluded and the mismatch direction is
- * reported so the UI can identify which side needs updating. Versions in
- * [{@link USAGE_MERGE_COMPATIBLE_SINCE}, expected] still merge, so an additive
- * provider expansion does not drop Claude/Codex totals from older servers.
- * When `provider` is supplied, summaries are narrowed before source ownership
- * and all derived totals are calculated.
+ * Exclude incompatible contracts and report their direction; accept versions from
+ * USAGE_MERGE_COMPATIBLE_SINCE through expectedContractVersion.
+ * Filter providers before resolving physical-source ownership and totals.
  */
 export function mergeUsage(
   environments: readonly EnvironmentUsage[],

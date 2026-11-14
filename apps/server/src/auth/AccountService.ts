@@ -500,7 +500,7 @@ export const make = Effect.fn("AccountService.make")(function* (
                     yield* statusLocked(sessionId, lane);
                 }),
               )
-              .pipe(Effect.catch(() => Effect.void)),
+              .pipe(Effect.ignore),
           { concurrency: 4, discard: true },
         );
       }

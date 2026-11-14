@@ -42,7 +42,7 @@ import { useProjectOverview } from "./useProjectOverview";
 const UPDATES_SHOWN = 6;
 
 type ProjectMemoryQuery = EnvironmentQueryView<ServerProjectMemory, unknown>;
-const HISTORY_SHOWN = 5;
+const HISTORY_SHOWN = 3;
 
 function memoryDayLabel(day: string) {
   const [year, month, date] = day.split("-").map(Number);
@@ -57,11 +57,11 @@ function memoryDayLabel(day: string) {
 function ThreadEntry({
   thread,
   report,
-  framed = false,
+  compact = false,
 }: {
   thread: EnvironmentThreadShell;
   report: string | undefined;
-  framed?: boolean;
+  compact?: boolean;
 }) {
   const status = projectThreadStatus(thread);
   const excerpt = projectThreadExcerpt(thread, report);
@@ -70,18 +70,10 @@ function ThreadEntry({
     <Link
       to="/$environmentId/$threadId"
       params={{ environmentId: thread.environmentId, threadId: thread.id }}
-      className={cn(
-        "group block min-w-0 px-4 py-3.5 transition-colors hover:bg-accent/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
-        framed ? null : "rounded-lg",
-      )}
+      className="group block min-w-0 rounded-lg px-3 py-3 transition-colors hover:bg-accent/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
     >
-      <span className="flex items-baseline gap-3">
-        <span
-          className={cn(
-            "min-w-0 flex-1 break-words text-sm text-foreground",
-            framed ? "font-medium" : "font-normal",
-          )}
-        >
+      <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="min-w-0 flex-[1_1_12rem] break-words text-sm font-medium text-foreground">
           {thread.title}
         </span>
         <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground tabular-nums">
@@ -110,7 +102,12 @@ function ThreadEntry({
         </span>
       ) : null}
       {excerpt ? (
-        <span className="mt-2 line-clamp-3 break-words text-sm leading-6 text-foreground/80">
+        <span
+          className={cn(
+            "mt-1 break-words text-sm leading-6 text-muted-foreground",
+            compact ? "line-clamp-1" : "line-clamp-3",
+          )}
+        >
           {excerpt}
         </span>
       ) : null}
@@ -399,36 +396,34 @@ function ProjectOverview({
 
   return (
     <>
-      <header className="mb-10 flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
-        <div className="min-w-0 basis-full sm:flex-1 sm:basis-auto">
-          <h1 id="project-home-title" className="break-words text-3xl font-semibold tracking-tight">
-            {title}
-          </h1>
-          <p className="mt-3 flex items-center gap-2 text-base">
-            {view.needsYou.length ? (
-              <span aria-hidden className={cn("size-2 rounded-full", needsYouStatus?.dotClass)} />
-            ) : view.working.length ? (
-              <span aria-hidden className={cn("size-2 rounded-full", workingStatus?.dotClass)} />
-            ) : view.recent.length ? (
-              <CheckIcon aria-hidden className="size-4 text-muted-foreground" />
-            ) : null}
-            {headline}
-          </p>
-          {view.recent.length ? (
-            <p className="mt-1 text-sm text-muted-foreground">{facts.join(" · ")}</p>
+      <header className="mb-9 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3">
+        <h1 id="project-home-title" className="break-words text-3xl font-semibold tracking-tight">
+          {title}
+        </h1>
+        <p className="col-span-full flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+          {view.needsYou.length ? (
+            <span aria-hidden className={cn("size-2 rounded-full", needsYouStatus?.dotClass)} />
+          ) : view.working.length ? (
+            <span aria-hidden className={cn("size-2 rounded-full", workingStatus?.dotClass)} />
+          ) : view.recent.length ? (
+            <CheckIcon aria-hidden className="size-4 text-muted-foreground" />
           ) : null}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            disabled={!connected || opening !== null}
-            aria-busy={opening === "thread"}
-            onClick={createThread}
-          >
-            {opening === "thread" ? <Spinner aria-hidden /> : <PlusIcon />}
-            {opening === "thread" ? "Opening thread…" : "New thread"}
-          </Button>
-        </div>
+          <span className={view.needsYou.length ? "font-medium text-foreground" : undefined}>
+            {headline}
+          </span>
+          {view.recent.length ? <span>· {facts.join(" · ")}</span> : null}
+        </p>
+        <Button
+          className="col-start-2 row-start-1"
+          variant="outline"
+          size="sm"
+          disabled={!connected || opening !== null}
+          aria-busy={opening === "thread"}
+          onClick={createThread}
+        >
+          {opening === "thread" ? <Spinner aria-hidden /> : <PlusIcon />}
+          {opening === "thread" ? "Opening thread…" : "New thread"}
+        </Button>
       </header>
       <p role="status" className="sr-only">
         {opening ? "Opening new thread…" : ""}
@@ -441,17 +436,20 @@ function ProjectOverview({
           Showing saved activity. Reconnect to {environmentLabel} to see what agents are doing now.
         </div>
       ) : null}
-      <div className="grid gap-x-14 gap-y-12 lg:grid-cols-[minmax(0,1fr)_18rem]">
-        <div className="min-w-0 space-y-10">
+      <div className="grid gap-x-10 gap-y-10 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <div className="min-w-0 space-y-9">
           {view.needsYou.length ? (
             <section aria-labelledby="project-needs-you">
               <h2 id="project-needs-you" className="mb-3 text-base font-semibold tracking-tight">
-                Needs you
+                Needs you{" "}
+                <span className="ml-1 text-sm font-normal text-muted-foreground">
+                  {view.needsYou.length}
+                </span>
               </h2>
-              <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+              <ul className="-mx-3 divide-y divide-border">
                 {view.needsYou.map((thread) => (
                   <li key={thread.id}>
-                    <ThreadEntry thread={thread} report={reports.get(thread.id)} framed />
+                    <ThreadEntry thread={thread} report={reports.get(thread.id)} compact />
                   </li>
                 ))}
               </ul>
@@ -468,12 +466,15 @@ function ProjectOverview({
           {view.working.length ? (
             <section aria-labelledby="project-working">
               <h2 id="project-working" className="mb-3 text-base font-semibold tracking-tight">
-                In progress
+                In progress{" "}
+                <span className="ml-1 text-sm font-normal text-muted-foreground">
+                  {view.working.length}
+                </span>
               </h2>
-              <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+              <ul className="-mx-3 divide-y divide-border">
                 {view.working.map((thread) => (
                   <li key={thread.id}>
-                    <ThreadEntry thread={thread} report={reports.get(thread.id)} framed />
+                    <ThreadEntry thread={thread} report={reports.get(thread.id)} compact />
                   </li>
                 ))}
               </ul>
@@ -490,13 +491,9 @@ function ProjectOverview({
               </p>
               <div className="mt-5 space-y-7">
                 {days.map((day) => (
-                  <section
-                    key={day.label}
-                    aria-label={day.label}
-                    className="border-l border-border pl-4"
-                  >
+                  <section key={day.label} aria-label={day.label} className="min-w-0">
                     <h3 className="mb-1 text-xs text-muted-foreground">{day.label}</h3>
-                    <ul className="-mx-4 space-y-1">
+                    <ul className="-mx-3 divide-y divide-border">
                       {day.threads.map((thread) => (
                         <li key={thread.id}>
                           <ThreadEntry thread={thread} report={reports.get(thread.id)} />

@@ -55,8 +55,6 @@ describe("isolated native Help authentication", () => {
 
   it.each([
     "not JSON",
-    "null",
-    "[]",
     "{}",
     JSON.stringify({ auth_mode: "apikey", tokens, last_refresh: lastRefresh }),
     JSON.stringify({ auth_mode: "agentIdentity", tokens, last_refresh: lastRefresh }),

@@ -1,3 +1,4 @@
+import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
 import { ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -5,7 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
-import { resolveAttachmentPathById } from "../attachmentStore.ts";
+import { resolveAttachmentPathById, parseAttachmentFileExtension } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
@@ -46,43 +47,64 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
     return {
-      cleanupScheduledTasks: (threadId: ThreadId) =>
-        scheduledTasks
+      cleanupScheduledTasks: Effect.fn("ResourceCleanupService.cleanupScheduledTasks")(function (
+        threadId: ThreadId,
+      ) {
+        return scheduledTasks
           .deleteForThread(threadId)
           .pipe(
             Effect.mapError(
               (cause) =>
                 new ResourceCleanupError({ operation: "scheduled-tasks", threadId, cause }),
             ),
-          ),
-      cleanupTerminals: (threadId: string) =>
-        terminals
+          );
+      }),
+      cleanupTerminals: Effect.fn("ResourceCleanupService.cleanupTerminals")(function (
+        threadId: string,
+      ) {
+        return terminals
           .close({ threadId, deleteHistory: true })
           .pipe(
             Effect.mapError(
               (cause) => new ResourceCleanupError({ operation: "terminal", threadId, cause }),
             ),
-          ),
-      cleanupPreviews: (threadId: string) =>
-        previews
+          );
+      }),
+      cleanupPreviews: Effect.fn("ResourceCleanupService.cleanupPreviews")(function (
+        threadId: string,
+      ) {
+        return previews
           .close({ threadId: ThreadId.make(threadId) })
           .pipe(
             Effect.mapError(
               (cause) => new ResourceCleanupError({ operation: "preview", threadId, cause }),
             ),
-          ),
-      cleanupAttachments: (attachmentIds: ReadonlyArray<string>) =>
-        Effect.forEach(
+          );
+      }),
+      cleanupAttachments: Effect.fn("ResourceCleanupService.cleanupAttachments")(function (
+        attachmentIds: ReadonlyArray<string>,
+      ) {
+        return Effect.forEach(
           attachmentIds,
           (attachmentId) =>
             Effect.gen(function* () {
-              const path = yield* resolveAttachmentPathById({
+              const existingPath = yield* resolveAttachmentPathById({
                 attachmentsDir: config.attachmentsDir,
                 attachmentId,
               });
+              const extension = parseAttachmentFileExtension(attachmentId);
+              const path =
+                existingPath ??
+                (extension
+                  ? resolveAttachmentRelativePath({
+                      attachmentsDir: config.attachmentsDir,
+                      relativePath: `${attachmentId}.${extension}`,
+                    })
+                  : null);
               return yield* path === null
                 ? Effect.void
                 : fileSystem.remove(path, { force: true }).pipe(
+                    Effect.andThen(fileSystem.remove(`${path}.txt`, { force: true })),
                     Effect.mapError(
                       (cause) =>
                         new ResourceCleanupError({
@@ -94,7 +116,8 @@ export const layer = Layer.effect(
                   );
             }),
           { discard: true, concurrency: 4 },
-        ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)),
+        ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+      }),
     };
   }),
 );

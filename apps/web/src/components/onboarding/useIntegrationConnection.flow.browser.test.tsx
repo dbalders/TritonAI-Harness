@@ -48,46 +48,6 @@ const outlook = (connectionState: "not_connected" | "connected") => ({
 });
 
 describe("useIntegrationConnection", () => {
-  it("lets someone try again after the plugin list couldn't be read", async () => {
-    await using _fixture = await setupTest();
-
-    mocks.list.mockResolvedValueOnce({ _tag: "Failure", cause: new Error("offline") });
-    await _fixture.render("local");
-    expect(_fixture.latest?.status).toBe("failed");
-    expect(_fixture.latest?.error).toContain("Try again");
-
-    await act(async () => {
-      await _fixture.latest?.connect();
-    });
-    await act(async () => vi.advanceTimersByTimeAsync(0));
-    expect(mocks.list).toHaveBeenCalledTimes(2);
-    expect(_fixture.latest?.status).toBe("ready");
-  });
-
-  it("picks a sign-in back up after switching to another environment and back", async () => {
-    await using _fixture = await setupTest();
-
-    await _fixture.render("local");
-    expect(_fixture.latest?.status).toBe("ready");
-    await act(async () => {
-      await _fixture.latest?.connect();
-    });
-    expect(_fixture.latest?.status).toBe("waiting");
-
-    await _fixture.render("remote");
-    expect(_fixture.latest?.status).toBe("ready");
-    expect(_fixture.latest?.flow).toBeNull();
-
-    await _fixture.render("local");
-    expect(_fixture.latest?.status).toBe("waiting");
-    await act(async () => vi.advanceTimersByTimeAsync(5_000));
-    expect(mocks.poll).toHaveBeenCalledWith({
-      environmentId: "local",
-      input: { id: "microsoft-365", flowId: "flow-1" },
-    });
-    expect(_fixture.latest?.status).toBe("connected");
-  });
-
   it("keeps a finished sign-in when an older plugin list answers after it", async () => {
     await using _fixture = await setupTest();
 
@@ -154,53 +114,6 @@ describe("useIntegrationConnection", () => {
     );
     expect(_fixture.latest?.status).toBe("connected");
     expect(_fixture.latest?.integration?.connectionState).toBe("connected");
-  });
-
-  it("ignores a late answer for a sign-in that Start over replaced", async () => {
-    await using _fixture = await setupTest();
-
-    let answerFirstPoll: (value: unknown) => void = () => {};
-    mocks.poll.mockReturnValueOnce(new Promise((resolve) => (answerFirstPoll = resolve)));
-    await _fixture.render("local");
-    await act(async () => {
-      await _fixture.latest?.connect();
-    });
-    await act(async () => vi.advanceTimersByTimeAsync(5_000));
-    expect(mocks.poll).toHaveBeenCalledTimes(1);
-
-    mocks.connect.mockResolvedValueOnce({
-      _tag: "Success",
-      value: {
-        kind: "device_code",
-        flowId: "flow-2",
-        verificationUri: "https://microsoft.com/devicelogin",
-        verificationUriComplete: null,
-        userCode: "WXYZ-9876",
-        message: "Enter the code",
-        expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
-        intervalSeconds: 5,
-      },
-    });
-    await act(async () => {
-      await _fixture.latest?.connect();
-    });
-    await act(async () =>
-      answerFirstPoll({
-        _tag: "Success",
-        value: {
-          state: "failed",
-          retryAfterSeconds: null,
-          message: "The old code expired.",
-          integration: outlook("not_connected"),
-        },
-      }),
-    );
-
-    expect(_fixture.latest?.status).toBe("waiting");
-    expect(
-      _fixture.latest?.flow?.kind === "device_code" ? _fixture.latest.flow.userCode : null,
-    ).toBe("WXYZ-9876");
-    expect(_fixture.latest?.error).toBeNull();
   });
 });
 

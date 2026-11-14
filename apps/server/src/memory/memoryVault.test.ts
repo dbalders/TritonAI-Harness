@@ -25,6 +25,7 @@ const device: MemoryDevice = {
 };
 
 it.layer(NodeServices.layer)("memory skills", (it) => {
+  // regression: f841cc2211 keep stable and nightly memory skills independent
   it.effect("keeps both vaults available in a shared Codex home when one is disabled", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -35,8 +36,9 @@ it.layer(NodeServices.layer)("memory skills", (it) => {
         path.join(root, ".tritonai-harness", "memory", "general"),
         path.join(root, ".tritonai-harness-nightly", "memory", "general"),
       ];
-      yield* Effect.all(
-        vaults.map((vaultPath) =>
+      yield* Effect.forEach(
+        vaults,
+        (vaultPath) =>
           installMemorySkill({
             skillsDirectory,
             vaultPath,
@@ -46,7 +48,6 @@ it.layer(NodeServices.layer)("memory skills", (it) => {
               device,
             }),
           }),
-        ),
         { concurrency: "unbounded" },
       );
 
@@ -67,6 +68,7 @@ it.layer(NodeServices.layer)("memory skills", (it) => {
     }),
   );
 
+  // regression: f841cc2211 keep stable and nightly memory skills independent
   it.effect("preserves a same-named skill belonging to another owner", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

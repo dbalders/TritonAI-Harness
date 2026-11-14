@@ -5,13 +5,7 @@ import Migration0070 from "./Migrations/070_ProjectBriefArchives.ts";
 import Migration0071 from "./Migrations/071_ProjectOverviews.ts";
 import Migration0072 from "./Migrations/072_ProjectNextStepDismissals.ts";
 /**
- * Migration runner with an inline loader.
- *
- * Uses Migrator.make with fromRecord to define migrations inline.
- * All migrations are statically imported - no dynamic file system loading.
- *
- * `runMigrations` is called by the SQLite persistence layer at startup, so the
- * schema is always up to date before the application starts.
+ * Statically import migrations and run the inline loader before SQLite startup completes.
  */
 
 import * as Migrator from "effect/sql/Migrator";
@@ -92,6 +86,8 @@ import UpstreamMigration0064 from "./Migrations/064_CanonicalizeThreadPullReques
 import UpstreamMigration0065 from "./Migrations/065_CodexUsageNativeTurnIndex.ts";
 import UpstreamMigration0066 from "./Migrations/066_RepairClientSettlementTimestamps.ts";
 import UpstreamMigration0067 from "./Migrations/067_WebhookDedupe.ts";
+import UpstreamMigration0068 from "./Migrations/068_ShellStopRequestIndex.ts";
+import UpstreamMigration0069 from "./Migrations/069_ThreadMessageSearch.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -176,6 +172,8 @@ export const migrationEntries = [
   [75, "CodexUsageNativeTurnIndex", UpstreamMigration0065],
   [76, "RepairClientSettlementTimestamps", UpstreamMigration0066],
   [77, "WebhookDedupe", UpstreamMigration0067],
+  [78, "ShellStopRequestIndex", UpstreamMigration0068],
+  [79, "ThreadMessageSearch", UpstreamMigration0069],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -192,12 +190,7 @@ const makeMigrationLoader = (throughId?: number) =>
 // V2's schema migrations start at 59 after the legacy schema migrations.
 const FIRST_V2_MIGRATION_ID = 59;
 
-/**
- * Fail before migrating when the migrator would skip one of V2's own
- * migrations. It skips every id up to the highest recorded one, whatever name
- * was recorded, so a database that took a V2 id for another migration would
- * start without V2's schema and fail on first use.
- */
+// Migrators skip ids up to the highest recorded; reject collisions that would skip V2 schema.
 const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function* (
   throughId?: number,
 ) {
