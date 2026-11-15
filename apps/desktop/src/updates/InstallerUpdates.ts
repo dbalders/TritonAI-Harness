@@ -29,10 +29,10 @@ const INSTALLER_VERSION_MARKER_RELATIVE_PATH = [
 
 // The Installer repository is moving from dbalders to the UCSD organization. GitHub
 // redirects the old API path after the transfer, so the check follows that redirect, trusts
-// only a final response from api.github.com, and accepts assets published under either owner.
+// only a final response from https://api.github.com, and accepts assets under either owner.
 const INSTALLER_RELEASE_OWNERS = ["dbalders", "UCSD"] as const;
-const GITHUB_API_HOST = "api.github.com";
-const GITHUB_RELEASE_URL = `https://${GITHUB_API_HOST}/repos/dbalders/TritonAI-Installer/releases/latest`;
+const GITHUB_API_ORIGIN = "https://api.github.com";
+const GITHUB_RELEASE_URL = `${GITHUB_API_ORIGIN}/repos/dbalders/TritonAI-Installer/releases/latest`;
 const GITHUB_DOWNLOAD_PATH_PREFIXES = INSTALLER_RELEASE_OWNERS.map(
   (owner) => `/${owner}/TritonAI-Installer/releases/download/`,
 );
@@ -445,7 +445,7 @@ export class InstallerUpdates extends Context.Service<
 >()("@t3tools/desktop/updates/InstallerUpdates") {}
 
 function requireGitHubApiResponse(response: HttpClientResponse.HttpClientResponse) {
-  return new URL(response.request.url).hostname === GITHUB_API_HOST
+  return new URL(response.request.url).origin === GITHUB_API_ORIGIN
     ? Effect.succeed(response)
     : Effect.fail(
         new InstallerReleaseFetchError({ cause: "GitHub redirected outside its release API" }),

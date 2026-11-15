@@ -328,6 +328,22 @@ function assertReviewedPluginCatalog() {
     })),
   };
   assert.strictEqual(assertCatalogComposition(catalog, composition), composition);
+  const ucsdCatalog = {
+    ...catalog,
+    source: { ...catalog.source, repository: "https://github.com/UCSD/TritonAI-Plugins.git" },
+  };
+  assert.strictEqual(assertCatalogComposition(ucsdCatalog, composition), composition);
+  assert.throws(
+    () =>
+      assertCatalogComposition(catalog, {
+        ...composition,
+        source: {
+          ...composition.source,
+          repository: "https://github.com/someone/TritonAI-Plugins.git",
+        },
+      }),
+    /approved catalog source/,
+  );
   assert.throws(
     () =>
       assertCatalogComposition(catalog, {

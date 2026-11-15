@@ -378,6 +378,11 @@ accepts both owners during the move:
   `https://github.com/dbalders/TritonAI-Plugins.git`; keep that until no supported Installer
   rejects the UCSD URL.
 
+`UCSD/UCSD-Skills-Library` already exists as an older fork of the skills repository. GitHub
+refuses a transfer when the target already has a repository with that name or a fork in the same
+network, so delete that fork (after confirming its changes are upstream) before transferring
+`UCSD-Skills-Library`.
+
 Never create a repository or fork with an old name under `dbalders` after a transfer. That
 replaces GitHub's redirect, which released builds still depend on for desktop updates and public
 skills.

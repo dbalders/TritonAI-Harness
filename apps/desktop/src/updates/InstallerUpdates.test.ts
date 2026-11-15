@@ -192,15 +192,22 @@ describe("installer repository transfer to UCSD", () => {
     }),
   );
 
-  effectIt.effect("does not trust a release document redirected away from the GitHub API", () =>
-    Effect.gen(function* () {
-      const { client } = redirectingClient("https://releases.example.com/latest.json");
-      const error = yield* fetchLatestInstallerRelease(client).pipe(
-        Effect.as("trusted" as const),
-        Effect.flip,
-      );
-      expect(error._tag).toBe("InstallerReleaseFetchError");
-    }),
+  effectIt.effect(
+    "does not trust a release document redirected away from the HTTPS GitHub API",
+    () =>
+      Effect.gen(function* () {
+        for (const location of [
+          "https://releases.example.com/latest.json",
+          "http://api.github.com/repositories/1061800000/releases/latest",
+        ]) {
+          const { client } = redirectingClient(location);
+          const error = yield* fetchLatestInstallerRelease(client).pipe(
+            Effect.as("trusted" as const),
+            Effect.flip,
+          );
+          expect(error._tag).toBe("InstallerReleaseFetchError");
+        }
+      }),
   );
 });
 
