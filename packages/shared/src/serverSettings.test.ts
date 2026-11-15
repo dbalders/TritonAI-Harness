@@ -1040,7 +1040,17 @@ describe("resolveSpeechPostProcessingModelSelection", () => {
     const cleanup = createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-haiku", [
       { id: "effort", value: "low" },
     ]);
-    const base = { ...DEFAULT_SERVER_SETTINGS, textGenerationModelSelection: textGeneration };
+    const base = {
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: textGeneration,
+      providerInstances: {
+        ...DEFAULT_SERVER_SETTINGS.providerInstances,
+        [ProviderInstanceId.make("claudeAgent")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          enabled: true,
+        },
+      },
+    };
     expect(resolveSpeechPostProcessingModelSelection(base)).toBe(textGeneration);
     const pinned = applyServerSettingsPatch(base, { speechPostProcessingModelSelection: cleanup });
     expect(resolveSpeechPostProcessingModelSelection(pinned)).toEqual(cleanup);

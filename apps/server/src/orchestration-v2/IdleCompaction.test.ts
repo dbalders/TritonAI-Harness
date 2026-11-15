@@ -405,6 +405,9 @@ describe("IdleCompactionService", () => {
             getSettings: Effect.succeed({
               ...DEFAULT_SERVER_SETTINGS,
               idleCompaction: "beforeCacheExpires",
+              providerInstances: {
+                [instanceId]: { driver: ProviderDriverKind.make("claudeAgent"), enabled: true },
+              },
             }),
           }),
         );

@@ -691,7 +691,7 @@ it.effect("an update the project refuses tells the agent why", () =>
     const refused = yield* toolkit
       .handle("t3_project_update", {
         projectId: harness.projectId,
-        projectIcon: { kind: "monogram", text: "ABC", color: "blue" },
+        projectIcon: { kind: "monogram", text: "AB", color: "blue" },
       })
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
 

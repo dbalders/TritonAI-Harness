@@ -110,7 +110,11 @@ describe("collectServerUpdateTargets", () => {
         entry.label,
         entry.reason,
       ]),
-    ).toEqual([["off", "Example Corp manages T3 Code updates."]]);
+    ).toEqual([
+      ["off", "Example Corp manages TritonAI Harness updates."],
+      ["no-nightly", "needs a manual update"],
+      ["desktop-no-nightly", "needs a newer desktop app"],
+    ]);
     expect(
       collectServerUpdateTargets(
         machines.map((entry) => ({
@@ -122,7 +126,7 @@ describe("collectServerUpdateTargets", () => {
         })),
         "0.0.50-nightly.20261028.1",
       ).skipped.map((entry) => entry.label),
-    ).toEqual(["off", "no-nightly"]);
+    ).toEqual(["off", "no-nightly", "desktop-no-nightly"]);
   });
 });
 
@@ -233,7 +237,7 @@ describe("collectChannelSwitchTargets", () => {
       ["old-desktop", "needs a newer desktop app"],
       [
         "no-nightly",
-        "Example Corp manages T3 Code updates. Only stable releases can be installed.",
+        "Example Corp manages TritonAI Harness updates. Only stable releases can be installed.",
       ],
     ]);
   });

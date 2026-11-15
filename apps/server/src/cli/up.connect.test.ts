@@ -142,6 +142,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
         link.mode = "managed";
         const fs = yield* FileSystem.FileSystem;
         const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-up-connect-test-" });
+        const keyFile = `${baseDir}/test-secret-key.json`;
+        yield* fs.writeFileString(
+          keyFile,
+          JSON.stringify({ version: 1, active: Buffer.alloc(32, 7).toString("base64") }),
+          { mode: 0o600 },
+        );
         vi.spyOn(BootService, "layer").mockReturnValue(
           Layer.succeed(
             BootService.BootService,
@@ -172,7 +178,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
           Effect.provideService(HostProcess.Environment, {}),
           Effect.provide(
             Layer.mergeAll(
-              ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({ env: { TRITONAI_SECRET_STORE_KEY_FILE: keyFile } }),
+              ),
               Layer.fresh(TestConsole.layer),
             ),
           ),

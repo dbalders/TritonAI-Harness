@@ -1,4 +1,3 @@
-import * as Result from "effect/Result";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -166,8 +165,19 @@ describe("createAssetEnvironmentAtoms", () => {
         );
       } else if (scenario.localDefect) {
         const cause = yield* Effect.sandbox(result).pipe(Effect.flip);
-        expect(Cause.findErrorOption(cause)).toEqual(Option.some(error));
-        expect(Cause.findDefect(cause)).toEqual(Result.succeed("cleanup failed"));
+        expect(Cause.findErrorOption(cause)).toEqual(Option.none());
+        expect(cause.reasons).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              _tag: "Die",
+              defect: new AssetWorkspaceAssetNotFoundError({
+                resource,
+                checkedPath: "/local/clip.mp4",
+              }),
+            }),
+            expect.objectContaining({ _tag: "Die", defect: "cleanup failed" }),
+          ]),
+        );
       } else {
         expect(yield* Effect.flip(result)).toEqual(error);
       }

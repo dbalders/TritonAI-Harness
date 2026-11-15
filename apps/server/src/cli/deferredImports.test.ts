@@ -6,6 +6,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as NetService from "@t3tools/shared/Net";
 import * as Effect from "effect/Effect";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -44,7 +45,23 @@ vi.mock("../claudeHistoryWorker.ts", async () => {
 
 const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
 const runCli = (args: ReadonlyArray<string>) =>
-  Command.runWith(cli, { version: "0.0.0" })(args).pipe(Effect.provide(layerCliRuntime));
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-deferred-key-" });
+    const keyFile = NodePath.join(root, "fixture-secret-key.json");
+    yield* fs.writeFileString(
+      keyFile,
+      JSON.stringify({ version: 1, active: Buffer.alloc(32, 7).toString("base64") }),
+      { mode: 0o600 },
+    );
+    return yield* Command.runWith(cli, { version: "0.0.0" })(args).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { TRITONAI_SECRET_STORE_KEY_FILE: keyFile } }),
+        ),
+      ),
+    );
+  }).pipe(Effect.scoped, Effect.provide(layerCliRuntime));
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("CLI deferred imports", (it) => {
   it.effect("runs commands that do not need them without loading them", () =>

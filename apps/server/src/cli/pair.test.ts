@@ -78,8 +78,9 @@ const makeSecretStoreConfigLayer = (baseDir: string) => {
     `${JSON.stringify({ version: 1, active: TEST_SECRET_STORE_KEY })}\n`,
     { mode: 0o600 },
   );
-  return ConfigProvider.layer(
+  return ConfigProvider.layerAdd(
     ConfigProvider.fromEnv({ env: { TRITONAI_SECRET_STORE_KEY_FILE: keyFilePath } }),
+    { asPrimary: true },
   );
 };
 

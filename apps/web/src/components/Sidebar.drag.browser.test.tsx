@@ -45,11 +45,14 @@ it("keeps the title when dragging a search result from a collapsed folder", asyn
     createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${first.id}`] }),
   );
   await router.load();
+  const container = document.createElement("div");
+  container.style.cssText = "height: 900px; width: 1400px;";
   await using _app = await render(<AppRoot router={router} />, {
+    container,
     // AppRoot brings its own router.
     router: false,
   });
-  const folder = page.getByRole("button", { name: /^render/ });
+  const folder = page.getByRole("treeitem", { name: "render", exact: true });
   await expect.element(folder).toHaveAttribute("aria-expanded", "true");
   await userEvent.click(folder);
   await expect.element(page.getByText(second.title, { exact: true })).not.toBeInTheDocument();

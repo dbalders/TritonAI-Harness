@@ -121,7 +121,9 @@ it("enables the chosen provider only after a successful setup and keeps its gran
           await destination.click();
           await page.getByRole("option", { name: "Grok Voice Transcribe via Laptop" }).click();
           await dialog.getByRole("button", { name: "Use Grok Voice Transcribe" }).click();
-          await expect.element(destination).toHaveTextContent("Grok Voice Transcribe via Laptop");
+          await vi.waitFor(() =>
+            expect(destination.element().textContent).toContain("Grok Voice Transcribe via Laptop"),
+          );
           await destination.click();
           await page.getByRole("option", { name: "Off", exact: true }).click();
           await expect.element(destination).toHaveTextContent("Off");

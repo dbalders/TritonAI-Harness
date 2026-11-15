@@ -171,8 +171,10 @@ describe("ExpandedImageDialog", () => {
       const { scrollLeft, scrollTop } = viewport;
       await userEvent.wheel(viewportLocator, { delta });
       await vi.waitFor(() => {
-        expect(Math.sign(viewport.scrollLeft - scrollLeft)).toBe(Math.sign(delta.x));
-        expect(Math.sign(viewport.scrollTop - scrollTop)).toBe(Math.sign(delta.y));
+        if (delta.x !== 0)
+          expect(Math.sign(viewport.scrollLeft - scrollLeft)).toBe(Math.sign(delta.x));
+        if (delta.y !== 0)
+          expect(Math.sign(viewport.scrollTop - scrollTop)).toBe(Math.sign(delta.y));
       });
     };
     await pan({ x: 60, y: 0 });

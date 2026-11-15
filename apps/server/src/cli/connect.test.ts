@@ -91,6 +91,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
         const baseDir = yield* fs.makeTempDirectoryScoped({
           prefix: "t3-connect-unlink-test-",
         });
+        const keyFile = `${baseDir}/test-secret-key.json`;
+        yield* fs.writeFileString(
+          keyFile,
+          JSON.stringify({ version: 1, active: Buffer.alloc(32, 7).toString("base64") }),
+          { mode: 0o600 },
+        );
         const state = yield* makePersistedServerRuntimeState({
           config: { host: "127.0.0.1", devUrl: undefined },
           port: address.port,
@@ -106,6 +112,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer))
           "--base-dir",
           baseDir,
         ]).pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { TRITONAI_SECRET_STORE_KEY_FILE: keyFile } }),
+            ),
+          ),
           // TestConsole has no reader for Console.warn.
           Effect.updateService(Console.Console, (console) => ({
             ...console,

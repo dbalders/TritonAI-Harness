@@ -1464,6 +1464,10 @@ describe("OrchestratorMcpService provider resolution", () => {
           }),
           ServerSettings.layerTest({
             providerInstances: {
+              [ProviderInstanceId.make("claudeAgent")]: {
+                driver: ProviderDriverKind.make("claudeAgent"),
+                enabled: true,
+              },
               [ProviderInstanceId.make("pi")]: {
                 driver: ProviderDriverKind.make("pi"),
                 enabled: true,

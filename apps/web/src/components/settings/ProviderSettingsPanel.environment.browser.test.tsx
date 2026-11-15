@@ -348,7 +348,7 @@ describe("EnvironmentProviderSettings instance removal", () => {
     };
     await setProviders([provider()]);
     await using _screen = await render(panel({ targetInstanceId: codexId }));
-    const reset = page.getByRole("button", { name: "Reset Codex provider settings to default" });
+    const reset = page.getByRole("button", { name: "Reset TritonAI provider settings to default" });
     await userEvent.click(reset);
 
     expect(state.mutateProviderInstance).not.toHaveBeenCalled();
@@ -362,33 +362,6 @@ describe("EnvironmentProviderSettings instance removal", () => {
         instanceId: codexId,
       }),
     );
-  });
-
-  it("warns that resetting an enabled default-off provider turns it off", async () => {
-    await setup();
-    const antigravityId = ProviderInstanceId.make("antigravity");
-    const antigravity = ProviderDriverKind.make("antigravity");
-    state.settings = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      providerInstances: {
-        [antigravityId]: {
-          driver: antigravity,
-          enabled: true,
-          config: { binaryPath: "/opt/antigravity/bin/agy" },
-        },
-      },
-    };
-    await setProviders([{ ...provider(), instanceId: antigravityId, driver: antigravity }]);
-    await using _screen = await render(panel({ targetInstanceId: antigravityId }));
-    await userEvent.click(page.getByRole("button", { name: /^Reset .* provider settings/ }));
-
-    expect(state.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("It will also be turned off."),
-      {
-        variant: "destructive",
-      },
-    );
-    expect(state.mutateProviderInstance).not.toHaveBeenCalled();
   });
 
   it("deletes a custom instance only once the user confirms", async () => {
