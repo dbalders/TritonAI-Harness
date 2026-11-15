@@ -116,8 +116,10 @@ runs:
       shell: bash
       env:
         INSTALL_ARGS: ${{ inputs.install-args }}
-      # Unquoted so each filter is its own argument.
-      run: vp install $INSTALL_ARGS
+      # Split arguments while preserving filter globs for the installer.
+      run: |
+        set -f
+        vp install $INSTALL_ARGS
 
     - name: Save lockfile verification
       if: inputs.install == 'true' && steps.pnpm_verified.outputs.cache-hit != 'true'

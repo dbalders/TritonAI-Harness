@@ -82,8 +82,9 @@ on Android. For a remote backend, use its reachable origin.
 An Electron-hosted backend can return `SecretStoreKeyError` from this CLI because
 Electron supplies its protected encryption key at startup. Create the disposable
 link through desktop Settings → Sharing & access → Create link, with the
-scopes needed for the test. After creating it, expand Authorized clients, then
-choose Share on that disposable link to reveal its URL and QR code. Keep the credential out of tool output. For an iOS
+scopes needed for the test. After creating it, expand Authorized clients. The new
+link's share panel starts open; choose Share only if that panel is closed to
+reveal its URL and QR code. Keep the credential out of tool output. For an iOS
 Simulator, convert a desktop `t3code-dev://app/pair#…` link to
 `http://127.0.0.1:<backend-port>/pair#…`, preserving its fragment, then pass that
 URL as the encoded `pairingUrl` on `t3code-dev://connections/new?autoConnect=1`.
