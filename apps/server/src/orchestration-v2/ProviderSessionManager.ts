@@ -445,6 +445,7 @@ export const layerWithOptions = (
       const prepareMcpSession = (
         threadId: ThreadId,
         providerInstanceId: ProviderInstanceId,
+        driver: ProviderDriverKind,
       ): Effect.Effect<PreparedMcpCredential> =>
         options.configureMcp === false
           ? mcpSessions
@@ -460,6 +461,7 @@ export const layerWithOptions = (
                   browser: browserToolsAvailable,
                   device: deviceToolsAvailable,
                 });
+                const integrationToolsViaDynamicTools = driver === "codex";
                 const subagent = yield* projectionStore.getThread(threadId).pipe(
                   Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
                   Effect.orElseSucceed(() => false),
@@ -483,6 +485,8 @@ export const layerWithOptions = (
                     resolved !== undefined &&
                     resolved.thread.threadId === threadId &&
                     resolved.thread.providerInstanceId === providerInstanceId &&
+                    (resolved.thread.integrationToolsViaDynamicTools === true) ===
+                      integrationToolsViaDynamicTools &&
                     // A flipped browser-access setting must not survive through
                     // credential reuse: rotate so the new scope reflects it.
                     resolved.capabilities.has("integrations.invoke") &&
@@ -502,6 +506,9 @@ export const layerWithOptions = (
                   browserToolsAvailable,
                   capabilities,
                   subagent,
+                  ...(integrationToolsViaDynamicTools
+                    ? { integrationToolsViaDynamicTools: true }
+                    : {}),
                 });
                 yield* mcpSessions.set(credential.config);
                 reserveMcpCredential(threadId, credential.config.providerSessionId);
@@ -1358,7 +1365,11 @@ export const layerWithOptions = (
               Effect.uninterruptible,
             );
             if (attached !== undefined) {
-              const prepared = yield* prepareMcpSession(input.threadId, input.providerInstanceId);
+              const prepared = yield* prepareMcpSession(
+                input.threadId,
+                input.providerInstanceId,
+                attached.driver,
+              );
               preparedForCleanup = prepared;
               if (prepared.mcpCredentialId !== undefined) {
                 const mcpCredentialId = prepared.mcpCredentialId;
@@ -2189,6 +2200,7 @@ export const layerWithOptions = (
               const prepared = yield* prepareMcpSession(
                 input.threadId,
                 input.modelSelection.instanceId,
+                adapter.driver,
               );
               const mcpCredentialId = prepared.mcpCredentialId;
               let reservationDropped = mcpCredentialId === undefined;

@@ -693,7 +693,7 @@ function IntegrationCard({
                         disabled={busy}
                         onClick={() => void onAction("disconnect", integration)}
                       >
-                        <UnplugIcon /> Reset connection
+                        <UnplugIcon /> Disconnect
                       </Button>
                       {integration.enabled ? (
                         <Button

@@ -43,6 +43,7 @@ import * as Predicate from "effect/Predicate";
 import * as FileSystem from "effect/FileSystem";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@t3tools/shared/mcpApp";
 import { toolOutputImages } from "@t3tools/shared/toolOutput";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveAttachmentPathById } from "../../attachmentStore.ts";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -70,7 +71,9 @@ import type * as ProviderContinuationRequests from "@t3tools/provider-core/serve
 import * as ModelManifest from "../../provider/ModelManifest.ts";
 import { resolveProviderCompatibility } from "../../provider/providerCompatibility.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
-import { withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
+import { requestBrowserAccess } from "../../provider/testFixtures/browserAccessClient.ts";
+import * as ServerSettings from "../../serverSettings.ts";
+import { makeReplayServerConfig, withCodexReplayChildMetadata } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
 
 const replayTranscriptJson = Schema.fromJsonString(CodexReplay.CodexAppServerReplayTranscript);
@@ -253,6 +256,117 @@ describe("CodexAdapterV2 runtime policy", () => {
   );
 });
 
+describe("CodexAdapterV2 thread MCP configuration", () => {
+  it("overrides only Harness servers so other launch-configured MCP servers survive", () => {
+    const params = CodexAdapterV2.codexThreadRuntimeParams({
+      mcpSession: {
+        environmentId: EnvironmentId.make("mcp-merge-environment"),
+        threadId: ThreadId.make("mcp-merge-thread"),
+        providerSessionId: "mcp-merge-session",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture-token",
+        browserToolsAvailable: true,
+      },
+      computerUseMcp: {
+        command: "/fixture/cua-driver",
+        args: ["mcp"],
+        environment: { FIXTURE: "desktop" },
+      },
+      modelSelection: { model: "gpt-5.4" },
+      runtimePolicy: {
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: "/workspace/mcp-merge",
+      },
+    });
+    assert.notProperty(params.config, "mcp_servers");
+    assert.deepEqual(params.config["mcp_servers.cua-driver"], {
+      command: "/fixture/cua-driver",
+      args: ["mcp"],
+      env: { FIXTURE: "desktop" },
+    });
+    assert.deepEqual(params.config["mcp_servers.t3-code"], {
+      url: "http://127.0.0.1:43123/mcp",
+      tool_timeout_sec: 3900,
+      http_headers: { Authorization: "Bearer fixture-token" },
+      tools: {
+        preview_open: { approval_mode: "approve" },
+        preview_navigate: { approval_mode: "approve" },
+      },
+    });
+    assert.equal(params.cwd, "/workspace/mcp-merge");
+    assert.equal(params.model, "gpt-5.4");
+    const withoutSession = CodexAdapterV2.codexThreadRuntimeParams({
+      mcpSession: undefined,
+      computerUseMcp: { command: "/fixture/cua-driver", args: ["mcp"], environment: {} },
+    });
+    assert.notProperty(withoutSession.config, "mcp_servers.t3-code");
+    assert.property(withoutSession.config, "mcp_servers.cua-driver");
+  });
+
+  it("keeps Harness MCP tools out of tool search on the hosted route", () => {
+    const mcpSession = {
+      environmentId: EnvironmentId.make("mcp-direct-environment"),
+      threadId: ThreadId.make("mcp-direct-thread"),
+      providerSessionId: "mcp-direct-session",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      endpoint: "http://127.0.0.1:43123/mcp",
+      authorizationHeader: "Bearer fixture-token",
+      browserToolsAvailable: true,
+    };
+    const computerUseMcp = { command: "/fixture/cua-driver", args: ["mcp"], environment: {} };
+    const hostedInput = {
+      mcpSession,
+      computerUseMcp,
+      keepMcpToolsDirect: true,
+      additionalMcpServers: {
+        "archive.dot": {
+          command: "fixture-mcp",
+          args: ["./relative-server.mjs"],
+          cwd: "../mcp",
+          env: { CUSTOM_HEADER: "private-value" },
+          tool_timeout_sec: null,
+          omit_tools_from: ["code_mode"],
+        },
+        "t3-code": {
+          url: "http://stale.invalid/mcp",
+          http_headers: { Authorization: "Bearer stale-fixture" },
+          omit_tools_from: ["code_mode"],
+        },
+      },
+    };
+    const hosted = CodexAdapterV2.codexThreadRuntimeParams(hostedInput);
+    const hostedServers = hosted.config.mcp_servers as Record<string, Record<string, unknown>>;
+    assert.deepEqual(hostedServers["archive.dot"], {
+      command: "fixture-mcp",
+      args: ["./relative-server.mjs"],
+      cwd: "../mcp",
+      env: { CUSTOM_HEADER: "private-value" },
+      omit_tools_from: ["code_mode", "deferred"],
+    });
+    assert.deepInclude(hostedServers["t3-code"]!, {
+      url: mcpSession.endpoint,
+      http_headers: { Authorization: mcpSession.authorizationHeader },
+      omit_tools_from: ["code_mode", "deferred"],
+    });
+    assert.deepInclude(hostedServers["cua-driver"]!, {
+      command: computerUseMcp.command,
+      args: computerUseMcp.args,
+      env: computerUseMcp.environment,
+    });
+    for (const name of ["t3-code", "cua-driver"])
+      assert.notProperty(hosted.config, `mcp_servers.${name}`);
+    const cloud = CodexAdapterV2.codexThreadRuntimeParams({ mcpSession, computerUseMcp });
+    for (const server of ["mcp_servers.t3-code", "mcp_servers.cua-driver"])
+      assert.notProperty(cloud.config[server] as object, "omit_tools_from");
+    for (const params of [hosted, cloud]) {
+      assert.isFalse(params.config["features.multi_agent"]);
+      assert.isFalse(params.config["features.multi_agent_v2"]);
+    }
+  });
+});
+
 describe("CodexAdapterV2 native protocol logging", () => {
   it.effect("logs decoded app-server frames once with credentials redacted", () =>
     Effect.gen(function* () {
@@ -290,6 +404,12 @@ describe("CodexAdapterV2 native protocol logging", () => {
             id: "evt-1",
             http_headers: { Authorization: "Bearer secret-codex-token" },
             usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+            config: {
+              mcp_servers: {
+                external: { args: ["private-argument"], env: { CUSTOM_HEADER: "private-value" } },
+              },
+              model_providers: { custom: { http_headers: { CUSTOM_HEADER: "private-value" } } },
+            },
           },
         },
       });
@@ -316,6 +436,7 @@ describe("CodexAdapterV2 native protocol logging", () => {
               id: "evt-1",
               http_headers: { Authorization: "[REDACTED]" },
               usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+              config: { mcp_servers: "[REDACTED]", model_providers: "[REDACTED]" },
             },
           },
         },
@@ -880,6 +1001,80 @@ describe("CodexAdapterV2 process exit", () => {
 });
 
 describe("CodexAdapterV2 session initialize", () => {
+  it.live("supplies a private browser authorization host to desktop and server sessions", () =>
+    Effect.gen(function* () {
+      for (const { mode, failHost } of [
+        { mode: "desktop", failHost: false },
+        { mode: "desktop", failHost: true },
+        { mode: "web", failHost: false },
+      ] as const) {
+        let launchedEnvironment: NodeJS.ProcessEnv | undefined;
+        const serverConfig = yield* makeReplayServerConfig("browser-access-host").pipe(
+          Effect.orDie,
+        );
+        const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
+          instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+          settings: DEFAULT_CODEX_SETTINGS,
+          environment: {
+            BROWSER_USE_ACCESS_EXECUTOR_ID: "inherited-other-app",
+            BROWSER_USE_ACCESS_PIPE_PATH: "/other-app/socket",
+            BROWSER_USE_ACCESS_VERIFYING_IDENTITY: "other-app-identity",
+          },
+          clientFactory: {
+            open: (input) => {
+              launchedEnvironment = input.environment;
+              return Layer.build(
+                CodexReplay.layerReplay(
+                  makeCodexReplayTranscript({ scenario: "browser-access-host", entries: [] }),
+                ),
+              ).pipe(
+                Effect.flatMap((context) =>
+                  Effect.service(CodexClient.CodexAppServerClient).pipe(Effect.provide(context)),
+                ),
+                Effect.orDie,
+              );
+            },
+          },
+          crypto: yield* Crypto.Crypto,
+          fileSystem: yield* FileSystem.FileSystem,
+          idAllocator: yield* IdAllocator.IdAllocatorV2,
+          serverConfig: { ...serverConfig, mode },
+        });
+        const opening = adapter.openSession({
+          threadId: ThreadId.make("browser-access-host-thread"),
+          providerSessionId: ProviderSessionId.make("browser-access-host-session"),
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        });
+        yield* failHost
+          ? opening.pipe(
+              Effect.provideService(HostProcess.Platform, "linux"),
+              Effect.provideService(HostProcess.UserId, undefined),
+            )
+          : opening;
+        assert.isDefined(launchedEnvironment);
+        if (!failHost) {
+          assert.isNotEmpty(launchedEnvironment!.BROWSER_USE_ACCESS_PIPE_PATH);
+          assert.notEqual(launchedEnvironment!.BROWSER_USE_ACCESS_PIPE_PATH, "/other-app/socket");
+          assert.isNotEmpty(launchedEnvironment!.BROWSER_USE_ACCESS_VERIFYING_IDENTITY);
+          assert.notEqual(
+            launchedEnvironment!.BROWSER_USE_ACCESS_EXECUTOR_ID,
+            "inherited-other-app",
+          );
+        } else {
+          assert.equal(launchedEnvironment!.BROWSER_USE_ACCESS_EXECUTOR_ID, "");
+          assert.equal(launchedEnvironment!.BROWSER_USE_ACCESS_PIPE_PATH, "");
+          assert.equal(launchedEnvironment!.BROWSER_USE_ACCESS_VERIFYING_IDENTITY, "");
+        }
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
   const openReplaySession = (
     transcript: CodexReplay.CodexAppServerReplayTranscript,
     beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
@@ -1143,9 +1338,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
     beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
     overrides: Partial<
-      Pick<CodexAdapterV2.CodexAdapterV2Options, "allowedModels" | "settings">
+      Pick<CodexAdapterV2.CodexAdapterV2Options, "allowedModels" | "settings" | "serverConfig">
     > = {},
     onToolResponse: (result: unknown) => Effect.Effect<void> = () => Effect.void,
+    onOpen: (environment: NodeJS.ProcessEnv) => void = () => {},
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1161,8 +1357,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         beforeEmitInbound === undefined ? {} : { beforeEmitInbound },
       );
       const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
-        open: (openInput) =>
-          Layer.build(CodexReplay.layerReplayWithDriver(driver)).pipe(
+        open: (openInput) => {
+          onOpen(openInput.environment);
+          return Layer.build(CodexReplay.layerReplayWithDriver(driver)).pipe(
             Effect.mapError(
               (cause) =>
                 new ProviderAdapter.ProviderAdapterOpenSessionError({
@@ -1197,7 +1394,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 Effect.provide(context),
               ),
             ),
-          ),
+          );
+        },
       };
       const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
         instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
@@ -1491,6 +1689,137 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  it.live("authorizes only the owning live browser turn and honors project opt-outs", () =>
+    Effect.gen(function* () {
+      const scenario = "native-browser-policy";
+      const nativeThreadId = "native-browser-thread";
+      const nativeTurnId = "native-browser-turn";
+      const threadId = ThreadId.make(`thread-${scenario}`);
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const settingsRead = yield* Ref.make<
+        { entered: Deferred.Deferred<void>; release: Deferred.Deferred<void> } | undefined
+      >(undefined);
+      const gatedSettings = {
+        ...settings,
+        getSettings: Effect.gen(function* () {
+          const value = yield* settings.getSettings;
+          const pending = yield* Ref.get(settingsRead);
+          if (pending) {
+            yield* Deferred.succeed(pending.entered, undefined);
+            yield* Deferred.await(pending.release);
+          }
+          return value;
+        }),
+      };
+      const config = {
+        environmentId: EnvironmentId.make("browser-environment"),
+        threadId,
+        // MCP credential identities are distinct from the adapter's provider session identity.
+        providerSessionId: "browser-mcp-credential",
+        providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture",
+        browserToolsAvailable: true,
+      };
+      yield* sessions.set(config);
+      let environment: NodeJS.ProcessEnv = {};
+      const request = (overrides: Record<string, string> = {}) =>
+        requestBrowserAccess(environment as Record<string, string>, {
+          executorId: environment.BROWSER_USE_ACCESS_EXECUTOR_ID!,
+          sessionId: nativeThreadId,
+          turnId: nativeTurnId,
+          nonce: "a".repeat(64),
+          ...overrides,
+        }).pipe(Effect.map((response) => JSON.parse(response.payload).allowed as boolean));
+      const serverConfig = yield* makeReplayServerConfig(scenario).pipe(Effect.orDie);
+      const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
+      const turnParams = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId,
+        codexInput: [{ type: "text", text: "work" }],
+        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        modelSelection: CODEX_TEST_MODEL_SELECTION,
+        hasT3Mcp: true,
+        browserToolsAvailable: true,
+      });
+      entries[5] = {
+        type: "expect_outbound",
+        label: "turn/start",
+        frame: { id: 3, method: "turn/start", params: turnParams },
+      };
+      const harness = yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({ scenario, entries }),
+        () => Effect.void,
+        () => Effect.void,
+        undefined,
+        { serverConfig: { ...serverConfig, mode: "desktop" } },
+        () => Effect.void,
+        (value) => {
+          environment = value;
+        },
+      ).pipe(Effect.provideService(ServerSettings.ServerSettingsService, gatedSettings));
+      assert.isFalse(yield* request());
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("browser-access-attempt"),
+          text: "work",
+        }),
+      );
+      assert.isTrue(yield* request());
+      assert.isFalse(yield* request({ sessionId: "other-native-thread" }));
+      assert.isFalse(yield* request({ turnId: "other-turn" }));
+      yield* settings.updateSettings({
+        projectSettingsOverrides: { [`project-${threadId}`]: { enableAgentBrowserAccess: false } },
+      });
+      assert.isFalse(yield* request());
+      yield* settings.updateSettings({
+        projectSettingsOverrides: { [`project-${threadId}`]: { enableAgentBrowserAccess: true } },
+      });
+      assert.isTrue(yield* request());
+      yield* sessions.set({ ...config, capabilities: new Set() });
+      assert.isFalse(yield* request());
+      yield* sessions.set({ ...config, expiresAt: 0 });
+      assert.isFalse(yield* request());
+      yield* sessions.set({ ...config, providerSessionId: "replacement-session" });
+      assert.isFalse(yield* request());
+      yield* sessions.clear(threadId);
+      assert.isFalse(yield* request());
+      for (const revoked of [
+        { ...config, providerSessionId: "replacement-session" },
+        { ...config, expiresAt: 0 },
+        { ...config, capabilities: new Set<string>() },
+        undefined,
+      ]) {
+        yield* sessions.set(config);
+        const pending = {
+          entered: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        };
+        yield* Ref.set(settingsRead, pending);
+        const checking = yield* request().pipe(Effect.forkChild);
+        yield* Deferred.await(pending.entered);
+        if (revoked) yield* sessions.set(revoked);
+        else yield* sessions.clear(threadId);
+        yield* Deferred.succeed(pending.release, undefined);
+        assert.isFalse(yield* Fiber.join(checking));
+        yield* Ref.set(settingsRead, undefined);
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          ServerSettings.layerTest(),
+        ),
+      ),
+    ),
+  );
+
   it.effect("adds the session MCP server without replacing launch-argument servers", () =>
     Effect.gen(function* () {
       const scenario = "launch-mcp-servers";
@@ -1524,8 +1853,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           cwd: "/workspace",
           model: "gpt-5.4",
           config: {
-            "tools.update_plan.enabled": true,
-            mcp_optional_startup_grace_ms: 10_000,
+            ...CodexAdapterV2.CODEX_THREAD_CONFIG,
             "mcp_servers.t3-code": {
               url: "http://127.0.0.1:43123/mcp",
               tool_timeout_sec: 3_900,
@@ -6157,6 +6485,91 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       childTurnCompleted(RESUME_CHILD_TURN_2),
     ],
   });
+
+  it.live("authorizes native child browser turns under their root session and revokes them", () =>
+    Effect.gen(function* () {
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const threadId = ThreadId.make(`thread-${RESUME_SCENARIO}`);
+      yield* sessions.set({
+        environmentId: EnvironmentId.make("browser-child-environment"),
+        threadId,
+        providerSessionId: "browser-child-credential",
+        providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture",
+        browserToolsAvailable: true,
+      });
+      const entries = resumeSubagentTranscript.entries.slice(
+        0,
+        resumeSubagentTranscript.entries.findIndex(
+          (entry) =>
+            entry.type === "emit_inbound" && entry.label === `turn/started/${RESUME_CHILD_TURN_1}`,
+        ) + 1,
+      );
+      entries[5] = {
+        type: "expect_outbound",
+        label: "turn/start",
+        frame: {
+          id: 3,
+          method: "turn/start",
+          params: yield* CodexAdapterV2.buildCodexTurnStartParams({
+            nativeThreadId: RESUME_NATIVE_THREAD,
+            codexInput: [{ type: "text", text: RESUME_PROMPT }],
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+            hasT3Mcp: true,
+            browserToolsAvailable: true,
+          }),
+        },
+      };
+      let environment: NodeJS.ProcessEnv = {};
+      const harness = yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({ scenario: RESUME_SCENARIO, entries }),
+        undefined,
+        undefined,
+        undefined,
+        {},
+        undefined,
+        (value) => {
+          environment = value;
+        },
+      );
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("browser-child-attempt"),
+          text: RESUME_PROMPT,
+        }),
+      );
+      yield* harness.until(() =>
+        harness.subagentUpdates().some((event) => event.subagent.status === "running"),
+      );
+      const request = (sessionId: string) =>
+        requestBrowserAccess(environment as Record<string, string>, {
+          executorId: environment.BROWSER_USE_ACCESS_EXECUTOR_ID!,
+          sessionId,
+          turnId: RESUME_CHILD_TURN_1,
+          nonce: "a".repeat(64),
+        }).pipe(Effect.map((response) => JSON.parse(response.payload).allowed as boolean));
+      assert.isTrue(yield* request(RESUME_NATIVE_THREAD));
+      assert.isTrue(yield* request(RESUME_CHILD_THREAD));
+      assert.isFalse(yield* request("foreign-root-session"));
+      yield* sessions.clear(threadId);
+      assert.isFalse(yield* request(RESUME_NATIVE_THREAD));
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          ServerSettings.layerTest(),
+        ),
+      ),
+    ),
+  );
 
   it.effect("wakes the parent when a native child finishes after the parent's turn", () =>
     Effect.scoped(

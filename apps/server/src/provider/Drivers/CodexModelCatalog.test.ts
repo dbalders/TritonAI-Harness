@@ -210,6 +210,7 @@ describe("CodexModelCatalog", () => {
     NodeAssert.equal(glm?.apply_patch_tool_type, null);
     NodeAssert.equal(glm?.supports_parallel_tool_calls, false);
     NodeAssert.equal(glm?.web_search_tool_type, "text");
+    // Only the managed gateway proxy translates tool search for these models.
     NodeAssert.equal(glm?.supports_search_tool, false);
     NodeAssert.equal(glm?.model_messages, null);
     NodeAssert.equal(glm?.context_window, 123_000);
@@ -239,7 +240,7 @@ describe("CodexModelCatalog", () => {
   });
 
   // regression: #421 fix(codex): contain Stop commands and restore managed Auto approvals
-  it("clears inherited references to the removed reviewer only for managed gateways", () => {
+  it("clears the removed reviewer and enables translated tool search only for managed gateways", () => {
     const catalog = JSON.parse(bundledCatalog) as { models: Array<Record<string, unknown>> };
     catalog.models[0]!.auto_review_model_override = "codex-auto-review";
     catalog.models[1]!.auto_review_model_override = "gpt-5.2";
@@ -247,7 +248,14 @@ describe("CodexModelCatalog", () => {
 
     for (const managedGateway of [true, false]) {
       const result = JSON.parse(
-        buildTritonAiCodexModelCatalog(JSON.stringify(catalog), {}, { managedGateway }),
+        buildTritonAiCodexModelCatalog(
+          JSON.stringify(catalog),
+          {
+            "api-glm-5.3": { name: "GLM 5.3", capabilities: { inputModalities: ["text"] } },
+            "custom-frontier": { name: "Custom", capabilities: { inputModalities: ["text"] } },
+          },
+          { managedGateway },
+        ),
       ) as { models: Array<Record<string, unknown>> };
 
       NodeAssert.equal(
@@ -257,8 +265,10 @@ describe("CodexModelCatalog", () => {
       NodeAssert.equal(result.models[1]?.auto_review_model_override, "gpt-5.2");
       NodeAssert.deepStrictEqual(
         result.models.map((model) => model.slug),
-        ["gpt-5.2", "gpt-5.5"],
+        ["gpt-5.2", "gpt-5.5", "api-glm-5.3", "custom-frontier"],
       );
+      NodeAssert.equal(result.models[2]?.supports_search_tool, managedGateway);
+      NodeAssert.equal(result.models[3]?.supports_search_tool, false);
     }
   });
 });
