@@ -195,7 +195,10 @@ describe("installer repository transfer to UCSD", () => {
   effectIt.effect("does not trust a release document redirected away from the GitHub API", () =>
     Effect.gen(function* () {
       const { client } = redirectingClient("https://releases.example.com/latest.json");
-      const error = yield* Effect.flip(fetchLatestInstallerRelease(client));
+      const error = yield* fetchLatestInstallerRelease(client).pipe(
+        Effect.as("trusted" as const),
+        Effect.flip,
+      );
       expect(error._tag).toBe("InstallerReleaseFetchError");
     }),
   );

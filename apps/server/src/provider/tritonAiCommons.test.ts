@@ -51,6 +51,13 @@ function localSkill(markdown?: string): ServerProviderSkillBundle {
   };
 }
 
+/** A failure the GitHub plugin explained to the user, as the integration registry surfaces it. */
+function providerExplainedError(message: string): Error {
+  const error = new Error(message);
+  error.name = "IntegrationProviderPublicError";
+  return error;
+}
+
 function registryFixture(options?: {
   readonly login?: string;
   readonly availableTools?: ReadonlyArray<string>;
@@ -68,7 +75,7 @@ function registryFixture(options?: {
   /** An older fork named UCSD/UCSD-Skills-Library exists while dbalders is still canonical. */
   readonly staleUcsdFork?: boolean;
   /** The canonical repository lookup fails, for example because GitHub timed out. */
-  readonly upstreamFailure?: string;
+  readonly upstreamFailure?: string | Error;
 }) {
   const calls: Invocation[] = [];
   const login = options?.login ?? "contributor";
@@ -99,6 +106,7 @@ function registryFixture(options?: {
       if (name === "github.repositories.get") {
         const owner = (input as { owner: string }).owner;
         if (owner === upstreamOwner) {
+          if (options?.upstreamFailure instanceof Error) throw options.upstreamFailure;
           if (options?.upstreamFailure) throw new Error(options.upstreamFailure);
           return {
             full_name: `${upstreamOwner}/UCSD-Skills-Library`,
@@ -603,6 +611,42 @@ describe("TritonAI Commons local skill submission", () => {
     };
     expect(pull.owner).toBe("UCSD");
     expect(pull.head).toMatch(/^tritonai-commons\//u);
+  });
+
+  it("reports the UCSD provider's explanation instead of the expected old-path failure", async () => {
+    for (const [message, expected] of [
+      [
+        "GitHub authorization expired. Reconnect GitHub.",
+        /Reconnect GitHub.*Settings > Plugins > GitHub/u,
+      ],
+      ["GitHub rate limit reached; retry in 5 minutes.", /rate limit reached; retry in 5 minutes/u],
+    ] as const) {
+      const fixture = registryFixture({
+        upstreamOwner: "UCSD",
+        upstreamFailure: providerExplainedError(message),
+      });
+      await expect(
+        submitProviderSkillToTritonAiCommons({
+          bundle: localSkill(),
+          registry: fixture.registry,
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow(expected);
+      expect(fixture.calls.some(({ writeApproved }) => writeApproved)).toBe(false);
+    }
+  });
+
+  it("reports the dbalders provider's explanation before the transfer when UCSD is absent", async () => {
+    const fixture = registryFixture({
+      upstreamFailure: providerExplainedError("GitHub authorization expired. Reconnect GitHub."),
+    });
+    await expect(
+      submitProviderSkillToTritonAiCommons({
+        bundle: localSkill(),
+        registry: fixture.registry,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(/Reconnect GitHub/u);
   });
 
   it("never treats a fork in the UCSD organization as the Commons upstream", async () => {

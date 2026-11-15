@@ -501,18 +501,40 @@ interface CommonsUpstream {
   readonly metadata: Record<string, unknown>;
 }
 
+function isProviderExplainedError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "IntegrationProviderPublicError" || error.name === "IntegrationOperationError")
+  );
+}
+
+/**
+ * After the transfer the old owner path fails predictably (the GitHub plugin refuses redirects),
+ * so report the latest failure the provider explained, such as authorization or a rate limit,
+ * ahead of generic or "not found" failures.
+ */
+function preferredUpstreamError(errors: ReadonlyArray<unknown>): unknown {
+  const informative = errors.filter((error) => !isGitHubMissing(error));
+  return (
+    informative.findLast(isProviderExplainedError) ??
+    informative.at(-1) ??
+    errors[0] ??
+    commonsError("GitHub did not return the TritonAI Commons repository.")
+  );
+}
+
 async function resolveCommonsUpstream(
   registry: CommonsIntegrationRegistry,
   signal: AbortSignal,
 ): Promise<CommonsUpstream> {
-  let firstError: unknown;
+  const errors: unknown[] = [];
   for (const owner of COMMONS_OWNERS) {
     let metadata: Record<string, unknown>;
     try {
       metadata = await repositoryMetadata(registry, signal, owner);
     } catch (error) {
       if (signal.aborted) throw error;
-      firstError ??= error;
+      errors.push(error);
       continue;
     }
     const fullName = `${owner}/${COMMONS_REPOSITORY}`;
@@ -526,7 +548,7 @@ async function resolveCommonsUpstream(
     }
     return { owner, fullName, metadata };
   }
-  throw firstError ?? commonsError("GitHub did not return the TritonAI Commons repository.");
+  throw preferredUpstreamError(errors);
 }
 
 function verifyCommonsFork(repository: Record<string, unknown>, upstreamFullName: string): void {
