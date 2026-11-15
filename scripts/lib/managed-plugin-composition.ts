@@ -16,6 +16,17 @@ export const PRODUCTION_PLUGIN_SOURCE_ENV = "TRITONAI_PLUGIN_COMPOSITION_SOURCE"
 export const PRODUCTION_PLUGIN_CONFIGURATION_ENV = "TRITONAI_PLUGIN_CONFIGURATION_JSON";
 
 const CANONICAL_PLUGIN_REPOSITORY = "https://github.com/dbalders/TritonAI-Plugins.git";
+// The Plugins repository is moving from dbalders to the UCSD organization. New
+// compositions still record the current owner; verification accepts either owner.
+const ACCEPTED_PLUGIN_REPOSITORIES = [
+  CANONICAL_PLUGIN_REPOSITORY,
+  "https://github.com/UCSD/TritonAI-Plugins.git",
+] as const;
+type AcceptedPluginRepository = (typeof ACCEPTED_PLUGIN_REPOSITORIES)[number];
+
+export function isAcceptedPluginRepository(value: unknown): value is AcceptedPluginRepository {
+  return (ACCEPTED_PLUGIN_REPOSITORIES as ReadonlyArray<unknown>).includes(value);
+}
 const MANAGED_PLUGIN_SOURCE_MANIFEST_FILE = "manifest.json";
 const MANAGED_PLUGIN_ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
@@ -51,7 +62,7 @@ export interface ManagedPluginComposition {
   readonly version: 1;
   readonly kind: typeof MANAGED_PLUGIN_COMPOSITION_KIND;
   readonly source: {
-    readonly repository: typeof CANONICAL_PLUGIN_REPOSITORY;
+    readonly repository: AcceptedPluginRepository;
     readonly ref: string;
     readonly commit: string;
   };
@@ -363,7 +374,8 @@ export function readManagedPluginComposition(sourceRoot: string): ManagedPluginC
     ["repository", "ref", "commit"],
     "Managed plugin composition source",
   );
-  if (value.source.repository !== CANONICAL_PLUGIN_REPOSITORY) {
+  const repository = value.source.repository;
+  if (!isAcceptedPluginRepository(repository)) {
     throw new Error(
       "Managed plugin composition must come from the canonical TritonAI-Plugins repository.",
     );
@@ -400,7 +412,7 @@ export function readManagedPluginComposition(sourceRoot: string): ManagedPluginC
     version: MANAGED_PLUGIN_COMPOSITION_VERSION,
     kind: MANAGED_PLUGIN_COMPOSITION_KIND,
     source: {
-      repository: CANONICAL_PLUGIN_REPOSITORY,
+      repository,
       ref: value.source.ref,
       commit: value.source.commit,
     },

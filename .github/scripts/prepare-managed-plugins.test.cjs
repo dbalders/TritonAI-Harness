@@ -328,6 +328,22 @@ function assertReviewedPluginCatalog() {
     })),
   };
   assert.strictEqual(assertCatalogComposition(catalog, composition), composition);
+  const ucsdCatalog = {
+    ...catalog,
+    source: { ...catalog.source, repository: "https://github.com/UCSD/TritonAI-Plugins.git" },
+  };
+  assert.strictEqual(assertCatalogComposition(ucsdCatalog, composition), composition);
+  assert.throws(
+    () =>
+      assertCatalogComposition(catalog, {
+        ...composition,
+        source: {
+          ...composition.source,
+          repository: "https://github.com/someone/TritonAI-Plugins.git",
+        },
+      }),
+    /approved catalog source/,
+  );
   assert.throws(
     () =>
       assertCatalogComposition(catalog, {
@@ -400,6 +416,16 @@ function assertCanonicalProvenance() {
     assert.strictEqual(assertCanonicalPluginRepository(repository), "dbalders/TritonAI-Plugins");
   }
   for (const repository of [
+    "https://github.com/UCSD/TritonAI-Plugins.git",
+    "https://github.com/ucsd/TritonAI-Plugins",
+    "git@github.com:UCSD/TritonAI-Plugins.git",
+  ]) {
+    assert.strictEqual(assertCanonicalPluginRepository(repository), "UCSD/TritonAI-Plugins");
+  }
+  for (const repository of [
+    "https://github.com/UCSD-evil/TritonAI-Plugins.git",
+    "https://github.com/UCSD/TritonAI-Plugins-fork.git",
+    "https://github.com/someone/TritonAI-Plugins.git",
     "https://github.com/dbalders/TritonAI-Plugin.git",
     "https://github.com.evil.example/dbalders/TritonAI-Plugins.git",
     "https://gitlab.com/dbalders/TritonAI-Plugins.git",

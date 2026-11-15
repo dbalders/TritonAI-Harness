@@ -1,8 +1,12 @@
+import { it as effectIt } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   compareInstallerVersions,
   expectedInstallerAssetName,
+  fetchLatestInstallerRelease,
   parseStableInstallerRelease,
   parseInstallerVersionMarker,
   selectInstallerReleaseAsset,
@@ -120,6 +124,91 @@ describe("installer version comparison and release selection", () => {
       "missing TritonAI-Installer-1.5.0-arm64.dmg",
     );
   });
+});
+
+describe("installer repository transfer to UCSD", () => {
+  it("accepts assets published under either repository owner and no other", () => {
+    const dmg = "TritonAI-Installer-1.5.0-arm64.dmg";
+    for (const owner of ["dbalders", "UCSD"]) {
+      const moved = parseStableInstallerRelease(
+        release("1.5.0", [
+          {
+            name: dmg,
+            browser_download_url: `https://github.com/${owner}/TritonAI-Installer/releases/download/v1.5.0/${dmg}`,
+          },
+        ]),
+      );
+      expect(selectInstallerReleaseAsset(moved, "darwin", "arm64").url).toBe(
+        `https://github.com/${owner}/TritonAI-Installer/releases/download/v1.5.0/${dmg}`,
+      );
+    }
+    for (const owner of ["UCSD-evil", "ucsd-forks", "someone"]) {
+      const foreign = parseStableInstallerRelease(
+        release("1.5.0", [
+          {
+            name: dmg,
+            browser_download_url: `https://github.com/${owner}/TritonAI-Installer/releases/download/v1.5.0/${dmg}`,
+          },
+        ]),
+      );
+      expect(() => selectInstallerReleaseAsset(foreign, "darwin", "arm64")).toThrow("missing");
+    }
+  });
+
+  function redirectingClient(redirectLocation: string) {
+    const requested: string[] = [];
+    const client = HttpClient.make((request) =>
+      Effect.sync(() => {
+        requested.push(request.url);
+        if (request.url.includes("/repos/dbalders/")) {
+          return HttpClientResponse.fromWeb(
+            request,
+            new Response(null, { status: 301, headers: { location: redirectLocation } }),
+          );
+        }
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(JSON.stringify({ tag_name: "v1.5.0", draft: false, prerelease: false }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }),
+    );
+    return { client, requested };
+  }
+
+  effectIt.effect("follows GitHub's redirect from the old owner's release API", () =>
+    Effect.gen(function* () {
+      const { client, requested } = redirectingClient(
+        "https://api.github.com/repositories/1061800000/releases/latest",
+      );
+      const release = yield* fetchLatestInstallerRelease(client);
+      expect(release).toMatchObject({ tag_name: "v1.5.0" });
+      expect(requested).toEqual([
+        "https://api.github.com/repos/dbalders/TritonAI-Installer/releases/latest",
+        "https://api.github.com/repositories/1061800000/releases/latest",
+      ]);
+    }),
+  );
+
+  effectIt.effect(
+    "does not trust a release document redirected away from the HTTPS GitHub API",
+    () =>
+      Effect.gen(function* () {
+        for (const location of [
+          "https://releases.example.com/latest.json",
+          "http://api.github.com/repositories/1061800000/releases/latest",
+        ]) {
+          const { client } = redirectingClient(location);
+          const error = yield* fetchLatestInstallerRelease(client).pipe(
+            Effect.as("trusted" as const),
+            Effect.flip,
+          );
+          expect(error._tag).toBe("InstallerReleaseFetchError");
+        }
+      }),
+  );
 });
 
 describe("installer version marker", () => {

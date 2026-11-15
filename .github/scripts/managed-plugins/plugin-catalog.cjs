@@ -1,7 +1,10 @@
 "use strict";
 const fs = require("fs");
 
-const { assertCanonicalPluginRepository } = require("./plugin-provenance.cjs");
+const {
+  ACCEPTED_PLUGIN_REPOSITORY_URLS,
+  assertCanonicalPluginRepository,
+} = require("./plugin-provenance.cjs");
 const CATALOG_KIND = "tritonai-managed-plugin-catalog";
 const CATALOG_VERSION = 1;
 const COMMIT = /^[a-f0-9]{40}$/;
@@ -74,7 +77,9 @@ function validateManagedPluginCatalog(value) {
 function assertCatalogComposition(catalog, composition) {
   const approved = validateManagedPluginCatalog(catalog);
   if (
-    composition.source.repository !== approved.source.repository ||
+    // New compositions record the dbalders URL; a catalog may already record the UCSD one.
+    !ACCEPTED_PLUGIN_REPOSITORY_URLS.includes(composition.source.repository) ||
+    !ACCEPTED_PLUGIN_REPOSITORY_URLS.includes(approved.source.repository) ||
     composition.source.ref !== approved.source.ref ||
     composition.source.commit !== approved.source.commit
   ) {
