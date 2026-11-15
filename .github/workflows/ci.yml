@@ -55,9 +55,9 @@ jobs:
 
       - name: Release publication guards
         run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/*stable*.test.cjs .github/scripts/prepare-mobile-native.test.cjs .github/scripts/controlled-release-assets.test.cjs
-      - name: Install browser secret helper build libraries
+      - name: Install desktop build and credential-store dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config build-essential xvfb
+          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config build-essential xvfb dbus-x11 gnome-keyring
 
       - name: Build and verify desktop pipeline
         run: vp run preflight:desktop
@@ -65,10 +65,16 @@ jobs:
       - name: Open the seeded thread in the built desktop app
         id: desktop_launch
         timeout-minutes: 4
+        env:
+          XDG_CURRENT_DESKTOP: GNOME
         run: |
-          electron=$(node -p "require('./apps/desktop/node_modules/electron')")
-          xvfb-run -a node scripts/smoke-desktop-app.ts --executable "$electron" --app apps/desktop \
-            --artifacts-dir "$RUNNER_TEMP/desktop-launch-check"
+          desktop_electron=$(node -p "require('./apps/desktop/node_modules/electron')")
+          export desktop_electron
+          dbus-run-session -- bash -euo pipefail <<'DESKTOP_SMOKE'
+            printf "%s" "ci-desktop-smoke" | gnome-keyring-daemon --unlock --components=secrets
+            xvfb-run -a node scripts/smoke-desktop-app.ts --executable "$desktop_electron" --app apps/desktop \
+              --artifacts-dir "$RUNNER_TEMP/desktop-launch-check"
+          DESKTOP_SMOKE
 
       - name: Upload desktop launch check
         if: failure() && steps.desktop_launch.outcome == 'failure'
