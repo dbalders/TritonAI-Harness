@@ -1,6 +1,7 @@
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { isDeepStrictEqual } = require("node:util");
+const { ACCEPTED_PLUGIN_REPOSITORY_URLS } = require("./plugin-provenance.cjs");
 
 function safeRelativePath(value) {
   return (
@@ -29,7 +30,7 @@ function validateFrozenComposition(composition) {
   if (
     composition.version !== 1 ||
     composition.kind !== "tritonai-harness-plugin-composition" ||
-    source.repository !== "https://github.com/dbalders/TritonAI-Plugins.git" ||
+    !ACCEPTED_PLUGIN_REPOSITORY_URLS.includes(source.repository) ||
     typeof source.commit !== "string" ||
     !commit.test(source.commit) ||
     typeof source.ref !== "string" ||

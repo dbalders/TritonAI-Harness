@@ -27,9 +27,16 @@ const INSTALLER_VERSION_MARKER_RELATIVE_PATH = [
   "installer-version.json",
 ] as const;
 
-const GITHUB_RELEASE_URL =
-  "https://api.github.com/repos/dbalders/TritonAI-Installer/releases/latest";
-const GITHUB_DOWNLOAD_PATH_PREFIX = "/dbalders/TritonAI-Installer/releases/download/";
+// The Installer repository is moving from dbalders to the UCSD organization. GitHub
+// redirects the old API path after the transfer, so the check follows that redirect, trusts
+// only a final response from api.github.com, and accepts assets published under either owner.
+const INSTALLER_RELEASE_OWNERS = ["dbalders", "UCSD"] as const;
+const GITHUB_API_HOST = "api.github.com";
+const GITHUB_RELEASE_URL = `https://${GITHUB_API_HOST}/repos/dbalders/TritonAI-Installer/releases/latest`;
+const GITHUB_DOWNLOAD_PATH_PREFIXES = INSTALLER_RELEASE_OWNERS.map(
+  (owner) => `/${owner}/TritonAI-Installer/releases/download/`,
+);
+const MAX_RELEASE_REDIRECTS = 3;
 const MAX_RELEASE_RESPONSE_BYTES = 512 * 1024;
 const MAX_MARKER_BYTES = 16 * 1024;
 const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
@@ -174,10 +181,12 @@ function validateInstallerAssetUrl(
     if (url.protocol !== "https:" || url.hostname !== "github.com") return null;
     if (url.search || url.hash) return null;
     const decodedPath = decodeURIComponent(url.pathname);
-    const expectedPaths = new Set([
-      `${GITHUB_DOWNLOAD_PATH_PREFIX}${version}/${expectedName}`,
-      `${GITHUB_DOWNLOAD_PATH_PREFIX}v${version}/${expectedName}`,
-    ]);
+    const expectedPaths = new Set(
+      GITHUB_DOWNLOAD_PATH_PREFIXES.flatMap((prefix) => [
+        `${prefix}${version}/${expectedName}`,
+        `${prefix}v${version}/${expectedName}`,
+      ]),
+    );
     if (!expectedPaths.has(decodedPath)) return null;
     return url.href;
   } catch {
@@ -435,6 +444,37 @@ export class InstallerUpdates extends Context.Service<
   }
 >()("@t3tools/desktop/updates/InstallerUpdates") {}
 
+function requireGitHubApiResponse(response: HttpClientResponse.HttpClientResponse) {
+  return new URL(response.request.url).hostname === GITHUB_API_HOST
+    ? Effect.succeed(response)
+    : Effect.fail(
+        new InstallerReleaseFetchError({ cause: "GitHub redirected outside its release API" }),
+      );
+}
+
+/** Reads the latest stable Installer release, following GitHub's repository-transfer redirect. */
+export function fetchLatestInstallerRelease(httpClient: HttpClient.HttpClient) {
+  const releaseRequest = HttpClientRequest.get(GITHUB_RELEASE_URL).pipe(
+    HttpClientRequest.setHeader("accept", "application/vnd.github+json"),
+    HttpClientRequest.setHeader("user-agent", "TritonAI-Harness"),
+    HttpClientRequest.setHeader("x-github-api-version", "2022-11-28"),
+  );
+  return HttpClient.followRedirects(httpClient, MAX_RELEASE_REDIRECTS)
+    .execute(releaseRequest)
+    .pipe(
+      Effect.flatMap(HttpClientResponse.filterStatusOk),
+      Effect.flatMap(requireGitHubApiResponse),
+      Effect.flatMap(readLimitedReleaseText),
+      Effect.timeout("15 seconds"),
+      Effect.mapError((cause) => new InstallerReleaseFetchError({ cause })),
+      Effect.flatMap((raw) =>
+        decodeUnknownJson(raw).pipe(
+          Effect.mapError((cause) => new InstallerReleaseFetchError({ cause })),
+        ),
+      ),
+    );
+}
+
 const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const electronShell = yield* ElectronShell.ElectronShell;
@@ -447,22 +487,7 @@ const make = Effect.gen(function* () {
     environment.homeDirectory,
     ...INSTALLER_VERSION_MARKER_RELATIVE_PATH,
   );
-  const releaseRequest = HttpClientRequest.get(GITHUB_RELEASE_URL).pipe(
-    HttpClientRequest.setHeader("accept", "application/vnd.github+json"),
-    HttpClientRequest.setHeader("user-agent", "TritonAI-Harness"),
-    HttpClientRequest.setHeader("x-github-api-version", "2022-11-28"),
-  );
-  const fetchRelease = httpClient.execute(releaseRequest).pipe(
-    Effect.flatMap(HttpClientResponse.filterStatusOk),
-    Effect.flatMap(readLimitedReleaseText),
-    Effect.timeout("15 seconds"),
-    Effect.mapError((cause) => new InstallerReleaseFetchError({ cause })),
-    Effect.flatMap((raw) =>
-      decodeUnknownJson(raw).pipe(
-        Effect.mapError((cause) => new InstallerReleaseFetchError({ cause })),
-      ),
-    ),
-  );
+  const fetchRelease = fetchLatestInstallerRelease(httpClient);
   const readMarker = Effect.gen(function* () {
     const markerExists = yield* fileSystem
       .exists(markerPath)

@@ -1,7 +1,10 @@
 const NIGHTLY_TAG = /^v\d+\.\d+\.\d+-nightly\.\d{8}\.[1-9]\d*$/;
+// The downstream repository is moving from dbalders to the UCSD organization; accept
+// both owners so the scheduled nightly keeps publishing across the transfer.
+const NIGHTLY_REPOSITORIES = new Set(["dbalders/TritonAI-Harness", "UCSD/TritonAI-Harness"]);
 
 function assertNightlyPublication({ repository, ref, defaultBranch, tag }) {
-  if (repository !== "dbalders/TritonAI-Harness")
+  if (!NIGHTLY_REPOSITORIES.has(repository))
     throw new Error("Nightly publication is restricted to the downstream repository.");
   if (ref !== `refs/heads/${defaultBranch}`)
     throw new Error("Publish nightlies only from the default branch.");

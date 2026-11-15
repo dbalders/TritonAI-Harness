@@ -63,9 +63,16 @@ function registryFixture(options?: {
   readonly failAfterPutOnceAt?: number;
   readonly pullChangedFilesDelta?: number;
   readonly staleFork?: boolean;
+  /** Where the canonical Commons repository lives; "UCSD" models the post-transfer state. */
+  readonly upstreamOwner?: "dbalders" | "UCSD";
+  /** An older fork named UCSD/UCSD-Skills-Library exists while dbalders is still canonical. */
+  readonly staleUcsdFork?: boolean;
+  /** The canonical repository lookup fails, for example because GitHub timed out. */
+  readonly upstreamFailure?: string;
 }) {
   const calls: Invocation[] = [];
   const login = options?.login ?? "contributor";
+  const upstreamOwner = options?.upstreamOwner ?? "dbalders";
   const availableTools = options?.availableTools ?? TOOL_NAMES;
   let forkCreated = false;
   let pullCreated = false;
@@ -85,9 +92,29 @@ function registryFixture(options?: {
         hasSignal: context.signal instanceof AbortSignal,
       });
       if (name === "github.identity.get") return { login, id: 1 };
+      const requestedOwner = (input as { owner?: string }).owner;
+      // The GitHub plugin uses redirect: "error", so the old owner path fails after the move.
+      if (upstreamOwner === "UCSD" && requestedOwner === "dbalders")
+        throw new Error("fetch failed");
       if (name === "github.repositories.get") {
         const owner = (input as { owner: string }).owner;
-        if (owner === "dbalders") return { default_branch: "main", fork: false };
+        if (owner === upstreamOwner) {
+          if (options?.upstreamFailure) throw new Error(options.upstreamFailure);
+          return {
+            full_name: `${upstreamOwner}/UCSD-Skills-Library`,
+            default_branch: "main",
+            fork: false,
+          };
+        }
+        if (owner === "UCSD") {
+          if (!options?.staleUcsdFork) throw new Error(GITHUB_MISSING);
+          return {
+            full_name: "UCSD/UCSD-Skills-Library",
+            default_branch: "main",
+            fork: true,
+            parent: { full_name: "dbalders/UCSD-Skills-Library" },
+          };
+        }
         if (options?.forkExists === false && !forkCreated) throw new Error(GITHUB_MISSING);
         return {
           default_branch: "main",
@@ -95,7 +122,7 @@ function registryFixture(options?: {
           parent: {
             full_name: options?.wrongFork
               ? "someone-else/UCSD-Skills-Library"
-              : "dbalders/UCSD-Skills-Library",
+              : `${upstreamOwner}/UCSD-Skills-Library`,
           },
         };
       }
@@ -103,7 +130,7 @@ function registryFixture(options?: {
         const { owner, ref } = input as { owner: string; ref: string };
         if (ref === "main") {
           return {
-            sha: options?.staleFork === true && owner !== "dbalders" ? "c".repeat(40) : BASE_SHA,
+            sha: options?.staleFork === true && owner !== upstreamOwner ? "c".repeat(40) : BASE_SHA,
           };
         }
         if (
@@ -211,7 +238,7 @@ function registryFixture(options?: {
         pullCreated = true;
         pullHead = (input as { head: string }).head.includes(":")
           ? (input as { head: string }).head
-          : `${login}:${(input as { head: string }).head}`;
+          : `${upstreamOwner}:${(input as { head: string }).head}`;
         return { html_url: "https://github.com/dbalders/UCSD-Skills-Library/pull/42" };
       }
       return {};
@@ -508,6 +535,90 @@ describe("TritonAI Commons local skill submission", () => {
       }),
     ).rejects.toThrow("different repository");
     expect(fixture.calls.some(({ name }) => name === "github.branches.create")).toBe(false);
+  });
+
+  it("keeps submitting to dbalders without consulting UCSD before the transfer", async () => {
+    const fixture = registryFixture({ staleUcsdFork: true });
+    await submitProviderSkillToTritonAiCommons({
+      bundle: localSkill(),
+      registry: fixture.registry,
+      signal: new AbortController().signal,
+    });
+    expect(fixture.calls.some(({ input }) => (input as { owner?: string }).owner === "UCSD")).toBe(
+      false,
+    );
+    expect(fixture.calls.find(({ name }) => name === "github.pulls.create")?.input).toMatchObject({
+      owner: "dbalders",
+    });
+  });
+
+  it("submits to UCSD after the transfer even though the old owner path fails", async () => {
+    const fixture = registryFixture({ upstreamOwner: "UCSD", forkExists: false });
+    const result = await submitProviderSkillToTritonAiCommons({
+      bundle: localSkill(),
+      registry: fixture.registry,
+      signal: new AbortController().signal,
+    });
+    expect(result.path).toBe("community/local-accessibility-review/SKILL.md");
+    expect(fixture.calls.find(({ name }) => name === "github.repositories.fork")?.input).toEqual({
+      owner: "UCSD",
+      repo: "UCSD-Skills-Library",
+    });
+    expect(fixture.calls.find(({ name }) => name === "github.pulls.create")?.input).toMatchObject({
+      owner: "UCSD",
+      head: expect.stringMatching(/^contributor:tritonai-commons\//u),
+    });
+    const oldOwnerCalls = fixture.calls.filter(
+      ({ input }) => (input as { owner?: string }).owner === "dbalders",
+    );
+    expect(oldOwnerCalls.map(({ name }) => name)).toEqual(["github.repositories.get"]);
+  });
+
+  it("accepts a contributor fork whose parent moved to UCSD", async () => {
+    const fixture = registryFixture({ upstreamOwner: "UCSD" });
+    await expect(
+      submitProviderSkillToTritonAiCommons({
+        bundle: localSkill(),
+        registry: fixture.registry,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toMatchObject({ skillName: "local-accessibility-review" });
+    expect(fixture.calls.some(({ name }) => name === "github.repositories.fork")).toBe(false);
+  });
+
+  it("never forks into the former owner's account after the transfer", async () => {
+    const fixture = registryFixture({ upstreamOwner: "UCSD", login: "dbalders" });
+    await submitProviderSkillToTritonAiCommons({
+      bundle: localSkill(),
+      registry: fixture.registry,
+      signal: new AbortController().signal,
+    });
+    expect(fixture.calls.some(({ name }) => name === "github.repositories.fork")).toBe(false);
+    expect(
+      fixture.calls.find(({ name }) => name === "github.branches.create")?.input,
+    ).toMatchObject({ owner: "UCSD", repo: "UCSD-Skills-Library" });
+    const pull = fixture.calls.find(({ name }) => name === "github.pulls.create")?.input as {
+      owner: string;
+      head: string;
+    };
+    expect(pull.owner).toBe("UCSD");
+    expect(pull.head).toMatch(/^tritonai-commons\//u);
+  });
+
+  it("never treats a fork in the UCSD organization as the Commons upstream", async () => {
+    const fixture = registryFixture({
+      staleUcsdFork: true,
+      upstreamFailure: "GitHub request timed out.",
+    });
+    await expect(
+      submitProviderSkillToTritonAiCommons({
+        bundle: localSkill(),
+        registry: fixture.registry,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow();
+    expect(fixture.calls.some(({ writeApproved }) => writeApproved)).toBe(false);
+    expect(fixture.calls.some(({ name }) => name === "github.commits.status.get")).toBe(false);
   });
 
   it("fails actionably before GitHub calls when a capability is disabled", async () => {

@@ -553,7 +553,7 @@ try {
   );
   assertDoesNotMatch(
     releaseWorkflow,
-    /TRITONAI_INSTALLER_COMPOSITION_COMMIT|dbalders\/TritonAI-Installer/u,
+    /TRITONAI_INSTALLER_COMPOSITION_COMMIT|(?:dbalders|UCSD)\/TritonAI-Installer/iu,
     "Harness composition and finalization must not depend on Installer source.",
   );
   assertDoesNotMatch(
