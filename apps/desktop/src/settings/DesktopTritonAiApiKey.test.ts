@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -22,7 +23,11 @@ function makeEnvironmentLayer(homeDirectory: string) {
     runningUnderArm64Translation: false,
   }).pipe(
     Layer.provide(
-      Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({ T3CODE_HOME: homeDirectory })),
+      Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        DesktopConfig.layerTest({ T3CODE_HOME: homeDirectory }),
+      ),
     ),
   );
 }
@@ -36,7 +41,7 @@ const withKeyStore = <A, E, R>(
       prefix: "tritonai-api-key-test-",
     });
     return yield* effect.pipe(Effect.provide(makeEnvironmentLayer(homeDirectory)));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 describe("DesktopTritonAiApiKey", () => {
   // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes

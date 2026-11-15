@@ -5,7 +5,7 @@ import {
   TRITONAI_ONPREM_API_KEY_ENV,
   type DesktopTritonAiCredentialStatus,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -464,7 +464,7 @@ export const replaceTritonAiCredentials = Effect.fn("desktop.tritonAiApiKey.repl
   ): Effect.fn.Return<
     void,
     DesktopTritonAiApiKeyInputError | DesktopTritonAiApiKeyWriteError,
-    DesktopEnvironment.DesktopEnvironment | Crypto.Crypto | FileSystem.FileSystem
+    DesktopEnvironment.DesktopEnvironment | SecureRandom.SecureRandom | FileSystem.FileSystem
   > {
     const normalized = normalizeCredentialBundle(rawCredentials);
     if (normalized === null && !options?.allowEmpty) {
@@ -474,10 +474,10 @@ export const replaceTritonAiCredentials = Effect.fn("desktop.tritonAiApiKey.repl
 
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const fileSystem = yield* FileSystem.FileSystem;
-    const crypto = yield* Crypto.Crypto;
+    const crypto = yield* SecureRandom.SecureRandom;
     const overridePath = tritonAiApiKeyOverridePath(environment);
     const directory = environment.path.dirname(overridePath);
-    const suffix = yield* crypto.randomUUIDv4().pipe(
+    const suffix = yield* crypto.uuidV4().pipe(
       Effect.mapError(
         (cause) =>
           new DesktopTritonAiApiKeyWriteError({
@@ -526,11 +526,7 @@ export const replaceTritonAiCredentials = Effect.fn("desktop.tritonAiApiKey.repl
         ),
       );
     }).pipe(
-      Effect.catch((error) =>
-        fileSystem
-          .remove(tempPath, { force: true })
-          .pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
-      ),
+      Effect.tapError(() => fileSystem.remove(tempPath, { force: true }).pipe(Effect.ignore)),
     );
   },
 );

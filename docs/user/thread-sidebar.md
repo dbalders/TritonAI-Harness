@@ -5,8 +5,10 @@ need a separate branch and working directory.
 
 ## Start a thread
 
-On web and desktop, a new thread keeps the current project and carries your model
-and mode selections, unless the destination project has its own model default.
+On web and desktop, **New thread** opens the project picker when you have more than one
+open project in the default or project-grouped sidebar. Archived projects don't count. **Shift-click** to start in
+the current project, or use a project's own new-thread action. A new thread carries
+your model and mode selections, unless the destination project has its own model default.
 Its branch and workspace mode come from your configured defaults. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
 
@@ -204,14 +206,11 @@ and keeps it active until new activity resumes the automatic rules.
 Manually marking an idle thread done dismisses unanswered async questions without
 sending an answer or restarting the agent. Marking a thread done also closes its
 terminals that wait at an idle prompt, and keeps their output. A terminal that
-runs a command, such as a dev server, stays open.
-
-By default, environments mark inactive threads done after fourteen days and mark
-threads done when their pull request merges. A closed pull request can also mark an idle
-thread done. Work in progress, pending questions or approvals, and live background work
-keep the thread active. An open pull request also keeps an inactive thread active,
-but an old closed or merged pull request does not mark work done that you resumed
-after it closed.
+runs a command, such as a dev server, stays open unless its action has **Stop this action
+when the thread settles** enabled in Settings > Projects > Actions. You can also set
+`"stopOnSettle": true` on a `t3.json` action and import it there. Start the command through
+that action so T3 can stop its terminal and child processes. Commands started through an
+agent's own shell tools are managed by the provider.
 
 To reclaim disk space from done work, turn on **Run in the thread's worktree when the
 thread is marked done** for one of the project's actions, or set `"runOnSettle": true` on a
@@ -220,24 +219,23 @@ worktree is marked done, manually or automatically, even if a terminal there sti
 command such as a dev server. Threads in the project's main checkout skip it. Its terminal
 closes when the command succeeds and stays open when it fails.
 
-On web and desktop, press a thread's **Settle** button and drag up or down to
+On web and desktop, press a thread's **Done** button and drag up or down to
 mark done every thread in that section between it and the one you release on.
-The **Un-mark done** and **Wake** buttons work the same way in their sections.
+The **Reopen** and **Wake** buttons work the same way in their sections.
 Press `Escape` while dragging to cancel.
 
-By default, environments mark done inactive threads after three days and mark done
-threads whose pull request merged. A closed pull request can also mark done an idle
-thread. An empty thread's inactivity counts from when it was created.
-Work in progress, pending questions or approvals, and live background work
-prevent automatic mark donement . An open pull request does not prevent inactivity
-mark donement unless you turn on **Keep threads with a PR** in **Settings → General**,
-but an old closed or merged pull request does not mark done work you
-resumed after it closed. Only your own messages count as resuming. A turn that
-finished background work or a pull request watch starts on its own does not.
+By default, environments mark inactive threads done after fourteen days and mark done
+threads whose pull request merged. A closed pull request can also mark an idle thread done.
+An empty thread's inactivity counts from when it was created. Work in progress, pending
+questions or approvals, and live background work prevent automatic completion. An open pull
+request keeps an inactive thread active when **Keep threads with a PR** is enabled in
+**Settings → Threads**. A closed or merged pull request does not mark done work you resumed
+after it closed. Only your own messages count as resuming; background turns and pull request
+watch updates do not.
 
 To keep one thread out of the Done shelf no matter how long it sits idle, open its menu,
-choose **Automatically mark done**, and pick **Disabled**. The current option is checked. Pick
-**Enabled** to return to the usual rules. **Done**, snooze, and archive still work while it
+choose **Automatically mark done**, and pick **Never**. The current option is checked. Pick
+**Follow settings** to return to the rules in **Settings → Threads**. **Done**, snooze, and archive still work while it
 is disabled.
 
 Change these rules in **Settings → Threads**.
@@ -274,9 +272,11 @@ palette.
 
 Use **Settings → Keybindings** to find or customize shortcuts for searching files
 and copying a thread reference. A copied reference uses the thread's pull request
-link when available, otherwise the thread itself, which pastes into a composer as
-a thread chip. To copy the thread even when it has a PR, choose **Copy → Thread**
-from its context menu, or **Copy thread** from its long-press menu on mobile.
+link when available, otherwise a link to the thread, which opens it from anywhere
+you paste it and pastes into a composer as a thread chip (see
+[sharing a thread](./prompt-links.md#share-a-thread)). To copy the thread even
+when it has a PR, choose **Copy → Thread** from its context menu, or **Copy
+thread** from its long-press menu on mobile.
 **Thread ID** copies the bare ID for scripts and the `t3` CLI. See
 [keybindings](./keybindings.md) for custom configuration.
 
@@ -285,8 +285,9 @@ from its context menu, or **Copy thread** from its long-press menu on mobile.
 **Limited** means the provider stopped on a usage or rate limit. The conversation
 keeps the provider's explanation. Retry after the limit resets, or switch to
 another provider instance.
-On web and desktop, press **Resume** in an empty composer to continue a limited
-or interrupted turn manually.
+Press **Resume** in an empty composer to continue a limited or interrupted turn
+manually. Do this when the provider reports no reset time, because nothing
+continues the turn on its own.
 Queued messages stay saved while the limit blocks the thread. They run after
 the continuation finishes. If the queue was held by a restart, resume it then.
 
@@ -341,9 +342,10 @@ You can also choose **Side chat** from the **+** menu in the right panel. The si
 chat opens as a tab there, with its own composer. Side chats do not show in the
 sidebar. Find one again under **Side chats** in thread details.
 
-A side chat works in the same folder as the thread. Its first reply asks before it
-edits files or runs commands. After that, it uses the permission mode you choose
-in its composer.
+A side chat works in the same folder as the thread and starts with the permissions,
+model, and reasoning level shown in the thread's composer, including for its first
+reply. Change them for an individual side chat in its composer. Later changes to the
+parent do not change existing side chats.
 
 To use what you learned, choose **Bring back**. The thread gets the side chat with
 your next message there. Bring back is available while the thread is idle.
@@ -376,3 +378,7 @@ several selected threads together. Choose **Wake thread** to bring a thread back
 Nightly builds show a starry sidebar header, including with the UC San Diego theme.
 The `(Nightly)` label appears as text with a transparent background.
 Use **Settings → Appearance → Environment identification** to choose artwork, a pill, or neither.
+A snoozed thread keeps working and stays hidden until its wake time, even while
+its agent wakes itself for background work. It comes back early for an approval,
+a new question, a failed run, or a message or answer you send. You can snooze an existing
+question and answer when the thread wakes; the question stays unanswered.

@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 // The registry deliberately owns atomic filesystem installation semantics instead of
 // exposing the filesystem through its Effect service boundary.
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off cryptoRandomUUID:off
@@ -106,6 +107,7 @@ export interface IntegrationLifecycleContext extends IntegrationInvocationContex
 /** Longest provider message passed to agents and users; longer messages are cut, not dropped. */
 const MAX_PROVIDER_PUBLIC_MESSAGE_LENGTH = 1_024;
 
+// @effect-diagnostics-next-line extendsNativeError:off -- This error is part of the Promise-based plugin API.
 export class IntegrationProviderPublicError extends Error {
   readonly _tag = "IntegrationProviderPublicError";
   /**
@@ -600,6 +602,7 @@ const EMPTY_STATE: PersistedIntegrationState = {
   removing: emptyRecord(),
 };
 
+// @effect-diagnostics-next-line extendsNativeError:off -- This error is part of the Promise-based plugin API.
 class ProviderStatusTimeoutError extends Error {
   constructor() {
     super("The integration provider timed out while reporting its status.");
@@ -607,6 +610,7 @@ class ProviderStatusTimeoutError extends Error {
   }
 }
 
+// @effect-diagnostics-next-line extendsNativeError:off -- This error is part of the Promise-based plugin API.
 class ProviderStatusContractError extends Error {
   constructor() {
     super("The integration provider returned an invalid status.");
@@ -614,6 +618,7 @@ class ProviderStatusContractError extends Error {
   }
 }
 
+// @effect-diagnostics-next-line extendsNativeError:off -- This error is part of the Promise-based plugin API.
 class ProviderOperationTimeoutError extends Error {
   constructor() {
     super("The integration provider operation timed out.");
@@ -3835,6 +3840,7 @@ export function getIntegrationRegistryOptional(): RegistryRuntime | null {
 export const listEnabledIntegrations = Effect.suspend(() => {
   const registry = activeRegistry;
   if (!registry) return Effect.succeed<ReadonlyArray<IntegrationSummary>>([]);
+  // @effect-diagnostics-next-line effectTryWithoutCatch:off -- A failed registry observation falls back to an empty inventory.
   return Effect.tryPromise(() => registry.list()).pipe(
     Effect.timeoutOption(Duration.seconds(5)),
     Effect.map(
@@ -3877,9 +3883,10 @@ export const startupLayer = Layer.effectDiscard(
       resolveIntegrationCodexHomes(config.baseDir, settings),
     );
     const runFork = Effect.runForkWith(yield* Effect.context<never>());
+    const hostEnvironment = yield* HostProcess.Environment;
     const builtinIntegrations = yield* Effect.promise(() =>
       loadBuiltinIntegrations(secrets, {
-        includeFixtures: process.env.TRITONAI_ENABLE_INTEGRATION_FIXTURES === "1",
+        includeFixtures: hostEnvironment.TRITONAI_ENABLE_INTEGRATION_FIXTURES === "1",
       }),
     );
     const registry = yield* Effect.promise(() =>

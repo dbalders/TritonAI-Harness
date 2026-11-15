@@ -95,6 +95,7 @@ import {
   packWindowsServerAsar,
   preflightWindowsDesktopBuild,
   renderMacPasskeyEntitlements,
+  resolveMacFileExclusions,
   resolveMacWebAuthnEntitlements,
   resolveMacPasskeySigningConfiguration,
   resolveMergedStageDependencies,
@@ -1013,6 +1014,30 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       }),
     ),
   );
+
+  it("drops the other architecture's Darwin prebuilds from single-architecture Mac builds", () => {
+    const excludes = (arch: "arm64" | "x64" | "universal", file: string) =>
+      resolveMacFileExclusions(arch).some((glob) => NodePath.matchesGlob(file, glob.slice(1)));
+    const x64 = [
+      "node_modules/node-pty/prebuilds/darwin-x64/pty.node",
+      "node_modules/objc-js/prebuilds/darwin-x64/node.napi.node",
+    ];
+    const arm64 = [
+      "node_modules/node-pty/prebuilds/darwin-arm64/pty.node",
+      "node_modules/objc-js/prebuilds/darwin-arm64/node.napi.armv8.node",
+    ];
+
+    for (const file of x64) {
+      assert.isTrue(excludes("arm64", file), file);
+      assert.isFalse(excludes("x64", file), file);
+      assert.isFalse(excludes("universal", file), file);
+    }
+    for (const file of arm64) {
+      assert.isTrue(excludes("x64", file), file);
+      assert.isFalse(excludes("arm64", file), file);
+      assert.isFalse(excludes("universal", file), file);
+    }
+  });
 
   it.effect("unpacks target Windows natives while excluding the other architecture", () =>
     Effect.scoped(
@@ -2608,9 +2633,16 @@ it.effect("extracts a deflated Windows helper archive without stalling", () =>
     end.writeUInt32LE(local.length + name.length + compressed.length, 16);
     const archive = Buffer.concat([local, name, compressed, central, name, end]);
     yield* fs.writeFile(archivePath, archive);
-    yield* Effect.tryPromise(() =>
-      extractWindowsCuaDriverArchive(archivePath, { dir: destination }),
-    );
+    yield* Effect.tryPromise({
+      try: () => extractWindowsCuaDriverArchive(archivePath, { dir: destination }),
+      catch: (cause) =>
+        PlatformError.systemError({
+          _tag: "Unknown",
+          module: "FileSystem",
+          method: "extractWindowsCuaDriverArchive",
+          cause,
+        }),
+    });
     assert.deepEqual(yield* fs.readFile(path.join(destination, "cua-driver.exe")), payload);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

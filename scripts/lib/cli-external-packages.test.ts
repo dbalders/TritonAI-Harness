@@ -46,6 +46,9 @@ describe("shouldBundleCliDependency", () => {
       "@yuuang/ffi-rs-win32-x64-msvc",
       "@ff-labs/fff-node",
       "@napi-rs/keyring",
+      "transcribe-cpp",
+      "@transcribe-cpp/win32-x64-cpu-vulkan",
+      "koffi",
       "@clerk/electron-passkeys",
       "node-addon-api",
     ]) {
@@ -222,6 +225,11 @@ var x = 1;
 });
 
 describe("findEsmImportsOfExternalPackages", () => {
+  it("checks deeply nested generated expressions without overflowing", () => {
+    const source = `const value = ${Array.from({ length: 20000 }, () => "value").join(" + ")} + import("deep-package");`;
+    assert.deepStrictEqual(findEsmImportsOfExternalPackages(source), ["deep-package"]);
+  });
+
   it("flags static and dynamic imports of file-backed packages", () => {
     const source = [
       'import { FileFinder } from "@ff-labs/fff-node";',

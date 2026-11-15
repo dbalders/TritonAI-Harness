@@ -8,6 +8,7 @@ export const requestBrowserAccess = (
   environment: Readonly<Record<string, string>>,
   params: unknown,
 ) =>
+  // @effect-diagnostics-next-line effectTryWithoutCatch:off -- This IPC fixture exposes the original socket failure to its test.
   Effect.tryPromise(
     () =>
       new Promise<{ payload: string; signature: string }>((resolve, reject) => {

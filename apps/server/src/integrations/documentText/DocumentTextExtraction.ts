@@ -170,6 +170,7 @@ async function extractPdf(bytes: Uint8Array, maxCharacters: number): Promise<Doc
   }
 }
 
+// @effect-diagnostics-next-line extendsNativeError:off -- This error is part of the Promise-based plugin API.
 class DocxLimitError extends Error {
   readonly reason: "corrupt" | "too_large" | "expanding";
   constructor(reason: "corrupt" | "too_large" | "expanding", message: string) {

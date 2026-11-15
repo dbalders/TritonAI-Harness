@@ -1,8 +1,8 @@
 # Background Service Distribution Policy
 
 TritonAI Harness does not expose the upstream background-service commands. That implementation
-installs and updates the public `t3` npm package, which is the upstream T3 Code distribution rather
-than a UCSD-managed TritonAI Harness package.
+installs and updates upstream T3 Code server artifacts rather than a UCSD-managed
+TritonAI Harness package.
 
 Desktop lifecycle and updates remain owned by TritonAI Installer and the installed desktop app. A
 remote or headless server must be started and updated through the same approved managed process that

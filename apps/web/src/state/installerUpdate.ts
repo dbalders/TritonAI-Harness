@@ -35,9 +35,10 @@ function createInstallerUpdateStateAtom(getBridge: () => InstallerUpdateBridge |
         (unsubscribe) => Effect.sync(unsubscribe),
       );
 
-      const initialState = yield* Effect.tryPromise(() => bridge.getInstallerUpdateState()).pipe(
-        Effect.orElseSucceed(() => null),
-      );
+      const initialState = yield* Effect.tryPromise({
+        try: () => bridge.getInstallerUpdateState(),
+        catch: () => null,
+      }).pipe(Effect.orElseSucceed(() => null));
       if (!receivedUpdate && initialState !== null) {
         Queue.offerUnsafe(queue, initialState);
       }

@@ -11,6 +11,8 @@ export type DesktopMcpServerConfiguration = typeof DesktopMcpServerConfiguration
 
 // A supervisor must not restart a server refused by the state-directory owner.
 export const SERVER_EXIT_CODE_STATE_DIR_OWNED = 78;
+// A server the managed policy refused, so the desktop app blames the policy rather than the release.
+export const SERVER_EXIT_CODE_MANAGED_POLICY = 77;
 
 export const DesktopBackendBootstrap = Schema.Struct({
   // The first key encrypts new server-secret envelopes. Any remaining keys

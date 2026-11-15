@@ -11,6 +11,7 @@ import {
   Headers,
   HttpBody,
   HttpClientRequest,
+  HttpMethod,
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
@@ -362,9 +363,11 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
   environment: NodeJS.ProcessEnv,
   options: TritonAiImageProxyOptions = {},
 ) {
+  // @effect-diagnostics-next-line effectTryWithoutCatch:off -- Invalid proxy configuration propagates to the provider setup boundary.
   const upstream = yield* Effect.try(() => new URL(upstreamBaseUrl));
   const allProxy = environment.all_proxy || environment.ALL_PROXY;
   const dispatcher = yield* Effect.acquireRelease(
+    // @effect-diagnostics-next-line effectTryWithoutCatch:off -- Dispatcher setup errors propagate to the provider setup boundary.
     Effect.try(
       () =>
         new EnvHttpProxyAgent({
@@ -387,6 +390,8 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
   yield* server.serve(
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
+      if (!HttpMethod.isHttpMethod(request.method))
+        return HttpServerResponse.empty({ status: 405 });
       const local = new URL(request.url, "http://localhost");
       if (!local.pathname.startsWith(`${prefix}/`))
         return HttpServerResponse.empty({ status: 404 });

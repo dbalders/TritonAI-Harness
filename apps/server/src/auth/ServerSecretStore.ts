@@ -3,7 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
 import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Crypto from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/encoding/Base64";
 import * as FileSystem from "effect/FileSystem";
@@ -316,7 +316,7 @@ const decodeEnvelope = (
  * @public
  */
 export const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Crypto.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
   const path = yield* Path.Path;
@@ -429,7 +429,7 @@ export const make = Effect.gen(function* () {
                     }),
                 ),
               )}\n`;
-              const uuid = yield* crypto.randomUUIDv4().pipe(
+              const uuid = yield* crypto.uuidV4().pipe(
                 Effect.mapError(
                   (cause) =>
                     new SecretStoreTemporaryPathError({
@@ -519,7 +519,7 @@ export const make = Effect.gen(function* () {
     const secretPath = resolveSecretPath(name);
     return Effect.gen(function* () {
       const envelope = yield* encodeEnvelope(name, value, keys[0]);
-      const uuid = yield* crypto.randomUUIDv4().pipe(
+      const uuid = yield* crypto.uuidV4().pipe(
         Effect.mapError(
           (cause) =>
             new SecretStoreTemporaryPathError({
@@ -559,9 +559,7 @@ export const make = Effect.gen(function* () {
             ? cause
             : new SecretStorePersistError({ resource: `secret ${name}`, cause }),
         ),
-        Effect.catch((cause) =>
-          fileSystem.remove(tempPath).pipe(Effect.ignore, Effect.andThen(Effect.fail(cause))),
-        ),
+        Effect.tapError(() => fileSystem.remove(tempPath).pipe(Effect.ignore)),
       );
     });
   };
@@ -650,7 +648,7 @@ export const make = Effect.gen(function* () {
     const secretPath = resolveSecretPath(name);
     return Effect.gen(function* () {
       const envelope = yield* encodeEnvelope(name, value, keys[0]);
-      const uuid = yield* crypto.randomUUIDv4().pipe(
+      const uuid = yield* crypto.uuidV4().pipe(
         Effect.mapError(
           (cause) =>
             new SecretStoreTemporaryPathError({

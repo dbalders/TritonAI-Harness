@@ -17,6 +17,7 @@ an Icon Composer macOS rendition with 860px artwork centered on the 1024px canva
 to match neighboring Dock tiles in the desktop app; Windows, Linux, favicons, and runtime logos get
 rounded-square renditions. Desktop packaging converts the generated macOS PNGs into
 ICNS resources. Edit the source layers rather than generated PNG/ICO renditions.
+Run `vp run icons:export` from the repository root to regenerate the tracked iOS, Linux, Windows, and web assets. The development web exports are also copied to `apps/web/public` for the browser favicon, web app manifest icons, and splash screen. Run `vp run icons:check` to verify that the generated assets and public copies match their sources without changing files.
 
 Development retains its separate Aurora circular raster master at
 `dev/tritonai-harness-dev-1024.png`. Its web, Linux, Windows, and opaque iOS exports

@@ -18,7 +18,7 @@ import {
   PlugIcon,
   PuzzleIcon,
   RefreshCwIcon,
-  SparklesIcon,
+  BookOpenIcon,
   UnplugIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -849,7 +849,7 @@ function IntegrationCard({
           <PluginDetailSection
             title="Skills"
             count={integration.skills.length}
-            icon={<SparklesIcon className="size-4 text-muted-foreground" />}
+            icon={<BookOpenIcon className="size-4 text-muted-foreground" />}
           >
             {integration.skills.length > 0 ? (
               <div className="divide-y divide-border/50">
@@ -857,7 +857,7 @@ function IntegrationCard({
                   <div key={skill.name} className="flex items-center justify-between gap-4 py-3">
                     <div className="min-w-0">
                       <p className="flex items-center gap-2 text-sm font-medium">
-                        <SparklesIcon className="size-3.5 text-muted-foreground" />
+                        <BookOpenIcon className="size-3.5 text-muted-foreground" />
                         {skill.name}
                         {skill.available ? (
                           <CheckCircle2Icon

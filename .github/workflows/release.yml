@@ -27,8 +27,12 @@ permissions:
   contents: read
   id-token: none
 
+# Harness packages through build-desktop-artifact.ts and finalize-macos-desktop-release.ts.
+# Do not call upstream release-desktop.yml: it bypasses our controlled draft,
+# immutable plugin composition, validation receipts, and signing gates.
 jobs:
   resolve_release:
+    if: github.repository == 'dbalders/TritonAI-Harness'
     name: Resolve controlled draft
     # GitHub hides unpublished drafts from tokens without repository write access.
     permissions:

@@ -99,7 +99,8 @@ export const makeCodexFlatToolCatalog = Effect.fn("makeCodexFlatToolCatalog")(fu
           }),
           (runtime) =>
             runtime
-              ? Effect.tryPromise(() => registry.releaseSkillRuntime(runtime.root)).pipe(
+              ? // @effect-diagnostics-next-line effectTryWithoutCatch:off -- Plugin lease cleanup is best effort and its failure is ignored.
+                Effect.tryPromise(() => registry.releaseSkillRuntime(runtime.root)).pipe(
                   Effect.ignore,
                 )
               : Effect.void,

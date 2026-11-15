@@ -139,6 +139,7 @@ const harness = Effect.fn(function* (
     generateBranchName: () => Effect.die("Unexpected branch generation"),
     generateThreadTitle: () => Effect.die("Unexpected title generation"),
     generateReviewGuide: () => Effect.die("Unexpected review generation"),
+    generateTranscriptionPostProcessing: () => Effect.die("Unexpected transcript generation"),
     generateHelp: (input: HelpGenerationInput) =>
       Effect.sync(() => calls.push(input)).pipe(
         Effect.andThen(

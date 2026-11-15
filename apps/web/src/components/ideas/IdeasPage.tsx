@@ -9,7 +9,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, Idea, IdeaFeedbackKind, IdeasFeedbackInput } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { ChevronRightIcon, ClockIcon, EllipsisIcon, SparklesIcon, XIcon } from "lucide-react";
+import { ChevronRightIcon, ClockIcon, EllipsisIcon, LightbulbIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { isElectron } from "../../env";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
@@ -244,7 +244,7 @@ export function IdeasPage() {
               disabled={generating}
               aria-busy={generating}
             >
-              <SparklesIcon />
+              <LightbulbIcon />
               {generating ? "Finding ideas…" : "Suggest more"}
             </Button>
           </div>

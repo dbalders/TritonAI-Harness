@@ -78,6 +78,7 @@ class ImageContextOutputError extends Schema.TaggedError<ImageContextOutputError
   },
 ) {}
 
+// @effect-diagnostics-next-line extendsNativeError:off -- This error is part of the Promise-based plugin API.
 class ImageContextResponseLimitError extends Error {}
 
 export type CodexImageContextAnalyzer = (

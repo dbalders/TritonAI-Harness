@@ -1,0 +1,43 @@
+---
+import Layout from "../layouts/Layout.astro";
+---
+
+<Layout title="Page not found | TritonAI Harness" description="This page does not exist." noindex>
+  <section class="not-found container">
+    <p class="eyebrow">404</p>
+    <h1 class="display">This page does not exist.</h1>
+    <p class="not-found-lede">
+      Download Harness from its GitHub releases or use TritonAI Installer.
+    </p>
+    <div class="not-found-actions">
+      <a class="btn btn-primary btn-lg" href="/download">Download TritonAI Harness</a>
+      <a class="btn btn-ghost btn-lg" href="/">Home</a>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .not-found {
+    padding-top: 18vh;
+    padding-bottom: 18vh;
+    max-width: 720px;
+  }
+
+  .not-found h1 {
+    margin: 14px 0 18px;
+    font-size: clamp(2.25rem, 5vw, 3.5rem);
+  }
+
+  .not-found-lede {
+    color: var(--fg-muted);
+    font-size: 1.05rem;
+    line-height: 1.7;
+  }
+
+  .not-found-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 32px;
+  }
+</style>

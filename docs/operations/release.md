@@ -28,6 +28,16 @@ The upstream server self-update contracts remain in source for compatibility, bu
 servers do not advertise automatic replacement and clients do not render or copy public-package
 update commands. See [Server Update Architecture](../architecture/server-updates.md).
 
+## Upstream workflow boundary
+
+Harness keeps its controlled `release.yml` build and signing jobs. The upstream
+`release-desktop.yml` reusable workflow is excluded; no Harness workflow calls it. CI carries upstream's seeded desktop launch check
+on the GitHub-hosted Linux runner and requires the server transfer measurements.
+Upstream npm publishing, T3-hosted web deployments, relay configuration, native-client
+cache builds, mobile previews, and PR vouch automation are not Harness release gates.
+The macOS PR preview remains same-repository-only and uses a read-only build job,
+with artifact-only publication in a separate job that never executes PR code.
+
 ## Workflow contract
 
 Run `vp run gitlinks:check` after updating vendored reference repositories. Every tracked

@@ -12,8 +12,8 @@ this guidance informational and never starts a second server beside the desktop-
 ## Remote and headless servers
 
 Automatic remote replacement is disabled in TritonAI Harness. Upstream servers may advertise
-background-service or respawn capabilities, but those paths install the public `t3` npm package at
-the client version. TritonAI product versions are not distributed through that package, so the
+background-service or respawn capabilities, but those paths install upstream T3 Code server artifacts at
+the client version. TritonAI product versions are not distributed through that channel, so the
 client deliberately ignores those capabilities and does not render or copy an npm update command.
 
 Update a remote server through the same approved UCSD-managed distribution or deployment process

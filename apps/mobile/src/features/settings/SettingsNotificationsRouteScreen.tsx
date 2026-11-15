@@ -1,6 +1,13 @@
 import * as Dialog from "../../components/ui/Dialog";
-import { AuthRelayWriteScope, TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
+import {
+  AuthRelayWriteScope,
+  managedCapabilityDenial,
+  TRITONAI_CONNECT_NAME,
+  type EnvironmentId,
+} from "@t3tools/contracts";
 import { readEnvironmentScope } from "../../state/session";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { serverEnvironment } from "../../state/server";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useAuth } from "@clerk/expo";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
@@ -42,6 +49,20 @@ import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen.logic";
+
+/**
+ * A policy that turns Connect off refuses relay links and preferences, which would fail the
+ * whole batch, so those environments are skipped like ones this session cannot configure.
+ */
+function canLinkEnvironmentToConnect(environmentId: EnvironmentId) {
+  const policy = appAtomRegistry.get(
+    serverEnvironment.configValueAtom(environmentId),
+  )?.managedPolicy;
+  return (
+    readEnvironmentScope(environmentId, AuthRelayWriteScope) &&
+    managedCapabilityDenial(policy, "connect") === undefined
+  );
+}
 
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "linking";
@@ -271,8 +292,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
     const updateResult = await settleAsyncResult(() =>
       runtime.runPromiseExit(
         setLiveActivityUpdatesEnabled({
-          canConfigureEnvironment: (environmentId) =>
-            readEnvironmentScope(environmentId, AuthRelayWriteScope),
+          canConfigureEnvironment: canLinkEnvironmentToConnect,
           enabled: true,
           previousEnabled: liveActivitiesPreferenceEnabled,
           clerkToken: tokenResult.value,
@@ -350,8 +370,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
     const updateResult = await settleAsyncResult(() =>
       runtime.runPromiseExit(
         setLiveActivityUpdatesEnabled({
-          canConfigureEnvironment: (environmentId) =>
-            readEnvironmentScope(environmentId, AuthRelayWriteScope),
+          canConfigureEnvironment: canLinkEnvironmentToConnect,
           enabled: false,
           previousEnabled: liveActivitiesPreferenceEnabled,
           clerkToken: token,

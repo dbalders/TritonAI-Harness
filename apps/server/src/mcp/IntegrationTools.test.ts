@@ -1,3 +1,4 @@
+import * as ServerSettings from "../serverSettings.ts";
 import { expect, it, vi } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -529,11 +530,12 @@ it("keeps Codex plugin tools on their dynamic route while preserving core MCP an
     }),
   );
   const app = HttpRouter.toWebHandler(
-    Layer.mergeAll(
-      coreLayer,
-      registrationLayerFor([fixtureTool, writeFixtureTool], () => true),
+    layerMcpTransport(
+      Layer.mergeAll(
+        coreLayer,
+        registrationLayerFor([fixtureTool, writeFixtureTool], () => true),
+      ),
     ).pipe(
-      Layer.provideMerge(layerMcpTransport),
       Layer.provide(
         Layer.mock(McpSessionRegistry.McpSessionRegistry)({
           resolve: (token) =>
@@ -543,6 +545,7 @@ it("keeps Codex plugin tools on their dynamic route while preserving core MCP an
         }),
       ),
       Layer.provide(liveThreadsLayer),
+      Layer.provide(ServerSettings.layerTest()),
     ),
     { disableLogger: true },
   );

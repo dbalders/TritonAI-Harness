@@ -57,10 +57,26 @@ jobs:
         run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/*stable*.test.cjs .github/scripts/prepare-mobile-native.test.cjs .github/scripts/controlled-release-assets.test.cjs
       - name: Install browser secret helper build libraries
         run: |
-          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config build-essential
+          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config build-essential xvfb
 
       - name: Build and verify desktop pipeline
         run: vp run preflight:desktop
+
+      - name: Open the seeded thread in the built desktop app
+        id: desktop_launch
+        timeout-minutes: 4
+        run: |
+          electron=$(node -p "require('./apps/desktop/node_modules/electron')")
+          xvfb-run -a node scripts/smoke-desktop-app.ts --executable "$electron" --app apps/desktop \
+            --artifacts-dir "$RUNNER_TEMP/desktop-launch-check"
+
+      - name: Upload desktop launch check
+        if: failure() && steps.desktop_launch.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-launch-check
+          path: ${{ runner.temp }}/desktop-launch-check
+          if-no-files-found: ignore
 
       - name: Build and verify standalone server executable
         run: VP_NODE_VERSION=26.12.1 node apps/server/scripts/cli.ts build-exe --verbose
@@ -105,7 +121,7 @@ jobs:
         run: python3 -B .github/scripts/stage-preview-bundle.test.py
 
       - name: Test nightly release checks
-        run: node --test .github/scripts/check-nightly-release.test.cjs .github/scripts/vercel-deployment-output.test.cjs
+        run: node --test .github/scripts/check-nightly-release.test.cjs .github/scripts/vercel-deployment-output.test.cjs .github/scripts/mobile-preview-comment.test.cjs
 
       - name: Install Chromium for web browser tests
         run: node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
@@ -344,7 +360,7 @@ jobs:
       id-token: write
     name: Release Smoke
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -394,3 +410,9 @@ jobs:
               and .value.result == "skipped"
               and $needs.mobile_native_changes.result == "success"
               and $needs.mobile_native_changes.outputs.changed == "false"))' > /dev/null
+
+      - name: Require transfer measurements
+        uses: actions/download-artifact@v8
+        with:
+          name: thread-transfer-results
+          path: ${{ runner.temp }}/thread-transfer

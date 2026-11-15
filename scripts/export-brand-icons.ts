@@ -49,6 +49,8 @@ interface VariantOutputs {
   readonly macos: string;
   readonly universal: string;
   readonly appleTouch: string;
+  readonly webIcon192: string;
+  readonly webIcon512: string;
   readonly favicon16: string;
   readonly favicon32: string;
   readonly faviconIco: string;
@@ -211,20 +213,6 @@ export class IconExportAssetsStaleError extends Schema.TaggedError<IconExportAss
 
 const ICON_VARIANTS = [
   {
-    label: "production",
-    source: BRAND_ASSET_PATHS.productionIconComposerProject,
-    outputs: {
-      ios: BRAND_ASSET_PATHS.productionIosIconPng,
-      macos: BRAND_ASSET_PATHS.productionMacIconPng,
-      universal: BRAND_ASSET_PATHS.productionLinuxIconPng,
-      appleTouch: BRAND_ASSET_PATHS.productionWebAppleTouchIconPng,
-      favicon16: BRAND_ASSET_PATHS.productionWebFavicon16Png,
-      favicon32: BRAND_ASSET_PATHS.productionWebFavicon32Png,
-      faviconIco: BRAND_ASSET_PATHS.productionWebFaviconIco,
-      windowsIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
-    },
-  },
-  {
     label: "nightly",
     source: BRAND_ASSET_PATHS.nightlyIconComposerProject,
     outputs: {
@@ -232,10 +220,28 @@ const ICON_VARIANTS = [
       macos: BRAND_ASSET_PATHS.nightlyMacIconPng,
       universal: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
       appleTouch: BRAND_ASSET_PATHS.nightlyWebAppleTouchIconPng,
+      webIcon192: BRAND_ASSET_PATHS.nightlyWebIcon192Png,
+      webIcon512: BRAND_ASSET_PATHS.nightlyWebIcon512Png,
       favicon16: BRAND_ASSET_PATHS.nightlyWebFavicon16Png,
       favicon32: BRAND_ASSET_PATHS.nightlyWebFavicon32Png,
       faviconIco: BRAND_ASSET_PATHS.nightlyWebFaviconIco,
       windowsIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
+    },
+  },
+  {
+    label: "production",
+    source: BRAND_ASSET_PATHS.productionIconComposerProject,
+    outputs: {
+      ios: BRAND_ASSET_PATHS.productionIosIconPng,
+      macos: BRAND_ASSET_PATHS.productionMacIconPng,
+      universal: BRAND_ASSET_PATHS.productionLinuxIconPng,
+      appleTouch: BRAND_ASSET_PATHS.productionWebAppleTouchIconPng,
+      webIcon192: BRAND_ASSET_PATHS.productionWebIcon192Png,
+      webIcon512: BRAND_ASSET_PATHS.productionWebIcon512Png,
+      favicon16: BRAND_ASSET_PATHS.productionWebFavicon16Png,
+      favicon32: BRAND_ASSET_PATHS.productionWebFavicon32Png,
+      faviconIco: BRAND_ASSET_PATHS.productionWebFaviconIco,
+      windowsIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
     },
   },
 ] as const satisfies ReadonlyArray<IconVariant>;
@@ -620,6 +626,8 @@ const renderVariant = Effect.fn("iconExport.renderVariant")(function* (
     [variant.outputs.macos, yield* render("macOS", 1024)],
     [variant.outputs.universal, ios],
     [variant.outputs.appleTouch, yield* render("iOS", 180)],
+    [variant.outputs.webIcon192, yield* render("iOS", 192)],
+    [variant.outputs.webIcon512, yield* render("iOS", 512)],
     [variant.outputs.favicon16, yield* render("iOS", 16)],
     [variant.outputs.favicon32, yield* render("iOS", 32)],
     [variant.outputs.faviconIco, ico],

@@ -3,7 +3,7 @@
  * Delete its file while stopped to reset analytics identity without affecting pairing.
  * @module Identify
  */
-import * as Crypto from "effect/Crypto";
+import * as Crypto from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -15,7 +15,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 /** Reads or creates the install ID. Resolves to none, never a fresh ID per boot, when it cannot persist. */
 export const getAnonymousInstallId = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Crypto.SecureRandom;
   const { anonymousIdPath, stateDir } = yield* ServerConfig.ServerConfig;
 
   const readValid = fileSystem.readFileString(anonymousIdPath).pipe(
@@ -34,7 +34,7 @@ export const getAnonymousInstallId = Effect.gen(function* () {
   const existing = yield* readValid;
   if (Option.isSome(existing)) return existing;
 
-  const generated = yield* crypto.randomUUIDv4();
+  const generated = yield* crypto.uuidV4();
   yield* Effect.scoped(
     Effect.gen(function* () {
       const tempPath = yield* fileSystem.makeTempFileScoped({
