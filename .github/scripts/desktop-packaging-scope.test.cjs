@@ -13,6 +13,7 @@ test("native packaging runs for transitive inputs and unknown diffs, and skips u
     "native/resource-monitor/src/main.rs",
     "config/managed-plugin-catalog.nightly.json",
     "pnpm-lock.yaml",
+    ".pnpmfile.cjs",
     ".github/workflows/ci.yml",
     ".github/fixtures/packaging-plugin-configuration.json",
   ]) {

@@ -7,7 +7,7 @@ function affectsDesktopPackaging(path) {
       path,
     ) ||
     /(^|\/)package\.json$/.test(path) ||
-    /^(pnpm-lock\.yaml|pnpm-workspace\.yaml|vite\.config\.ts|tsconfig[^/]*\.json|\.npmrc|\.node-version|\.gitmodules)$/.test(
+    /^(pnpm-lock\.yaml|pnpm-workspace\.yaml|vite\.config\.ts|tsconfig[^/]*\.json|\.npmrc|\.pnpmfile\.cjs|\.node-version|\.gitmodules)$/.test(
       path,
     ) ||
     /^\.github\/(workflows\/(ci|nightly|release|desktop-macos-preview)\.yml|scripts\/|fixtures\/packaging-plugin-configuration\.json)/.test(
