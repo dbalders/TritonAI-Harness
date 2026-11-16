@@ -143,6 +143,14 @@ const decodePluginRuntimeManifest = Schema.decodeUnknownSync(
 const decodeReleasePackageManifest = Schema.decodeEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
 );
+const decodePreparedServerCacheManifest = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      format: Schema.Literals([1]),
+      entries: Schema.Array(Schema.Struct({ file: Schema.String, module: Schema.String })),
+    }),
+  ),
+);
 const decodeWorkspaceConfig = Schema.decodeEffect(fromYaml(WorkspaceConfig));
 const encodeStageWorkspaceConfig = Schema.encodeEffect(fromYaml(StageWorkspaceConfig));
 
@@ -943,6 +951,15 @@ export class DesktopBuildDistDirectoryMissingError extends Schema.TaggedError<De
   }
 }
 
+export class DesktopBuildArtifactCopyError extends Schema.TaggedError<DesktopBuildArtifactCopyError>()(
+  "DesktopBuildArtifactCopyError",
+  { from: Schema.String, to: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `Failed to copy build artifact ${this.from} to ${this.to}.`;
+  }
+}
+
 export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedError<DesktopBuildNoArtifactsProducedError>()(
   "DesktopBuildNoArtifactsProducedError",
   {
@@ -1445,14 +1462,15 @@ export const LINUX_FILE_EXCLUSIONS = [
   "!**/node_modules/node-pty/prebuilds/darwin-*/**/*",
 ] as const;
 
-// node-pty bundles both Darwin architectures; only universal apps need both.
+// Native packages (node-pty, objc-js) ship prebuilds for both Darwin architectures; only universal
+// apps need both. macOS 27 warns that an arm64 app holding x64-only code won't open on macOS 28.
 export function resolveMacFileExclusions(arch?: typeof BuildArch.Type) {
   if (arch === undefined || arch === "universal") {
     return [...MAC_FILE_EXCLUSIONS];
   }
 
   const unusedArch = arch === "arm64" ? "x64" : "arm64";
-  return [...MAC_FILE_EXCLUSIONS, `!**/node_modules/node-pty/prebuilds/darwin-${unusedArch}/**/*`];
+  return [...MAC_FILE_EXCLUSIONS, `!**/node_modules/**/prebuilds/darwin-${unusedArch}/**/*`];
 }
 // Large ASAR sidecars avoid NSIS extracting thousands of loose files during installs and updates.
 export const WINDOWS_SERVER_ASAR_RESOURCE = "server.asar";
@@ -2959,7 +2977,7 @@ const NativeMarkerManifest = Schema.Struct({
   dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   optionalDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
-const decodeNativeMarkerManifest = Schema.decodeUnknownSync(
+const decodeNativeMarkerManifest = Schema.decodeUnknownOption(
   Schema.fromJsonString(NativeMarkerManifest),
 );
 
@@ -2999,13 +3017,12 @@ const hasNativeLoaderMarkers = Effect.fn("hasNativeLoaderMarkers")(function* (pa
   if (!(yield* exists(manifestPath))) return false;
   const source = yield* fs.readFileString(manifestPath).pipe(Effect.orElseSucceed(() => ""));
   if (source === "") return false;
-  const manifest = yield* Effect.try(() => decodeNativeMarkerManifest(source)).pipe(
-    Effect.orElseSucceed(() => null),
-  );
-  if (manifest === null) return false;
-  return Object.keys({ ...manifest.dependencies, ...manifest.optionalDependencies }).some(
-    (dependency) => dependency.startsWith("node-gyp-build"),
-  );
+  const manifest = decodeNativeMarkerManifest(source);
+  if (Option.isNone(manifest)) return false;
+  return Object.keys({
+    ...manifest.value.dependencies,
+    ...manifest.value.optionalDependencies,
+  }).some((dependency) => dependency.startsWith("node-gyp-build"));
 });
 
 export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservingSymlinks")(
@@ -3067,7 +3084,11 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
 export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: {
     readonly asarPath: string;
-    readonly targetArch: typeof BuildArch.Type;
+    /**
+     * Set for the Windows sidecar, whose natives load only on a matching
+     * win32/linux host. Omit to always run the probe (macOS payload checks).
+     */
+    readonly targetArch?: typeof BuildArch.Type;
     readonly verbose: boolean;
   }) {
     const hostPlatform = yield* HostProcess.Platform;
@@ -3094,8 +3115,9 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
     // extraction and link validation above, but execute its module graph only
     // on a host that can load one of those native dependency sets.
     if (
-      (hostPlatform !== "win32" && hostPlatform !== "linux") ||
-      hostArchitecture !== input.targetArch
+      input.targetArch !== undefined &&
+      ((hostPlatform !== "win32" && hostPlatform !== "linux") ||
+        hostArchitecture !== input.targetArch)
     ) {
       yield* Effect.log(
         `[desktop-artifact] Skipped server sidecar runtime check on ${hostPlatform}/${hostArchitecture}; requires win32/${input.targetArch} or linux/${input.targetArch}.`,
@@ -3850,6 +3872,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   arch?: typeof BuildArch.Type,
 ) {
   const buildConfig: Record<string, unknown> = {
+    afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
     // Squirrel.Mac validates updates against the installed app's signing identity.
     // Keep the original bundle ID so existing Nightly installs can update.
     appId: platform === "mac" ? DESKTOP_APP_ID : resolveTritonAiDesktopIdentity(version).appId,
@@ -3877,7 +3900,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // not inflate the loose-file count and slow NSIS installation.
     ...(platform === "win"
       ? { asar: { smartUnpack: false }, asarUnpack: [WINDOWS_NATIVE_ASAR_UNPACK_GLOB] }
-      : {}),
+      : { asarUnpack: ["**/node_modules/@transcribe-cpp/**/*.{dylib,so,so.*}"] }),
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
@@ -3917,6 +3940,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true,
         NSLocalNetworkUsageDescription:
           "TritonAI Harness connects to devices on your local network for remote environments and commands run by terminals and coding agents.",
+        NSCalendarsUsageDescription:
+          "Commands you run in TritonAI Harness may need access to your calendars.",
+        NSCalendarsFullAccessUsageDescription:
+          "Commands you run in TritonAI Harness may need to read and write your calendar events.",
+        NSCalendarsWriteOnlyAccessUsageDescription:
+          "Commands you run in TritonAI Harness may need to add events to your calendars.",
         NSMicrophoneUsageDescription:
           "TritonAI Harness uses the microphone for voice dictation and commands run by terminals and coding agents.",
         NSScreenCaptureUsageDescription:
@@ -3983,6 +4012,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.toolsets = { appimage: "1.0.3" };
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
+    buildConfig.afterPack = path.join(repoRoot, "scripts/linux-after-pack.ts");
     buildConfig.linux = {
       target: target === "AppImage" ? [target, "deb"] : [target],
       executableName: resolveTritonAiDesktopIdentity(version).packageName,
@@ -4351,6 +4381,45 @@ const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(functio
   return count;
 });
 
+const countManifestBackedServerCacheFiles = Effect.fn(
+  "desktopArtifact.countManifestBackedServerCacheFiles",
+)(function* (resourcesDir: string, asarPath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const cacheDir = path.join(resourcesDir, "server-compile-cache");
+  const serialized = yield* fs.readFileString(path.join(cacheDir, "manifest.json"));
+  const manifest = yield* decodePreparedServerCacheManifest(serialized);
+  if (manifest.entries.length === 0) return 0;
+  const files = new Set<string>();
+  const modules = new Set<string>();
+  for (const entry of manifest.entries) {
+    if (
+      !/^[a-f0-9]{8}$/.test(entry.file) ||
+      !/^server\.asar\/apps\/server\/dist\/[^/\\]+\.mjs$/.test(entry.module) ||
+      files.has(entry.file) ||
+      modules.has(entry.module)
+    )
+      return 0;
+    const module = yield* Effect.try({
+      try: () =>
+        statFile(asarPath, path.join(...entry.module.slice("server.asar/".length).split("/"))),
+      catch: (cause) =>
+        new WindowsPackagedPayloadValidationError({
+          reason: "sidecar-invalid",
+          packagedAppDir: path.dirname(resourcesDir),
+          cause,
+        }),
+    });
+    if (!("size" in module) || (yield* fs.stat(path.join(cacheDir, entry.file))).type !== "File")
+      return 0;
+    files.add(entry.file);
+    modules.add(entry.module);
+  }
+  // Only the manifest and its unique, existing server-module cache files get
+  // an allowance. Unexpected cache files still count against the original budget.
+  return files.size + 1;
+});
+
 export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
   "desktopArtifact.verifyWindowsPrimaryFffNativeLoad",
 )(function* (input: {
@@ -4486,7 +4555,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
+  const baseFileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
   const isFile = (filePath: string) =>
     fs.stat(filePath).pipe(
       Effect.map((stat) => stat.type === "File"),
@@ -4685,6 +4754,11 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
 
   const fileCount = yield* countPayloadFiles(packagedAppDir);
+  const preparedCacheFileCount = yield* countManifestBackedServerCacheFiles(
+    resourcesDir,
+    asarPath,
+  ).pipe(Effect.orElseSucceed(() => 0));
+  const fileLimit = baseFileLimit + preparedCacheFileCount;
   if (fileCount > fileLimit) {
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "file-limit-exceeded",
@@ -4709,7 +4783,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   });
 
   yield* Effect.log(
-    `[desktop-artifact] Validated Windows payload structure (${String(fileCount)} files, ${String(unpackedFiles.length)} sidecar natives); runtime checks: Windows primary ${windowsPrimaryNativeLoad}, server sidecar ${sidecarSelfContainment}.`,
+    `[desktop-artifact] Validated Windows payload structure (${String(fileCount)} files including ${String(preparedCacheFileCount)} manifest-backed cache files, ${String(unpackedFiles.length)} sidecar natives); runtime checks: Windows primary ${windowsPrimaryNativeLoad}, server sidecar ${sidecarSelfContainment}.`,
   );
   return {
     packagedAppDir,
@@ -4718,6 +4792,42 @@ export const validateWindowsPackagedPayload = Effect.fn(
     runtimeChecks: { windowsPrimaryNativeLoad, sidecarSelfContainment },
   } as const;
 });
+
+export class MacPackagedAppMissingError extends Schema.TaggedError<MacPackagedAppMissingError>()(
+  "MacPackagedAppMissingError",
+  { stageDistDir: Schema.String },
+) {
+  override get message(): string {
+    return `Expected electron-builder to leave a packaged .app with Contents/Resources/app.asar under ${this.stageDistDir}/mac*.`;
+  }
+}
+
+export const validateMacPackagedPayload = Effect.fn("desktopArtifact.validateMacPackagedPayload")(
+  function* (input: { readonly stageDistDir: string; readonly verbose?: boolean }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const asarPaths: string[] = [];
+    for (const entry of yield* fs.readDirectory(input.stageDistDir)) {
+      if (!entry.startsWith("mac")) continue;
+      const outputDir = path.join(input.stageDistDir, entry);
+      const apps = yield* fs.readDirectory(outputDir).pipe(Effect.orElseSucceed(() => []));
+      for (const app of apps) {
+        if (app.endsWith(".app")) {
+          asarPaths.push(path.join(outputDir, app, "Contents/Resources/app.asar"));
+        }
+      }
+    }
+    if (asarPaths.length === 0) {
+      return yield* new MacPackagedAppMissingError({ stageDistDir: input.stageDistDir });
+    }
+    for (const asarPath of asarPaths) {
+      yield* verifyPackagedBundleIsSelfContained({ asarPath, verbose: input.verbose ?? false });
+    }
+    yield* Effect.log(
+      `[desktop-artifact] Validated macOS payload (${String(asarPaths.length)} app bundle(s)).`,
+    );
+  },
+);
 
 const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(function* (
   options: ResolvedBuildOptions,
@@ -5506,6 +5616,11 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     productName: resolveDesktopProductName(appVersion),
   });
 
+  // x64 builds on arm64 runners; the arm64 check covers the shared JS bundle.
+  if (options.platform === "mac" && options.arch === "arm64" && hostPlatform === "darwin") {
+    yield* validateMacPackagedPayload({ stageDistDir, verbose: options.verbose });
+  }
+
   if (options.platform === "mac" && options.target === "dmg") {
     yield* buildMacDmg({
       stageDistDir,
@@ -5515,8 +5630,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     });
   }
 
-  const stageEntries = yield* fs.readDirectory(stageDistDir);
-  yield* fs.makeDirectory(options.outputDir, { recursive: true });
   const proofPlatform =
     options.platform === "mac" || options.platform === "win" ? options.platform : null;
   const compositionOutputPath = proofPlatform
@@ -5528,16 +5641,11 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   if (compositionOutputPath) yield* fs.remove(compositionOutputPath, { force: true });
   if (compositionInputPath) yield* fs.remove(compositionInputPath, { force: true });
 
-  const copiedArtifacts: string[] = [];
-  for (const entry of stageEntries) {
-    const from = path.join(stageDistDir, entry);
-    const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
-    if (!stat || stat.type !== "File") continue;
-
-    const to = path.join(options.outputDir, entry);
-    yield* fs.copyFile(from, to);
-    copiedArtifacts.push(to);
-  }
+  const copiedArtifacts = yield* copyDesktopBuildArtifacts(
+    stageDistDir,
+    options.outputDir,
+    options.target === "dir",
+  );
 
   if (copiedArtifacts.length === 0) {
     return yield* new DesktopBuildNoArtifactsProducedError({
@@ -5608,6 +5716,43 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 ) {
   const repoRoot = yield* RepoRoot;
   return yield* withDesktopBuildLock(repoRoot, buildDesktopArtifactUnlocked(options));
+});
+
+export const copyDesktopBuildArtifacts = Effect.fn("copyDesktopBuildArtifacts")(function* (
+  stageDistDir: string,
+  outputDir: string,
+  includeDirectories = false,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const stageEntries = yield* fs.readDirectory(stageDistDir);
+  yield* fs.makeDirectory(outputDir, { recursive: true });
+
+  const copiedArtifacts: string[] = [];
+  for (const entry of stageEntries) {
+    const from = path.join(stageDistDir, entry);
+    const stat = yield* fs.stat(from).pipe(Effect.orElseSucceed(() => null));
+    if (!stat || (stat.type !== "File" && !(includeDirectories && stat.type === "Directory")))
+      continue;
+
+    const to = path.join(outputDir, entry);
+    // Replace whatever a reused output dir already holds at this path. fs.cp refuses to
+    // overwrite a directory with a file or a file with a directory, and only merges into
+    // an existing directory, so a stale entry of either type must go first.
+    yield* fs.remove(to, { recursive: true, force: true });
+    yield* Effect.tryPromise({
+      try: () =>
+        NodeFSP.cp(from, to, {
+          recursive: true,
+          force: true,
+          verbatimSymlinks: true,
+        }),
+      catch: (cause) => new DesktopBuildArtifactCopyError({ from, to, cause }),
+    });
+    copiedArtifacts.push(to);
+  }
+
+  return copiedArtifacts;
 });
 
 const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {

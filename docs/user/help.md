@@ -4,6 +4,11 @@ Open **Help** in the web or desktop sidebar, or search for **Open Help** in the
 command palette. Ask about settings, a provider that stopped responding, or a
 plugin connection. You do not need to create a project first.
 
+For a problem that needs a closer look, choose **Diagnose a problem**. It opens a
+support thread on the environment shown in Help, with its diagnostic context ready.
+Describe what went wrong and send when you are ready. The agent asks before applying
+a fix or posting an issue. See [Triage an issue](./triage.md).
+
 Help uses your environment's text generation model when you send a question.
 Opening the page and preparing feedback do not run a model. The conversation
 stays available while you navigate within the current app connection; restarting

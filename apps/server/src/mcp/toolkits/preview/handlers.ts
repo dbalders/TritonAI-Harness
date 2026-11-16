@@ -222,13 +222,25 @@ const handlers = {
   preview_status: McpToolAccess.readsAsCaller((input) =>
     invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   ),
-  preview_open: McpToolAccess.actsAsCaller((input) =>
-    admitNavigation("preview_open", input).pipe(
-      Effect.andThen(
-        invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),
-      ),
-      Effect.map((result) => withBrowserNavigationOutcome("preview_open", input, result)),
-    ),
+  // Models often pass a dev server as both `url` and `target`; the target knows the environment.
+  preview_open: McpToolAccess.actsAsCaller(({ target, url, ...input }) =>
+    Effect.gen(function* () {
+      const navigationInput = target === undefined ? { ...input, url } : { ...input, target };
+      yield* admitNavigation("preview_open", navigationInput);
+      const opened = yield* invokeTargeted<PreviewAutomationStatus>(
+        "open",
+        normalizePreviewOpenInput(
+          target === undefined && url !== undefined ? { ...input, url } : input,
+        ),
+      );
+      if (target === undefined || opened.tabId === null)
+        return withBrowserNavigationOutcome("preview_open", navigationInput, opened);
+      const navigated = yield* invokeTargeted<PreviewAutomationStatus>("navigate", {
+        target,
+        tabId: opened.tabId,
+      });
+      return withBrowserNavigationOutcome("preview_open", navigationInput, navigated);
+    }),
   ),
   preview_navigate: McpToolAccess.actsAsCaller((input) =>
     admitNavigation("preview_navigate", input).pipe(
@@ -243,8 +255,12 @@ const handlers = {
     invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
   ),
   preview_snapshot: McpToolAccess.readsAsCaller((input) => {
-    const { includeImage: _includeImage, save: _save, ...operationInput } = input ?? {};
-    return invokeTargeted<PreviewAutomationSnapshot>("snapshot", operationInput);
+    const { includeImage: _includeImage, save, ...operationInput } = input ?? {};
+    // The saved file is for people, so it keeps the resolution the agent's image is capped below.
+    return invokeTargeted<PreviewAutomationSnapshot>("snapshot", {
+      ...operationInput,
+      ...(save === true ? { fullScreenshot: true } : {}),
+    });
   }),
   preview_act: McpToolAccess.actsAsCaller(({ action, ...input }) =>
     decodeActInput[action](input).pipe(

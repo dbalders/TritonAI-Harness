@@ -163,6 +163,30 @@ describe("managed plugin release composition", () => {
     expect(() => readManagedPluginComposition(sourceRoot)).toThrow(/unsupported fields/iu);
   });
 
+  it("reads compositions recorded under either Plugins repository owner and no other", () => {
+    for (const [repository, accepted] of [
+      ["https://github.com/dbalders/TritonAI-Plugins.git", true],
+      ["https://github.com/UCSD/TritonAI-Plugins.git", true],
+      ["https://github.com/someone/TritonAI-Plugins.git", false],
+      ["https://github.com/UCSD/TritonAI-Plugins", false],
+    ] as const) {
+      const sourceRoot = makeCompositionFixture();
+      const manifestPath = NodePath.join(sourceRoot, "manifest.json");
+      const manifest = JSON.parse(NodeFS.readFileSync(manifestPath, "utf8")) as {
+        source: { repository: string };
+      };
+      manifest.source.repository = repository;
+      NodeFS.writeFileSync(manifestPath, JSON.stringify(manifest));
+      if (accepted) {
+        expect(readManagedPluginComposition(sourceRoot).source.repository).toBe(repository);
+      } else {
+        expect(() => readManagedPluginComposition(sourceRoot)).toThrow(
+          /canonical TritonAI-Plugins/u,
+        );
+      }
+    }
+  });
+
   it("accepts providerless packages without runtime metadata and rejects nonempty runtime metadata", () => {
     expect(() =>
       readManagedPluginComposition(

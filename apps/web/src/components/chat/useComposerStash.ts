@@ -25,7 +25,7 @@ import {
   hydrateImagesFromPersisted,
   useComposerDraftStore,
 } from "../../composerDraftStore";
-import { type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
+import { type ComposerPromptEditorHandle } from "../ComposerPromptEditorTiptap";
 import {
   MAX_STASH_ENTRIES,
   type PromptStashEntry,
@@ -68,6 +68,7 @@ import {
   useState,
 } from "react";
 import { BackgroundThreadContext } from "./backgroundThread";
+import { isInSideChatPane } from "../../lib/sideChatPane";
 import { useStableCallback } from "../../hooks/useStableCallback";
 
 /**
@@ -476,6 +477,7 @@ export function useComposerStash(input: {
     const images = [...attachmentDraft.images];
     const files = [...attachmentDraft.files];
     const stashedRecords: ComposerContextRecord[] = [
+      ...composerDraft.environmentContexts,
       ...composerThreadContexts,
       ...readTerminalContexts().map(terminalContextRecord),
       ...composerReviewComments.map(reviewCommentContextRecord),
@@ -498,7 +500,8 @@ export function useComposerStash(input: {
       return;
     }
     for (const file of files) {
-      if (composerFileNeedsReattach(file)) {
+      // A stash uploads bytes, which a restored linked path no longer has.
+      if (file.file === null && file.uploadedAttachmentId === undefined) {
         toastManager.add({
           type: "error",
           title: "Attach dropped files again or remove them before stashing",
@@ -564,6 +567,7 @@ export function useComposerStash(input: {
           current.images !== snapshot.images ||
           current.terminalContexts !== snapshot.terminalContexts ||
           current.threadContexts !== snapshot.threadContexts ||
+          current.environmentContexts !== snapshot.environmentContexts ||
           current.reviewComments !== snapshot.reviewComments ||
           current.previewAnnotations !== snapshot.previewAnnotations ||
           current.files.length !== files.length ||
@@ -654,6 +658,7 @@ export function useComposerStash(input: {
       clearComposerDraftPromptAndImages(stashTarget);
       clearComposerDraftTerminalContexts(stashTarget);
       setComposerDraftThreadContexts(stashTarget, []);
+      useComposerDraftStore.getState().setEnvironmentContexts(stashTarget, []);
       for (const comment of composerReviewComments) {
         removeComposerDraftReviewComment(stashTarget, comment.id);
       }
@@ -785,11 +790,16 @@ export function useComposerStash(input: {
       ).terminalOpen,
     ),
   }));
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers the capture-phase stash shortcut with the command registry while the composer is mounted
   useEffect(() => {
     if (backgroundThread) return;
     return registerCommands(
       { "composer.stash": handleStashShortcut },
-      { capture: true, context: readShortcutContext },
+      {
+        capture: true,
+        context: readShortcutContext,
+        when: (event) => !isInSideChatPane(event.target),
+      },
     );
   }, [backgroundThread, handleStashShortcut, readShortcutContext]);
 

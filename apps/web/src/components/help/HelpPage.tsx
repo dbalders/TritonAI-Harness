@@ -9,7 +9,7 @@ import {
   type HelpContext,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { InfoIcon, SendIcon } from "lucide-react";
+import { BugIcon, InfoIcon, SendIcon } from "lucide-react";
 import {
   useEffect,
   useEffectEvent,
@@ -20,6 +20,7 @@ import {
 } from "react";
 import { isElectron } from "../../env";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { useStartTriage } from "../../hooks/useStartTriage";
 import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
@@ -38,6 +39,7 @@ import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { HelpConversationLog } from "./HelpConversationLog";
 import { HelpEnvironmentPanel } from "./HelpEnvironmentPanel";
 import { HelpFeedbackForm } from "./HelpFeedbackForm";
@@ -105,6 +107,18 @@ function HelpSession({
   );
   const environment = useEnvironment(environmentId);
   const connected = connection !== null && environment?.connection.phase === "connected";
+  const startTriage = useStartTriage();
+  const triageAllowed = useAtomValue(serverEnvironment.prepareTriage.permissionAtom(environmentId));
+  const [startingTriage, setStartingTriage] = useState(false);
+  const supportsTriage = environment?.serverConfig?.environment.capabilities.triage === true;
+  const canTriage = connected && supportsTriage && triageAllowed;
+  const triageHint = !connected
+    ? "Connect to this environment to diagnose a problem."
+    : !supportsTriage
+      ? "Update this environment to a version of Harness that supports triage."
+      : !triageAllowed
+        ? "This connection does not have permission to start triage."
+        : "Open a support thread to investigate this environment's logs and source.";
   const canReadDiagnostics = useEnvironmentScope(environmentId, AuthDiagnosticsReadScope);
   const canReadOrchestration = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const allowed = useAtomValue(serverEnvironment.askHelp.permissionAtom(environmentId));
@@ -123,6 +137,7 @@ function HelpSession({
   // Read-only context outlives operation access, but stays local to this prepared connection.
   const [diagnosticContext, setDiagnosticContext] = useState<HelpContext | null>(null);
   const protectedAccess = canViewContext && allowed && !snapshot.accessDenied;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Revoke the external help conversation and pending reads when authorization changes.
   useEffect(() => {
     if (!canReadDiagnostics || !canReadOrchestration || authorizationDenied) {
       // oxlint-disable-next-line react/set-state-in-effect -- Discard the completed external read when context access is revoked.
@@ -147,6 +162,7 @@ function HelpSession({
     readonly previous: typeof query.data;
     readonly canAsk: boolean;
   } | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Discard a remote diagnostic read invalidated by the help server.
   useEffect(() => {
     if (!snapshot.diagnosticsInvalidated) return;
     // Reads started before an authoritative Ask denial cannot restore access.
@@ -156,6 +172,7 @@ function HelpSession({
   }, [snapshot.diagnosticsInvalidated]);
   const refresh = query.refresh;
   const contextBeforeRefresh = useEffectEvent(() => query.data);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refresh remote help diagnostics at the current connection and authorization boundary.
   useEffect(() => {
     if (
       !canReadContext ||
@@ -168,6 +185,7 @@ function HelpSession({
     refreshBoundary.current = { connection, previous: contextBeforeRefresh(), canAsk: allowed };
     refresh();
   }, [allowed, canReadContext, connection, environmentId, refresh]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Apply the completed remote diagnostic read only for the current authorized connection.
   useEffect(() => {
     if (
       canReadContext &&
@@ -201,6 +219,7 @@ function HelpSession({
     query.isPending,
     query.isSuccess,
   ]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Scroll the newest help question into view before paint.
   useLayoutEffect(() => {
     if (snapshot.messages.length === 0 && !snapshot.pendingQuestion && !snapshot.failedQuestion)
       return;
@@ -263,6 +282,7 @@ function HelpSession({
       section.ownerDocument.defaultView?.matchMedia("(pointer: coarse)").matches !== true;
     send();
   };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Restore DOM focus dropped by the disabled composer after its request finishes.
   useEffect(() => {
     if (pending || !restoreComposerFocus.current) return;
     restoreComposerFocus.current = false;
@@ -303,7 +323,7 @@ function HelpSession({
             <div className="space-y-1.5">
               <h1 className="text-xl font-semibold tracking-tight">Help</h1>
               <p className="text-sm leading-6 text-muted-foreground">
-                Ask about TritonAI, check a connection, or prepare feedback.
+                Ask about TritonAI, diagnose a problem, or prepare feedback.
               </p>
               <p className="text-xs leading-5 text-muted-foreground">
                 {environment ? (
@@ -316,15 +336,36 @@ function HelpSession({
                 )}
               </p>
             </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setFeedbackOpen((open) => !open)}
-              aria-expanded={feedbackOpen}
-              aria-controls="help-feedback"
-            >
-              {feedbackOpen ? "Hide feedback" : "Prepare feedback"}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Tooltip>
+                <TooltipTrigger render={<span tabIndex={canTriage ? undefined : 0} />}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!canTriage || startingTriage}
+                    aria-busy={startingTriage}
+                    onClick={() => {
+                      if (!canTriage || startingTriage || environmentId === null) return;
+                      setStartingTriage(true);
+                      void startTriage(environmentId).finally(() => setStartingTriage(false));
+                    }}
+                  >
+                    {startingTriage ? <Spinner /> : <BugIcon />}
+                    {startingTriage ? "Starting triage…" : "Diagnose a problem"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipPopup>{triageHint}</TooltipPopup>
+              </Tooltip>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setFeedbackOpen((open) => !open)}
+                aria-expanded={feedbackOpen}
+                aria-controls="help-feedback"
+              >
+                {feedbackOpen ? "Hide feedback" : "Prepare feedback"}
+              </Button>
+            </div>
           </div>
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_19rem]">
             <div className="min-w-0 space-y-6">

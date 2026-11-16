@@ -1,6 +1,9 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
@@ -54,6 +57,19 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [77, "WebhookDedupe"],
   [78, "ShellStopRequestIndex"],
   [79, "ThreadMessageSearch"],
+  // Upstream v0.1.4-v0.1.6 migrations 70-76, appended after Harness's shipped 79.
+  [80, "PeerLinks"],
+  [81, "PeerLinkFence"],
+  [82, "WaitingLinkRequestIndex"],
+  [83, "ActiveTurnItemIndexes"],
+  [84, "ExcludeAttachmentPlaceholdersFromSearch"],
+  [85, "SubagentDeliveryState"],
+  [86, "ProjectionProjectsPinArchive"],
+  [87, "RepairBooleanSettledOverride"],
+  [88, "DropOrchestrationEventCorrelationIndex"],
+  [89, "DelegatedRecoveryIndexes"],
+  [90, "ScheduledTaskThreadMode"],
+  [91, "ProjectionMessageSearchText"],
 ];
 
 it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
@@ -221,3 +237,79 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
     );
   },
 );
+
+it.effect("upgrades the packaged launch fixture and preserves its seeded conversation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const temp = yield* fs.makeTempDirectoryScoped({ prefix: "harness-launch-fixture-" });
+      const database = path.join(temp, "statev2.sqlite");
+      yield* fs.copyFile(
+        path.join(
+          import.meta.dirname,
+          "../../../../scripts/fixtures/desktop-launch/statev2.sqlite",
+        ),
+        database,
+      );
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations();
+        const threads = yield* sql<{ readonly title: string }>`
+          SELECT json_extract(payload_json, '$.title') AS title
+          FROM orchestration_v2_projection_threads
+        `;
+        const messages = yield* sql<{ readonly text: string }>`
+          SELECT json_extract(payload_json, '$.text') AS text
+          FROM orchestration_v2_projection_messages
+          WHERE thread_id = 'launch-check-thread'
+        `;
+        assert.equal(threads.length, 2);
+        assert.isTrue(threads.some((thread) => thread.title === "Release launch check"));
+        assert.isTrue(
+          messages.some((message) => message.text === "The release opens and shows this thread."),
+        );
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: database })));
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("v0.1.9 appended migrations", (it) => {
+  it.effect("drops the unused correlation index and keeps correlation values", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 58 });
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at,
+          command_id, causation_event_id, correlation_id, actor_kind, payload_json, metadata_json
+        )
+        VALUES (
+          'event-1', 'thread', 'thread-1', 0, 'thread.created', '2026-01-01T00:00:00.000Z',
+          'command-1', NULL, 'correlation-1', 'client', '{}', '{}'
+        )
+      `;
+
+      yield* runMigrations();
+
+      const indexes = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master
+        WHERE type = 'index' AND tbl_name = 'orchestration_events' AND sql IS NOT NULL
+      `;
+      const indexNames = indexes.map((row) => row.name);
+      assert.notInclude(indexNames, "idx_orch_events_correlation_id");
+      for (const kept of [
+        "idx_orch_events_stream_version",
+        "idx_orch_events_stream_sequence",
+        "idx_orch_events_command_id",
+        "idx_orchestration_events_agent_stream_sequence",
+      ]) {
+        assert.include(indexNames, kept);
+      }
+      const events = yield* sql<{ readonly correlation_id: string | null }>`
+        SELECT correlation_id FROM orchestration_events WHERE event_id = 'event-1'
+      `;
+      assert.deepStrictEqual(events, [{ correlation_id: "correlation-1" }]);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+});

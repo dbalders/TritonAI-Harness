@@ -7,6 +7,7 @@ import { isIntegrationId } from "./manifest.ts";
 const SAFE_SECRET_SUFFIX = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
 const MAX_SECRET_NAME_LENGTH = 200;
 
+// @effect-diagnostics-next-line extendsNativeError:off -- This error is part of the Promise-based plugin API.
 export class IntegrationSecretScopeError extends Error {
   constructor(integrationId: string) {
     super(`Secret names for ${integrationId} must stay within its integration namespace.`);

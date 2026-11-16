@@ -43,11 +43,18 @@ interface CompositionPackage {
   readonly files: ReadonlyArray<CompositionFile>;
 }
 
+// The Plugins repository is moving from dbalders to the UCSD organization; builds made on
+// either side of the transfer record their own owner.
+const ACCEPTED_PLUGIN_REPOSITORIES = [
+  "https://github.com/dbalders/TritonAI-Plugins.git",
+  "https://github.com/UCSD/TritonAI-Plugins.git",
+] as const;
+
 interface ProductionComposition {
   readonly version: 1;
   readonly kind: "tritonai-harness-plugin-composition";
   readonly source: {
-    readonly repository: "https://github.com/dbalders/TritonAI-Plugins.git";
+    readonly repository: (typeof ACCEPTED_PLUGIN_REPOSITORIES)[number];
     readonly ref: string;
     readonly commit: string;
   };
@@ -628,7 +635,9 @@ export async function loadProductionIntegrations(
     if (
       buildComposition.version !== 1 ||
       buildComposition.kind !== "tritonai-harness-plugin-composition" ||
-      buildComposition.source.repository !== "https://github.com/dbalders/TritonAI-Plugins.git"
+      !(ACCEPTED_PLUGIN_REPOSITORIES as ReadonlyArray<string>).includes(
+        buildComposition.source.repository,
+      )
     ) {
       throw new Error("Built-in plugin composition has an unsupported contract or provenance.");
     }

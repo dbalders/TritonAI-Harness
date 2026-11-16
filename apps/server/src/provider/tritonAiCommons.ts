@@ -8,7 +8,10 @@ import {
 import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
 
-const COMMONS_OWNER = "dbalders";
+// TritonAI Commons is moving from dbalders to the UCSD organization. The GitHub plugin
+// refuses HTTP redirects, so each submission resolves whichever owner currently hosts
+// the repository instead of relying on GitHub's transfer redirect.
+const COMMONS_OWNERS = ["dbalders", "UCSD"] as const;
 const COMMONS_REPOSITORY = "UCSD-Skills-Library";
 const MAX_SKILL_BYTES = 65_536;
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
@@ -492,7 +495,63 @@ async function waitForFork(
   );
 }
 
-function verifyCommonsFork(repository: Record<string, unknown>): void {
+interface CommonsUpstream {
+  readonly owner: string;
+  readonly fullName: string;
+  readonly metadata: Record<string, unknown>;
+}
+
+function isProviderExplainedError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "IntegrationProviderPublicError" || error.name === "IntegrationOperationError")
+  );
+}
+
+/**
+ * After the transfer the old owner path fails predictably (the GitHub plugin refuses redirects),
+ * so report the latest failure the provider explained, such as authorization or a rate limit,
+ * ahead of generic or "not found" failures.
+ */
+function preferredUpstreamError(errors: ReadonlyArray<unknown>): unknown {
+  const informative = errors.filter((error) => !isGitHubMissing(error));
+  return (
+    informative.findLast(isProviderExplainedError) ??
+    informative.at(-1) ??
+    errors[0] ??
+    commonsError("GitHub did not return the TritonAI Commons repository.")
+  );
+}
+
+async function resolveCommonsUpstream(
+  registry: CommonsIntegrationRegistry,
+  signal: AbortSignal,
+): Promise<CommonsUpstream> {
+  const errors: unknown[] = [];
+  for (const owner of COMMONS_OWNERS) {
+    let metadata: Record<string, unknown>;
+    try {
+      metadata = await repositoryMetadata(registry, signal, owner);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      errors.push(error);
+      continue;
+    }
+    const fullName = `${owner}/${COMMONS_REPOSITORY}`;
+    // A fork, such as an older copy inside the UCSD organization, is never the upstream.
+    if (
+      metadata.fork === true ||
+      typeof metadata.full_name !== "string" ||
+      metadata.full_name.toLowerCase() !== fullName.toLowerCase()
+    ) {
+      continue;
+    }
+    return { owner, fullName, metadata };
+  }
+  throw preferredUpstreamError(errors);
+}
+
+function verifyCommonsFork(repository: Record<string, unknown>, upstreamFullName: string): void {
   const parent = repository.parent;
   if (repository.fork !== true || !isRecord(parent)) {
     throw commonsError(
@@ -500,7 +559,7 @@ function verifyCommonsFork(repository: Record<string, unknown>): void {
     );
   }
   const fullName = boundedString(parent.full_name, "fork parent", 256);
-  if (fullName.toLowerCase() !== `${COMMONS_OWNER}/${COMMONS_REPOSITORY}`.toLowerCase()) {
+  if (fullName.toLowerCase() !== upstreamFullName.toLowerCase()) {
     throw commonsError(
       `The connected account's ${COMMONS_REPOSITORY} fork points to a different repository.`,
     );
@@ -695,6 +754,7 @@ async function putSubmissionFile(input: {
 async function findExistingSubmissionPullRequest(input: {
   readonly registry: CommonsIntegrationRegistry;
   readonly signal: AbortSignal;
+  readonly upstreamOwner: string;
   readonly head: string;
   readonly base: string;
   readonly baseCommitSha: string;
@@ -704,7 +764,7 @@ async function findExistingSubmissionPullRequest(input: {
   readonly files: ReadonlyArray<ServerProviderSkillBundleFile>;
 }): Promise<string | undefined> {
   const value = await invokeRead(input.registry, input.signal, "github.pulls.list", {
-    owner: COMMONS_OWNER,
+    owner: input.upstreamOwner,
     repo: COMMONS_REPOSITORY,
     state: "all",
     head: input.head,
@@ -731,7 +791,7 @@ async function findExistingSubmissionPullRequest(input: {
     throw commonsError("GitHub returned invalid pull-request number metadata.");
   }
   const detailValue = await invokeRead(input.registry, input.signal, "github.pulls.get", {
-    owner: COMMONS_OWNER,
+    owner: input.upstreamOwner,
     repo: COMMONS_REPOSITORY,
     number: pull.number,
   });
@@ -792,19 +852,19 @@ export async function submitProviderSkillToTritonAiCommons(input: {
     const identityValue = await invokeRead(input.registry, input.signal, "github.identity.get", {});
     if (!isRecord(identityValue)) throw commonsError("GitHub returned invalid identity metadata.");
     const login = boundedString(identityValue.login, "identity login", 100);
-    const upstream = await repositoryMetadata(input.registry, input.signal, COMMONS_OWNER);
-    const base = boundedString(upstream.default_branch, "default branch", 255);
+    const upstream = await resolveCommonsUpstream(input.registry, input.signal);
+    const base = boundedString(upstream.metadata.default_branch, "default branch", 255);
     const baseCommitSha = await readCommitSha({
       registry: input.registry,
       signal: input.signal,
-      owner: COMMONS_OWNER,
+      owner: upstream.owner,
       ref: base,
     });
     if (!baseCommitSha) throw commonsError("GitHub did not return the Commons base commit.");
     const repositoryLicenseFile = await readGitHubFile({
       registry: input.registry,
       signal: input.signal,
-      owner: COMMONS_OWNER,
+      owner: upstream.owner,
       path: "LICENSE",
       ref: baseCommitSha,
     });
@@ -824,13 +884,15 @@ export async function submitProviderSkillToTritonAiCommons(input: {
     await assertSkillIsUnpublished({
       registry: input.registry,
       signal: input.signal,
-      owner: COMMONS_OWNER,
+      owner: upstream.owner,
       name,
       ref: baseCommitSha,
     });
 
-    let targetOwner = COMMONS_OWNER;
-    if (login.toLowerCase() !== COMMONS_OWNER.toLowerCase()) {
+    // Commons owners publish branches directly. A fork in the former owner's account would
+    // also take over the old repository path and break GitHub's redirect for older builds.
+    let targetOwner = upstream.owner;
+    if (!COMMONS_OWNERS.some((owner) => owner.toLowerCase() === login.toLowerCase())) {
       targetOwner = login;
       let fork: Record<string, unknown>;
       try {
@@ -838,12 +900,12 @@ export async function submitProviderSkillToTritonAiCommons(input: {
       } catch (error) {
         if (!isGitHubMissing(error)) throw error;
         await invokeWrite(input.registry, input.signal, "github.repositories.fork", {
-          owner: COMMONS_OWNER,
+          owner: upstream.owner,
           repo: COMMONS_REPOSITORY,
         });
         fork = await waitForFork(input.registry, input.signal, login);
       }
-      verifyCommonsFork(fork);
+      verifyCommonsFork(fork, upstream.fullName);
       const forkBase = boundedString(fork.default_branch, "fork default branch", 255);
       const forkBaseCommitSha = await readCommitSha({
         registry: input.registry,
@@ -862,10 +924,11 @@ export async function submitProviderSkillToTritonAiCommons(input: {
 
     let branch: string | undefined;
     for (const candidate of submissionBranchCandidates(name, prepared.digest)) {
-      const pullHead = `${login}:${candidate}`;
+      const pullHead = `${targetOwner}:${candidate}`;
       const existingReviewUrl = await findExistingSubmissionPullRequest({
         registry: input.registry,
         signal: input.signal,
+        upstreamOwner: upstream.owner,
         head: pullHead,
         base,
         baseCommitSha,
@@ -901,7 +964,7 @@ export async function submitProviderSkillToTritonAiCommons(input: {
         "submission_failed",
       );
     }
-    const pullHead = `${login}:${branch}`;
+    const pullHead = `${targetOwner}:${branch}`;
     await ensureSubmissionBranch({
       registry: input.registry,
       signal: input.signal,
@@ -920,7 +983,7 @@ export async function submitProviderSkillToTritonAiCommons(input: {
       });
     }
     const pullValue = await invokeWrite(input.registry, input.signal, "github.pulls.create", {
-      owner: COMMONS_OWNER,
+      owner: upstream.owner,
       repo: COMMONS_REPOSITORY,
       title: `feat(commons): add ${name}`,
       body: pullRequestBody({
@@ -928,7 +991,7 @@ export async function submitProviderSkillToTritonAiCommons(input: {
         fileCount: prepared.bundle.files.length,
         maintainer: prepared.maintainer,
       }),
-      head: targetOwner === COMMONS_OWNER ? branch : pullHead,
+      head: targetOwner === upstream.owner ? branch : pullHead,
       base,
       draft: false,
     });

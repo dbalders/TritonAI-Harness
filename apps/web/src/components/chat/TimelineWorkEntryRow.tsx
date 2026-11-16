@@ -1,4 +1,5 @@
 import { computerUseActivity } from "./computerUseActivity";
+import { TimelinePendingApprovalRow } from "./TimelinePendingApprovalRow";
 import { WorkLogDetails, WorkLogRow } from "./WorkLog";
 import {
   getQuestionAnswerPreview,
@@ -16,6 +17,7 @@ import { Link } from "@tanstack/react-router";
 import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-execution";
 import {
   resolveViewedImageAsset,
+  toolGroupAction,
   workEntryViewedImagePath,
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
@@ -46,7 +48,6 @@ import {
   threadReadLabelPrefix,
   threadReadTargetId,
   threadReadTargetTitle,
-  toolGroupAction,
   workEntryDisplayLabel,
   workEntryReadOutput,
 } from "./MessagesTimeline.logic";
@@ -58,6 +59,7 @@ import {
   TimelineRowCtx,
   TimelineRowActivityCtx,
   WorkGroupViewCtx,
+  type TimelineRow,
   type TimelineWorkEntry,
 } from "./timelineRowContext";
 import { MESSAGE_HEADING_LEVEL, TimelineRowTimestamp } from "./TimelineRowParts";
@@ -71,7 +73,8 @@ import {
   workEntryRawCommand,
   buildToolCallExpandedBody,
   workEntryIconName,
-  remarkThoughtPreview,
+  THINKING_PREVIEW_PLUGINS,
+  THOUGHT_PREVIEW_PLUGINS,
 } from "./TimelineWorkEntryRow.logic";
 
 export function useThreadReadTarget(entry: TimelineWorkEntry, environmentId: EnvironmentId) {
@@ -167,6 +170,7 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: WorkEn
     <SubagentNotificationLink
       parentRef={scopeThreadRef(ctx.activeThreadEnvironmentId, item.threadId)}
       childThreadId={childThreadId}
+      taskIds={item.source.kind === "delegated_task" ? item.source.taskIds : undefined}
       outcome={item.outcome}
       createdAt={props.workEntry.createdAt}
       timestampFormat={ctx.timestampFormat}
@@ -236,6 +240,36 @@ export const ComputerUseActivityRow = memo(function ComputerUseActivityRow({
     </div>
   );
 });
+export function ViewedImagesTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "viewed-images" }>;
+}) {
+  const { threadRef, workspaceRoot, onImageExpand } = use(TimelineRowCtx);
+  if (!threadRef) return null;
+  return (
+    <div className="flex flex-wrap items-start gap-2 px-0.5">
+      {row.paths.map((path) => {
+        const image = resolveViewedImageAsset(path, {
+          threadId: threadRef.threadId,
+          workspaceRoot,
+        });
+        return image ? (
+          <ChatMarkdownAssetImage
+            key={path}
+            environmentId={threadRef.environmentId}
+            resource={image.resource}
+            alt={image.alt}
+            srcFragment={image.srcFragment}
+            workspaceRoot={workspaceRoot}
+            maxHeightRem={10}
+            onImageExpand={onImageExpand}
+          />
+        ) : null;
+      })}
+    </div>
+  );
+}
 
 function WorkEntryLogRow(props: WorkEntryRowProps) {
   return computerUseActivity(props.workEntry) ? (
@@ -275,10 +309,20 @@ function NativeWorkEntryLogRow(props: WorkEntryRowProps) {
     setExpanded(next);
   };
   const failureItem = workEntry.projectedItem?.item;
+  const pendingApproval =
+    failureItem?.type === "approval_request"
+      ? ctx.pendingApprovals.get(failureItem.requestId)
+      : undefined;
+  if (pendingApproval) return <TimelinePendingApprovalRow approval={pendingApproval} />;
   if (failureItem?.type === "error" && failureItem.status === "failed") {
     const warning = failureItem.failure.class === "usage_limit";
     const resetAt = failureItem.failure.resetAt;
-    const resetTime = resetAt ? formatUpcomingTimestamp(resetAt, timestampFormat) : null;
+    // The reset time is the viewer's local time; naming the zone keeps it
+    // unambiguous. Both read the zone now, since the device's can change.
+    const timeZone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const resetTime = resetAt
+      ? `${formatUpcomingTimestamp(resetAt, timestampFormat, undefined, timeZone)} (${timeZone})`
+      : null;
     const label = warning
       ? `Usage limit reached.${resetTime ? ` Retry after ${resetTime}.` : ""}`
       : workEntry.label;
@@ -505,12 +549,11 @@ function NativeWorkEntryLogRow(props: WorkEntryRowProps) {
                   text={workEntry.detail ?? previewText}
                   cwd={ctx.markdownCwd}
                   parseRawHtml={false}
-                  extraRemarkPlugins={[
-                    [
-                      remarkThoughtPreview,
-                      workEntry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Reasoning",
-                    ],
-                  ]}
+                  extraRemarkPlugins={
+                    workEntry.toolLifecycleStatus === "inProgress"
+                      ? THINKING_PREVIEW_PLUGINS
+                      : THOUGHT_PREVIEW_PLUGINS
+                  }
                 />
               ) : threadLabel ? (
                 <ThreadReadLabel
@@ -621,9 +664,7 @@ function NativeWorkEntryLogRow(props: WorkEntryRowProps) {
               environmentId={ctx.activeThreadEnvironmentId}
               cwd={ctx.markdownCwd}
               workspaceRoot={workspaceRoot}
-              onOpenThread={ctx.onOpenThread}
-              onOpenTurnDiff={ctx.onOpenTurnDiff}
-              onRollbackCheckpoint={ctx.onRollbackCheckpoint}
+              onOpenToolDiff={ctx.onOpenToolDiff}
               onImageExpand={ctx.onImageExpand}
               source={ctx.turnItemSource}
             />

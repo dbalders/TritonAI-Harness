@@ -1,4 +1,3 @@
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -7,9 +6,12 @@ import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import * as Channels from "../channels.ts";
 
-class AccountLoginIpcError extends Data.TaggedError("AccountLoginIpcError")<{
-  message: string;
-}> {}
+class AccountLoginIpcError extends Schema.TaggedError<AccountLoginIpcError>()(
+  "AccountLoginIpcError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 export const installAccountLoginHandlers = Effect.fn("desktop.ipc.installAccountLogin")(
   function* () {

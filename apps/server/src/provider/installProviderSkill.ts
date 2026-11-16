@@ -1086,11 +1086,7 @@ const prepareSkillBundleDirectory = Effect.fn("installProviderSkill.prepareSkill
       yield* writeSkillBundleFiles({ files: input.files, skillDirectory });
       return { root, skillDirectory } as const;
     }).pipe(
-      Effect.catch((error) =>
-        fs
-          .remove(root, { recursive: true, force: true })
-          .pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
-      ),
+      Effect.tapError(() => fs.remove(root, { recursive: true, force: true }).pipe(Effect.ignore)),
     );
   },
 );

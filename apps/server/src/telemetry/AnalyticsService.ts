@@ -24,6 +24,8 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import { getAnonymousInstallId } from "./Identify.ts";
 
 interface BufferedAnalyticsEvent {
@@ -164,18 +166,7 @@ export class AnalyticsService extends Context.Service<
     /** Best-effort bounded flush of currently queued telemetry events. */
     readonly flush: Effect.Effect<void>;
   }
->()("t3/telemetry/AnalyticsService") {
-  /** No-op layer for callers that intentionally disable telemetry. */
-  static readonly layerTest = Layer.succeed(
-    AnalyticsService,
-    AnalyticsService.of({
-      record: Effect.fn("AnalyticsService.record")(function () {
-        return Effect.void;
-      }),
-      flush: Effect.void,
-    }),
-  );
-}
+>()("t3/telemetry/AnalyticsService") {}
 
 export interface AnalyticsServiceOptions {
   readonly requestTimeoutMs?: number;
@@ -205,6 +196,13 @@ const makeWithOptions = Effect.fn("AnalyticsService.makeWithOptions")(function* 
   options: AnalyticsServiceOptions = {},
 ) {
   const telemetryConfig = yield* TelemetryEnvConfig;
+  const policy = yield* Effect.serviceOption(ManagedPolicy.ManagedPolicy);
+  const environment = yield* HostProcess.Environment;
+  const telemetryEnabled = () =>
+    telemetryConfig.enabled &&
+    environment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING !== "1" &&
+    environment.T3CODE_TELEMETRY_ENABLED !== "false" &&
+    (Option.isNone(policy) || ManagedPolicy.deniedBy(policy.value, "telemetry") === undefined);
   const httpClient = yield* HttpClient.HttpClient;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
@@ -225,7 +223,9 @@ const makeWithOptions = Effect.fn("AnalyticsService.makeWithOptions")(function* 
   const userAgent = `TritonAI-Harness/${packageJson.version}`;
   const eventUrl = `https://${telemetryConfig.plausibleSiteId}/`;
   // Opted-out installs never create an ID file.
-  const installId = telemetryConfig.enabled ? yield* getAnonymousInstallId : Option.none<string>();
+  const identityContext = yield* Effect.context<Effect.Services<typeof getAnonymousInstallId>>();
+  const readInstallId = getAnonymousInstallId.pipe(Effect.provide(identityContext));
+  let installId: Option.Option<string> | undefined;
 
   const enqueueBufferedEvent = (
     event: string,
@@ -257,7 +257,8 @@ const makeWithOptions = Effect.fn("AnalyticsService.makeWithOptions")(function* 
   const sendEvent = Effect.fn("AnalyticsService.sendEvent")(function* (
     event: BufferedAnalyticsEvent,
   ) {
-    if (!telemetryConfig.enabled) return;
+    if (!telemetryEnabled()) return;
+    installId ??= yield* readInstallId;
 
     const payload = {
       domain: telemetryConfig.plausibleSiteId,
@@ -338,7 +339,7 @@ const makeWithOptions = Effect.fn("AnalyticsService.makeWithOptions")(function* 
 
   const record: AnalyticsService["Service"]["record"] = Effect.fn("AnalyticsService.record")(
     function* (event, properties) {
-      if (!telemetryConfig.enabled) return;
+      if (!telemetryEnabled()) return;
 
       const plausibleProperties = toPlausibleProperties(event, properties);
       if (plausibleProperties === null) return;

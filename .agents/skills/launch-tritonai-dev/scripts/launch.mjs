@@ -14,7 +14,9 @@ if (
   );
 if (!NodeFS.existsSync(NodePath.join(root, "apps/desktop/src/app/DesktopEnvironment.ts")))
   throw new Error("Not a Harness checkout.");
-const home = NodePath.join(root, ".t3", "desktop");
+const home = NodePath.resolve(
+  process.env.TRITONAI_HARNESS_DEV_HOME ?? NodePath.join(root, ".t3", "desktop"),
+);
 const profileRoot = NodePath.join(home, "electron");
 const ownerPath = NodePath.join(home, "launcher.json");
 const debugPort =
@@ -142,6 +144,9 @@ else if (command === "stop") {
     console.log(JSON.stringify(current));
     process.exit(0);
   }
+  const existingOwner = readOwner();
+  if (existingOwner && existingOwner.root !== root && alive(existingOwner.pid))
+    throw new Error("This development home has a live owner from another checkout.");
   if (isOwnedBackend(current.backend))
     throw new Error(
       "A backend is still alive without an owned launcher. Stop it through this launcher first.",

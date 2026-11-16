@@ -11,6 +11,7 @@ export interface IntegrationToolUnavailableDetails {
 }
 
 /** Thrown by a transport when the requested tool is not bound or is no longer available. */
+// @effect-diagnostics-next-line extendsNativeError:off -- This error is part of the Promise-based plugin API.
 export class IntegrationToolUnavailableError extends Error {
   readonly _tag = "IntegrationToolUnavailableError";
   readonly details: IntegrationToolUnavailableDetails | undefined;

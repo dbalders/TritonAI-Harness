@@ -1,4 +1,9 @@
-import type { HelpSetting, HelpSettingsSnapshot, ServerSettings } from "@t3tools/contracts";
+import {
+  isSecretSetting,
+  type HelpSetting,
+  type HelpSettingsSnapshot,
+  type ServerSettings,
+} from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import type * as Schema from "effect/Schema";
@@ -24,14 +29,17 @@ function settingEntries(
   settings: ServerSettings,
   question: string,
 ): { entries: HelpSetting[]; omittedCount: number } {
-  const safe = mapSettingsSecrets(redactServerSettingsForClient(settings), (secret) => ({
-    value: secret.sensitive
-      ? secret.redacted || secret.value.length > 0
-        ? configuredSecret
-        : missingSecret
-      : secret.value,
-    redacted: false,
-  }));
+  const safe = mapSettingsSecrets(
+    redactServerSettingsForClient(settings, { secretReferences: false }),
+    (secret) => ({
+      value: secret.sensitive
+        ? secret.redacted || secret.value.length > 0
+          ? configuredSecret
+          : missingSecret
+        : secret.value,
+      redacted: false,
+    }),
+  );
   const entries: HelpSetting[] = [];
   const providerInstances = new Map(Object.entries(safe.providerInstances));
   let omittedCount = 0;
@@ -61,6 +69,11 @@ function settingEntries(
     for (const [name, child] of Object.entries(value)) {
       if (!Object.hasOwn(fields, name)) {
         unknown += 1;
+        continue;
+      }
+      // Secret unions are already reduced to presence markers, including external references.
+      if (isSecretSetting(fields[name]!)) {
+        visit(child, `${key}.${name}`, depth + 1, name);
         continue;
       }
       // Settings retain opaque driver data. Decode each present field recursively to

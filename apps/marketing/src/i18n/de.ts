@@ -1,0 +1,101 @@
+import type { Messages } from "./en";
+
+export const de: Messages = {
+  layout: {
+    defaultTitle: "TritonAI Harness",
+    defaultDescription: "TritonAI Harness. Die Open-Source-Steuerzentrale für Coding-Agents.",
+    socialImageAlt:
+      "TritonAI Harness: die Open-Source-Steuerzentrale für Coding-Agents, mit Claude Code, Codex, Cursor, OpenCode, Grok und Antigravity.",
+    homeLabel: "Startseite von TritonAI Harness",
+    download: "Download",
+    starsLabel: "TritonAI Harness auf GitHub einen Stern geben, {stars} Sterne",
+    githubStars: "{stars} GitHub-Sterne",
+    language: "Sprache",
+    mitLicensed: "MIT-lizenziert",
+    iosApp: "iOS-App",
+    androidApp: "Android-App",
+    terms: "Nutzungsbedingungen",
+    privacy: "Datenschutz",
+    security: "Sicherheit",
+  },
+  home: {
+    title: "TritonAI Harness | Die Open-Source-Steuerzentrale für Coding-Agents",
+    description: "TritonAI Harness. Die Open-Source-Steuerzentrale für Coding-Agents.",
+    heroTitle: ["Die Open-Source-", "Steuerzentrale", "für Coding-Agents."],
+    heroSub:
+      "Steuere Claude Code, Codex, Antigravity, OpenCode, Cursor und Grok von einer Oberfläche aus. Nutze dein eigenes Abo. Forke das ganze Ding.",
+    downloadForMac: "Für macOS herunterladen",
+    downloadForWindows: "Für Windows herunterladen",
+    downloadForLinux: "Für Linux herunterladen",
+    sourceLink: "Klau unseren Code (legal)",
+    alsoOnPhone: "Auch auf deinem Handy:",
+    screenshotAlt:
+      "TritonAI Harness führt Subagents von Claude, Codex, Muse und Gemini in einem Thread aus",
+    endorsementsTitle: "Toleriert von über {users} Devs",
+    endorsementsSub: "Manche haben sogar darüber getwittert.",
+    endorsementsLabel: "Stimmen von Entwicklern",
+    readPost: "Beitrag von {handle} auf X lesen",
+    harnessTitle: "Bring dein eigenes Abo mit",
+    harnessBody:
+      "TritonAI Harness verkauft keine Tokens weiter. Verbinde Claude Code, Codex, Antigravity, OpenCode, Cursor oder Grok mit den Zugangsdaten, die du schon hast. Wir orchestrieren sie, du behältst dein Abo.",
+    googleSignIn: "Google-Anmeldung",
+    harnessPoints: [
+      "Keine weiterverkauften Keys. Keine Kontingentgrenzen.",
+      "Modell mitten im Thread wechseln.",
+      "Jede Woche neue Agents.",
+    ],
+    gitVisualLabel:
+      "Illustration des Git-Workflows in TritonAI Harness: Diff prüfen, Änderungen committen und pushen, Pull Request öffnen.",
+    prReady: "Bereit",
+    prCommits: "3 Commits",
+    viewDiff: "Diff ansehen",
+    openPullRequest: "Pull Request öffnen",
+    commitPush: "Commit & Push",
+    gitTitle: "Ein Klick für Commit, Push und PR.",
+    gitBody:
+      "Jeder Agent-Thread schreibt in seinen eigenen Branch. Wenn alles passt, öffnet ein Klick den PR auf GitHub, mit generiertem Titel, Beschreibung und Changelog. Kein Terminal-Gefrickel nötig.",
+    gitPoints: [
+      "Automatisch generierte PR-Titel und -Beschreibungen",
+      "Inline-Diff-Review vor dem Push",
+      "Draft-PRs, gestapelte PRs, PRs nachbessern",
+      "Funktioniert mit deinem bestehenden GitHub-Login",
+    ],
+    openTitle: "Wenn dir etwas nicht gefällt, forke es.",
+    openPoints: [
+      { lead: "Ändere die UI.", rest: "Gestalte jede Oberfläche nach deinem Geschmack." },
+      { lead: "Füge einen Agenten hinzu.", rest: "Binde eigene Tools, Modelle und Abläufe ein." },
+      {
+        lead: "Veröffentliche deinen eigenen Build.",
+        rest: "Hoste ihn selbst oder vertreibe ihn als deinen eigenen.",
+      },
+    ],
+    stars: "{stars} Sterne",
+    forkOnGithub: "Auf GitHub forken",
+    browseSource: "Quellcode ansehen",
+    ctaTitle: "Deine Agents verdienen Besseres als ein Terminal.",
+    ctaSub:
+      "TritonAI Harness ist kostenlos, Open Source und schnell. Installier es, verbinde das Abo, für das du schon zahlst, und lass deine Agents loslegen.",
+    otherPlatforms: "Andere Plattformen",
+  },
+  download: {
+    title: "TritonAI Harness für macOS, Windows und Linux herunterladen | TritonAI Harness",
+    description:
+      "Download TritonAI Harness through TritonAI Installer or the Harness GitHub releases.",
+    breadcrumb: "Download",
+    heading: "TritonAI Harness herunterladen",
+    channelLabel: "Release-Kanal",
+    stable: "Stable",
+    nightly: "Nightly",
+    intelNote: "Mac mit Intel-Chip? {link}.",
+    intelLink: "Lade den x64-Build herunter",
+    armNote: "Auf ARM? Lade das {deb} oder {appimage} für arm64 herunter.",
+    mobile: "Mobil",
+    iphoneIpad: "iPhone & iPad",
+    terminal: "Terminal",
+    tryOnce: "Oder einmal ohne Installation ausprobieren:",
+    allBuilds: "Alle Builds findest du auf der {link}",
+    releasesPage: "GitHub-Releases-Seite",
+    builtAgo: "Erstellt {age}",
+    releasesFallback: "Releases",
+  },
+};

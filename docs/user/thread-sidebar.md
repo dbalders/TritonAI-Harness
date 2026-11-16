@@ -5,10 +5,18 @@ need a separate branch and working directory.
 
 ## Start a thread
 
-On web and desktop, a new thread keeps the current project and carries your model
-and mode selections, unless the destination project has its own model default.
+On web and desktop, **New thread** opens the project picker when you have more than one
+open project in the default or project-grouped sidebar. Archived projects don't count. **Shift-click** to start in
+the current project, or use a project's own new-thread action. A new thread carries
+your model and mode selections, unless the destination project has its own model default.
 Its branch and workspace mode come from your configured defaults. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
+
+On mobile, **New thread** starts in the current thread's project, or else in the
+last project you opened or chose on that device. If neither is available, the
+project picker opens. Turn off **Settings → General → Use last project** to
+choose a project every time. When you pick a project that is on more than one
+machine, the thread starts on a connected one if any is connected.
 
 When you change a new thread's project, TritonAI Harness stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
@@ -30,6 +38,12 @@ of its first message, and a short id, like
 folder, so the files the agent wrote stay until you delete them. Branch, worktree, and diff controls stay hidden because
 these folders are not Git repositories. This is unavailable when the data
 directory itself sits inside a Git checkout.
+
+When the work grows into something real, pick **Turn into project** from the
+thread's menu. The thread's folder becomes a project where it is, so nothing
+moves and the agent keeps working in the same place. Other threads in that folder
+move with it. Rename the project in its settings, and use **Initialize Git** to
+get branch and diff controls.
 
 ### Start in the background
 
@@ -144,7 +158,7 @@ To change how titles are written, add **Thread title instructions** in **Setting
 Text generation**, under Advanced, such as a length limit or an identifier to put first. They apply to new and
 regenerated titles. Select a project to give it its own instructions.
 
-Agents connected through T3 Code can use the same server-owned metadata workflow to
+Agents connected through TritonAI Harness can use the same server-owned metadata workflow to
 rename a thread, regenerate its title, or link and unlink a pull request. These changes
 appear on web, desktop, and mobile without requiring the originating browser to remain
 open.
@@ -166,6 +180,24 @@ choice.
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag or move threads within it. Your saved order returns when you turn it off.
 
+### Project folders
+
+On web and desktop, active threads sit in a folder for each project that has active work.
+Pinned projects come first, and an archived project's folder comes last and shows only while it
+has active threads. Pinned threads stay above the folders, and Snoozed and Done stay below them.
+A project with no active threads has no folder unless it is pinned or you pick it in the project
+filter.
+
+- Select a project's name to open its overview. Select the folder icon to open or close the
+  folder. A closed folder shows how many threads it holds, and a dot when one of them needs you.
+- Select **+** on a folder, or right-click it, to start a thread in that project.
+- Drag a folder by its header to move it with all its threads. Moving a folder switches project
+  sorting to Manual. Drag a thread to reorder it within its own folder.
+- The Working section is off while folders are on.
+
+To use one list without folders, turn off **Settings → Labs → Boring sidebar (group by project)**.
+Each device keeps its own choice.
+
 ## Done with a thread
 
 Choose **Done** from its menu to move finished work out of the active list
@@ -174,14 +206,11 @@ and keeps it active until new activity resumes the automatic rules.
 Manually marking an idle thread done dismisses unanswered async questions without
 sending an answer or restarting the agent. Marking a thread done also closes its
 terminals that wait at an idle prompt, and keeps their output. A terminal that
-runs a command, such as a dev server, stays open.
-
-By default, environments mark inactive threads done after fourteen days and mark
-threads done when their pull request merges. A closed pull request can also mark an idle
-thread done. Work in progress, pending questions or approvals, and live background work
-keep the thread active. An open pull request also keeps an inactive thread active,
-but an old closed or merged pull request does not mark work done that you resumed
-after it closed.
+runs a command, such as a dev server, stays open unless its action has **Stop this action
+when the thread settles** enabled in Settings > Projects > Actions. You can also set
+`"stopOnSettle": true` on a `t3.json` action and import it there. Start the command through
+that action so T3 can stop its terminal and child processes. Commands started through an
+agent's own shell tools are managed by the provider.
 
 To reclaim disk space from done work, turn on **Run in the thread's worktree when the
 thread is marked done** for one of the project's actions, or set `"runOnSettle": true` on a
@@ -190,24 +219,23 @@ worktree is marked done, manually or automatically, even if a terminal there sti
 command such as a dev server. Threads in the project's main checkout skip it. Its terminal
 closes when the command succeeds and stays open when it fails.
 
-On web and desktop, press a thread's **Settle** button and drag up or down to
+On web and desktop, press a thread's **Done** button and drag up or down to
 mark done every thread in that section between it and the one you release on.
-The **Un-mark done** and **Wake** buttons work the same way in their sections.
+The **Reopen** and **Wake** buttons work the same way in their sections.
 Press `Escape` while dragging to cancel.
 
-By default, environments mark done inactive threads after three days and mark done
-threads whose pull request merged. A closed pull request can also mark done an idle
-thread. An empty thread's inactivity counts from when it was created.
-Work in progress, pending questions or approvals, and live background work
-prevent automatic mark donement . An open pull request does not prevent inactivity
-mark donement unless you turn on **Keep threads with a PR** in **Settings → General**,
-but an old closed or merged pull request does not mark done work you
-resumed after it closed. Only your own messages count as resuming. A turn that
-finished background work or a pull request watch starts on its own does not.
+By default, environments mark inactive threads done after fourteen days and mark done
+threads whose pull request merged. A closed pull request can also mark an idle thread done.
+An empty thread's inactivity counts from when it was created. Work in progress, pending
+questions or approvals, and live background work prevent automatic completion. An open pull
+request keeps an inactive thread active when **Keep threads with a PR** is enabled in
+**Settings → Threads**. A closed or merged pull request does not mark done work you resumed
+after it closed. Only your own messages count as resuming; background turns and pull request
+watch updates do not.
 
 To keep one thread out of the Done shelf no matter how long it sits idle, open its menu,
-choose **Automatically mark done**, and pick **Disabled**. The current option is checked. Pick
-**Enabled** to return to the usual rules. **Done**, snooze, and archive still work while it
+choose **Automatically mark done**, and pick **Never**. The current option is checked. Pick
+**Follow settings** to return to the rules in **Settings → Threads**. **Done**, snooze, and archive still work while it
 is disabled.
 
 Change these rules in **Settings → Threads**.
@@ -244,16 +272,22 @@ palette.
 
 Use **Settings → Keybindings** to find or customize shortcuts for searching files
 and copying a thread reference. A copied reference uses the thread's pull request
-link when available, otherwise its thread ID. See [keybindings](./keybindings.md)
-for custom configuration.
+link when available, otherwise a link to the thread, which opens it from anywhere
+you paste it and pastes into a composer as a thread chip (see
+[sharing a thread](./prompt-links.md#share-a-thread)). To copy the thread even
+when it has a PR, choose **Copy → Thread** from its context menu, or **Copy
+thread** from its long-press menu on mobile.
+**Thread ID** copies the bare ID for scripts and the `t3` CLI. See
+[keybindings](./keybindings.md) for custom configuration.
 
 ## Inspect agent work
 
 **Limited** means the provider stopped on a usage or rate limit. The conversation
 keeps the provider's explanation. Retry after the limit resets, or switch to
 another provider instance.
-On web and desktop, press **Resume** in an empty composer to continue a limited
-or interrupted turn manually.
+Press **Resume** in an empty composer to continue a limited or interrupted turn
+manually. Do this when the provider reports no reset time, because nothing
+continues the turn on its own.
 Queued messages stay saved while the limit blocks the thread. They run after
 the continuation finishes. If the queue was held by a restart, resume it then.
 
@@ -285,10 +319,54 @@ Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
 
+On web and desktop, the thread details card lists the local servers that the
+thread's terminals or its Claude agent started, with their ports. Not every one
+serves a web page. A server the agent started stays listed after the agent's
+turn ends.
+Select a server to open it in the browser panel. **Stop** ends the server's job
+and keeps the agent, the terminal, and TritonAI Harness running. Stop needs terminal
+access to the environment and is not available on Windows.
+
+To choose what the thread details card shows, right-click the card or open
+**Settings → Appearance → Thread details**. Hidden rows keep their keyboard
+shortcuts, such as Open in editor and project scripts. **Reset to default** brings
+back the standard rows.
+
+## Side chats
+
+A side chat lets you ask a question about a thread without adding to it. It starts
+with what the thread knows, and the thread keeps working while you ask.
+
+On web and desktop, start a message with `/side` or `/btw`, then your question.
+You can also choose **Side chat** from the **+** menu in the right panel. The side
+chat opens as a tab there, with its own composer. Side chats do not show in the
+sidebar. Find one again under **Side chats** in thread details.
+
+A side chat works in the same folder as the thread and starts with the permissions,
+model, and reasoning level shown in the thread's composer, including for its first
+reply. Change them for an individual side chat in its composer. Later changes to the
+parent do not change existing side chats.
+
+To use what you learned, choose **Bring back**. The thread gets the side chat with
+your next message there. Bring back is available while the thread is idle.
+
+Closing a side chat you never sent a message in deletes it. To delete one you used,
+choose **Delete** at the top of the side chat. Deleting a thread also deletes its
+side chats.
+
+On mobile, a thread lists its side chats above the composer. Tap one to open it and
+answer its questions.
+
 ## Snooze until later
 
 On web and desktop, hover an active thread and click the clock beside its Done
 check to choose a wake time. The same controls are available with keyboard focus.
+
+To change the choices in the snooze menu, open **Settings → Threads → Snooze options**.
+Each option is a duration, such as 3 hours, or a time on a day, such as 9:00 PM
+tomorrow. A weekday means the next one after today. Menus list the options soonest
+first and hide a today option after its time passes. Saved with **All environments**
+selected, the options apply to every connected environment, and the mobile app uses them too.
 
 Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your
 local time zone, or a duration in minutes, hours, or days. Durations start when
@@ -300,3 +378,7 @@ several selected threads together. Choose **Wake thread** to bring a thread back
 Nightly builds show a starry sidebar header, including with the UC San Diego theme.
 The `(Nightly)` label appears as text with a transparent background.
 Use **Settings → Appearance → Environment identification** to choose artwork, a pill, or neither.
+A snoozed thread keeps working and stays hidden until its wake time, even while
+its agent wakes itself for background work. It comes back early for an approval,
+a new question, a failed run, or a message or answer you send. You can snooze an existing
+question and answer when the thread wakes; the question stays unanswered.

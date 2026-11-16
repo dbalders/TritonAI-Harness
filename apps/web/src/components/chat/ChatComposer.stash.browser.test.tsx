@@ -2,12 +2,15 @@ import { createRef } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import {
   EnvironmentId,
+  ComposerContextId,
+  type EnvironmentContextRecord,
   ThreadId,
   ProviderDriverKind,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { DEFAULT_CLIENT_SETTINGS, DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { act, render, stubGlobal } from "../../../test/render";
 import { ChatComposer, type ChatComposerProps } from "./ChatComposer";
@@ -118,17 +121,13 @@ function setup({ localPath = true, autoComplete = true, uploadStatus = 204 } = {
     supportsMultipleModels: false,
     onMultipleModelSelectionsChange() {},
     activeThreadId: threadId,
-    activeThreadEnvironmentId: environmentId,
     activeThread: undefined,
-    activeThreadShell: null,
-    promptHistoryMessages: [],
-    isServerThread: true,
-    isLocalDraftThread: false,
+    activeThreadRuns: [],
+    promptHistoryEntries: [],
     forceExpandedOnMobile: true,
     projectSelectionRequired: false,
     phase: "ready",
     canInterrupt: false,
-    isConnecting: false,
     isSendBusy: false,
     canResume: false,
     sendDisabledReason: null,
@@ -148,11 +147,7 @@ function setup({ localPath = true, autoComplete = true, uploadStatus = 204 } = {
     activePendingDraftAnswers: {},
     activePendingQuestionIndex: 0,
     respondingRequestIds: [],
-    showPlanFollowUpPrompt: false,
-    activeProposedPlan: null,
-    threadSyncPhase: null,
     runtimeMode: "auto",
-    interactionMode: "default",
     lockedProvider: null,
     providerStatuses: [
       {
@@ -175,10 +170,8 @@ function setup({ localPath = true, autoComplete = true, uploadStatus = 204 } = {
     activeProjectDefaultModelSelection: null,
     activeThreadModelSelection: null,
     activeProjectId: null,
-    activeContextWindow: null,
     compactThreadUnavailable: true,
     compactDisabled: true,
-    compactDisabledReason: null,
     resolvedTheme: "light",
     settings: DEFAULT_UNIFIED_SETTINGS,
     keybindings: DEFAULT_RESOLVED_KEYBINDINGS,
@@ -187,14 +180,9 @@ function setup({ localPath = true, autoComplete = true, uploadStatus = 204 } = {
     pullRequestProjectId: null,
     pullRequestRepository: null,
     threadPullRequests: undefined,
-    restingControlsHost: null,
-    restingControlsHaveLeadingContext: false,
-    onRestingControlsVisibilityChange() {},
-    getTimelineScrollableNode: () => null,
-    isTimelineAtLogicalEnd: () => true,
-    timelineOverflows: false,
     onComposerOverlayHeightChange() {},
-    onRestingChange() {},
+    permissionsShownInStrip: false,
+    onHeldRequestIdsChange() {},
     promptRef: { current: "" },
     composerImagesRef: { current: [] },
     composerFilesRef: { current: [] },
@@ -209,8 +197,6 @@ function setup({ localPath = true, autoComplete = true, uploadStatus = 204 } = {
     onSend() {},
     onResume() {},
     onInterrupt() {},
-    onImplementPlanInNewThread() {},
-    onRespondToApproval: async () => undefined,
     onSelectActivePendingUserInputOption() {},
     onAdvanceActivePendingUserInput() {},
     onDismissActivePendingUserInput() {},
@@ -219,9 +205,7 @@ function setup({ localPath = true, autoComplete = true, uploadStatus = 204 } = {
     onProviderModelSelect() {},
     onOpenProviderSetup() {},
     getModelDisabledReason: () => null,
-    toggleInteractionMode() {},
     handleRuntimeModeChange() {},
-    handleInteractionModeChange() {},
     focusComposer() {},
     scheduleComposerFocus() {},
     setThreadError() {},
@@ -273,7 +257,17 @@ it("stashes and restores a native local file only after the user requests Stash"
   using _bridge = stubGlobal("desktopBridge", fixture.bridge);
   using _xhr = stubGlobal("XMLHttpRequest", fixture.UploadRequest);
   using _toast = vi.spyOn(toastManager, "add");
-  useComposerDraftStore.getState().setPrompt(fixture.target, "Keep my notes");
+  const machine: EnvironmentContextRecord = {
+    version: 1,
+    kind: "environment",
+    contextId: ComposerContextId.make("stash-machine"),
+    label: "Acceptance machine",
+    environmentId: fixture.props.environmentId,
+  };
+  useComposerDraftStore.getState().setEnvironmentContexts(fixture.target, [machine]);
+  useComposerDraftStore
+    .getState()
+    .setPrompt(fixture.target, `Keep my notes ${formatComposerContextReference(machine)}`);
   await using screen = await render(<ChatComposer {...fixture.props} />);
   await expect.element(screen.getByTestId("composer-editor")).toBeInTheDocument();
   const file = await pickFile(screen.container);
@@ -297,6 +291,7 @@ it("stashes and restores a native local file only after the user requests Stash"
   ).toHaveLength(1);
   expect(usePromptStashStore.getState().entries[0]).toMatchObject({
     prompt: expect.stringContaining("Keep my notes"),
+    records: [machine],
     files: [
       {
         id: attachment.id,
@@ -309,9 +304,27 @@ it("stashes and restores a native local file only after the user requests Stash"
   expect(
     useComposerDraftStore.getState().getComposerDraft(fixture.target)?.files ?? [],
   ).toHaveLength(0);
+  expect(
+    useComposerDraftStore.getState().getComposerDraft(fixture.target)?.environmentContexts ?? [],
+  ).toEqual([]);
+  const restoredTarget = scopeThreadRef(
+    fixture.props.environmentId,
+    ThreadId.make("fresh-stash-target"),
+  );
+  await screen.rerender(
+    <ChatComposer
+      {...fixture.props}
+      composerDraftTarget={restoredTarget}
+      routeThreadRef={restoredTarget}
+      activeThreadId={restoredTarget.threadId}
+    />,
+  );
   await stash();
   expect(usePromptStashStore.getState().entries).toHaveLength(0);
-  const restored = useComposerDraftStore.getState().getComposerDraft(fixture.target)!;
+  const restored = useComposerDraftStore.getState().getComposerDraft(restoredTarget)!;
+  expect(restored.environmentContexts).toEqual([
+    expect.objectContaining({ environmentId: machine.environmentId, label: machine.label }),
+  ]);
   expect(restored.prompt).toContain("Keep my notes");
   expect(restored.files[0]).toMatchObject({
     file: null,

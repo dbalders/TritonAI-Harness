@@ -103,6 +103,7 @@ export function UcsdAccountSettings({ environmentId }: { readonly environmentId:
       return controller.activate();
     }, [controller, preparedConnection]),
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Recheck account sign-in on native app activation and remove the AppState listener on unmount.
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") void controller.check();

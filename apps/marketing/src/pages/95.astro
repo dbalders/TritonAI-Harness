@@ -1,7 +1,7 @@
 ---
 import RetroIcon from "../components/RetroIcon.astro";
 import RetroBox from "../components/RetroBox.astro";
-import { GITHUB_REPOSITORY_URL, MARKETING_STATS } from "../lib/site";
+import { GITHUB_REPOSITORY_URL } from "../lib/site";
 import "../styles/retro.css";
 
 const agents = [
@@ -42,13 +42,13 @@ const agents = [
     artwork: "Blue and violet software box with a floating chrome triangle and metallic spheres.",
   },
 ];
-const userDigits = MARKETING_STATS.users.replaceAll(",", "").padStart(7, "0").split("");
 ---
 
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="robots" content="noindex" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Introducing T3 Code. All your coding agents in one happy little window. Free, open source, and available without six CD-ROMs." />
     <meta name="theme-color" content="#000000" />
@@ -56,6 +56,7 @@ const userDigits = MARKETING_STATS.users.replaceAll(",", "").padStart(7, "0").sp
     <title>T3 Code '95 | The future is now. Like, right now.</title>
   </head>
   <body>
+    <p>This upstream T3 Code design demo is retained for reference. <a href="/download">Download TritonAI Harness</a> through its managed distribution.</p>
     <a class="skip-link retro-button" href="#main-content">Skip to the sales pitch</a>
 
     <nav class="desktop-icons" aria-label="Desktop shortcuts">
@@ -175,14 +176,13 @@ const userDigits = MARKETING_STATS.users.replaceAll(",", "").padStart(7, "0").sp
 
           <section class="faq-section" aria-labelledby="faq-title">
             <h2 id="faq-title">Questions</h2>
-            <details><summary>Wait. Is this a real product?</summary><p>Yes. T3 Code is a real, free, open-source app used by {MARKETING_STATS.users} developers. The packaging is a joke. The app is not. <a href="/">Visit the regular website.</a></p></details>
+            <details><summary>Wait. Is this a real product?</summary><p>Yes. T3 Code is a real, free, open-source app maintained upstream. The packaging is a joke. The app is not. <a href="/">Visit the regular website.</a></p></details>
             <details><summary>Does this replace my Claude or Codex subscription?</summary><p>No. T3 Code connects to the coding agents you already use. Keep your provider accounts and subscriptions. T3 Code gives you one app to work with them.</p></details>
             <details><summary>Will it run on Windows 95?</summary><p>Absolutely not. We brought back the look, not the driver problems. <a href="/download">Get a build for a current version of Windows, macOS, or Linux.</a></p></details>
             <details><summary>Where do I mail my check?</summary><p>Please do not mail us a check for zero dollars. Just download the app. The entire accounts department is a download button.</p></details>
           </section>
 
           <footer class="site-footer">
-            <div class="visitor-counter"><div class="counter-digits" aria-label={`${MARKETING_STATS.users} users`}>{userDigits.map((digit) => <span aria-hidden="true">{digit}</span>)}</div><span>developers use T3 Code.</span></div>
             <p>© {new Date().getFullYear()} T3 Tools Inc.</p>
             <nav aria-label="Footer"><a href="/">Back to the present</a><a href={GITHUB_REPOSITORY_URL}>GitHub</a><a href="/privacy-policy">Privacy</a><a href="/terms-of-service">Terms</a></nav>
           </footer>

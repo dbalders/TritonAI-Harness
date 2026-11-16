@@ -55,6 +55,8 @@ export function renderDevelopmentIconAssets(master: Buffer): Map<string, Buffer>
     [BRAND_ASSET_PATHS.developmentUniversalIconPng, master],
     [BRAND_ASSET_PATHS.developmentWindowsIconIco, ico],
     [BRAND_ASSET_PATHS.developmentWebFaviconIco, ico],
+    [BRAND_ASSET_PATHS.developmentWebIcon192Png, resizeNightlyIcon(source, 192, true)],
+    [BRAND_ASSET_PATHS.developmentWebIcon512Png, resizeNightlyIcon(source, 512, true)],
     [BRAND_ASSET_PATHS.developmentWebFavicon16Png, resizeNightlyIcon(source, 16)],
     [BRAND_ASSET_PATHS.developmentWebFavicon32Png, resizeNightlyIcon(source, 32)],
     [BRAND_ASSET_PATHS.developmentWebAppleTouchIconPng, resizeNightlyIcon(source, 180, true)],

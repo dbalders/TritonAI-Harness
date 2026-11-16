@@ -3,6 +3,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import {
   bindManagedPluginCompositionToArtifacts,
+  isAcceptedPluginRepository,
   managedPluginProofFileName,
   managedPluginProofInputFileName,
   type ManagedPluginComposition,
@@ -37,7 +38,7 @@ export async function finalizeManagedPluginProof(options: {
   if (
     composition.version !== 1 ||
     composition.kind !== "tritonai-harness-plugin-composition" ||
-    composition.source?.repository !== "https://github.com/dbalders/TritonAI-Plugins.git" ||
+    !isAcceptedPluginRepository(composition.source?.repository) ||
     !Array.isArray(composition.packages) ||
     composition.packages.length === 0
   ) {

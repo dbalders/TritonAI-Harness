@@ -15,6 +15,7 @@ function results(changed = "true") {
     workflow.jobs.check.needs.map((id) => [id, { result: "success" }]),
   );
   needs.mobile_native_changes.outputs = { changed };
+  needs.desktop_packaging_scope.outputs = { changed: "true" };
   return needs;
 }
 function check(needs) {
@@ -45,3 +46,30 @@ for (const result of ["failure", "cancelled", "skipped"]) {
     assert.notEqual(check(needs).status, 0);
   });
 }
+
+test(
+  "requires native packaging unless a successful scope job explicitly excludes it",
+  posix,
+  () => {
+    for (const id of ["packaging_wsl", "desktop_packaging"]) {
+      for (const result of ["failure", "cancelled", "skipped"]) {
+        const needs = results();
+        needs[id].result = result;
+        assert.notEqual(check(needs).status, 0, `${id}: ${result}`);
+      }
+    }
+    const needs = results();
+    needs.packaging_wsl.result = "skipped";
+    needs.desktop_packaging.result = "skipped";
+    for (const changed of ["true", "", undefined]) {
+      needs.desktop_packaging_scope.outputs.changed = changed;
+      assert.notEqual(check(needs).status, 0);
+    }
+    needs.desktop_packaging_scope.outputs.changed = "false";
+    assert.equal(check(needs).status, 0);
+    for (const result of ["failure", "cancelled", "skipped"]) {
+      needs.desktop_packaging_scope.result = result;
+      assert.notEqual(check(needs).status, 0);
+    }
+  },
+);

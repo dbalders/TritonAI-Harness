@@ -12,6 +12,7 @@
     <array>
       <string>applinks:clerk.t3.codes</string>
       <string>webcredentials:clerk.t3.codes</string>
+      <string>applinks:app.t3.codes</string>
     </array>
     <key>com.apple.security.application-groups</key>
     <array>

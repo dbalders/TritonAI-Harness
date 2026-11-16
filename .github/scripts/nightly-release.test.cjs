@@ -10,6 +10,7 @@ test("publication rejects stable tags, other repositories, and non-default branc
     tag: "v0.3.4-nightly.20260912.1",
   };
   assertNightlyPublication(valid);
+  assertNightlyPublication({ ...valid, repository: "UCSD/TritonAI-Harness" });
   for (const tag of [
     "v0.3.4",
     "0.3.4",
@@ -19,7 +20,13 @@ test("publication rejects stable tags, other repositories, and non-default branc
   ])
     assert.throws(() => assertNightlyPublication({ ...valid, tag }));
   assert.throws(() => assertNightlyPublication({ ...valid, ref: "refs/heads/test" }));
-  assert.throws(() => assertNightlyPublication({ ...valid, repository: "pingdotgg/t3code" }));
+  for (const repository of [
+    "pingdotgg/t3code",
+    "UCSD/UCSD-Skills-Library",
+    "ucsd-evil/TritonAI-Harness",
+    "UCSD/TritonAI-Harness-fork",
+  ])
+    assert.throws(() => assertNightlyPublication({ ...valid, repository }));
 });
 
 function fixture(eventName, inputs = {}) {

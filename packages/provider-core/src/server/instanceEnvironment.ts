@@ -13,21 +13,22 @@ export const mergeProviderInstanceEnvironment = Effect.fn(function* (
 ) {
   if (!environment || environment.length === 0) return baseEnv;
   const home = yield* HostProcess.HomeDirectory;
-  const effectivePlatform = platform ?? (yield* HostProcess.Platform);
+  const windows = (platform ?? (yield* HostProcess.Platform)) === "win32";
   const next: NodeJS.ProcessEnv = { ...baseEnv };
   for (const variable of environment) {
-    if (effectivePlatform === "win32") {
-      const normalizedName = variable.name.toLowerCase();
-      for (const existingName of Object.keys(next)) {
-        if (existingName !== variable.name && existingName.toLowerCase() === normalizedName) {
-          delete next[existingName];
-        }
+    // An unresolved secret reference carries no value; the registry resolves it for the provider.
+    if (typeof variable.value !== "string") continue;
+    // Windows reads names without regard to case, and a child gets the first spelling in sort
+    // order. Upper case sorts first, so the configured value wins even where a spawn merges the
+    // parent environment back in.
+    const name = windows ? variable.name.toUpperCase() : variable.name;
+    if (windows) {
+      for (const inherited of Object.keys(next)) {
+        if (inherited.toUpperCase() === name) delete next[inherited];
       }
     }
-    const normalizedName =
-      effectivePlatform === "win32" ? variable.name.toUpperCase() : variable.name;
-    next[variable.name] =
-      normalizedName === "CODEX_HOME" || normalizedName === "CLAUDE_CONFIG_DIR"
+    next[name] =
+      name === "CODEX_HOME" || name === "CLAUDE_CONFIG_DIR"
         ? expandHomePath(variable.value, home)
         : variable.value;
   }

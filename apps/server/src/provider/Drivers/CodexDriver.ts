@@ -5,7 +5,9 @@
  * @module provider/Drivers/CodexDriver
  */
 import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import type * as Signature from "effect/crypto/Signature";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -43,7 +45,6 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   makeCachedProviderMaintenanceResolution,
   makePackageManagedProviderMaintenanceResolver,
-  normalizeCommandPath,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
@@ -73,22 +74,37 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
-// The standalone installer lays out `<CODEX_HOME>/packages/standalone/…`;
-// CODEX_HOME is not always `~/.codex`.
-function isCodexStandaloneCommandPath(commandPath: string): boolean {
-  return normalizeCommandPath(commandPath).includes("/packages/standalone/");
+const CODEX_STANDALONE_HOME_PATTERN = /^(.*)\/packages\/standalone\//is;
+
+function codexStandaloneHome(commandPath: string): string | null {
+  // Slash replacement preserves indices; Unicode lowercasing can change the path length.
+  const match = CODEX_STANDALONE_HOME_PATTERN.exec(commandPath.replaceAll("\\", "/"));
+  if (!match) {
+    return null;
+  }
+  const home = match[1]!;
+  // Keep root separators: `C:` is drive-relative, and an empty home is not `/`.
+  const isRoot = home === "" || /^[a-z]:$/i.test(home);
+  return commandPath.slice(0, home.length + (isRoot ? 1 : 0));
 }
 
-/** `codex update` owns the shared home's standalone tree; auth-overlay homes do not carry it. */
+// Standalone updates locate their install through CODEX_HOME. Account and auth-overlay
+// homes can share an executable, so only the updater uses the executable's owning home.
 function makeCodexMaintenanceResolver(sharedHomePath: string) {
   const fallback = makePackageManagedProviderMaintenanceResolver({
     provider: DRIVER_KIND,
     npmPackageName: "@openai/codex",
+    mise: { tool: "codex" },
     nativeUpdate: {
       args: ["update"],
-      isCommandPath: isCodexStandaloneCommandPath,
+      isCommandPath: (commandPath) => codexStandaloneHome(commandPath) !== null,
       requiresCommandPath: true,
-      env: { CODEX_HOME: sharedHomePath },
+      env: (context) => ({
+        CODEX_HOME:
+          codexStandaloneHome(context.realCommandPath) ??
+          codexStandaloneHome(context.resolvedCommandPath) ??
+          sharedHomePath,
+      }),
     },
   });
   return makeTritonAiManagedCodexMaintenanceResolver({
@@ -110,7 +126,9 @@ export type CodexDriverEnv =
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
   | ResetCreditCoordinator.ResetCreditCoordinator
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
+  | Signature.Signature
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions
@@ -160,6 +178,7 @@ export const CodexDriver: ProviderDriver<
     const pathService = yield* Path.Path;
     const httpClient = yield* HttpClient.HttpClient;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
+    const installation = yield* CodexInstallation.CodexInstallation;
     const modelCatalog = yield* ModelCatalog.ModelCatalog;
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
     const path = yield* Path.Path;
@@ -171,7 +190,13 @@ export const CodexDriver: ProviderDriver<
       hostPlatform,
       String(instanceId),
     );
+    const isManagedGateway =
+      ["codex", "codex_frontier"].includes(String(instanceId)) &&
+      environment?.some((variable) => variable.name.toUpperCase() === "TRITONAI_API_KEY_SOURCE") ===
+        true;
     const configuredHomePath = config.homePath.trim();
+    const environmentHome =
+      !isManagedGateway && !config.shadowHomePath.trim() ? processEnv.CODEX_HOME : undefined;
     const binaryPath = enabled
       ? yield* resolveManagedCodexBinary({
           binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
@@ -195,13 +220,11 @@ export const CodexDriver: ProviderDriver<
       ...config,
       binaryPath,
       homePath:
-        configuredHomePath.length > 0 ? config.homePath : path.join(serverConfig.baseDir, "codex"),
+        configuredHomePath.length > 0
+          ? config.homePath
+          : environmentHome || path.join(serverConfig.baseDir, "codex"),
     } satisfies CodexSettings;
     const homeLayout = yield* resolveCodexHomeLayout(managedConfig);
-    const isManagedGateway =
-      ["codex", "codex_frontier"].includes(String(instanceId)) &&
-      environment?.some((variable) => variable.name.toUpperCase() === "TRITONAI_API_KEY_SOURCE") ===
-        true;
     // Managed gateways share runtime files, but their models cannot consume
     // each other's native history. Route changes must use a portable handoff.
     const continuationIdentity = {
@@ -280,6 +303,7 @@ export const CodexDriver: ProviderDriver<
       },
       {
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+        compatibility: installation.compatibility,
         ...(modelCatalogPath ? { modelCatalogPath } : {}),
         ...(isManagedGateway
           ? {

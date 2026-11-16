@@ -1,6 +1,5 @@
 import * as Schema from "effect/Schema";
 import { expect, it } from "@effect/vitest";
-
 import { Tool } from "effect/ai";
 
 import { PreviewToolkit } from "./tools.ts";
@@ -61,3 +60,16 @@ const encodePreviewResults = {
   preview_open: Schema.encodeUnknownSync(PreviewToolkit.tools.preview_open.successSchema),
   preview_navigate: Schema.encodeUnknownSync(PreviewToolkit.tools.preview_navigate.successSchema),
 };
+it("preview_open accepts a target while preserving open input constraints", () => {
+  const decode = Schema.decodeUnknownSync(PreviewToolkit.tools.preview_open.parametersSchema);
+  const target = { kind: "environment-port", port: 3000 };
+  expect(decode({ target })).toEqual({ target });
+  expect(decode({})).toEqual({});
+  expect(decode({ url: "https://example.com" })).toEqual({ url: "https://example.com" });
+  expect(decode({ url: "http://localhost:3000", target })).toEqual({
+    url: "http://localhost:3000",
+    target,
+  });
+  expect(() => decode({ target: { ...target, port: 0 } })).toThrow();
+  expect(() => decode({ target, tabId: "tab-1", reuseExistingTab: false })).toThrow();
+});

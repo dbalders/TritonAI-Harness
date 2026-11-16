@@ -1,10 +1,15 @@
 import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
 import { makeProviderClientRegistry } from "@t3tools/provider-core/client";
 
+// Harness: the web registry offers only the managed TritonAI (Codex) engine. The
+// shared upstream registry in @t3tools/client-runtime/provider-clients keeps every
+// adapter for model-name helpers; managed availability comes from policy.
+
 export const providerClients = makeProviderClientRegistry([
   {
     driverKind: ProviderDriverKind.make("codex"),
     label: "TritonAI",
+    modelFamilies: ["GPT-", "GPT "],
     acpRegistryAgentIds: ["codex-acp"],
     settingsSchema: CodexSettings,
   },
