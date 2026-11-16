@@ -1807,6 +1807,63 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect(
+    "budgets only manifest-backed server cache files separately from the Windows payload",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+          const input = {
+            stageDistDir: fixture.stageDistDir,
+            appExecutableName: fixture.appExecutableName,
+            targetArch: "x64" as const,
+            appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
+          };
+          const baseline = yield* validateWindowsPackagedPayload(input);
+          const cache = path.join(fixture.packagedAppDir, "resources/server-compile-cache");
+          yield* fs.makeDirectory(cache);
+          yield* fs.writeFileString(path.join(cache, "12345678"), "prepared bytecode");
+          const manifest = {
+            format: 1,
+            entries: [{ file: "12345678", module: "server.asar/apps/server/dist/bin.mjs" }],
+          };
+          yield* fs.writeFileString(path.join(cache, "manifest.json"), JSON.stringify(manifest));
+          const result = yield* validateWindowsPackagedPayload({
+            ...input,
+            fileLimit: baseline.fileCount,
+          });
+          assert.equal(result.fileCount, baseline.fileCount + 2);
+
+          yield* fs.writeFileString(path.join(cache, "unexpected.bin"), "unaccounted payload");
+          const extra = yield* validateWindowsPackagedPayload({
+            ...input,
+            fileLimit: baseline.fileCount,
+          }).pipe(Effect.flip);
+          assert.instanceOf(extra, WindowsPackagedPayloadValidationError);
+          assert.equal(extra.reason, "file-limit-exceeded");
+          yield* fs.remove(path.join(cache, "unexpected.bin"));
+
+          manifest.entries[0]!.module = "server.asar/apps/server/dist/missing.mjs";
+          yield* fs.writeFileString(path.join(cache, "manifest.json"), JSON.stringify(manifest));
+          const invalid = yield* validateWindowsPackagedPayload({
+            ...input,
+            fileLimit: baseline.fileCount,
+          }).pipe(Effect.flip);
+          assert.instanceOf(invalid, WindowsPackagedPayloadValidationError);
+          assert.equal(invalid.reason, "file-limit-exceeded");
+          yield* fs.writeFileString(path.join(cache, "manifest.json"), "invalid JSON");
+          const malformed = yield* validateWindowsPackagedPayload({
+            ...input,
+            fileLimit: baseline.fileCount,
+          }).pipe(Effect.flip);
+          assert.instanceOf(malformed, WindowsPackagedPayloadValidationError);
+          assert.equal(malformed.reason, "file-limit-exceeded");
+        }),
+      ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
+  );
+
   it.effect("rejects a Windows payload that regresses above the file-count budget", () =>
     Effect.scoped(
       Effect.gen(function* () {

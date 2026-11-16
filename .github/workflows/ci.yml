@@ -388,6 +388,157 @@ jobs:
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
 
+  desktop_packaging_scope:
+    name: Desktop Packaging Scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/scripts
+      - id: detect
+        name: Detect desktop packaging inputs
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: node .github/scripts/desktop-packaging-scope.cjs
+
+  packaging_wsl:
+    name: Package matching WSL runtime
+    needs: desktop_packaging_scope
+    if: ${{ !cancelled() && needs.desktop_packaging_scope.outputs.changed != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PACKAGING_VERSION: 0.0.0-nightly.20000101.1
+      TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
+    steps:
+      - &packaging_checkout
+        name: Checkout packaging candidate
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |-
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      # Public placeholders exercise the pinned Nightly composition, without
+      # giving PR code release credentials or connecting any user accounts.
+      - &packaging_plugins
+        name: Prepare and validate pinned Nightly plugins
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/scripts/prepare-managed-plugins.cjs --production --nightly
+          TRITONAI_PLUGIN_CONFIGURATION_JSON="$(node -p "JSON.stringify(require('./.github/fixtures/packaging-plugin-configuration.json'))")"
+          export TRITONAI_PLUGIN_CONFIGURATION_JSON
+          node scripts/validate-managed-plugin-configuration.ts --receipt .release-input/managed-plugin-validation-receipt.json
+          echo "TRITONAI_PLUGIN_CONFIGURATION_JSON=$TRITONAI_PLUGIN_CONFIGURATION_JSON" >> "$GITHUB_ENV"
+          node scripts/update-release-package-versions.ts "$PACKAGING_VERSION"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Build and verify the same WSL archive as Nightly
+        shell: bash
+        run: |
+          set -euo pipefail
+          vp run --filter t3 build
+          VP_NODE_VERSION=26.12.1 node apps/server/scripts/cli.ts build-exe --verbose
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml
+          mkdir -p cli-resource-monitor/linux-x64
+          cp native/resource-monitor/target/release/t3-resource-monitor cli-resource-monitor/linux-x64/
+          node scripts/build-cli-archive.ts --platform linux --arch x64 --version "$PACKAGING_VERSION" --resource-monitor-dir cli-resource-monitor --output-dir wsl-runtime
+          node scripts/smoke-cli-archive.ts --archive "wsl-runtime/t3-$PACKAGING_VERSION-linux-x64.tar.gz" --expect-version "$PACKAGING_VERSION"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packaging-check-wsl-runtime
+          path: wsl-runtime/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  desktop_packaging:
+    name: Package ${{ matrix.label }}
+    needs: [desktop_packaging_scope, packaging_wsl]
+    if: ${{ !cancelled() && needs.desktop_packaging_scope.outputs.changed != 'false' && needs.packaging_wsl.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS updater ZIP
+            runner: macos-15
+            platform: mac
+            target: zip
+            arch: arm64
+          - label: Windows installer
+            runner: windows-2025
+            platform: win
+            target: nsis
+            arch: x64
+    env:
+      PACKAGING_VERSION: 0.0.0-nightly.20000101.1
+      TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/plugins
+    steps:
+      - *packaging_checkout
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: ${{ matrix.platform != 'win' }}
+          run-install: false
+      - name: Install frozen desktop dependencies
+        run: vp install --frozen-lockfile --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - *packaging_plugins
+      - uses: actions/download-artifact@v7
+        if: matrix.platform == 'win'
+        with:
+          name: packaging-check-wsl-runtime
+          path: wsl-runtime
+      - name: Install Spectre-mitigated MSVC libs
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+            throw "Visual Studio Spectre library installation failed."
+          }
+      - name: Build unsigned candidate with Nightly payload validators
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--platform "${{ matrix.platform }}" --target "${{ matrix.target }}" --arch "${{ matrix.arch }}"
+            --build-version "$PACKAGING_VERSION" --verbose --plugin-configuration-prevalidated
+            --plugin-validation-receipt "$GITHUB_WORKSPACE/.release-input/managed-plugin-validation-receipt.json")
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            args+=(--wsl-runtime "$GITHUB_WORKSPACE/wsl-runtime/t3-$PACKAGING_VERSION-linux-x64.tar.gz")
+          fi
+          vp run dist:desktop:artifact "${args[@]}"
+      - name: Verify final updater ZIP permissions
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: node scripts/verify-macos-update-zip.cjs "release/TritonAI-Harness-$PACKAGING_VERSION-arm64.zip"
+      - name: Install, upgrade, and boot the Windows candidate
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "release/TritonAI-Harness-$env:PACKAGING_VERSION-x64.exe").Path
+          $pluginIds = @((Get-Content .release-input/plugins/manifest.json -Raw | ConvertFrom-Json).packages.id)
+          ./scripts/verify-windows-packaged-boot.ps1 -InstallerPath $installer -AllowUnsigned -ExpectedPluginIds $pluginIds
+
   # Keep the branch-protection name stable while requiring every CI result.
   check:
     name: Check
@@ -401,6 +552,9 @@ jobs:
         mobile_native_changes,
         mobile_native_static_analysis,
         release_smoke,
+        desktop_packaging_scope,
+        packaging_wsl,
+        desktop_packaging,
       ]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -415,7 +569,11 @@ jobs:
             or (.key == "mobile_native_static_analysis"
               and .value.result == "skipped"
               and $needs.mobile_native_changes.result == "success"
-              and $needs.mobile_native_changes.outputs.changed == "false"))' > /dev/null
+              and $needs.mobile_native_changes.outputs.changed == "false")
+            or ((.key == "packaging_wsl" or .key == "desktop_packaging")
+              and .value.result == "skipped"
+              and $needs.desktop_packaging_scope.result == "success"
+              and $needs.desktop_packaging_scope.outputs.changed == "false"))' > /dev/null
 
       - name: Require transfer measurements
         uses: actions/download-artifact@v8

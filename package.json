@@ -29,7 +29,7 @@
     "typecheck": "vp run -r --cache --concurrency-limit 2 typecheck",
     "tc": "vp run -r --cache --concurrency-limit 2 typecheck",
     "preflight": "vp run preflight:checks && vp run preflight:tests && vp run preflight:server",
-    "preflight:checks": "vp run gitlinks:check && node --test .github/scripts/check-gitlinks.test.cjs .github/scripts/windows-test-scope.test.cjs .github/scripts/dev-launcher.test.cjs .github/scripts/mobile-production-reconcile.test.cjs .github/scripts/mirror-play-apk.test.cjs .github/scripts/ci-aggregate.test.cjs && vp run test:release-inputs && vp run knip:check && vp check && vp run typecheck",
+    "preflight:checks": "vp run gitlinks:check && node --test .github/scripts/check-gitlinks.test.cjs .github/scripts/windows-test-scope.test.cjs .github/scripts/desktop-packaging-scope.test.cjs .github/scripts/dev-launcher.test.cjs .github/scripts/mobile-production-reconcile.test.cjs .github/scripts/mirror-play-apk.test.cjs .github/scripts/ci-aggregate.test.cjs && vp run test:release-inputs && vp run knip:check && vp check && vp run typecheck",
     "gitlinks:check": "node .github/scripts/check-gitlinks.cjs",
     "preflight:tests": "vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test",
     "preflight:server": "vp run --filter t3 test",

@@ -1,0 +1,26 @@
+{
+  "github": {
+    "clientId": "00000000000000000000"
+  },
+  "google-workspace": {
+    "clientId": "123456789012-packagingcheck.apps.googleusercontent.com",
+    "clientSecret": "packaging-check-placeholder"
+  },
+  "jira-data-center": {
+    "brokerUrl": "https://packaging-check.invalid",
+    "oauthClientId": "packaging-check"
+  },
+  "kuali-build": {},
+  "lucid": {
+    "serverOrigin": "https://mcp.lucid.app"
+  },
+  "microsoft-365": {
+    "clientId": "11111111-1111-4111-8111-111111111111",
+    "tenantId": "22222222-2222-4222-8222-222222222222"
+  },
+  "n8n": {
+    "serverUrl": "https://n8n.tritonai.ucsd.edu/mcp-server/http"
+  },
+  "tableau": {},
+  "ucsd-assistant": {}
+}

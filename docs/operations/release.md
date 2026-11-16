@@ -38,6 +38,20 @@ cache builds, mobile previews, and PR vouch automation are not Harness release g
 The macOS PR preview remains same-repository-only and uses a read-only build job,
 with artifact-only publication in a separate job that never executes PR code.
 
+## Required desktop packaging checks
+
+CI's required `Check` includes native macOS updater-ZIP and Windows installer checks
+when desktop, server, web, shared-package, dependency, native-tool, or packaging inputs
+change. Documentation and mobile-source-only changes skip these jobs; an unknown diff runs
+them. A failed scope job or missing scope output cannot excuse a skipped package check.
+
+The jobs build unsigned Nightly candidates with the pinned Nightly plugin composition
+and public fixture configuration. Windows embeds a matching Linux WSL archive and runs
+the existing install, upgrade, and boot verifier. macOS runs the existing final ZIP
+permission validator, including access after an administrator installs the update.
+Neither job publishes a release. Signing, notarization, and production configuration
+remain separate release gates; green packaging checks do not prove those services work.
+
 ## Workflow contract
 
 Run `vp run gitlinks:check` after updating vendored reference repositories. Every tracked
