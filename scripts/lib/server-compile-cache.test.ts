@@ -109,10 +109,14 @@ it.each([
       NodeFS.statSync(NodePath.join(resources, "server-compile-cache", manifest.entries[0].file))
         .size,
     ).toBeGreaterThan(0);
-    const prepared = NodePath.join(resources, "server-compile-cache");
-    expect(NodeFS.statSync(prepared).mode & 0o555).toBe(0o555);
-    for (const file of NodeFS.readdirSync(prepared)) {
-      expect(NodeFS.statSync(NodePath.join(prepared, file)).mode & 0o444).toBe(0o444);
+    // Windows reports modes from its read-only attribute, without POSIX execute bits.
+    // oxlint-disable-next-line t3code/no-global-process-runtime -- Permission assertions depend on the real filesystem host, not the simulated child target.
+    if (NodeOS.platform() !== "win32") {
+      const prepared = NodePath.join(resources, "server-compile-cache");
+      expect(NodeFS.statSync(prepared).mode & 0o555).toBe(0o555);
+      for (const file of NodeFS.readdirSync(prepared)) {
+        expect(NodeFS.statSync(NodePath.join(prepared, file)).mode & 0o444).toBe(0o444);
+      }
     }
   } finally {
     NodeFS.rmSync(root, { recursive: true, force: true });
