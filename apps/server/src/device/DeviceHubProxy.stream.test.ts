@@ -99,7 +99,11 @@ it.live("closes an upstream socket that is still connecting without an unhandled
       Effect.promise(
         () =>
           new Promise<NodeNet.Server>((resolve) => {
-            const server = NodeNet.createServer((socket) => dialed.resolve(socket));
+            const server = NodeNet.createServer((socket) => {
+              // Drain the handshake so an orderly peer close can emit end/close.
+              socket.resume();
+              dialed.resolve(socket);
+            });
             server.listen(0, "127.0.0.1", () => resolve(server));
           }),
       ),
