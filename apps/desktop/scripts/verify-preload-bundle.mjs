@@ -89,8 +89,6 @@ const createSandboxModules = (exposedGlobals) => {
 };
 
 const executeBundle = (source, sandboxModules) => {
-  const listeners = new Map();
-  const styles = new Map();
   const sandboxProcess = {
     contextIsolated: true,
     // oxlint-disable-next-line t3code/no-global-process-runtime -- This standalone CI verifier supplies the preload's host platform without loading Effect.
@@ -106,18 +104,20 @@ const executeBundle = (source, sandboxModules) => {
     return sandboxModules.get(moduleName);
   };
 
+  // A real preload loads with the page's DOM; no page events fire while the bundle runs here.
+  const document = Object.assign(new EventTarget(), {
+    fullscreenElement: null,
+    documentElement: { style: { setProperty: () => undefined } },
+  });
+  const window = Object.assign(new EventTarget(), { document });
+
   NodeVM.runInNewContext(
     source,
     {
+      document,
       process: sandboxProcess,
       require: requireSandboxModule,
-      window: {
-        addEventListener: (name, callback) => listeners.set(name, callback),
-        removeEventListener: (name) => listeners.delete(name),
-      },
-      document: {
-        documentElement: { style: { setProperty: (name, value) => styles.set(name, value) } },
-      },
+      window,
     },
     {
       filename: "desktop-preload.cjs",
@@ -125,7 +125,7 @@ const executeBundle = (source, sandboxModules) => {
     },
   );
   if (sandboxProcess.platform === "darwin") {
-    listeners.get("DOMContentLoaded")?.();
+    window.dispatchEvent(new Event("DOMContentLoaded"));
   }
 };
 

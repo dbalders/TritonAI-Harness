@@ -11,9 +11,11 @@ import {
 } from "@t3tools/contracts";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Mac from "effect/crypto/Mac";
 import * as Effect from "effect/Effect";
 import * as Base64 from "effect/encoding/Base64";
 import * as Hex from "effect/encoding/Hex";
@@ -825,8 +827,14 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         ...backendChildEnvPatch(),
         ...(managedPathEntries.length === 0
           ? {}
-          : { PATH: managedPathEntries.reduce(appendPathEntry, process.env.PATH) }),
+          : {
+              PATH: managedPathEntries.reduce(
+                appendPathEntry,
+                (yield* HostProcess.Environment).PATH,
+              ),
+            }),
         ELECTRON_RUN_AS_NODE: "1",
+        T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
         T3CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
       },
       extendEnv: true,
@@ -866,6 +874,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     ucsdEnvironment,
     tritonAiCredentialOverride,
   );
+  const env = yield* HostProcess.Environment;
 
   // wslhost loopback forwarding is unreliable on some Windows hosts; advertise the WSL IP instead.
   const wslBindHost = "0.0.0.0";
@@ -997,8 +1006,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     const value =
       hasManagedCredentialBundle && isCredential
         ? tritonAiCredentialEnvironment[name]
-        : process.env[name] && process.env[name].length > 0
-          ? process.env[name]
+        : env[name] && env[name].length > 0
+          ? env[name]
           : ucsdEnvironment[name];
     if (value !== undefined && value.length > 0) {
       forwardedEnv[name] = value;
@@ -1009,7 +1018,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   // Exclude host TRITONAI_HOME/T3CODE_HOME from WSL to avoid sharing the Windows database
   // and environment ID through /mnt/c.
   const parentEnvWithoutManagedHome: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(process.env)) {
+  for (const [key, value] of Object.entries(env)) {
     if (key === TRITONAI_HOME_ENV || key === LEGACY_T3CODE_HOME_ENV) continue;
     parentEnvWithoutManagedHome[key] = value;
   }
@@ -1096,17 +1105,17 @@ export const make = Effect.gen(function* () {
   const wslServerTree = yield* DesktopWslServerTree.DesktopWslServerTree;
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
   const computerUse = yield* DesktopComputerUse.DesktopComputerUse;
-  const crypto = yield* Crypto.Crypto;
   const dialog = yield* ElectronDialog.ElectronDialog;
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
-  // Use SynchronizedRef: concurrent primary/WSL resolution can yield during randomBytes
-  // and otherwise mint different secrets, breaking the shared renderer token.
+  const mac = yield* Mac.Mac;
+  const random = yield* SecureRandom.SecureRandom;
+  // Random generation yields; serialize it so concurrent backends cannot capture distinct bootstrap secrets.
   const secretRef = yield* SynchronizedRef.make(Option.none<string>());
   const getOrCreateBootstrapSecret = SynchronizedRef.modifyEffect(secretRef, (current) =>
     Option.match(current, {
       onSome: (secret) => Effect.succeed([secret, current] as const),
       onNone: () =>
-        crypto.randomBytes(32).pipe(
+        random.randomBytes(32).pipe(
           Effect.map((bytes) => {
             const secret = Hex.encode(bytes);
             return [secret, Option.some(secret)] as const;
@@ -1122,7 +1131,7 @@ export const make = Effect.gen(function* () {
       onSome: (keys) => Effect.succeed([keys, current] as const),
       onNone: () =>
         DesktopSecretStoreKey.resolve().pipe(
-          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.provideService(SecureRandom.SecureRandom, random),
           Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
           Effect.provideService(ElectronDialog.ElectronDialog, dialog),
           Effect.provideService(ElectronSafeStorage.ElectronSafeStorage, safeStorage),
@@ -1134,10 +1143,10 @@ export const make = Effect.gen(function* () {
 
   const sharedInputs = Effect.gen(function* () {
     const bootstrapSecret = yield* getOrCreateBootstrapSecret;
-    const bootstrapToken = currentDesktopBootstrapToken(
+    const bootstrapToken = yield* currentDesktopBootstrapToken(
       bootstrapSecret,
       yield* Clock.currentTimeMillis,
-    );
+    ).pipe(Effect.provideService(Mac.Mac, mac));
     const secretStoreKeyMaterial = yield* getOrCreateSecretStoreKeys;
     const observabilitySettings = yield* readBackendObservabilitySettings.pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -1206,7 +1215,9 @@ export const make = Effect.gen(function* () {
 
   const currentBootstrapToken = Effect.gen(function* () {
     const secret = yield* getOrCreateBootstrapSecret;
-    return currentDesktopBootstrapToken(secret, yield* Clock.currentTimeMillis);
+    return yield* currentDesktopBootstrapToken(secret, yield* Clock.currentTimeMillis).pipe(
+      Effect.provideService(Mac.Mac, mac),
+    );
   });
 
   return DesktopBackendConfiguration.of({

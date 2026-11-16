@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
@@ -31,6 +32,7 @@ const makeEnvironmentLayer = (baseDir: string, platform: NodeJS.Platform) =>
     Layer.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         DesktopConfig.layerTest({
           T3CODE_HOME: baseDir,
           T3CODE_MODE: "desktop",
@@ -75,6 +77,7 @@ const provideDependencies = (
   Effect.provide(
     Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       makeEnvironmentLayer(baseDir, platform),
       safeStorageLayer,
       dialogLayer,
@@ -128,7 +131,7 @@ describe("DesktopSecretStoreKey", () => {
       assert.deepEqual(first.legacySecretFingerprints, {});
       assert.isFalse(Buffer.from(wrapped).includes(Buffer.from(first.keys[0], "utf8")));
       assert.isFalse(entries.some((entry) => entry.endsWith(".tmp")));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("migrates approved plaintext and durably consumes its authorization", () =>
@@ -164,7 +167,7 @@ describe("DesktopSecretStoreKey", () => {
       );
       assert.deepEqual(restarted.legacySecretFingerprints, {});
       assert.equal(yield* fileSystem.readFileString(legacyPath), "legacy-value");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("rejects ambiguous legacy plaintext that begins with the envelope magic", () =>
@@ -186,7 +189,7 @@ describe("DesktopSecretStoreKey", () => {
       assert.instanceOf(error, PlatformError.PlatformError);
       assert.deepEqual(Array.from(yield* fileSystem.readFile(legacyPath)), Array.from(legacyValue));
       assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/secret-store-key.v1.bin`));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("migrates a legacy filename that matches an inherited object property", () =>
@@ -211,7 +214,7 @@ describe("DesktopSecretStoreKey", () => {
       );
       assert.deepEqual(Array.from(decoded.value), Array.from(value));
       assert.deepEqual(material.legacySecretFingerprints, {});
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("leaves legacy files untouched when migration is not explicitly approved", () =>
@@ -232,7 +235,7 @@ describe("DesktopSecretStoreKey", () => {
       assert.equal(yield* fileSystem.readFileString(legacyPath), "legacy-value");
       assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/secret-store-key.v1.bin`));
       assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/secret-store.v1.initialized`));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("fails closed when encrypted files remain but the wrapped data key is missing", () =>
@@ -264,7 +267,7 @@ describe("DesktopSecretStoreKey", () => {
         Array.from(yield* fileSystem.readFile(`${baseDir}/userdata/secrets/oauth.bin`)),
         Array.from(damagedEnvelope),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect(
@@ -298,7 +301,7 @@ describe("DesktopSecretStoreKey", () => {
         assert.deepEqual(Array.from(yield* fileSystem.readFile(secretPath)), Array.from(envelope));
         assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/secret-store-key.v1.bin`));
         assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/secret-store.v1.initialized`));
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("rejects truncated and modified envelope versions during legacy detection", () =>
@@ -339,7 +342,7 @@ describe("DesktopSecretStoreKey", () => {
         assert.deepEqual(Array.from(yield* fileSystem.readFile(secretPath)), Array.from(damaged));
         assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/secret-store-key.v1.bin`));
       }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("rejects Linux basic_text storage", () =>
@@ -355,7 +358,7 @@ describe("DesktopSecretStoreKey", () => {
 
       assert.instanceOf(error, PlatformError.PlatformError);
       assert.equal(error.reason._tag, "PermissionDenied");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("fails closed when OS credential encryption is unavailable", () =>
@@ -371,7 +374,7 @@ describe("DesktopSecretStoreKey", () => {
 
       assert.instanceOf(error, PlatformError.PlatformError);
       assert.equal(error.reason._tag, "PermissionDenied");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect(
@@ -392,6 +395,6 @@ describe("DesktopSecretStoreKey", () => {
           ),
         );
         assert.lengthOf(material.keys, 1);
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

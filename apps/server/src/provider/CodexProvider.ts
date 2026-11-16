@@ -50,6 +50,7 @@ import {
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
+  providerProbeEnvironment,
   spawnAndCollect,
   type ServerProviderDraft,
 } from "@t3tools/provider-core/server/snapshotProbe";
@@ -744,7 +745,8 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
 
   const integrationRegistry = Integrations.getIntegrationRegistryOptional();
   const integrationSkillRuntime = integrationRegistry
-    ? yield* Effect.tryPromise(() => integrationRegistry.prepareSkillRuntime()).pipe(
+    ? // @effect-diagnostics-next-line effectTryWithoutCatch:off -- Plugin skill preparation failure is logged and discovery continues.
+      yield* Effect.tryPromise(() => integrationRegistry.prepareSkillRuntime()).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("Failed to prepare integration plugin skills for provider status.", {
             cause,
@@ -754,11 +756,14 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     : null;
   const releaseIntegrationSkills =
     integrationRegistry && integrationSkillRuntime
-      ? Effect.tryPromise(() =>
+      ? // @effect-diagnostics-next-line effectTryWithoutCatch:off -- Plugin lease cleanup failures are logged and ignored.
+        Effect.tryPromise(() =>
           integrationRegistry.releaseSkillRuntime(integrationSkillRuntime.root),
         ).pipe(
           Effect.catch((cause) =>
-            Effect.logWarning("Failed to release provider-status integration skills.", { cause }),
+            Effect.logWarning("Failed to release provider-status integration skills.", {
+              cause,
+            }),
           ),
         )
       : Effect.void;
@@ -798,8 +803,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
         // Usage is an enrichment: a failure or a slow answer degrades to "no
         // usage this probe" rather than costing the account and models.
         input.skipNativeUsage
-          ? // @effect-diagnostics-next-line effectSucceedWithVoid:off -- This tuple needs undefined so consumers can narrow the optional value.
-            Effect.succeed(undefined)
+          ? Effect.undefined
           : withCodexDiscoveryDeadline(
               client.request("account/rateLimits/read", null),
               deadlineMs,
@@ -900,7 +904,10 @@ export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(functi
   readonly cwd: string;
   readonly environment?: NodeJS.ProcessEnv;
 }) {
-  const { client } = yield* withCodexAppServerClient(input);
+  const { client } = yield* withCodexAppServerClient({
+    ...input,
+    environment: providerProbeEnvironment(input.environment ?? process.env),
+  });
   const skillsResponse = yield* client.request("skills/list", { cwds: [input.cwd] });
   return parseCodexSkillsListResponse(skillsResponse, input.cwd);
 });
@@ -1010,7 +1017,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   ServerSettingsError,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > {
-  const resolvedEnvironment = environment ?? process.env;
+  const resolvedEnvironment = providerProbeEnvironment(environment ?? process.env);
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const emptyModels = emptyCodexModelsFromSettings(codexSettings);
 

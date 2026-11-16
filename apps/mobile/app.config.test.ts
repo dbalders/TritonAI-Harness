@@ -1,4 +1,8 @@
+import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/connectAuth";
 import { afterEach, expect, it, vi } from "vite-plus/test";
+
+import appleAppSiteAssociation from "../web/public/.well-known/apple-app-site-association.json";
+import assetLinks from "../web/public/.well-known/assetlinks.json";
 
 // Keep config parsing independent of local env files and build credentials.
 vi.mock("../../scripts/lib/public-config.ts", () => ({
@@ -32,5 +36,14 @@ it.each([
     const config = await loadConfig(value);
     expect(config.ios?.bundleIdentifier).toBe(iosIdentifier);
     expect(config.android?.package).toBe(androidPackage);
+    expect(appleAppSiteAssociation.applinks.details[0]?.appIDs).toContain(
+      `${config.ios?.appleTeamId}.${iosIdentifier}`,
+    );
+    const host = new URL(DEFAULT_HOSTED_APP_URL).host;
+    expect(config.ios?.associatedDomains).toContain(`applinks:${host}`);
+    expect(config.android?.intentFilters?.[0]?.data).toEqual([
+      { scheme: "https", host, pathPrefix: "/threads/" },
+    ]);
+    expect(assetLinks.map((link) => link.target.package_name)).toContain(androidPackage);
   },
 );

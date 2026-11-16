@@ -9,6 +9,14 @@ import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 import type { ProviderMaintenanceCapabilities } from "./maintenance.ts";
 
+/** authLabel names the plan, for drivers whose usage report carries it. */
+export type ProviderUsageLimitsReport = ProviderUsageLimitsUpdate & {
+  readonly checkedAt: string;
+  readonly authLabel?: string;
+  /** A full reading replaces sparse windows and clears a previous probe failure. */
+  readonly complete?: boolean;
+};
+
 export interface ManagedServerProvider {
   /** Cached; pass { fresh: true } before executing updates. */
   readonly resolveMaintenance: (options?: {
@@ -24,11 +32,6 @@ export interface ManagedServerProvider {
     never,
     Scope.Scope
   >;
-  /**
-   * Sparse: windows merge by id and an
-   * update with no usable window leaves the snapshot untouched.
-   */
-  readonly applyUsageLimits: (
-    update: ProviderUsageLimitsUpdate & { readonly checkedAt: string },
-  ) => Effect.Effect<void>;
+  /** Merge windows by ID and set any authLabel; an update with no window leaves the snapshot untouched. */
+  readonly applyUsageLimits: (update: ProviderUsageLimitsReport) => Effect.Effect<void>;
 }

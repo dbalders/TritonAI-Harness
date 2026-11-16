@@ -7,12 +7,13 @@ import type { NavigationState, PartialState } from "@react-navigation/native";
  * to the NotFound wildcard route on every dev launch.
  */
 export function shouldHandleAppLink(url: string, cloudConfigured = false): boolean {
+  const route = url.split(/[?#]/)[0] ?? "";
   return (
-    (cloudConfigured || !CLOUD_ONLY_LINK_PATH.test(url.split(/[?#]/)[0] ?? "")) &&
-    !url.includes("expo-development-client") &&
-    !url.includes("://expo-sharing") &&
-    !/^t3code(-dev|-preview)?:\/\/\/account\/callback\//.test(url) &&
-    !/^t3code(-dev|-preview)?:\/*$/.test(url)
+    !route.includes("expo-development-client") &&
+    !route.includes("://expo-sharing") &&
+    !/^t3code(-dev|-preview)?:\/\/\/account\/callback\//.test(route) &&
+    !/^t3code(-dev|-preview)?:\/*$/.test(route) &&
+    (cloudConfigured || !CLOUD_ONLY_LINK_PATH.test(route))
   );
 }
 

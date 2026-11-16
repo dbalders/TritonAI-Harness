@@ -37,6 +37,7 @@ const workspaceFiles = [
   "packages/provider-cursor/package.json",
   "packages/provider-fx/package.json",
   "packages/provider-grok/package.json",
+  "packages/provider-kiro/package.json",
   "packages/provider-muse/package.json",
   "packages/provider-opencode/package.json",
   "packages/secret-provider-core/package.json",
@@ -45,6 +46,7 @@ const workspaceFiles = [
   "packages/source-control-azure-devops/package.json",
   "packages/source-control-bitbucket/package.json",
   "packages/source-control-core/package.json",
+  "packages/source-control-cursor-origin/package.json",
   "packages/source-control-definitions/package.json",
   "packages/source-control-forgejo/package.json",
   "packages/source-control-gitcafe/package.json",
@@ -556,7 +558,7 @@ try {
   );
   assertDoesNotMatch(
     releaseWorkflow,
-    /TRITONAI_INSTALLER_COMPOSITION_COMMIT|dbalders\/TritonAI-Installer/u,
+    /TRITONAI_INSTALLER_COMPOSITION_COMMIT|(?:dbalders|UCSD)\/TritonAI-Installer/iu,
     "Harness composition and finalization must not depend on Installer source.",
   );
   assertDoesNotMatch(

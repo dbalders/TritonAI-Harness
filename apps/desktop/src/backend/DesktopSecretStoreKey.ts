@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - protected key verification requires native constant-time byte comparison.
 import * as NodeCrypto from "node:crypto";
 
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/encoding/Base64";
@@ -269,7 +269,7 @@ const persistWrappedKey = Effect.fn("desktop.secretStoreKey.persist")(function* 
   wrappedKeyPath: string,
   material: DesktopSecretStoreKeyMaterial,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
@@ -285,7 +285,7 @@ const persistWrappedKey = Effect.fn("desktop.secretStoreKey.persist")(function* 
         ),
       ),
     );
-  const uuid = yield* crypto.randomUUIDv4();
+  const uuid = yield* crypto.uuidV4();
   const tempPath = `${wrappedKeyPath}.${uuid}.tmp`;
 
   yield* Effect.scoped(
@@ -320,11 +320,7 @@ const persistWrappedKey = Effect.fn("desktop.secretStoreKey.persist")(function* 
       yield* fileSystem.chmod(wrappedKeyPath, 0o600);
       yield* syncDirectory(environment.path.dirname(wrappedKeyPath));
     }),
-  ).pipe(
-    Effect.catch((cause) =>
-      fileSystem.remove(tempPath).pipe(Effect.ignore, Effect.andThen(Effect.fail(cause))),
-    ),
-  );
+  ).pipe(Effect.tapError(() => fileSystem.remove(tempPath).pipe(Effect.ignore)));
 });
 
 const readInitializedMarker = Effect.fn("desktop.secretStoreKey.readInitializedMarker")(function* (
@@ -347,7 +343,7 @@ const readInitializedMarker = Effect.fn("desktop.secretStoreKey.readInitializedM
 
 const persistInitializedMarker = Effect.fn("desktop.secretStoreKey.persistInitializedMarker")(
   function* (initializedPath: string) {
-    const crypto = yield* Crypto.Crypto;
+    const crypto = yield* SecureRandom.SecureRandom;
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const fileSystem = yield* FileSystem.FileSystem;
     const existing = yield* readInitializedMarker(initializedPath);
@@ -358,7 +354,7 @@ const persistInitializedMarker = Effect.fn("desktop.secretStoreKey.persistInitia
       return;
     }
 
-    const uuid = yield* crypto.randomUUIDv4();
+    const uuid = yield* crypto.uuidV4();
     const tempPath = `${initializedPath}.${uuid}.tmp`;
     yield* Effect.scoped(
       Effect.gen(function* () {
@@ -373,11 +369,7 @@ const persistInitializedMarker = Effect.fn("desktop.secretStoreKey.persistInitia
         yield* fileSystem.chmod(initializedPath, 0o600);
         yield* syncDirectory(environment.path.dirname(initializedPath));
       }),
-    ).pipe(
-      Effect.catch((cause) =>
-        fileSystem.remove(tempPath).pipe(Effect.ignore, Effect.andThen(Effect.fail(cause))),
-      ),
-    );
+    ).pipe(Effect.tapError(() => fileSystem.remove(tempPath).pipe(Effect.ignore)));
   },
 );
 
@@ -387,7 +379,7 @@ const migrateLegacyValue = Effect.fn("desktop.secretStoreKey.migrateLegacyValue"
   expectedFingerprint: string,
   material: DesktopSecretStoreKeyMaterial,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const secretPath = environment.path.join(secretsDir, `${name}.bin`);
@@ -433,7 +425,7 @@ const migrateLegacyValue = Effect.fn("desktop.secretStoreKey.migrateLegacyValue"
     try: () => SecretEnvelope.encodeServerSecretEnvelope(name, stored, keys[0]!),
     catch: () => keyError("migration", "A legacy secret could not be encrypted."),
   });
-  const uuid = yield* crypto.randomUUIDv4();
+  const uuid = yield* crypto.uuidV4();
   const tempPath = `${secretPath}.${uuid}.tmp`;
   yield* Effect.scoped(
     Effect.gen(function* () {
@@ -457,11 +449,7 @@ const migrateLegacyValue = Effect.fn("desktop.secretStoreKey.migrateLegacyValue"
       yield* fileSystem.chmod(secretPath, 0o600);
       yield* syncDirectory(secretsDir);
     }),
-  ).pipe(
-    Effect.catch((cause) =>
-      fileSystem.remove(tempPath).pipe(Effect.ignore, Effect.andThen(Effect.fail(cause))),
-    ),
-  );
+  ).pipe(Effect.tapError(() => fileSystem.remove(tempPath).pipe(Effect.ignore)));
 });
 
 const migratePendingLegacySecrets = Effect.fn("desktop.secretStoreKey.migratePending")(function* (
@@ -485,7 +473,7 @@ const migratePendingLegacySecrets = Effect.fn("desktop.secretStoreKey.migratePen
 });
 
 export const resolve = Effect.fn("desktop.secretStoreKey.resolve")(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;

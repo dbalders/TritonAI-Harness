@@ -18,7 +18,12 @@ therefore stays in Full access until you change its mode. Changing the draft's p
 machine applies the current remembered mode or destination default, unless you chose a mode
 specifically for that draft.
 
-## The Modes
+An administrator can cap the modes available on a machine with a
+[managed policy](./managed-policy.md#permission-modes); modes above the cap show who manages them.
+
+Approve or reject requests in the conversation to let the agent continue. Permission modes do
+not prevent the agent from asking questions about the task. Subagent approval requests appear in
+the parent conversation with the subagent's name, so you can respond without switching threads.
 
 **Supervised**: where supported, safe read-only work may proceed without a prompt. Commands that
 need additional permissions, file-changing operations, and write tools pause and wait for approval.
@@ -45,6 +50,12 @@ existing threads are unchanged.
 
 For Grok, **Always allow this session** remembers the matching command or tool input. Other
 actions still ask for approval. It does not change the thread to **Full access**.
+Claude can still ask in **Full access** when its settings disable bypass permissions or require
+approval for an action. Dangerous-removal safety checks in bypass mode reject the command with
+the original warning. Claude can use a safe rewrite when the warning supplies one; otherwise it
+continues without the removal and tells you what it skipped.
+While a Claude approval is pending, type a text reply to decline that request and give feedback
+directly to the agent that asked, including a subagent. Other pending requests stay unanswered.
 
 ## Opening Websites in the Browser
 
@@ -95,3 +106,7 @@ always-approve. The labels above describe the shared boundary; the exact per-pro
 is internal and may change.
 
 Mobile offers the same four modes with the same labels and descriptions.
+Kiro offers only **Supervised** and **Full access**. In **Supervised** Kiro also asks you to
+review a turn's file changes. See [Kiro permissions](./providers-kiro.md#permission-modes).
+
+See the [provider guides](./install.md#providers) for setup and provider-specific limits.

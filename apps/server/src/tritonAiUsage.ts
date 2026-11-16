@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   DEFAULT_TRITONAI_AI_BASE_URL,
   ServerTritonAiUsageError,
@@ -170,13 +171,14 @@ export const fetchTritonAiUsage = Effect.fn("fetchTritonAiUsage")(function* (opt
   readonly fetch?: FetchLike;
   readonly now?: () => string;
 }): Effect.fn.Return<ServerTritonAiUsageSnapshot, ServerTritonAiUsageError> {
+  const hostEnvironment = yield* HostProcess.Environment;
   const env =
     options?.env ??
     ({
-      TRITONAI_API_KEY: process.env[TRITONAI_API_KEY_ENV],
-      TRITONAI_ONPREM_API_KEY: process.env.TRITONAI_ONPREM_API_KEY,
-      TRITONAI_FRONTIER_API_KEY: process.env.TRITONAI_FRONTIER_API_KEY,
-      UCSD_AI_BASE_URL: process.env[UCSD_AI_BASE_URL_ENV],
+      TRITONAI_API_KEY: hostEnvironment[TRITONAI_API_KEY_ENV],
+      TRITONAI_ONPREM_API_KEY: hostEnvironment.TRITONAI_ONPREM_API_KEY,
+      TRITONAI_FRONTIER_API_KEY: hostEnvironment.TRITONAI_FRONTIER_API_KEY,
+      UCSD_AI_BASE_URL: hostEnvironment[UCSD_AI_BASE_URL_ENV],
     } satisfies TritonAiUsageEnv);
   const apiKey = resolveTritonAiServiceApiKey(env);
   if (!apiKey) {

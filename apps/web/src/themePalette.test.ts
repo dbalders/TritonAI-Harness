@@ -73,6 +73,12 @@ describe("theme files", () => {
     expect(resolveThemeAppearance("ucsd-light", true)).toBe("light");
     expect(resolveThemeAppearance("ucsd-dark", false)).toBe("dark");
   });
+  it("gives non-Latin theme names distinct stable ids", () => {
+    const file = { version: THEME_FILE_VERSION, appearance: "dark", colors: { canvas: "#101820" } };
+    const night = parseThemeFile({ ...file, name: "夜" });
+    expect(parseThemeFile({ ...file, name: "朝" }).id).not.toBe(night.id);
+    expect(parseThemeFile({ ...file, name: " 夜 " }).id).toBe(night.id);
+  });
 
   it("keeps built-in and standard search pairs readable and distinct from inline code", () => {
     const toOklab = converter("oklab");

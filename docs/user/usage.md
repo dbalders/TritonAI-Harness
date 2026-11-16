@@ -12,18 +12,34 @@ time, and any budget restriction reported by TritonAI. The key remains on the se
 
 **Usage** totals Codex session history from your connected environments. It shows token use,
 cache savings, model breakdowns, and estimated API-equivalent cost. These estimates are not your
-subscription bill. Totals depend on the history available on each server.
+subscription bill.
 
-On macOS, choose **Enable Cursor usage** on Usage to allow TritonAI Harness to read your existing
-Cursor CLI login from Keychain for **Usage → Limits**. macOS may ask you to allow access on the
-server Mac. To turn it off, open the environment dropdown on **Usage**, choose **Usage sources**,
-and switch off **Cursor account usage** for that environment.
+Totals depend on the history available on each server. Grok turns without a saved completed-turn
+record are missing from the totals.
+Text generation (thread titles, commit messages, PR text, branch names and review guides) is not in
+the totals for Codex or Claude Code 2.0.63 and newer, because those runs save no session history.
 
-Usage includes each configured Codex account's history, including disabled accounts. Custom homes
-follow the account's home setting or its `CODEX_HOME` environment variable. Use absolute paths or
-`~/` paths in the account's environment settings; relative environment paths depend on each
-project's working directory and cannot be reliably discovered by Usage. Accounts sharing a history
-directory count once.
+OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
+databases, including Harness-managed profiles. Set `OPENCODE_DATA_DIR` or `ANTIGRAVITY_DATA_DIR` on the
+server to read a different data directory; comma-separated paths read multiple directories.
+
+Cursor reads account usage from Cursor's API for the account you signed in with in Harness or set as
+`CURSOR_API_KEY`. This includes headless Harness sessions and desktop usage across machines; the same
+account counts once across connected environments. Harness does not estimate missing tokens from
+conversation text.
+
+Usage includes each configured account's history, including disabled accounts. Custom homes follow
+the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME` environment
+variable. Pi reads `~/.pi/agent/sessions`, or the `sessions` directory under
+`PI_CODING_AGENT_DIR`. Set `PI_CODING_AGENT_SESSION_DIR` to read a different session directory.
+To include sessions saved through `--session-dir` or Pi's `sessionDir` setting, set this environment
+variable to the same directory. Pi includes recorded tool and summary costs under `Tools/summaries`.
+Muse Code reads native session history, including child sessions, from the home reported by the
+configured Muse CLI. Its environment settings, including `XDG_DATA_HOME`, apply. Models without
+known prices still contribute tokens and appear as unpriced; set custom prices to estimate their cost.
+Use absolute paths or `~/` paths in the account's environment settings; relative environment paths
+depend on each project's working directory and cannot be reliably discovered by Usage. Accounts
+sharing a history directory count once.
 
 The server saves its first hostname in `<T3 home>/usage-host-id`, so a recreated container keeps
 its usage identity when its data directory is persisted. Set `T3CODE_HOST_ID` to choose the identity
@@ -59,6 +75,30 @@ Each destination reports whether the change saved. Offline or unavailable enviro
 marked **Not saved**. Reconnect them and choose **Retry failed saves** to finish the same change
 without writing again to environments that already saved. Changes are not queued after you close
 the dialog.
+
+## Show only some models
+
+To count only some models, or to leave some out, add `usageModelFilter` to the server's
+`settings.json` in its `userdata` directory, such as `~/.t3/userdata/settings.json`:
+
+```json
+{
+  "usageModelFilter": {
+    "include": [{ "provider": "claude", "model": "orbit-1" }, { "model": "orbit-2" }],
+    "exclude": [{ "model": "drift-9" }]
+  }
+}
+```
+
+`include` keeps only the listed models and `exclude` leaves the listed models out. `provider` is
+one of `claude`, `codex`, `cursor`, `grok`, `opencode`, `antigravity`, `pi`, or `muse`; omit it
+to match a model ID from any provider. Use the model ID that Usage shows without **Map to**, such
+as a provider-prefixed ID for Pi. Filters apply before **Map to**, so a model you leave out is not
+counted under its mapped name. Usage applies each environment's own filter. Remove the setting to
+show every model again.
+
+If the setting is invalid, Usage ignores it and shows every model, and the next save of any other
+setting removes it from `settings.json`.
 
 ## Track subscription limits
 
@@ -103,27 +143,38 @@ context use against the model's limit. A tick on the bar marks where the provide
 automatically, when it reports that point.
 
 OpenCode Go reports its session, weekly, and monthly allowance when OpenCode runs locally in
-the environment. TritonAI Harness cannot report limits for external OpenCode servers because their credentials
-belong to the remote server. Cursor reports
-its monthly allowance, including separate Auto and API usage, using the CLI login or
-`CURSOR_AUTH_TOKEN`. On macOS, this includes the default Keychain login after you enable Cursor
-usage. Keychain login is used for limits only with Cursor's default API endpoint. If you configure
-a custom Cursor endpoint, use an explicit token or file-based CLI login for limits.
+the environment. Harness cannot report limits for external OpenCode servers because their credentials
+belong to the remote server. Limits need an OpenCode Go API key, or an OpenCode Console connected
+in OpenCode with an API key. A Console browser sign-in alone does not report them. You can also add
+your Go API key as `OPENCODE_API_KEY` in the OpenCode instance's **Environment variables**, then
+refresh provider status. Cursor reports
+its monthly allowance, including separate Auto and API usage, for `CURSOR_AUTH_TOKEN` when it is set,
+otherwise for the account you signed in with in Harness or set as `CURSOR_API_KEY`.
+Sign-in and API keys report limits only with Cursor's default API endpoint. If you configure a custom
+Cursor endpoint, use an explicit `CURSOR_AUTH_TOKEN` for limits.
 
 Grok reports the remaining subscription allowance and reset time for its current billing period
 after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
 or endpoint configurations do not report subscription limits.
+
+Muse Code reports its session and weekly windows and its tier once the Muse CLI has run in a thread.
+Until then it shows no limits. Readings are not kept across a server restart.
 
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
 
 ## Connect a CLIProxyAPI hub
 
-Open the environment dropdown on **Usage**, then choose **Usage sources**. Add a hub under the
-environment that will connect to it, using its URL and management key. Accounts appear under
-**Usage → Limits**. This supplies usage information; configure the provider separately to send
-agent requests through the hub. Remove a hub from **Usage sources** when it is no longer needed.
-Removing it also deletes its stored management key from that environment.
+To see pooled accounts, open the environment dropdown on **Usage**, choose **Usage sources**, then **Add hub**. Choose the
+environment that will connect to the hub and enter its URL and management key.
+
+The hub's Codex, Claude, xAI (shown as Grok) and Antigravity accounts appear under **Usage → Limits**;
+accounts for other providers are not read. Codex accounts show banked reset credits; select an
+account and choose **Use reset** to redeem one. No hub plugin is required.
+
+This connection supplies usage information; configure
+the provider separately to send agent requests through the hub. Remove the hub from the same
+settings section when you no longer need it.
 
 ## Subscription usage widget
 

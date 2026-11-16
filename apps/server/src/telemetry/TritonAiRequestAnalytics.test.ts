@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -9,7 +10,7 @@ import * as ServerConfig from "../config.ts";
 import { makeTritonAiClientHeaders } from "../tritonAiClientHeaders.ts";
 import * as TritonAiRequestAnalytics from "./TritonAiRequestAnalytics.ts";
 
-it.layer(NodeServices.layer)("TritonAiRequestAnalytics", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("TritonAiRequestAnalytics", (it) => {
   it.effect.each([false, "invalid"])(
     "omits analytics and does not create an ID when telemetry is %s",
     (value) =>

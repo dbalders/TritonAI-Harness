@@ -37,8 +37,9 @@ vp run mobile:install <ios|android> <device-id>
 
 This installs the dev client for the checkout's native fingerprint: from the
 device, the local cache, or the shared cache in seconds, building once only
-when no machine has that fingerprint yet (5-15 minutes, logged to the file it
-names). The device id may be omitted when exactly one device is booted. It
+when no machine has that fingerprint yet: in the `Mobile Dev Client` workflow
+on Blacksmith when HEAD is pushed and `gh` may dispatch it (the command waits),
+otherwise here (5-15 minutes, logged to the file it names). The device id may be omitted when exactly one device is booted. It
 prints one JSON line; on failure it names the next command. Mobile verification
 includes that step unless the user prohibits it.
 
@@ -81,8 +82,9 @@ on Android. For a remote backend, use its reachable origin.
 An Electron-hosted backend can return `SecretStoreKeyError` from this CLI because
 Electron supplies its protected encryption key at startup. Create the disposable
 link through desktop Settings → Sharing & access → Create link, with the
-scopes needed for the test. After creating it, expand Authorized clients, then
-choose Share on that disposable link to reveal its URL and QR code. Keep the credential out of tool output. For an iOS
+scopes needed for the test. After creating it, expand Authorized clients. The new
+link's share panel starts open; choose Share only if that panel is closed to
+reveal its URL and QR code. Keep the credential out of tool output. For an iOS
 Simulator, convert a desktop `t3code-dev://app/pair#…` link to
 `http://127.0.0.1:<backend-port>/pair#…`, preserving its fragment, then pass that
 URL as the encoded `pairingUrl` on `t3code-dev://connections/new?autoConnect=1`.

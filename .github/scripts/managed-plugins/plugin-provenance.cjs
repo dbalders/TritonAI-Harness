@@ -2,20 +2,31 @@
 const path = require("path");
 const CANONICAL_PLUGIN_REPOSITORY = "dbalders/TritonAI-Plugins";
 const CANONICAL_PLUGIN_REPOSITORY_URL = "https://github.com/dbalders/TritonAI-Plugins.git";
+// The Plugins repository is moving from dbalders to the UCSD organization. Accept both
+// owners so compositions verify on either side of the transfer.
+const ACCEPTED_PLUGIN_REPOSITORY_OWNERS = ["dbalders", "UCSD"];
+const ACCEPTED_PLUGIN_REPOSITORY_URLS = Object.freeze(
+  ACCEPTED_PLUGIN_REPOSITORY_OWNERS.map(
+    (owner) => `https://github.com/${owner}/TritonAI-Plugins.git`,
+  ),
+);
 function assertCanonicalPluginRepository(repository, label = "TritonAI plugin source") {
   const parsed = parseGitHubRepository(repository);
-  const canonical =
+  const owner =
     parsed &&
     parsed.host === "github.com" &&
-    parsed.owner.toLowerCase() === "dbalders" &&
-    parsed.repository.toLowerCase() === "tritonai-plugins";
-  if (!canonical) {
+    parsed.repository.toLowerCase() === "tritonai-plugins" &&
+    ACCEPTED_PLUGIN_REPOSITORY_OWNERS.find(
+      (candidate) => candidate.toLowerCase() === parsed.owner.toLowerCase(),
+    );
+  if (!owner) {
     throw new Error(
-      `${label} must identify github.com/${CANONICAL_PLUGIN_REPOSITORY}; ` +
+      `${label} must identify github.com/${CANONICAL_PLUGIN_REPOSITORY} or ` +
+        `github.com/UCSD/TritonAI-Plugins; ` +
         `${sanitizeRepositoryUrl(repository)} is not accepted as managed plugin provenance.`,
     );
   }
-  return CANONICAL_PLUGIN_REPOSITORY;
+  return `${owner}/TritonAI-Plugins`;
 }
 function parseGitHubRepository(value) {
   const raw = String(value || "").trim();
@@ -63,6 +74,7 @@ function isLocalRepository(value) {
   return path.isAbsolute(value) || path.win32.isAbsolute(value) || /^file:/i.test(value);
 }
 module.exports = {
+  ACCEPTED_PLUGIN_REPOSITORY_URLS,
   CANONICAL_PLUGIN_REPOSITORY,
   CANONICAL_PLUGIN_REPOSITORY_URL,
   assertCanonicalPluginRepository,

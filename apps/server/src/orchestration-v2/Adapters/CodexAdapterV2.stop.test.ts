@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -23,7 +24,7 @@ import {
   CodexAppServerTransportError,
 } from "effect-codex-app-server/errors";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -217,7 +218,7 @@ it.live.each([
           settings: defaultCodexSettings,
           environment: {},
           clientFactory: { open: () => Effect.succeed(client) },
-          crypto: yield* Crypto.Crypto,
+          digest: yield* Digest.Digest,
           fileSystem: fs,
           idAllocator: yield* IdAllocator.IdAllocatorV2,
           serverConfig: yield* makeReplayServerConfig("stop-process"),
@@ -278,7 +279,11 @@ it.live.each([
               branch: null,
               worktreePath: cwd,
               activeProviderThreadId: providerThread.id,
-              lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+              lineage: {
+                parentThreadId: null,
+                relationshipToParent: null,
+                rootThreadId: threadId,
+              },
               forkedFrom: null,
               createdAt: now,
               updatedAt: now,
@@ -490,7 +495,12 @@ it.live.each([
       }),
     ).pipe(
       Effect.provide(
-        Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+        Layer.mergeAll(
+          NodeServices.layer,
+          NodeCrypto.layer,
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+        ),
       ),
     ),
 );

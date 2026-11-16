@@ -12,7 +12,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { formatThreadLink } from "@t3tools/shared/threadLinks";
+import { formatThreadLink, hostedThreadLink } from "@t3tools/shared/threadLinks";
 
 const ALL_MCP_CAPABILITIES = [
   "integrations.invoke",
@@ -30,6 +30,8 @@ export interface McpThreadCaller {
   readonly providerInstanceId: ProviderInstanceId;
   /** A delegated child task; its parent owns the work it hands back. */
   readonly subagent?: boolean;
+  /** This provider invokes plugins through its native dynamic-tool approval path. */
+  readonly integrationToolsViaDynamicTools?: boolean;
 }
 
 export interface McpClientCaller {
@@ -46,7 +48,8 @@ export interface McpClientCaller {
    * another environment passing on the limits of the agent it calls for.
    */
   readonly narrowedTo?: ClientModes | undefined;
-  /** The origin an outside client reached; its thread links open the web app there. */
+  /** An outside client's thread links go through this hosted app, as Copy thread's do. */
+  readonly hostedAppUrl?: string | undefined;
   readonly webOrigin?: string | undefined;
 }
 
@@ -97,6 +100,31 @@ export const clientModeCeiling = (client: McpClientCaller | undefined): ClientMo
   };
 };
 
+/**
+ * A client approved above an administrator's runtime-mode ceiling acts as if it had narrowed
+ * itself to the ceiling, so what it starts and schedules is not refused for a mode it never chose.
+ */
+export const withRuntimeModeCeiling = (
+  scope: McpInvocationScope,
+  ceiling: RuntimeMode | undefined,
+): McpInvocationScope => {
+  if (ceiling === undefined || scope.client === undefined) return scope;
+  const asked = scope.client.narrowedTo;
+  return {
+    ...scope,
+    client: {
+      ...scope.client,
+      narrowedTo: {
+        runtimeMode:
+          asked !== undefined && runtimeModeRank[asked.runtimeMode] < runtimeModeRank[ceiling]
+            ? asked.runtimeMode
+            : ceiling,
+        interactionMode: asked?.interactionMode ?? "default",
+      },
+    },
+  };
+};
+
 /** Thread callers default to their own thread; client callers need thread for tools that act as the caller. */
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;
@@ -112,16 +140,24 @@ export interface McpInvocationScope {
 
 /**
  * T3 Code renders `t3-thread://` links as thread chips. Other MCP clients cannot open them, so
- * they get a web URL on the origin they reached instead.
+ * they get a browser link on the paired origin, or the explicitly configured hosted app.
+ * A known `title` labels the chip for clients that cannot load this environment's threads.
  */
 export const threadLinkFor = (
   scope: Pick<McpInvocationScope, "environmentId" | "client">,
   threadId: ThreadId,
+  title?: string,
 ): string => {
-  const origin = scope.client?.webOrigin;
-  return origin === undefined
-    ? formatThreadLink({ environmentId: scope.environmentId, threadId })
-    : `${origin}/${encodeURIComponent(scope.environmentId)}/${encodeURIComponent(threadId)}`;
+  const ref = { environmentId: scope.environmentId, threadId };
+  if (scope.client?.hostedAppUrl !== undefined)
+    return hostedThreadLink(ref, scope.client.hostedAppUrl);
+  if (scope.client?.webOrigin !== undefined) {
+    return new URL(
+      `/${encodeURIComponent(ref.environmentId)}/${encodeURIComponent(threadId)}`,
+      scope.client.webOrigin,
+    ).toString();
+  }
+  return formatThreadLink(ref, title);
 };
 
 export class McpInvocationContext extends Context.Service<

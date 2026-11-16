@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
@@ -130,7 +131,7 @@ const PermissionDeniedFileSystemLayer = Layer.effect(
         ),
     } satisfies FileSystem.FileSystem;
   }),
-).pipe(Layer.provide(NodeServices.layer));
+).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const RenameFailureFileSystemLayer = Layer.effect(
   FileSystem.FileSystem,
@@ -150,7 +151,7 @@ const RenameFailureFileSystemLayer = Layer.effect(
         ),
     } satisfies FileSystem.FileSystem;
   }),
-).pipe(Layer.provide(NodeServices.layer));
+).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const FailureAfterPublishFileSystemLayer = Layer.effect(
   FileSystem.FileSystem,
@@ -174,9 +175,9 @@ const FailureAfterPublishFileSystemLayer = Layer.effect(
         ),
     } satisfies FileSystem.FileSystem;
   }),
-).pipe(Layer.provide(NodeServices.layer));
+).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
-it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerSecretStore.layer", (it) => {
   it.effect("reuses an existing secret instead of regenerating it", () =>
     Effect.gen(function* () {
       const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -254,7 +255,7 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
             },
           } satisfies FileSystem.FileSystem;
         }),
-      ).pipe(Layer.provide(NodeServices.layer));
+      ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
       const initializeStore = () =>
         Effect.service(ServerSecretStore.ServerSecretStore).pipe(
           Effect.provide(
@@ -668,7 +669,7 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
             },
           } satisfies FileSystem.FileSystem;
         }),
-      ).pipe(Layer.provide(NodeServices.layer));
+      ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
       const initializeStore = (fileSystemLayer?: Layer.Layer<FileSystem.FileSystem>) =>
         Effect.service(ServerSecretStore.ServerSecretStore).pipe(
           Effect.provide(
@@ -862,7 +863,9 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
   it.effect("lazily rotates an envelope through configured fallback keys", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-key-rotation-" });
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-key-rotation-",
+      });
       const value = new TextEncoder().encode("rotating-secret");
 
       yield* Effect.gen(function* () {

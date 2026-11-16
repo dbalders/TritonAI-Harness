@@ -28,6 +28,16 @@ The upstream server self-update contracts remain in source for compatibility, bu
 servers do not advertise automatic replacement and clients do not render or copy public-package
 update commands. See [Server Update Architecture](../architecture/server-updates.md).
 
+## Upstream workflow boundary
+
+Harness keeps its controlled `release.yml` build and signing jobs. The upstream
+`release-desktop.yml` reusable workflow is excluded; no Harness workflow calls it. CI carries upstream's seeded desktop launch check
+on the GitHub-hosted Linux runner and requires the server transfer measurements.
+Upstream npm publishing, T3-hosted web deployments, relay configuration, native-client
+cache builds, mobile previews, and PR vouch automation are not Harness release gates.
+The macOS PR preview remains same-repository-only and uses a read-only build job,
+with artifact-only publication in a separate job that never executes PR code.
+
 ## Workflow contract
 
 Run `vp run gitlinks:check` after updating vendored reference repositories. Every tracked
@@ -360,6 +370,33 @@ executing provider code. The final proof manifest is a required release asset. B
 composition is embedded in each Harness artifact, users who update Harness directly receive the
 same managed plugins without running TritonAI Installer.
 
+## Moving the repositories to the UCSD organization
+
+Harness, Installer, Plugins, and both skills repositories are moving from `dbalders` to the
+[UCSD organization](https://github.com/UCSD) using GitHub's repository transfer. Release code
+accepts both owners during the move:
+
+- Workflows use `GITHUB_REPOSITORY`, so stable and nightly publishing continue from the
+  transferred repository. The nightly publish guard accepts `dbalders/TritonAI-Harness` and
+  `UCSD/TritonAI-Harness` only.
+- The desktop Installer update check follows GitHub's API redirect and accepts Installer assets
+  published under either owner.
+- TritonAI Commons resolves which owner currently hosts `UCSD-Skills-Library`, because the GitHub
+  plugin refuses redirects. It never treats a fork as the upstream, and it never forks into a
+  current or former owner account.
+- Managed plugin provenance accepts either Plugins owner. New compositions still record
+  `https://github.com/dbalders/TritonAI-Plugins.git`; keep that until no supported Installer
+  rejects the UCSD URL.
+
+`UCSD/UCSD-Skills-Library` already exists as an older fork of the skills repository. GitHub
+refuses a transfer when the target already has a repository with that name or a fork in the same
+network, so delete that fork (after confirming its changes are upstream) before transferring
+`UCSD-Skills-Library`.
+
+Never create a repository or fork with an old name under `dbalders` after a transfer. That
+replaces GitHub's redirect, which released builds still depend on for desktop updates and public
+skills.
+
 ## Windows signing
 
 ### Stable and nightly GitHub OIDC setup
@@ -368,7 +405,10 @@ Both stable and nightly Windows jobs use the `windows-signing` GitHub environmen
 Create an Entra app registration and service principal dedicated to Harness releases, then add
 an OIDC federated credential with issuer `https://token.actions.githubusercontent.com`, audience
 `api://AzureADTokenExchange`, and subject
-`repo:dbalders/TritonAI-Harness:environment:windows-signing`.
+`repo:dbalders/TritonAI-Harness:environment:windows-signing`. Before the repository moves to
+the UCSD organization, add a second credential with subject
+`repo:UCSD/TritonAI-Harness:environment:windows-signing`; GitHub issues the new subject as soon as
+the transfer completes. Remove the old credential after the first signed UCSD build.
 Assign that service principal **Artifact Signing Certificate Profile Signer** at this resource:
 
 ```text

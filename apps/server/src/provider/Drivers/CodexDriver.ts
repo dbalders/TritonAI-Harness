@@ -5,7 +5,9 @@
  * @module provider/Drivers/CodexDriver
  */
 import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import type * as Signature from "effect/crypto/Signature";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -92,6 +94,7 @@ function makeCodexMaintenanceResolver(sharedHomePath: string) {
   const fallback = makePackageManagedProviderMaintenanceResolver({
     provider: DRIVER_KIND,
     npmPackageName: "@openai/codex",
+    mise: { tool: "codex" },
     nativeUpdate: {
       args: ["update"],
       isCommandPath: (commandPath) => codexStandaloneHome(commandPath) !== null,
@@ -123,7 +126,9 @@ export type CodexDriverEnv =
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
   | ResetCreditCoordinator.ResetCreditCoordinator
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
+  | Signature.Signature
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions
@@ -185,7 +190,13 @@ export const CodexDriver: ProviderDriver<
       hostPlatform,
       String(instanceId),
     );
+    const isManagedGateway =
+      ["codex", "codex_frontier"].includes(String(instanceId)) &&
+      environment?.some((variable) => variable.name.toUpperCase() === "TRITONAI_API_KEY_SOURCE") ===
+        true;
     const configuredHomePath = config.homePath.trim();
+    const environmentHome =
+      !isManagedGateway && !config.shadowHomePath.trim() ? processEnv.CODEX_HOME : undefined;
     const binaryPath = enabled
       ? yield* resolveManagedCodexBinary({
           binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
@@ -209,13 +220,11 @@ export const CodexDriver: ProviderDriver<
       ...config,
       binaryPath,
       homePath:
-        configuredHomePath.length > 0 ? config.homePath : path.join(serverConfig.baseDir, "codex"),
+        configuredHomePath.length > 0
+          ? config.homePath
+          : environmentHome || path.join(serverConfig.baseDir, "codex"),
     } satisfies CodexSettings;
     const homeLayout = yield* resolveCodexHomeLayout(managedConfig);
-    const isManagedGateway =
-      ["codex", "codex_frontier"].includes(String(instanceId)) &&
-      environment?.some((variable) => variable.name.toUpperCase() === "TRITONAI_API_KEY_SOURCE") ===
-        true;
     // Managed gateways share runtime files, but their models cannot consume
     // each other's native history. Route changes must use a portable handoff.
     const continuationIdentity = {

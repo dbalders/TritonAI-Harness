@@ -73,7 +73,6 @@ export function UsageSourcesDialog({
                     environmentId={environment.environmentId}
                     environmentLabel={environment.label}
                     sources={environment.settings.usageLimitSources}
-                    cursorKeychainUsageEnabled={environment.settings.cursorKeychainUsageEnabled}
                     readOnly={environment.readOnly}
                   />
                 </div>

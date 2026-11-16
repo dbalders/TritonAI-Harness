@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -135,7 +136,7 @@ describe("TritonAI credential IPC", () => {
       assert.notProperty(result, "sharedApiKey");
       assert.notProperty(result, "onPremApiKey");
       assert.notProperty(result, "frontierApiKey");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("persists a shared replacement before restarting only the backend", () =>
@@ -189,7 +190,7 @@ describe("TritonAI credential IPC", () => {
       );
       assert.deepEqual(Option.getOrUndefined(stored), { sharedApiKey: "replacement-key" });
       assert.deepEqual(backendLifecycle, ["stop", "start", "ready"]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   // regression: #210 fix(desktop): wait for key-change reconnects and show saved key suffixes
@@ -244,7 +245,7 @@ describe("TritonAI credential IPC", () => {
           frontierKeyLastFour: "-key",
         },
       });
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("keeps the other configured route when a new key covers only one route", () =>
@@ -275,7 +276,7 @@ describe("TritonAI credential IPC", () => {
         onPremApiKey: "existing-shared-key",
         frontierApiKey: "new-frontier-key",
       });
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   // regression: #154 fix(settings): route TritonAI keys per connection
@@ -348,7 +349,7 @@ describe("TritonAI credential IPC", () => {
         onPremKeyLastFour: "3333",
         frontierKeyLastFour: "2222",
       });
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   // regression: #154 fix(settings): route TritonAI keys per connection
@@ -380,7 +381,7 @@ describe("TritonAI credential IPC", () => {
         status: "error",
         message: "This key is active, but it does not include access to on-prem models.",
       });
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   // regression: #154 fix(settings): route TritonAI keys per connection
@@ -425,7 +426,7 @@ describe("TritonAI credential IPC", () => {
       assert.deepEqual(Option.getOrUndefined(stored), {
         frontierApiKey: "existing-shared-key",
       });
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("keeps current credentials when TritonAI rejects a replacement", () =>
@@ -463,6 +464,6 @@ describe("TritonAI credential IPC", () => {
         Effect.provide(environmentLayer),
       );
       assert.deepEqual(Option.getOrUndefined(stored), { sharedApiKey: "current-key" });
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

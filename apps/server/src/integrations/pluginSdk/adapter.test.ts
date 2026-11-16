@@ -863,6 +863,36 @@ export function createIntegrationProvider() {
     expect(unclear).toMatchObject({ _tag: "IntegrationProviderPublicError", unchanged: false });
   });
 
+  it("bounds a long plugin failure message instead of dropping it", async () => {
+    const source = `
+export function createIntegrationProvider() {
+  return {
+    id: "${id}",
+    async status() { return { state: "connected", accountLabel: null, grantedCapabilities: ["fixture.read"], message: null }; },
+    async invoke() {
+      throw { _tag: "ExternalCommitOutcomeUnknown", code: "external_commit_outcome_unknown", message: "The outcome is unknown. " + "x".repeat(2000), retryable: false };
+    }
+  };
+}
+`;
+    const loaded = await loadPluginSdkIntegration({
+      files: artifact(source),
+      secrets: secretStore(),
+      configuration: { prefix: "fixture" },
+      expected: { id, version: "1.0.0" },
+      hostNodeVersion: "24.13.1",
+    });
+    const provider = loaded.provider;
+    if (!provider) throw new Error("Expected an admitted provider.");
+    const failure = await provider
+      .invoke("fixture.records.list", {})
+      .catch((error: unknown) => error);
+    expect(failure).toMatchObject({ _tag: "IntegrationProviderPublicError", unchanged: false });
+    const message = (failure as Error).message;
+    expect(message.startsWith("The outcome is unknown. xxx")).toBe(true);
+    expect(message.length).toBeLessThanOrEqual(1_024);
+  });
+
   it("isolates module state by the complete admitted artifact", async () => {
     const statefulSource = `
 let instanceCount = 0;

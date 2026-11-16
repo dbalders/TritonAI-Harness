@@ -28,7 +28,6 @@ type EarlyLinuxElectronOptionsInput = EarlyDesktopSettingsInput;
 
 export interface EarlyLinuxElectronOptions {
   readonly isDevelopment: boolean;
-  readonly linuxWmClass: string;
   readonly linuxDesktopEntryName: string;
   readonly passwordStore: LinuxPasswordStoreSwitch | null;
 }
@@ -151,9 +150,6 @@ export function resolveEarlyLinuxElectronOptions(
   const isDevelopment = isDevelopmentEnvironment(input.env);
   return {
     isDevelopment,
-    linuxWmClass: isDevelopmentEnvironment(input.env)
-      ? "tritonai-harness-dev"
-      : resolveTritonAiDesktopIdentity(input.appVersion).packageName,
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment, input.appVersion),
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,

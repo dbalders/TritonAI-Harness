@@ -21,7 +21,6 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SendIcon,
-  SparklesIcon,
   Trash2Icon,
   UsersIcon,
 } from "lucide-react";
@@ -832,7 +831,7 @@ export function SkillsSettingsPanel() {
       {catalog !== null || catalogLoading || managedOnlyRows.length > 0 ? (
         <CatalogSkillSection
           title="AI Team"
-          icon={<SparklesIcon className="size-3.5" />}
+          icon={<UsersIcon className="size-3.5" />}
           items={aiTeamItems}
           managedRows={managedOnlyRows}
           emptyTitle={catalogLoading ? "Loading AI Team skills" : "No AI Team skills"}

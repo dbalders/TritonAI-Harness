@@ -191,13 +191,13 @@ function notarize(file, label, notary, exec) {
   return receipt;
 }
 
-async function stapleAccepted(file, receipt, label, exec, wait = sleep) {
+async function runAcceptedStapler(action, file, receipt, label, exec, wait = sleep) {
   if (receipt?.status !== "Accepted")
-    throw new Error("Stapling requires an Accepted notarization receipt.");
+    throw new Error("Stapler requires an Accepted notarization receipt.");
   const delays = [10000, 30000, 60000];
   for (let attempt = 0; ; attempt++) {
     try {
-      const result = exec("xcrun", ["stapler", "staple", file], {
+      const result = exec("xcrun", ["stapler", action, file], {
         capture: true,
         timeout: 60000,
         killSignal: "SIGKILL",
@@ -226,6 +226,14 @@ async function stapleAccepted(file, receipt, label, exec, wait = sleep) {
       await wait(delays[attempt]);
     }
   }
+}
+
+function stapleAccepted(file, receipt, label, exec, wait) {
+  return runAcceptedStapler("staple", file, receipt, label, exec, wait);
+}
+
+function validateAccepted(file, receipt, label, exec, wait) {
+  return runAcceptedStapler("validate", file, receipt, label, exec, wait);
 }
 
 async function fileInfo(file) {
@@ -932,7 +940,7 @@ async function finalizeMacRelease({
     { mode: 0o600 },
   );
   await stapleAccepted(signedApp, appReceipt, "Staple accepted signed app", exec, wait);
-  exec("xcrun", ["stapler", "validate", signedApp], { label: "Validate stapled app notarization" });
+  await validateAccepted(signedApp, appReceipt, "Validate stapled app notarization", exec, wait);
   verifySignedApp(signedApp, identity, exec);
   // Electron Builder's ZIP predates the staple; rebuild it (and its blockmap) from the stapled app.
   fs.rmSync(zip, { force: true });
@@ -965,7 +973,7 @@ async function finalizeMacRelease({
     { mode: 0o600 },
   );
   await stapleAccepted(dmg, receipt, "Staple accepted candidate DMG", exec, wait);
-  exec("xcrun", ["stapler", "validate", dmg], { label: "Validate stapled notarization" });
+  await validateAccepted(dmg, receipt, "Validate stapled notarization", exec, wait);
   exec(
     "spctl",
     ["--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=4", dmg],
@@ -978,9 +986,7 @@ async function finalizeMacRelease({
     exec,
     async (app) => {
       verifySignedApp(app, identity, exec);
-      exec("xcrun", ["stapler", "validate", app], {
-        label: "Validate stapled app inside final DMG",
-      });
+      await validateAccepted(app, appReceipt, "Validate stapled app inside final DMG", exec, wait);
       verifyPluginPayload(app, composition, tools.asar, version, tools.parseImports);
       return verifyBoot({
         appPath: app,
@@ -1000,9 +1006,13 @@ async function finalizeMacRelease({
     });
     const zipApp = path.join(zipScratch, `${productName}.app`);
     verifySignedApp(zipApp, identity, exec);
-    exec("xcrun", ["stapler", "validate", zipApp], {
-      label: "Validate stapled app inside final updater ZIP",
-    });
+    await validateAccepted(
+      zipApp,
+      appReceipt,
+      "Validate stapled app inside final updater ZIP",
+      exec,
+      wait,
+    );
     verifyPluginPayload(zipApp, composition, tools.asar, version, tools.parseImports);
     const [zipAsar, signedAsar] = await Promise.all(
       [zipApp, signedApp].map((app) =>
@@ -1081,6 +1091,7 @@ module.exports = {
   verifyPackagedBoot,
   finalizeMacRelease,
   stapleAccepted,
+  validateAccepted,
 };
 
 if (require.main === module) {

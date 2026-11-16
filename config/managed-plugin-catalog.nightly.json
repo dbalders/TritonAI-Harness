@@ -3,8 +3,8 @@
   "kind": "tritonai-managed-plugin-catalog",
   "source": {
     "repository": "https://github.com/dbalders/TritonAI-Plugins.git",
-    "ref": "refs/tags/v0.1.18",
-    "commit": "e4fdc81be6b14c1d55292252c5c6ea382555578a"
+    "ref": "9e5b19cbf350fe3f221577d2c621be81d4176177",
+    "commit": "9e5b19cbf350fe3f221577d2c621be81d4176177"
   },
   "packages": [
     {
@@ -51,9 +51,9 @@
     },
     {
       "pluginId": "tableau",
-      "version": "1.1.0",
-      "digest": "99b627d5a10f9c7fea9bfaaebf435fa50236bad037411f721190efc8e42141c5",
-      "manifestDigest": "9447a651f9dee86010b4dae5857fb0f8ddc3388c48b2cb3f55959d6b720b59cf"
+      "version": "1.2.0",
+      "digest": "1b51eec87f0dc0da69f264b8e3a68fb9220ce02de8067933e4dbea22ce1e77b3",
+      "manifestDigest": "018f69e79685f2e6028359610bb80e1a45a6b7976b2fd6ec10c1ddc83ac501d6"
     },
     {
       "pluginId": "ucsd-assistant",

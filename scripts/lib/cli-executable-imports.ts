@@ -12,7 +12,9 @@ export function findEsmImportsOfExternalPackages(source: string): ReadonlyArray<
     false,
     ts.ScriptKind.JS,
   );
-  const visit = (node: ts.Node): void => {
+  const pending: ts.Node[] = [module];
+  while (pending.length > 0) {
+    const node = pending.pop()!;
     const dynamic =
       ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword;
     const specifierNode =
@@ -30,8 +32,9 @@ export function findEsmImportsOfExternalPackages(source: string): ReadonlyArray<
         specifiers.add(specifier);
       }
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(module);
+    ts.forEachChild(node, (child) => {
+      pending.push(child);
+    });
+  }
   return [...specifiers].sort();
 }

@@ -96,6 +96,12 @@ import UpstreamMigration0074 from "./Migrations/074_ExcludeAttachmentPlaceholder
 import UpstreamMigration0075 from "./Migrations/075_SubagentDeliveryState.ts";
 import UpstreamMigration0076 from "./Migrations/076_ProjectionProjectsPinArchive.ts";
 
+import UpstreamMigration0077 from "./Migrations/077_RepairBooleanSettledOverride.ts";
+import UpstreamMigration0078 from "./Migrations/078_DropOrchestrationEventCorrelationIndex.ts";
+import UpstreamMigration0079 from "./Migrations/079_DelegatedRecoveryIndexes.ts";
+import UpstreamMigration0080 from "./Migrations/080_ScheduledTaskThreadMode.ts";
+import UpstreamMigration0081 from "./Migrations/081_ProjectionMessageSearchText.ts";
+
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
@@ -189,6 +195,11 @@ export const migrationEntries = [
   [84, "ExcludeAttachmentPlaceholdersFromSearch", UpstreamMigration0074],
   [85, "SubagentDeliveryState", UpstreamMigration0075],
   [86, "ProjectionProjectsPinArchive", UpstreamMigration0076],
+  [87, "RepairBooleanSettledOverride", UpstreamMigration0077],
+  [88, "DropOrchestrationEventCorrelationIndex", UpstreamMigration0078],
+  [89, "DelegatedRecoveryIndexes", UpstreamMigration0079],
+  [90, "ScheduledTaskThreadMode", UpstreamMigration0080],
+  [91, "ProjectionMessageSearchText", UpstreamMigration0081],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
