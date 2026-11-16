@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -34,7 +35,13 @@ const spawnError = (reason: "NotFound" | "PermissionDenied", module = "ChildProc
   });
 
 const withProcess = (run: VcsProcess.VcsProcess["Service"]["run"]) =>
-  Effect.provide(Layer.mergeAll(NodeServices.layer, Layer.succeed(VcsProcess.VcsProcess, { run })));
+  Effect.provide(
+    Layer.mergeAll(
+      NodeServices.layer,
+      NodeCrypto.layer,
+      Layer.succeed(VcsProcess.VcsProcess, { run }),
+    ),
+  );
 
 describe("optional Git detection", () => {
   // regression: #327 fix(server): skip repository probes when Git is unavailable

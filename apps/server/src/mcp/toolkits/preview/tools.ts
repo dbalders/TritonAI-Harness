@@ -1,4 +1,5 @@
 import {
+  BrowserNavigationTarget,
   OrchestratorMcpFailure,
   ToolActivityIcon,
   PreviewAutomationActInput,
@@ -70,11 +71,17 @@ const PreviewStatusTool = Tool.make("preview_status", {
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true);
 
+// `url` already covers websites, so open only adds the dev-server target.
+const EnvironmentPortTarget = BrowserNavigationTarget.members[1];
+
 const PreviewOpenTool = browserTool(
   Tool.make("preview_open", {
     description:
-      "Open a preview tab in this thread and show it. `open=false` keeps it in the background. Reuses your current tab unless `tabId` or `reuseExistingTab=false` says otherwise. Parallel subagents in one session must each use `reuseExistingTab=false`, then their own returned `tabId`.",
-    parameters: PreviewAutomationOpenInput,
+      "Open a preview tab in this thread and show it. For a dev server, pass `target` instead of `url`. `open=false` keeps it in the background. Reuses your current tab unless `tabId` or `reuseExistingTab=false` says otherwise. Parallel subagents in one session must each use `reuseExistingTab=false`, then their own returned `tabId`.",
+    parameters: PreviewAutomationOpenInput.mapFields(
+      (fields) => ({ ...fields, target: Schema.optional(EnvironmentPortTarget) }),
+      { unsafePreserveChecks: true },
+    ),
     success: PreviewNavigationStatus,
     failure: PreviewToolFailure,
     dependencies,
@@ -183,7 +190,7 @@ export const PreviewEvaluateResult = Schema.Struct({
 const PreviewEvaluateTool = browserTool(
   Tool.make("preview_evaluate", {
     description:
-      "Run JavaScript in the page. It can change page state. Returns `{value}`, up to 64 KB. Needs your tab, or an unclaimed one. To read a tab the user drives, use `preview_snapshot`. Page tools reached here: read data only, never create, save, or display. Show results with `html_render`.",
+      "Run JavaScript in the page. It can change page state. Returns `{value}`, up to 64 KB. Needs your tab, or an unclaimed one. To read a tab the user drives, use `preview_snapshot`. Page tools write only on user request. Show results with `html_render`, never page tools.",
     parameters: PreviewAutomationEvaluateInput,
     success: PreviewEvaluateResult,
     failure: PreviewToolFailure,
@@ -206,7 +213,10 @@ const PreviewRecordingStartTool = safeBrowserTool(
   Tool.make("preview_recording_start", {
     description: "Start recording the chosen tab.",
     parameters: PreviewAutomationTabTargetInput,
-    success: Schema.Struct({ ...PreviewAutomationRecordingStatus.fields, ...presentationFields }),
+    success: Schema.Struct({
+      ...PreviewAutomationRecordingStatus.fields,
+      ...presentationFields,
+    }),
     failure: PreviewToolFailure,
     dependencies,
   }).annotate(Tool.Title, "Start browser recording"),
@@ -217,7 +227,10 @@ const PreviewRecordingStopTool = safeBrowserTool(
     description:
       "Stop recording the chosen tab. Returns a local path to the recording file (max 50 MiB).",
     parameters: PreviewAutomationTabTargetInput,
-    success: Schema.Struct({ ...PreviewAutomationRecordingArtifact.fields, ...presentationFields }),
+    success: Schema.Struct({
+      ...PreviewAutomationRecordingArtifact.fields,
+      ...presentationFields,
+    }),
     failure: PreviewToolFailure,
     dependencies: [...dependencies, FileSystem.FileSystem, ServerConfig.ServerConfig],
   }).annotate(Tool.Title, "Stop browser recording"),

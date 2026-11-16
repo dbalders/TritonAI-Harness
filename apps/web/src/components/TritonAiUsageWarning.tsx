@@ -23,6 +23,7 @@ export function TritonAiUsageWarning() {
   );
   const activeToastRef = useRef<ToastId | null>(null);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Close the imperative usage toast when its environment unmounts.
   useEffect(() => {
     return () => {
       if (environmentId !== null && activeToastRef.current !== null) {
@@ -32,6 +33,7 @@ export function TritonAiUsageWarning() {
     };
   }, [environmentId]);
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Keep the imperative usage warning toast synchronized with provider limit observations.
   useEffect(() => {
     if (environmentId === null || data === null) {
       return;

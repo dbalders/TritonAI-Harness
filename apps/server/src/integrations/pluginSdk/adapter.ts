@@ -86,6 +86,7 @@ interface PluginSdkModule {
 
 const DEFAULT_ADMISSION_TIMEOUT_MS = 5_000;
 
+// @effect-diagnostics-next-line extendsNativeError:off -- This error is part of the Promise-based plugin API.
 export class PluginSdkQuarantineError extends Error {
   constructor(cause?: unknown) {
     super("A plugin SDK provider was quarantined.", cause === undefined ? undefined : { cause });

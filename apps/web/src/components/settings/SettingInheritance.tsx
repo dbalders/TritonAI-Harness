@@ -39,6 +39,13 @@ const WRITING_STYLE_LABELS: Record<string, string> = {
   custom: "Custom instructions",
 };
 
+const BACKGROUND_ACTIVITY_PROFILE_LABELS: Record<string, string> = {
+  balanced: "Balanced",
+  performance: "Performance",
+  "battery-saver": "Battery saver",
+  custom: "Advanced",
+};
+
 function formatValue(key: keyof ServerSettings, value: unknown): string {
   if (value === null || value === undefined) {
     return key === "pullRequestMergeMethod"
@@ -77,9 +84,15 @@ function formatValue(key: keyof ServerSettings, value: unknown): string {
   }
   if (Array.isArray(value)) return `${value.length} ${value.length === 1 ? "item" : "items"}`;
   if (typeof value === "object") {
+    if (key === "backgroundActivity" && "profile" in value && typeof value.profile === "string") {
+      return BACKGROUND_ACTIVITY_PROFILE_LABELS[value.profile] ?? value.profile;
+    }
     if ("model" in value && typeof value.model === "string") return value.model;
     if ("mode" in value && typeof value.mode === "string") {
-      return WRITING_STYLE_LABELS[value.mode] ?? value.mode;
+      if (key === "worktreeCleanup") return value.mode === "off" ? "Off" : "Custom";
+      return key === "sourceControlWritingStyle"
+        ? (WRITING_STYLE_LABELS[value.mode] ?? value.mode)
+        : value.mode;
     }
   }
   return "Custom";

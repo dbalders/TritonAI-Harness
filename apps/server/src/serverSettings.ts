@@ -5,6 +5,7 @@ import {
   ModelSelection,
   ProjectId,
   ProjectScript,
+  keepUnknownOverrideKeys,
   ProjectSettingsOverrides,
   type ProviderInstanceConfig,
   type ProviderInstanceMutation,
@@ -17,7 +18,10 @@ import {
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
+  type ManagedPolicySummary,
   globalIdleCompaction,
+  isSecretReference,
+  type SecretReference,
   withIdleCompaction,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
@@ -53,11 +57,12 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
+import { secretProviderDefinitions } from "./secrets/secretProviderDefinitions.ts";
 import {
   readSecretFieldValues,
   sourceControlHostSecretName,
 } from "./sourceControl/sourceControlHostSecrets.ts";
-import { mapSettingsSecrets, SECRET_REDACTED, type SettingsSecret } from "./settingsSecrets.ts";
 import {
   applyManagedHarnessPolicy,
   createManagedProfileSettings,
@@ -72,6 +77,14 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
  * a semaphore, and FileSystem.watch.
  * @module ServerSettings
  */
+
+import {
+  mapSettingsSecrets,
+  mapSettingsSecretValues,
+  withoutRemovedSecretProviderReferences,
+  SECRET_REDACTED,
+  type SettingsSecret,
+} from "./settingsSecrets.ts";
 
 export {
   resolveReviewGuideModelSelection,
@@ -202,12 +215,48 @@ const normalizeServerSettings = (
     ),
   );
 
-export function redactServerSettingsForClient(settings: ServerSettings): ServerSettings {
-  return mapSettingsSecrets(settings, (secret) =>
+export function redactServerSettingsForClient(
+  settings: ServerSettings,
+  client: { readonly secretReferences: boolean },
+): ServerSettings {
+  const redacted = mapSettingsSecrets(settings, (secret) =>
     secret.sensitive
       ? { value: "", redacted: secret.redacted || secret.value.length > 0 }
       : { value: secret.value, redacted: false },
   );
+  // Older clients decode secret fields as strings and fail on a reference, so they see a saved secret.
+  const shaped = client.secretReferences
+    ? redacted
+    : mapSettingsSecretValues(redacted, (value) =>
+        isSecretReference(value) ? SECRET_REDACTED : value,
+      );
+  return { ...shaped, secretProviders: withoutUnknownSecretProviderConfigs(shaped) };
+}
+
+/** A client shown a reference as a saved secret sends that marker back; it keeps the reference. */
+function withEchoedSecretReferences(current: ServerSettings, next: ServerSettings): ServerSettings {
+  const references = new Map<string, SecretReference>();
+  mapSettingsSecretValues(current, (value, secretName) => {
+    if (isSecretReference(value)) references.set(secretName, value);
+    return value;
+  });
+  if (references.size === 0) return next;
+  return mapSettingsSecretValues(next, (value, secretName) =>
+    value === SECRET_REDACTED ? (references.get(secretName) ?? value) : value,
+  );
+}
+
+// A newer kind's config may hold credentials this build cannot recognize, so it never leaves the server.
+function withoutUnknownSecretProviderConfigs(
+  settings: ServerSettings,
+): ServerSettings["secretProviders"] {
+  return Object.fromEntries(
+    Object.entries(settings.secretProviders).map(([id, entry]) => {
+      if (secretProviderConfigGuards.has(entry.kind)) return [id, entry];
+      const { config: _config, ...envelope } = entry;
+      return [id, envelope];
+    }),
+  ) as ServerSettings["secretProviders"];
 }
 
 export function applyProviderInstanceMutation(
@@ -221,6 +270,40 @@ export function applyProviderInstanceMutation(
     delete providerInstances[mutation.instanceId];
   }
   return { ...settings, providerInstances };
+}
+
+const secretProviderConfigGuards = new Map(
+  secretProviderDefinitions.definitions.map((definition) => [
+    definition.kind as string,
+    Schema.is(definition.configSchema),
+  ]),
+);
+
+// Rejects a kind this server has not loaded rather than storing a config it cannot check.
+function ensureSecretProviderWritesAllowed(
+  patch: ServerSettingsPatch,
+  settingsPath: string,
+): Effect.Effect<void, ServerSettingsError> {
+  for (const [id, entry] of Object.entries(patch.secretProviders ?? {})) {
+    if (entry === null) continue;
+    const isConfig = secretProviderConfigGuards.get(entry.kind);
+    const problem =
+      isConfig === undefined
+        ? `Unsupported secret provider kind: ${entry.kind}.`
+        : isConfig(entry.config)
+          ? undefined
+          : `Invalid ${entry.kind} config for secret provider ${id}.`;
+    if (problem !== undefined) {
+      return Effect.fail(
+        new ServerSettingsError({
+          settingsPath,
+          operation: "write-secret-provider",
+          cause: new Error(problem),
+        }),
+      );
+    }
+  }
+  return Effect.void;
 }
 
 function ensureProviderInstanceMutationAllowed(
@@ -252,7 +335,9 @@ export class ServerSettingsService extends Context.Service<
     /** Await settings runtime readiness. */
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
-    /** Read the current settings. */
+    /** The administrator's policy as clients see it; absent when unmanaged. */
+    readonly managedPolicy?: ManagedPolicySummary | undefined;
+
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
 
     /** Normalized user settings before the managed runtime policy. */
@@ -285,12 +370,15 @@ export class ServerSettingsService extends Context.Service<
     readonly subscribeChanges: Effect.Effect<Stream.Stream<ServerSettings>, never, Scope.Scope>;
   }
 >()("t3/serverSettings/ServerSettingsService") {
-  /** @deprecated Import and use `layerTest` from this module. */
-  static readonly layerTest = (overrides: DeepPartial<ServerSettings> = {}) => layerTest(overrides);
+  static readonly layerTest = (
+    overrides: DeepPartial<ServerSettings> = {},
+    managedPolicy?: ManagedPolicySummary,
+  ) => layerTest(overrides, managedPolicy);
 }
 
 const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   overrides: DeepPartial<ServerSettings> = {},
+  managedPolicy?: ManagedPolicySummary,
 ) {
   const { automaticGitFetchInterval, providerHealthRefreshInterval, ...overridesForMerge } =
     overrides;
@@ -321,6 +409,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     );
 
   return {
+    managedPolicy,
     start: Effect.void,
     ready: Effect.void,
     getSettings,
@@ -344,8 +433,11 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   } satisfies ServerSettingsService["Service"];
 });
 
-export const layerTest = (overrides: DeepPartial<ServerSettings> = {}) =>
-  Layer.effect(ServerSettingsService, makeTest(overrides));
+/** Test settings; `managedPolicy` only tells consumers a policy applies, it does not lock values. */
+export const layerTest = (
+  overrides: DeepPartial<ServerSettings> = {},
+  managedPolicy?: ManagedPolicySummary,
+) => Layer.effect(ServerSettingsService, makeTest(overrides, managedPolicy));
 
 // Accept retired token delivery only on load so one old value cannot reset all settings.
 const PersistedResponseStreamingMode = Schema.Union([
@@ -360,27 +452,24 @@ const PersistedResponseStreamingMode = Schema.Union([
     }),
   ),
 );
-const ServerSettingsJson = fromLenientJson(
-  Schema.Struct({
-    ...ServerSettings.fields,
-    responseStreamingMode: PersistedResponseStreamingMode.pipe(
-      Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
-    ),
-    projectSettingsOverrides: Schema.Record(
-      ProjectId,
+const PersistedServerSettings = Schema.Struct({
+  ...ServerSettings.fields,
+  responseStreamingMode: PersistedResponseStreamingMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
+  ),
+  projectSettingsOverrides: Schema.Record(
+    ProjectId,
+    keepUnknownOverrideKeys(
       Schema.Struct({
         ...ProjectSettingsOverrides.fields,
         responseStreamingMode: Schema.optionalKey(PersistedResponseStreamingMode),
       }),
-    ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  }),
-);
-const decodeServerSettingsJsonExit = Schema.decodeUnknownExit(ServerSettingsJson);
-/**
- * The retired `providers.<kind>` map, read without its old schemas. Before
- * `providerInstances` existed each built-in driver had one blob there; it
- * now only feeds `migrateLegacyProviderSettings`.
- */
+    ),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+// Parse first and decode second, so a managed policy can fill its defaults in between.
+const decodeSettingsFileJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
+const decodePersistedServerSettingsExit = Schema.decodeUnknownExit(PersistedServerSettings);
 const LegacyProviderSettingsJson = fromLenientJson(
   Schema.Struct({
     providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
@@ -521,18 +610,33 @@ function selectionSupportsTextGeneration(
   return settings.providerInstances[selection.instanceId]?.driver !== ACP_REGISTRY_DRIVER;
 }
 
-function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  return isModelSelectionProviderEnabled(settings, settings.textGenerationModelSelection) &&
-    selectionSupportsTextGeneration(settings, settings.textGenerationModelSelection)
+type DriverAllowed = (driver: ProviderDriverKind) => boolean;
+const anyDriver: DriverAllowed = () => true;
+
+function resolveTextGenerationProvider(
+  settings: ServerSettings,
+  isDriverAllowed: DriverAllowed = anyDriver,
+): ServerSettings {
+  const selection = settings.textGenerationModelSelection;
+  return isModelSelectionProviderEnabled(settings, selection) &&
+    selectionSupportsTextGeneration(settings, selection) &&
+    isDriverAllowed(
+      settings.providerInstances[selection.instanceId]?.driver ??
+        ProviderDriverKind.make(selection.instanceId),
+    )
     ? settings
-    : fallbackTextGenerationProvider(settings);
+    : fallbackTextGenerationProvider(settings, isDriverAllowed);
 }
 
-function fallbackTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  // A slot without an explicit instance uses its driver's default enabled state.
+function fallbackTextGenerationProvider(
+  settings: ServerSettings,
+  isDriverAllowed: DriverAllowed,
+): ServerSettings {
   const fallback = fallbackTextGenerationModelSelection(
     settings.providerInstances,
     (instanceId, driver) =>
+      // A default instance id can be configured with another driver.
+      isDriverAllowed(settings.providerInstances[instanceId]?.driver ?? driver) &&
       resolveProviderInstanceEnabled(
         settings.providerInstances[instanceId] ?? { driver, config: {} },
       ),
@@ -549,7 +653,12 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "sourceControlWriterModelSelection",
   "reviewGuideModelSelection",
   "textGenerationModelSelection",
+  "fallbackModelSelection",
   "pullRequestMergeMethod",
+  // Empty by default, these hold one whole value, which a managed policy can default.
+  ...Object.entries(DEFAULT_SERVER_SETTINGS).flatMap(([key, value]) =>
+    value === null ? [key] : [],
+  ),
 ]);
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
@@ -698,6 +807,17 @@ const make = Effect.fn("serverSettings.make")(function* (
       : Effect.succeed(settings);
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const sql = yield* SqlClient.SqlClient;
+  const {
+    settings: managed,
+    providers: managedProviders,
+    summary: managedPolicy,
+  } = yield* ManagedPolicy.ManagedPolicy;
+  // Locks are laid over every settings value that leaves this service, never persisted.
+  const toEffective = (settings: ServerSettings) =>
+    resolveTextGenerationProvider(
+      managedProviders.applyLimits(managed.applyLocks(settings)),
+      managedProviders.isDriverAllowed,
+    );
   const writeSemaphore = yield* Semaphore.make(1);
   const cacheKey = "settings" as const;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
@@ -731,6 +851,13 @@ const make = Effect.fn("serverSettings.make")(function* (
     ),
   );
 
+  // The file before this write, parsed; only read when policy defaults need it.
+  const readStoredSettings = Effect.gen(function* () {
+    if (!(yield* readConfigExists)) return undefined;
+    const parsed = decodeSettingsFileJsonExit(yield* readRawConfig);
+    return Exit.isSuccess(parsed) ? parsed.value : undefined;
+  });
+
   const writeSettingsAtomically = Effect.fnUntraced(
     function* (
       settings: ServerSettings,
@@ -741,7 +868,7 @@ const make = Effect.fn("serverSettings.make")(function* (
         : settings;
       const [encodedSettings, encodedDefaults, rawDocument] = yield* Effect.all([
         encodeServerSettings(userSettings),
-        encodeServerSettings(DEFAULT_SERVER_SETTINGS),
+        encodeServerSettings(managed.defaults),
         Ref.get(rawDocumentRef),
       ]);
       const sparseSettings = stripDefaultServerSettings(encodedSettings, encodedDefaults) ?? {};
@@ -776,7 +903,13 @@ const make = Effect.fn("serverSettings.make")(function* (
             "usageLimitSources",
           ]),
         ) ?? {};
-      const persistedDocument = mergeJsonDocuments(unknownSettings, sparseSettings);
+      const storedSettings =
+        managed.keepStored === undefined
+          ? sparseSettings
+          : managed.keepStored(sparseSettings, userSettings, yield* readStoredSettings, (key) =>
+              ATOMIC_SETTINGS_KEYS.has(key),
+            );
+      const persistedDocument = mergeJsonDocuments(unknownSettings, storedSettings);
       const contents = yield* encodeUnknownJsonPretty(persistedDocument);
       yield* writeFileStringAtomically({
         filePath: settingsPath,
@@ -828,7 +961,7 @@ const make = Effect.fn("serverSettings.make")(function* (
   );
 
   const loadSettingsFromDisk = Effect.gen(function* () {
-    let settings = DEFAULT_SERVER_SETTINGS;
+    let settings = managed.defaults;
     let legacyProviders: Readonly<Record<string, unknown>> | undefined;
     let legacySourceControl: Parameters<typeof migrateLegacySourceControlSettings>[1] = {};
     // A file that failed to decode must stay on disk for the user to repair;
@@ -843,7 +976,11 @@ const make = Effect.fn("serverSettings.make")(function* (
         UNION ALL SELECT 1 FROM orchestration_v2_projection_threads LIMIT 1`.pipe(
         Effect.mapError(
           (cause) =>
-            new ServerSettingsError({ settingsPath, operation: "read-provider-history", cause }),
+            new ServerSettingsError({
+              settingsPath,
+              operation: "read-provider-history",
+              cause,
+            }),
         ),
       );
       yield* Ref.set(
@@ -871,7 +1008,10 @@ const make = Effect.fn("serverSettings.make")(function* (
               ),
             )
           : raw;
-      const decoded = decodeServerSettingsJsonExit(migratedRaw);
+      const parsed = decodeSettingsFileJsonExit(migratedRaw);
+      const decoded = Exit.isFailure(parsed)
+        ? parsed
+        : decodePersistedServerSettingsExit(managed.withDefaults(parsed.value));
       const legacySettings = decodeLegacyProviderSettingsJsonExit(migratedRaw);
       if (legacySettings._tag === "Success") {
         legacyProviders = legacySettings.value.providers;
@@ -884,7 +1024,7 @@ const make = Effect.fn("serverSettings.make")(function* (
         const failure = decoded._tag === "Failure" ? decoded : legacySettings;
         if (failure._tag === "Failure") parseFailure = Option.some(Cause.squash(failure.cause));
         // The file may hold an opt-out we can no longer read; never resume threads on a guess.
-        settings = { ...DEFAULT_SERVER_SETTINGS, continueThreadsAfterServerUpdate: false };
+        settings = { ...managed.defaults, continueThreadsAfterServerUpdate: false };
         if (failure._tag === "Failure") {
           yield* Effect.logWarning("failed to parse settings.json, using defaults", {
             path: settingsPath,
@@ -1079,6 +1219,37 @@ const make = Effect.fn("serverSettings.make")(function* (
     },
   );
 
+  // Background sweeps read settings every few seconds; reading secret files each time is wasted.
+  // Every secret write rewrites the settings file, so a new cached object implies fresh secrets.
+  // A read that overlaps a secret write may see files a rollback then restores, so it is not kept.
+  let materialized: { readonly source: ServerSettings; readonly value: ServerSettings } | null =
+    null;
+  let secretWriteGeneration = 0;
+  const invalidateMaterialized = Effect.sync(() => {
+    secretWriteGeneration++;
+    materialized = null;
+  });
+  const getMaterializedSettings = getSettingsFromCache.pipe(
+    Effect.flatMap((source) => {
+      if (materialized?.source === source) return Effect.succeed(materialized.value);
+      const generation = secretWriteGeneration;
+      // Cache the secret-materialized document only; managed policy and text-generation
+      // resolution are pure and re-run per read because policy depends on the raw document.
+      return materializeSettingsSecrets(source).pipe(
+        Effect.tap((value) =>
+          Effect.sync(() => {
+            if (generation === secretWriteGeneration) materialized = { source, value };
+          }),
+        ),
+      );
+    }),
+  );
+
+  const getEffectiveSettings = getMaterializedSettings.pipe(
+    Effect.flatMap(applyEffectivePolicy),
+    Effect.map(toEffective),
+  );
+
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
       Stream.mapEffect((settings) =>
@@ -1094,7 +1265,7 @@ const make = Effect.fn("serverSettings.make")(function* (
           ),
         ),
       ),
-      Stream.map(resolveTextGenerationProvider),
+      Stream.map(toEffective),
     );
 
   type SecretChange = {
@@ -1108,15 +1279,23 @@ const make = Effect.fn("serverSettings.make")(function* (
 
   const persistSettingsSecrets = (current: ServerSettings, next: ServerSettings) =>
     Effect.sync(() => {
+      // Only sensitive rows own a stored secret; a plain duplicate must not hide one from cleanup.
       const previous = new Map<string, SettingsSecret>();
+      const inlineValues = new Map<string, string>();
       mapSettingsSecrets(current, (secret) => {
-        // Duplicate environment names follow the provider's last-value-wins behavior.
+        if (!secret.sensitive) return secret;
         previous.set(secret.secretName, secret);
+        if (!secret.redacted && secret.value.length > 0) {
+          inlineValues.set(secret.secretName, secret.value);
+        }
         return secret;
       });
       const changes: SecretChange[] = [];
       const nextSecretNames = new Set<string>();
-      const settings = mapSettingsSecrets(next, (secret) => {
+      const keptSecretNames = new Set<string>();
+      const writtenSecretNames = new Set<string>();
+      const inlineWrites = new Map<string, SecretChange>();
+      const settings = mapSettingsSecrets(withEchoedSecretReferences(current, next), (secret) => {
         const metadata = {
           secretName: secret.secretName,
           ...(secret.providerInstanceId !== undefined
@@ -1130,24 +1309,34 @@ const make = Effect.fn("serverSettings.make")(function* (
           changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
           return { value: secret.value, redacted: false };
         }
-        const old = previous.get(secret.secretName);
-        const inlineValue =
-          old?.sensitive && !old.redacted && old.value.length > 0 ? old.value : undefined;
-        const value = secret.redacted ? inlineValue : secret.value;
-        if (value === undefined) {
+        if (secret.redacted) {
+          keptSecretNames.add(secret.secretName);
           nextSecretNames.add(secret.secretName);
+          const inlineValue = inlineValues.get(secret.secretName);
+          if (inlineValue !== undefined) {
+            inlineWrites.set(secret.secretName, {
+              ...metadata,
+              kind: "write",
+              value: textEncoder.encode(inlineValue),
+            });
+          }
           return { value: "", redacted: true };
         }
-        if (value.length === 0) {
+        if (secret.value.length === 0) {
           changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
           return { value: "", redacted: false };
         }
         nextSecretNames.add(secret.secretName);
-        changes.push({ ...metadata, kind: "write", value: textEncoder.encode(value) });
+        writtenSecretNames.add(secret.secretName);
+        changes.push({ ...metadata, kind: "write", value: textEncoder.encode(secret.value) });
         return { value: "", redacted: true };
       });
+      // A legacy inline value only moves to the store when no row in this save replaces it.
+      for (const [secretName, change] of inlineWrites) {
+        if (!writtenSecretNames.has(secretName)) changes.push(change);
+      }
       for (const secret of previous.values()) {
-        if (!secret.sensitive || nextSecretNames.has(secret.secretName)) continue;
+        if (nextSecretNames.has(secret.secretName)) continue;
         if (changes.some((change) => change.secretName === secret.secretName)) continue;
         changes.push({
           kind: "remove",
@@ -1161,7 +1350,13 @@ const make = Effect.fn("serverSettings.make")(function* (
             : {}),
         });
       }
-      return { settings, changes };
+      return {
+        settings,
+        // A redacted row still claims its stored secret, so a duplicate row must not remove it.
+        changes: changes.filter(
+          (change) => change.kind === "write" || !keptSecretNames.has(change.secretName),
+        ),
+      };
     });
 
   const rollbackSettingsSecretWrites = (
@@ -1241,6 +1436,7 @@ const make = Effect.fn("serverSettings.make")(function* (
   };
 
   const updateAndPersistSettings = (
+    patch: ServerSettingsPatch,
     update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
     options?: { readonly replaceProviderInstances?: boolean },
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
@@ -1255,14 +1451,49 @@ const make = Effect.fn("serverSettings.make")(function* (
           });
         }
         const current = yield* materializeSettingsSecrets(loaded);
-        const proposed = yield* update(current);
+        // An older client echoes a reference as the redacted marker; restore it before vetting so
+        // a removed provider's reference is cleared below rather than restored by persistence.
+        const proposed = withEchoedSecretReferences(current, yield* update(current));
         const updated = removeManagedTritonAiProviderEnvironment(
           managedPolicyEnabled ? stripManagedFieldsForPersistence(proposed) : proposed,
         );
-        const persisted = yield* persistSettingsSecrets(current, updated);
+        // Vet before secrets: a variable the policy hides from clients is not one they removed.
+        const vetted = managed.vetWrite(current, yield* normalizeServerSettings(updated), patch);
+        if (vetted._tag === "Locked") {
+          return yield* new ServerSettingsError({
+            settingsPath,
+            operation: "write-managed-setting",
+            managedSetting: vetted.path,
+            managedBy: managedPolicy?.organization,
+          });
+        }
+        const vettedProviders = managedProviders.vetWrite(current, vetted.settings);
+        if (vettedProviders._tag === "Locked") {
+          return yield* new ServerSettingsError({
+            settingsPath,
+            operation: "write-managed-setting",
+            managedSetting: vettedProviders.path,
+            managedBy: managedPolicy?.organization,
+          });
+        }
+        if (vettedProviders._tag === "Disallowed") {
+          return yield* new ServerSettingsError({
+            settingsPath,
+            operation: "use-disallowed-provider",
+            providerInstanceId: vettedProviders.instanceId,
+            providerLabel: vettedProviders.label,
+            managedBy: managedPolicy?.organization,
+          });
+        }
+        // After vetting, which can keep stored variables a policy hides from clients.
+        const persisted = yield* persistSettingsSecrets(
+          current,
+          withoutRemovedSecretProviderReferences(current, vettedProviders.settings),
+        );
         const next = yield* normalizeServerSettings(persisted.settings);
-        const materialized = yield* Effect.uninterruptibleMask(() =>
+        const materializedNext = yield* Effect.uninterruptibleMask(() =>
           Effect.gen(function* () {
+            yield* invalidateMaterialized;
             const rollbackSecretChanges = yield* applySettingsSecretChanges(persisted.changes);
             const materializedExit = yield* Effect.exit(materializeSettingsSecrets(next));
             if (Exit.isFailure(materializedExit)) {
@@ -1275,23 +1506,20 @@ const make = Effect.fn("serverSettings.make")(function* (
               return yield* Effect.failCause(writeExit.cause);
             }
             return materializedExit.value;
-          }),
+          }).pipe(Effect.ensuring(invalidateMaterialized)),
         );
-        yield* Cache.set(settingsCache, cacheKey, { settings: next, parseFailure: Option.none() });
+        yield* Cache.set(settingsCache, cacheKey, {
+          settings: next,
+          parseFailure: Option.none(),
+        });
+        materialized = { source: next, value: materializedNext };
         yield* emitChange(next);
-        return resolveTextGenerationProvider(yield* applyEffectivePolicy(materialized));
+        return toEffective(yield* applyEffectivePolicy(materializedNext));
       }),
     );
 
   const withSettingsSnapshot: ServerSettingsService["Service"]["withSettingsSnapshot"] = (use) =>
-    writeSemaphore.withPermits(1)(
-      getSettingsFromCache.pipe(
-        Effect.flatMap(materializeSettingsSecrets),
-        Effect.flatMap(applyEffectivePolicy),
-        Effect.map(resolveTextGenerationProvider),
-        Effect.flatMap(use),
-      ),
-    );
+    writeSemaphore.withPermits(1)(getEffectiveSettings.pipe(Effect.flatMap(use)));
 
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
@@ -1396,23 +1624,26 @@ const make = Effect.fn("serverSettings.make")(function* (
   });
 
   return {
+    managedPolicy,
     start,
     ready: Deferred.await(startedDeferred),
-    getSettings: getSettingsFromCache.pipe(
-      Effect.flatMap(materializeSettingsSecrets),
-      Effect.flatMap(applyEffectivePolicy),
-      Effect.map(resolveTextGenerationProvider),
-    ),
-    getPersistedSettings: getSettingsFromCache.pipe(Effect.flatMap(materializeSettingsSecrets)),
+    getSettings: getEffectiveSettings,
+    getPersistedSettings: getMaterializedSettings,
     updateSettings: (patch) =>
       updateAndPersistSettings(
-        (current) => Effect.succeed(applyServerSettingsPatch(current, patch)),
+        patch,
+        (current) =>
+          ensureSecretProviderWritesAllowed(patch, settingsPath).pipe(
+            Effect.as(applyServerSettingsPatch(current, patch)),
+          ),
         { replaceProviderInstances: patch.providerInstances !== undefined },
       ),
     updateProviderInstance: (mutation, patch = {}) =>
       updateAndPersistSettings(
+        patch,
         (current) =>
           Effect.gen(function* () {
+            yield* ensureSecretProviderWritesAllowed(patch, settingsPath);
             yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
             const patched = applyServerSettingsPatch(current, patch);
             return applyProviderInstanceMutation(patched, mutation);

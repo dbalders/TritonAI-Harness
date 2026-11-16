@@ -585,12 +585,7 @@ export const installCodexProviderSkill = Effect.fn("installCodexProviderSkill")(
   ).pipe(
     Effect.scoped,
     Effect.mapError((cause) => skillInstallError(cause.message, cause)),
-    Effect.catch((error) =>
-      rollbackProviderSkillInstall(rollback).pipe(
-        Effect.ignore,
-        Effect.andThen(Effect.fail(error)),
-      ),
-    ),
+    Effect.tapError(() => rollbackProviderSkillInstall(rollback).pipe(Effect.ignore)),
   );
   yield* discardProviderSkillInstallRollback(rollback).pipe(Effect.ignore);
   const providers = yield* refreshProvidersAfterCodexMutation(target.instanceId);
@@ -764,7 +759,7 @@ export const removeCodexProviderSkill = Effect.fn("removeCodexProviderSkill")(fu
     expectedIdentity: removalIdentity,
   }).pipe(
     Effect.mapError((cause) => skillInstallError(cause.message, cause)),
-    Effect.catch((error) =>
+    Effect.tapError(() =>
       (removalIdentity === null
         ? Effect.succeed(false)
         : providerSkillRemovalIdentityMatches(
@@ -783,7 +778,6 @@ export const removeCodexProviderSkill = Effect.fn("removeCodexProviderSkill")(fu
               ).pipe(Effect.scoped, Effect.ignore)
             : Effect.void,
         ),
-        Effect.andThen(Effect.fail(error)),
       ),
     ),
   );

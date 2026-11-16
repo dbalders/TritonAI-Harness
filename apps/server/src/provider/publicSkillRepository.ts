@@ -114,6 +114,7 @@ interface PublicSkillFetchRuntime {
   readonly defaultCooldownMs: number;
 }
 
+// @effect-diagnostics-next-line extendsNativeError:off -- This error is part of the Promise-based plugin API.
 class PublicSkillRepositoryFailure extends Error {
   readonly detail: unknown;
 

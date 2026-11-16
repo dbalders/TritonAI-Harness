@@ -4,9 +4,11 @@ import {
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   type ModelSelection,
+  type ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
+  type ServerSettings,
 } from "@t3tools/contracts";
 import {
   type CustomModelDefinition,
@@ -16,8 +18,10 @@ import {
   resolveSelectableModel,
 } from "@t3tools/shared/model";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
-import { UnifiedSettings } from "@t3tools/contracts/settings";
+import { type ClientSettings, UnifiedSettings } from "@t3tools/contracts/settings";
+import { resolveModelPreferences } from "@t3tools/shared/serverSettings";
 import * as Arr from "effect/Array";
+import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
 import {
   getDefaultServerModel,
@@ -29,14 +33,17 @@ import {
   type ProviderInstanceEntry,
   deriveProviderInstanceEntries,
   NO_PROVIDER_MODEL_SELECTION,
+  resolveDefaultProviderModelSelection,
+  resolveProjectDefaultProviderModelSelection,
 } from "./providerInstances";
 import { sortModelsForProviderInstance } from "./modelOrdering";
+import { resolveModelShortName } from "@t3tools/client-runtime/provider-clients";
 
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 const DEFAULT_TEXT_GENERATION_INSTANCE_ID = ProviderInstanceId.make("codex");
 
 // Legacy per-driver buckets would leak custom-instance models into stock instances.
-function readInstanceCustomModels(
+export function readInstanceCustomModels(
   settings: UnifiedSettings,
   instanceId: ProviderInstanceId,
   driverKind: ProviderDriverKind,
@@ -85,13 +92,17 @@ function appendUnavailableDynamicModelSelection(
   return [...options, { slug, name: slug, isCustom: false, isUnavailable: true }];
 }
 
-function toAppModelOption(model: ServerProvider["models"][number]): AppModelOption {
+function toAppModelOption(
+  model: ServerProvider["models"][number],
+  driverKind: ProviderDriverKind,
+): AppModelOption {
   const option: AppModelOption = {
     slug: model.slug,
     name: model.name,
     isCustom: model.isCustom,
   };
-  if (model.shortName) option.shortName = model.shortName;
+  const shortName = resolveModelShortName(model, driverKind);
+  if (shortName) option.shortName = shortName;
   if (model.subProvider) option.subProvider = model.subProvider;
   if (model.aliases) option.aliases = model.aliases;
   if (model.badge) option.badge = model.badge;
@@ -104,12 +115,19 @@ function toAppModelOption(model: ServerProvider["models"][number]): AppModelOpti
 function toCustomAppModelOption(
   custom: CustomModelDefinition,
   models: ReadonlyArray<ServerProvider["models"][number]>,
+  driverKind: ProviderDriverKind,
 ): AppModelOption {
   const reported = models.find((model) => model.slug === custom.slug);
   if (custom.name === custom.slug && reported) {
-    return { ...toAppModelOption(reported), isCustom: true };
+    return { ...toAppModelOption(reported, driverKind), isCustom: true };
   }
-  return { slug: custom.slug, name: custom.name, isCustom: true };
+  const shortName = resolveModelShortName(custom, driverKind);
+  return {
+    slug: custom.slug,
+    name: custom.name,
+    isCustom: true,
+    ...(shortName ? { shortName } : {}),
+  };
 }
 
 function readInstanceModelPreferences(
@@ -171,7 +189,7 @@ function getAppModelOptions(
   // Server custom-model snapshots can lag removals; rebuild custom rows from settings.
   const options: AppModelOption[] = rawModels
     .filter((model) => !model.isCustom)
-    .map(toAppModelOption);
+    .map((model) => toAppModelOption(model, provider));
   const seen = new Set(options.map((option) => option.slug));
   const builtInModelSlugs = new Set(
     Arr.filterMap(getProviderModels(providers, provider), (model) =>
@@ -187,7 +205,7 @@ function getAppModelOptions(
     }
 
     seen.add(entry.slug);
-    options.push(toCustomAppModelOption(entry, rawModels));
+    options.push(toCustomAppModelOption(entry, rawModels, provider));
   }
 
   const preferences = readInstanceModelPreferences(settings, defaultInstanceId);
@@ -207,7 +225,7 @@ export function getAppModelOptionsForInstance(
 ): AppModelOption[] {
   const options: AppModelOption[] = entry.models
     .filter((model) => !model.isCustom)
-    .map(toAppModelOption);
+    .map((model) => toAppModelOption(model, entry.driverKind));
   const seen = new Set(options.map((option) => option.slug));
   const builtInModelSlugs = new Set(
     Arr.filterMap(entry.models, (model) =>
@@ -222,7 +240,7 @@ export function getAppModelOptionsForInstance(
     }
 
     seen.add(custom.slug);
-    options.push(toCustomAppModelOption(custom, entry.models));
+    options.push(toCustomAppModelOption(custom, entry.models, entry.driverKind));
   }
 
   const preferences = readInstanceModelPreferences(settings, entry.instanceId);
@@ -303,6 +321,38 @@ export function resolveEffectiveDefaultModelSelection(
   return model === null || model === selection.model ? selection : { ...selection, model };
 }
 
+export function defaultModelSelectionsAreMixed(
+  clientSettings: ClientSettings,
+  targets: ReadonlyArray<{
+    projectId: ProjectId | null;
+    settings: ServerSettings;
+    providers: ReadonlyArray<ServerProvider>;
+  }>,
+): boolean {
+  const selections = targets.map(({ projectId, settings, providers }) => {
+    const stored = settings.defaultModelSelection;
+    const selection =
+      stored === null
+        ? resolveProjectDefaultProviderModelSelection(providers, settings, projectId)
+        : resolveDefaultProviderModelSelection(providers, stored);
+    return {
+      stored,
+      effective: selection
+        ? resolveEffectiveDefaultModelSelection(
+            {
+              ...clientSettings,
+              ...settings,
+              ...resolveModelPreferences(settings, clientSettings),
+            },
+            providers,
+            selection,
+          )
+        : null,
+    };
+  });
+  return selections.some((selection) => !Equal.equals(selection, selections[0]));
+}
+
 export function getCustomModelOptionsByInstance(
   settings: UnifiedSettings,
   providers: ReadonlyArray<ServerProvider>,
@@ -372,7 +422,7 @@ export function resolveAppModelSelectionState(
       model,
       models: entry.models,
       modelOptions: selectedEntry ? selection.options : undefined,
-      planModeEnabled: settings.planModeEnabled || selectsPlanAgent(selection.options),
+      includePlanAgent: selectsPlanAgent(selection.options),
     });
 
     return createModelSelection(entry.instanceId, model, modelOptionsForDispatch);

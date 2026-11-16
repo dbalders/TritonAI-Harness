@@ -4,8 +4,6 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ServerProviderUpdateError,
-  ThreadId,
-  type ProviderSession,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -88,18 +86,6 @@ const npmCapabilities = (provider: ProviderDriverKind) =>
     updateLockKey: "npm-global",
   });
 
-function codexSession(threadId: string): ProviderSession {
-  return {
-    provider: CODEX,
-    providerInstanceId: CODEX_ID,
-    status: "ready",
-    runtimeMode: "full-access",
-    threadId: ThreadId.make(threadId),
-    createdAt: CHECKED_AT,
-    updatedAt: CHECKED_AT,
-  };
-}
-
 const makeHarness = Effect.fn("makeHarness")(function* (input: {
   readonly initialProviders?: ReadonlyArray<ServerProvider>;
   readonly unmanagedInstanceIds?: ReadonlyArray<ProviderInstanceId>;
@@ -107,7 +93,9 @@ const makeHarness = Effect.fn("makeHarness")(function* (input: {
   readonly devUrl?: URL;
 }) {
   const providersRef = yield* Ref.make(input.initialProviders ?? []);
-  const sessionsRef = yield* Ref.make<ReadonlyArray<ProviderSession>>([]);
+  const sessionsRef = yield* Ref.make<
+    Effect.Success<ProviderSessionManagerV2Shape["liveInstances"]>
+  >([]);
   const updateCallsRef = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
   const updated = yield* PubSub.unbounded<ProviderInstanceId>();
   const updatedSubscription = yield* PubSub.subscribe(updated);
@@ -158,14 +146,7 @@ const makeHarness = Effect.fn("makeHarness")(function* (input: {
       }),
   };
   const providerService: Partial<ProviderSessionManagerV2Shape> = {
-    liveInstances: Ref.get(sessionsRef).pipe(
-      Effect.map((sessions) =>
-        sessions.map((session) => ({
-          instanceId: session.providerInstanceId!,
-          driver: session.provider,
-        })),
-      ),
-    ),
+    liveInstances: Ref.get(sessionsRef),
   };
 
   const services = Layer.mergeAll(
@@ -218,7 +199,7 @@ describe("makeManagedCodexAutoUpdater", () => {
         yield* ManagedCodexAutoUpdate.makeManagedCodexAutoUpdater().pipe(
           Effect.provide(harness.services),
         );
-      yield* Ref.set(harness.sessionsRef, [codexSession("thread-1")]);
+      yield* Ref.set(harness.sessionsRef, [{ instanceId: CODEX_ID, driver: CODEX }]);
 
       assert.deepStrictEqual(yield* considerProviders([snapshot()]), []);
       yield* Ref.set(harness.sessionsRef, []);

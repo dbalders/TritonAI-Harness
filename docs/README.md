@@ -11,6 +11,8 @@
 - [Project settings](./user/project-settings.md)
 - [Appearance and themes](./user/appearance.md)
 - [Keyboard shortcuts](./user/keybindings.md)
+- [Voice input](./user/voice-input.md)
+- [Text generation models](./user/text-generation.md)
 - [SnapShots](./user/snap-shot.md)
 - [Visual replies](./user/html-renders.md)
 - [Import browser sessions](./user/browser-import.md)
@@ -22,16 +24,18 @@
 - [Get help and prepare feedback](./user/help.md)
 - [Record a skill](./user/record-a-skill.md)
 - [UC San Diego account](./user/ucsd-account.md)
+- [Secrets](./user/secrets.md)
 - [Product usage data](./user/telemetry.md)
 - [Remote access](./user/remote-access.md)
 - [Updating TritonAI Harness](./user/updating.md)
 - [Source control integrations](./user/source-control.md)
 - [Background service distribution policy](./user/background-service.md)
-- Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md)
+- Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md) · [Kiro](./user/providers-kiro.md) · [Pi](./user/providers-pi.md) · [Muse Code](./user/providers-muse.md) · [fx](./user/providers-fx.md)
 
 Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
 
 - [Outside agents (MCP)](./user/outside-agents.md)
+- [Triage an issue](./user/triage.md)
 
 ---
 
@@ -58,6 +62,7 @@ source alone does not explain. Most code changes do not need an internal documen
 - [Environment auth](./internals/environment-auth.md)
 - [T3 Connect](./internals/t3-connect.md)
 - [Assistant citations](./internals/assistant-citations.md)
+- [Mobile layout](./internals/mobile-layout.md)
 - [Mobile navigation](./internals/mobile-navigation.md)
 - [Mobile development lifecycle](./internals/mobile-development.md)
 - [Terminal runtime](./internals/terminal-runtime.md)
@@ -67,6 +72,7 @@ source alone does not explain. Most code changes do not need an internal documen
 ### Runbooks
 
 - [Development and local builds](./operations/development.md)
+- [Scenarios: real-app proof for a fix](./operations/scenarios.md)
 - [T3 Connect setup](./operations/connect-setup.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)

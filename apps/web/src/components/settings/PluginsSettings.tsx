@@ -18,7 +18,7 @@ import {
   PlugIcon,
   PuzzleIcon,
   RefreshCwIcon,
-  SparklesIcon,
+  BookOpenIcon,
   UnplugIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -268,6 +268,7 @@ function IntegrationFlowPoller({
   readonly flow: ScheduledIntegrationFlow;
   readonly poll: PollIntegrationFlow;
 }) {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Own the integration sign-in polling timer and cancel it when this flow unmounts.
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(
@@ -552,6 +553,7 @@ function IntegrationCard({
     }
   }
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Focus the plugin connection button when an external connection-attention request arrives.
   useEffect(() => {
     if (
       !shouldFocusConnectionAction({
@@ -847,7 +849,7 @@ function IntegrationCard({
           <PluginDetailSection
             title="Skills"
             count={integration.skills.length}
-            icon={<SparklesIcon className="size-4 text-muted-foreground" />}
+            icon={<BookOpenIcon className="size-4 text-muted-foreground" />}
           >
             {integration.skills.length > 0 ? (
               <div className="divide-y divide-border/50">
@@ -855,7 +857,7 @@ function IntegrationCard({
                   <div key={skill.name} className="flex items-center justify-between gap-4 py-3">
                     <div className="min-w-0">
                       <p className="flex items-center gap-2 text-sm font-medium">
-                        <SparklesIcon className="size-3.5 text-muted-foreground" />
+                        <BookOpenIcon className="size-3.5 text-muted-foreground" />
                         {skill.name}
                         {skill.available ? (
                           <CheckCircle2Icon
@@ -911,6 +913,7 @@ function EnvironmentPluginsSettingsPanel({
   readonly environmentId: EnvironmentId | null;
 }) {
   const environmentIdRef = useRef(environmentId);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Bind asynchronous plugin operations to the mounted environment and invalidate them on unmount.
   useEffect(() => {
     environmentIdRef.current = environmentId;
     return () => {
@@ -986,6 +989,7 @@ function EnvironmentPluginsSettingsPanel({
       });
   };
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Load the remote integration inventory for the currently mounted environment.
   useEffect(() => {
     void load();
   }, [load]);

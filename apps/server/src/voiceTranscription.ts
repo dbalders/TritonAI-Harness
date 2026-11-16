@@ -1,3 +1,4 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
@@ -245,13 +246,14 @@ export const transcribeVoice = Effect.fn("voiceTranscription.transcribeVoice")(f
     readonly fetch?: FetchLike;
   },
 ): Effect.fn.Return<ServerVoiceTranscribeResult, ServerVoiceTranscriptionError> {
+  const hostEnvironment = yield* HostProcess.Environment;
   const env =
     options?.env ??
     ({
-      TRITONAI_API_KEY: process.env.TRITONAI_API_KEY,
-      TRITONAI_ONPREM_API_KEY: process.env.TRITONAI_ONPREM_API_KEY,
-      TRITONAI_FRONTIER_API_KEY: process.env.TRITONAI_FRONTIER_API_KEY,
-      UCSD_AI_BASE_URL: process.env.UCSD_AI_BASE_URL,
+      TRITONAI_API_KEY: hostEnvironment.TRITONAI_API_KEY,
+      TRITONAI_ONPREM_API_KEY: hostEnvironment.TRITONAI_ONPREM_API_KEY,
+      TRITONAI_FRONTIER_API_KEY: hostEnvironment.TRITONAI_FRONTIER_API_KEY,
+      UCSD_AI_BASE_URL: hostEnvironment.UCSD_AI_BASE_URL,
     } satisfies VoiceTranscriptionEnv);
   const fetchImpl = options?.fetch ?? globalThis.fetch;
   const config = yield* resolveVoiceTranscriptionConfig(input, env);

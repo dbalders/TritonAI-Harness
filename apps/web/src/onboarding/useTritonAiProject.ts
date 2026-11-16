@@ -2,7 +2,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useRef } from "react";
 import { waitForProject } from "../firstRunOnboarding";
-import { inferProjectTitleFromPath } from "../lib/projectPaths";
+import { inferProjectTitleFromPath } from "@t3tools/client-runtime/state/projects";
 import { newProjectId } from "../lib/utils";
 import { useProjects } from "../state/entities";
 import { projectEnvironment } from "../state/projects";

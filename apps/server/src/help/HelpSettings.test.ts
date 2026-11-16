@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ProjectId,
   UsageLimitSourceId,
+  SecretProviderId,
   type ServerSettings,
 } from "@t3tools/contracts";
 import { buildHelpPrompt } from "@t3tools/provider-core/server/textGenerationPrompts";
@@ -71,6 +72,15 @@ describe("Help settings snapshot", () => {
             { name: "EMPTY_API_TOKEN", value: "", sensitive: true },
           ],
         },
+        [ProviderInstanceId.make("reference")]: {
+          driver: ProviderDriverKind.make("antigravity"),
+          config: {
+            apiKey: {
+              provider: SecretProviderId.make("vault"),
+              reference: "private-reference-location",
+            },
+          },
+        },
         [ProviderInstanceId.make("empty")]: {
           driver: ProviderDriverKind.make("antigravity"),
           config: { apiKey: "" },
@@ -103,11 +113,13 @@ describe("Help settings snapshot", () => {
       "opaque-github",
       "opaque-unknown-secret",
       "opaque-password",
+      "private-reference-location",
     ])
       expect(json).not.toContain(secret);
     const result = values(snapshot);
     expect(result[`providerInstances.${providerId}.config.apiKey`]).toBe("configured");
     expect(result["providerInstances.empty.config.apiKey"]).toBe("missing");
+    expect(result["providerInstances.reference.config.apiKey"]).toBe("configured");
     expect(result["providerInstances.redacted.config.apiKey"]).toBe("configured");
     expect(result["providerInstances.redacted.environment[0].value"]).toBe("configured");
     expect(result[`providerInstances.${providerId}.environment[2].value`]).toBe("missing");

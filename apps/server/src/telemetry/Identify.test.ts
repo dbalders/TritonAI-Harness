@@ -1,3 +1,5 @@
+import * as Layer from "effect/Layer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -9,7 +11,7 @@ import { getAnonymousInstallId } from "./Identify.ts";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-it.layer(NodeServices.layer)("getAnonymousInstallId", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("getAnonymousInstallId", (it) => {
   it.effect("creates one random ID and reuses it on later reads", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

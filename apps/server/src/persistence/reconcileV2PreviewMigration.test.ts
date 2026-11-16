@@ -56,6 +56,18 @@ describe("V2 preview upgrade", () => {
         [77, "WebhookDedupe"],
         [78, "ShellStopRequestIndex"],
         [79, "ThreadMessageSearch"],
+        [80, "PeerLinks"],
+        [81, "PeerLinkFence"],
+        [82, "WaitingLinkRequestIndex"],
+        [83, "ActiveTurnItemIndexes"],
+        [84, "ExcludeAttachmentPlaceholdersFromSearch"],
+        [85, "SubagentDeliveryState"],
+        [86, "ProjectionProjectsPinArchive"],
+        [87, "RepairBooleanSettledOverride"],
+        [88, "DropOrchestrationEventCorrelationIndex"],
+        [89, "DelegatedRecoveryIndexes"],
+        [90, "ScheduledTaskThreadMode"],
+        [91, "ProjectionMessageSearchText"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -155,6 +167,18 @@ describe("V2 preview upgrade", () => {
         [77, "WebhookDedupe"],
         [78, "ShellStopRequestIndex"],
         [79, "ThreadMessageSearch"],
+        [80, "PeerLinks"],
+        [81, "PeerLinkFence"],
+        [82, "WaitingLinkRequestIndex"],
+        [83, "ActiveTurnItemIndexes"],
+        [84, "ExcludeAttachmentPlaceholdersFromSearch"],
+        [85, "SubagentDeliveryState"],
+        [86, "ProjectionProjectsPinArchive"],
+        [87, "RepairBooleanSettledOverride"],
+        [88, "DropOrchestrationEventCorrelationIndex"],
+        [89, "DelegatedRecoveryIndexes"],
+        [90, "ScheduledTaskThreadMode"],
+        [91, "ProjectionMessageSearchText"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

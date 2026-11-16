@@ -115,6 +115,7 @@ export function useProjectOverview({
       setChecking(false);
     });
   };
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Refresh the remote project overview for the mounted project connection.
   useEffect(() => {
     void Promise.resolve().then(() => refresh());
   }, [refresh]);

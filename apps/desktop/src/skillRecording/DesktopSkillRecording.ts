@@ -3,7 +3,7 @@ import type {
   DesktopSkillRecordingStopResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Electron from "electron";
@@ -55,7 +55,7 @@ function focusOwner(contents: Electron.WebContents, platform: NodeJS.Platform) {
 
 const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* SecureRandom.SecureRandom;
   const workerPath = environment.path.join(__dirname, "skillRecording", "SkillRecordingWorker.cjs");
   const hasPermission = () =>
     environment.platform !== "darwin" ||
@@ -93,7 +93,7 @@ const make = Effect.gen(function* () {
         Electron.systemPreferences.isTrustedAccessibilityClient(true),
     ),
     start: Effect.fn("DesktopSkillRecording.start")((ownerId) =>
-      crypto.randomUUIDv4().pipe(
+      crypto.uuidV4().pipe(
         Effect.flatMap((sessionId) => Effect.promise(() => recorder.start(ownerId, sessionId))),
         Effect.orElseSucceed(() => ({ status: "unavailable" as const })),
       ),

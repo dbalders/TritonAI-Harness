@@ -13,6 +13,7 @@ export class HelpIntegrations extends Context.Service<
 export const layerFromSnapshot = (read: () => Promise<IntegrationsListResult | undefined>) =>
   Layer.sync(HelpIntegrations, () =>
     HelpIntegrations.of({
+      // @effect-diagnostics-next-line effectTryWithoutCatch:off -- Failed cached inventory reads fall back to no inventory.
       snapshot: Effect.tryPromise(read).pipe(
         Effect.catchCause(() => Effect.void),
         Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.void }),

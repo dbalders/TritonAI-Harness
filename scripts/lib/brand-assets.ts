@@ -31,6 +31,12 @@ export const BRAND_ASSET_PATHS = {
   developmentWebFavicon16Png: "assets/dev/tritonai-harness-dev-web-favicon-16x16.png",
   developmentWebFavicon32Png: "assets/dev/tritonai-harness-dev-web-favicon-32x32.png",
   developmentWebAppleTouchIconPng: "assets/dev/tritonai-harness-dev-web-apple-touch-180.png",
+  productionWebIcon192Png: "assets/prod/tritonai-harness-web-icon-192x192.png",
+  productionWebIcon512Png: "assets/prod/tritonai-harness-web-icon-512x512.png",
+  nightlyWebIcon192Png: "assets/nightly/tritonai-harness-nightly-web-icon-192x192.png",
+  nightlyWebIcon512Png: "assets/nightly/tritonai-harness-nightly-web-icon-512x512.png",
+  developmentWebIcon192Png: "assets/dev/tritonai-harness-dev-web-icon-192x192.png",
+  developmentWebIcon512Png: "assets/dev/tritonai-harness-dev-web-icon-512x512.png",
 } as const;
 
 export type WebAssetBrand = "development" | "nightly" | "production";
@@ -43,10 +49,6 @@ export function resolveWebAssetBrandForChannel(channel: WebAssetChannel): WebAss
   return channel === "nightly" ? "nightly" : "production";
 }
 
-export function resolveWebAssetBrandForPackageVersion(version: string): WebAssetBrand {
-  return /^[^-+]+-(?:nightly|preview)\./.test(version) ? "nightly" : "production";
-}
-
 export interface IconOverride {
   readonly sourceRelativePath: string;
   readonly targetRelativePath: string;
@@ -57,6 +59,8 @@ const WEB_ICON_TARGET_FILENAMES = {
   favicon16Png: "favicon-16x16.png",
   favicon32Png: "favicon-32x32.png",
   appleTouchIconPng: "apple-touch-icon.png",
+  icon192Png: "icon-192x192.png",
+  icon512Png: "icon-512x512.png",
 } as const;
 
 const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
@@ -65,18 +69,24 @@ const WEB_ICON_SOURCE_PATHS_BY_BRAND = {
     favicon16Png: BRAND_ASSET_PATHS.developmentWebFavicon16Png,
     favicon32Png: BRAND_ASSET_PATHS.developmentWebFavicon32Png,
     appleTouchIconPng: BRAND_ASSET_PATHS.developmentWebAppleTouchIconPng,
+    icon192Png: BRAND_ASSET_PATHS.developmentWebIcon192Png,
+    icon512Png: BRAND_ASSET_PATHS.developmentWebIcon512Png,
   },
   nightly: {
     faviconIco: BRAND_ASSET_PATHS.nightlyWebFaviconIco,
     favicon16Png: BRAND_ASSET_PATHS.nightlyWebFavicon16Png,
     favicon32Png: BRAND_ASSET_PATHS.nightlyWebFavicon32Png,
     appleTouchIconPng: BRAND_ASSET_PATHS.nightlyWebAppleTouchIconPng,
+    icon192Png: BRAND_ASSET_PATHS.nightlyWebIcon192Png,
+    icon512Png: BRAND_ASSET_PATHS.nightlyWebIcon512Png,
   },
   production: {
     faviconIco: BRAND_ASSET_PATHS.productionWebFaviconIco,
     favicon16Png: BRAND_ASSET_PATHS.productionWebFavicon16Png,
     favicon32Png: BRAND_ASSET_PATHS.productionWebFavicon32Png,
     appleTouchIconPng: BRAND_ASSET_PATHS.productionWebAppleTouchIconPng,
+    icon192Png: BRAND_ASSET_PATHS.productionWebIcon192Png,
+    icon512Png: BRAND_ASSET_PATHS.productionWebIcon512Png,
   },
 } as const satisfies Record<WebAssetBrand, Record<keyof typeof WEB_ICON_TARGET_FILENAMES, string>>;
 
@@ -101,6 +111,14 @@ export function resolveWebIconOverrides(
     {
       sourceRelativePath: sourcePaths.appleTouchIconPng,
       targetRelativePath: `${targetDirectory}/${WEB_ICON_TARGET_FILENAMES.appleTouchIconPng}`,
+    },
+    {
+      sourceRelativePath: sourcePaths.icon192Png,
+      targetRelativePath: `${targetDirectory}/${WEB_ICON_TARGET_FILENAMES.icon192Png}`,
+    },
+    {
+      sourceRelativePath: sourcePaths.icon512Png,
+      targetRelativePath: `${targetDirectory}/${WEB_ICON_TARGET_FILENAMES.icon512Png}`,
     },
   ];
 }

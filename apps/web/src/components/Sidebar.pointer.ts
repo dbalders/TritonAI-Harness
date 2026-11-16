@@ -5,7 +5,7 @@ import { getOwnerDocument, getWindow } from "@dnd-kit/utilities";
 
 // Search can unmount the drag context while its Sidebar remains mounted.
 export function SidebarDragLifecycle({ onUnmount }: { onUnmount: () => void }) {
-  // oxlint-disable-next-line t3code/react-effect-budget -- Cancels the owning drag when its sortable context unmounts.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels the owning dnd-kit drag when its sortable context unmounts
   useLayoutEffect(() => onUnmount, [onUnmount]);
   return null;
 }
@@ -58,7 +58,9 @@ export class SidebarPointerSensor {
     this.document.removeEventListener("click", this.suppressClick, { capture: true });
     this.document.removeEventListener("pointerdown", this.clearClickSuppression, { capture: true });
   };
+  // A drag that starts on a link must not follow it when released.
   private suppressClick = (event: Event) => {
+    event.preventDefault();
     event.stopPropagation();
     this.clearClickSuppression();
   };

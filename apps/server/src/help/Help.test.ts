@@ -92,7 +92,7 @@ function trace(
     slowestSpans: [],
     commonFailures: [],
     latestFailures: Array.from({ length: 7 }, (_, index) => ({
-      name: index === 0 ? "ws.rpc.server.getSettings" : `prompt.${secret}`,
+      name: index === 0 ? "ws.rpc.server.updateSettings" : `prompt.${secret}`,
       cause: `Authentication failed: ${secret} raw user prompt`,
       durationMs: 50,
       endedAt: at,
@@ -139,6 +139,7 @@ const harness = Effect.fn(function* (
     generateBranchName: () => Effect.die("Unexpected branch generation"),
     generateThreadTitle: () => Effect.die("Unexpected title generation"),
     generateReviewGuide: () => Effect.die("Unexpected review generation"),
+    generateTranscriptionPostProcessing: () => Effect.die("Unexpected transcript generation"),
     generateHelp: (input: HelpGenerationInput) =>
       Effect.sync(() => calls.push(input)).pipe(
         Effect.andThen(
@@ -333,7 +334,7 @@ it.layer(NodeServices.layer)("Help", (it) => {
           slowSpanCount: 3,
           partial: false,
           recentFailures: Array.from({ length: 5 }, (_, index) => ({
-            operation: index === 0 ? "ws.rpc.server.getSettings" : "other",
+            operation: index === 0 ? "ws.rpc.server.updateSettings" : "other",
             category: "authentication",
             occurredAt: "2026-10-22T12:00:00.000Z",
           })),

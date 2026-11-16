@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off - A fake download edits a note synchronously mid-request.
 import * as NodeFS from "node:fs";
@@ -524,7 +525,7 @@ const assertNotSyncing = (drive: FakeOneDrive, sync: MemorySync.MemorySync["Serv
     assert.isNull(drive.file("TritonAI Harness"));
   });
 
-it.layer(NodeServices.layer)("MemorySync", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("MemorySync", (it) => {
   // regression: #335 preserve recovered inbox notes and sign-out access
   it.effect("keeps sign out available when Microsoft cannot load the account name", () =>
     Effect.gen(function* () {

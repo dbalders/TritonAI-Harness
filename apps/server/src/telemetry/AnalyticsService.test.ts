@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -17,6 +18,8 @@ import {
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as AnalyticsService from "./AnalyticsService.ts";
 
 interface RecordedEventRequest {
@@ -29,7 +32,7 @@ interface RecordedEventRequest {
     readonly props?: Readonly<Record<string, unknown>>;
   } | null;
 }
-it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService test", (it) => {
   it.effect("flush delivers buffered events individually to Plausible", () =>
     Effect.gen(function* () {
       const capturedRequests: Array<RecordedEventRequest> = [];
@@ -235,35 +238,106 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
     }),
   );
 
-  it.effect("does not create an install ID when telemetry is disabled", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-telemetry-disabled-",
-      });
-      const serverConfigLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), baseDir);
-      const runtimeLayer = AnalyticsService.layer.pipe(
-        Layer.provideMerge(serverConfigLayer),
-        Layer.provide(
-          ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: false })),
-        ),
-        Layer.provide(
-          Layer.mergeAll(
-            Layer.succeed(HostProcessPlatform, "linux"),
-            Layer.succeed(HostProcessArchitecture, "arm64"),
+  it.effect.each([
+    { enabled: false, policyDisabled: false, pending: false },
+    { enabled: true, policyDisabled: true, pending: false },
+    { enabled: true, policyDisabled: false, pending: true },
+  ])(
+    "does not create an install ID without consent ($enabled/$policyDisabled/$pending)",
+    ({ enabled, policyDisabled, pending }) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-telemetry-disabled-",
+        });
+        const serverConfigLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), baseDir);
+        const runtimeLayer = AnalyticsService.layer.pipe(
+          Layer.provideMerge(serverConfigLayer),
+          Layer.provide(
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: enabled })),
           ),
-        ),
-        Layer.provideMerge(NodeHttpServer.layerTest),
+          Layer.provide(
+            ManagedPolicy.layerTest(
+              policyDisabled
+                ? { schemaVersion: 1, organization: "Test", limits: { telemetry: false } }
+                : undefined,
+            ),
+          ),
+          Layer.provide(
+            Layer.succeed(
+              HostProcess.Environment,
+              pending ? { T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1" } : {},
+            ),
+          ),
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(HostProcessPlatform, "linux"),
+              Layer.succeed(HostProcessArchitecture, "arm64"),
+            ),
+          ),
+          Layer.provideMerge(NodeHttpServer.layerTest),
+        );
+
+        const anonymousIdPath = yield* Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          yield* analytics.record("server.boot.heartbeat", {
+            threadCount: 1,
+            projectCount: 1,
+          });
+          yield* analytics.flush;
+          return (yield* ServerConfig.ServerConfig).anonymousIdPath;
+        }).pipe(Effect.provide(runtimeLayer));
+
+        assert.isFalse(yield* fileSystem.exists(anonymousIdPath));
+      }),
+  );
+
+  it.effect("waits for shell consent and assigns a stable anonymous ID after opt-in", () =>
+    Effect.gen(function* () {
+      const environment: NodeJS.ProcessEnv = { T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1" };
+      const bodies: Array<NonNullable<RecordedEventRequest["body"]>> = [];
+      const client = HttpClient.make((request) =>
+        Effect.sync(() => {
+          assert.equal(request.body._tag, "Uint8Array");
+          if (request.body._tag === "Uint8Array")
+            bodies.push(JSON.parse(new TextDecoder().decode(request.body.body)));
+          return HttpClientResponse.fromWeb(request, new Response(null, { status: 202 }));
+        }),
       );
-
-      const anonymousIdPath = yield* Effect.gen(function* () {
+      const runtime = AnalyticsService.layer.pipe(
+        Layer.provideMerge(
+          ServerConfig.layerTest(process.cwd(), { prefix: "harness-late-consent-" }),
+        ),
+        Layer.provide(
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: true })),
+        ),
+        Layer.provide(Layer.succeed(HostProcess.Environment, environment)),
+        Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+      );
+      yield* Effect.gen(function* () {
         const analytics = yield* AnalyticsService.AnalyticsService;
-        yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
+        const { anonymousIdPath } = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* analytics.record("thread.created");
         yield* analytics.flush;
-        return (yield* ServerConfig.ServerConfig).anonymousIdPath;
-      }).pipe(Effect.provide(runtimeLayer));
-
-      assert.isFalse(yield* fileSystem.exists(anonymousIdPath));
+        assert.isFalse(yield* fs.exists(anonymousIdPath));
+        delete environment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING;
+        environment.T3CODE_TELEMETRY_ENABLED = "false";
+        yield* analytics.record("thread.created");
+        yield* analytics.flush;
+        assert.isFalse(yield* fs.exists(anonymousIdPath));
+        environment.T3CODE_TELEMETRY_ENABLED = "true";
+        yield* analytics.record("thread.created");
+        yield* analytics.flush;
+        yield* analytics.record("thread.created");
+        yield* analytics.flush;
+        const savedId = (yield* fs.readFileString(anonymousIdPath)).trim();
+        assert.equal(bodies.length, 2);
+        assert.deepEqual(
+          bodies.map((body) => body.props?.aid),
+          [savedId, savedId],
+        );
+      }).pipe(Effect.provide(runtime));
     }),
   );
 

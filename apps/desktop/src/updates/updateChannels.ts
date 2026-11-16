@@ -1,11 +1,6 @@
-import type { DesktopUpdateChannel } from "@t3tools/contracts";
-
-import { isTritonAiNightlyVersion } from "@t3tools/contracts";
+// Preview builds share nightly branding but ship without an update feed.
+const PRERELEASE_VERSION_PATTERN = /^[^-+]+-(?:nightly|preview)\.\d{8}\.\d+$/;
 
 export function isNightlyDesktopVersion(version: string): boolean {
-  return isTritonAiNightlyVersion(version) || /^[^-+]+-preview\.\d{8}\.\d+$/.test(version);
-}
-
-export function resolveDefaultDesktopUpdateChannel(appVersion: string): DesktopUpdateChannel {
-  return isTritonAiNightlyVersion(appVersion) ? "nightly" : "latest";
+  return PRERELEASE_VERSION_PATTERN.test(version);
 }

@@ -10,6 +10,8 @@ import { assert, it } from "@effect/vitest";
 import {
   ComposerContextId,
   EventId,
+  ProjectId,
+  ProviderInstanceId,
   type OrchestrationMessageContext,
   ThreadId,
 } from "@t3tools/contracts";
@@ -26,8 +28,6 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as Statement from "effect/sql/Statement";
 
-import * as SqlitePersistence from "../../persistence/Sqlite.ts";
-
 import { listLinkedPullRequestThreads } from "../../pullRequest/linkedThreads.ts";
 
 import * as EventSink from "../EventSink.ts";
@@ -35,13 +35,12 @@ import * as EventSink from "../EventSink.ts";
 import * as EventStore from "../EventStore.ts";
 
 import * as LegacyV1ThreadImporter from "./LegacyV1ThreadImporter.ts";
-
-import * as ProjectionMaintenance from "../ProjectionMaintenance.ts";
-
+import * as ProjectionReplay from "../testkit/ProjectionReplay.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 
-const layerDatabase = SqlitePersistence.layerMemory;
+import { layerReaderDatabase, traceSqlRouting } from "../../persistence/testkit/SqliteRouting.ts";
 
+const layerDatabase = layerReaderDatabase;
 const layerEventStoreProvided = EventStore.layer.pipe(Layer.provideMerge(layerDatabase));
 
 const layerProjectionStoreProvided = ProjectionStore.layer.pipe(Layer.provideMerge(layerDatabase));
@@ -57,8 +56,7 @@ const layerEventSinkProvided = EventSink.layer.pipe(Layer.provide(layerStoresPro
 const layerImporterProvided = LegacyV1ThreadImporter.layer.pipe(
   Layer.provide(Layer.mergeAll(layerStoresProvided, layerEventSinkProvided)),
 );
-
-const layerProjectionMaintenanceProvided = ProjectionMaintenance.layer.pipe(
+const layerProjectionReplayProvided = ProjectionReplay.layer.pipe(
   Layer.provide(layerStoresProvided),
 );
 
@@ -66,7 +64,7 @@ const layerTest = Layer.mergeAll(
   layerStoresProvided,
   layerEventSinkProvided,
   layerImporterProvided,
-  layerProjectionMaintenanceProvided,
+  layerProjectionReplayProvided,
 );
 
 const seedPendingTranscripts = Effect.gen(function* () {
@@ -104,6 +102,72 @@ const seedPendingTranscripts = Effect.gen(function* () {
   }
   yield* importer.reconcileShells;
 });
+
+it.effect("routes shell selectors to readers while imports stay writable", () =>
+  Effect.gen(function* () {
+    const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+    const sql = yield* SqlClient.SqlClient;
+    const { queries, trace } = traceSqlRouting();
+    yield* seedPendingTranscripts.pipe(trace);
+    const selectors = queries.filter(
+      ({ query }) =>
+        query.includes("FROM projection_threads AS thread") ||
+        query.includes("FROM orchestration_v2_legacy_imports AS legacy_import") ||
+        query.includes("FROM projection_thread_messages AS message"),
+    );
+    assert.lengthOf(selectors, 6);
+    assert.deepEqual([...new Set(selectors.map((row) => row.connection))], ["reader"]);
+    assert.deepEqual(yield* importer.reconcileShells, {
+      importedThreadCount: 0,
+      importedMessageCount: 0,
+    });
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          interaction_mode, created_at, updated_at
+        ) VALUES (
+          'thread:uncommitted', 'project:background', 'Uncommitted legacy title',
+          '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', 'default',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        )
+      `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, role, text, is_streaming, created_at, updated_at
+          ) VALUES (
+            'message:uncommitted', 'thread:uncommitted', 'user', 'Uncommitted preview', 0,
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+          )
+        `;
+        yield* sql`
+          UPDATE orchestration_v2_projection_threads
+          SET payload_json = json_remove(payload_json, '$.pinnedAt')
+          WHERE thread_id = 'thread:first'
+        `;
+        yield* sql`
+          UPDATE projection_threads SET pinned_at = '2026-01-01T00:00:00.000Z'
+          WHERE thread_id = 'thread:first'
+        `;
+        const result = yield* importer.reconcileShells;
+        assert.deepEqual(result, { importedThreadCount: 2, importedMessageCount: 1 });
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        const repaired = yield* projections.getThreadProjection(ThreadId.make("thread:first"));
+        assert.equal(DateTime.formatIso(repaired.thread.pinnedAt!), "2026-01-01T00:00:00.000Z");
+        const imported = yield* projections.getThreadProjection(
+          ThreadId.make("thread:uncommitted"),
+        );
+        assert.equal(imported.messages[0]?.text, "Uncommitted preview");
+        assert.equal(
+          (yield* projections.getThreadProjection(ThreadId.make("thread:uncommitted"))).thread
+            .title,
+          "Uncommitted legacy title",
+        );
+      }),
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
 
 it.effect(
   "keeps hydrating later transcripts after a defect and leaves the failed thread pending",
@@ -235,12 +299,6 @@ it.effect("preserves newer thread activity while hydrating legacy transcripts", 
     });
     const readActivity = Effect.gen(function* () {
       const projection = yield* projections.getThreadProjection(threadId);
-      const storedEvents = yield* events.read({ threadId }).pipe(Stream.runCollect);
-      const memory = yield* Effect.gen(function* () {
-        const store = yield* ProjectionStore.ProjectionStoreV2;
-        for (const stored of storedEvents) yield* store.apply(stored.event);
-        return yield* store.getThreadProjection(threadId);
-      }).pipe(Effect.provide(ProjectionStore.layerMemory));
       const [row] = yield* sql<{ readonly scalar: string; readonly payload: string }>`
         SELECT updated_at AS scalar, json_extract(payload_json, '$.updatedAt') AS payload
         FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
@@ -250,8 +308,6 @@ it.effect("preserves newer thread activity while hydrating legacy transcripts", 
         payload: row?.payload,
         sqlThread: DateTime.formatIso(projection.thread.updatedAt),
         sqlProjection: DateTime.formatIso(projection.updatedAt),
-        memoryThread: DateTime.formatIso(memory.thread.updatedAt),
-        memoryProjection: DateTime.formatIso(memory.updatedAt),
       };
     });
     const expectedActivity = (at: string) => ({
@@ -259,8 +315,6 @@ it.effect("preserves newer thread activity while hydrating legacy transcripts", 
       payload: at,
       sqlThread: at,
       sqlProjection: at,
-      memoryThread: at,
-      memoryProjection: at,
     });
     assert.deepStrictEqual(yield* readActivity, expectedActivity(shellAt));
     const hydrated = yield* projections.getThreadProjection(threadId);
@@ -328,12 +382,79 @@ it.effect("preserves newer thread activity while hydrating legacy transcripts", 
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("caches the absent legacy transcript for a native V2 thread", () =>
+  Effect.gen(function* () {
+    const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = ThreadId.make("thread:v2-born");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const now = DateTime.makeUnsafe("2026-01-01T00:00:00.000Z");
+    yield* eventSink.write({
+      events: [
+        {
+          id: EventId.make("event:v2-born"),
+          type: "thread.created",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: threadId,
+            projectId: ProjectId.make("project:v2-born"),
+            title: "Native V2 thread",
+            providerInstanceId,
+            modelSelection: { instanceId: providerInstanceId, model: "gpt-6" },
+            createdBy: "user",
+            creationSource: "web",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: null,
+            lineage: {
+              parentThreadId: null,
+              relationshipToParent: null,
+              rootThreadId: threadId,
+            },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+        },
+      ],
+    });
+    const before = yield* projections.getThreadProjection(threadId);
+    let legacyLookups = 0;
+    for (let read = 0; read < 3; read++) {
+      const summary = yield* importer.ensureTranscript(threadId).pipe(
+        Effect.provideService(Statement.CurrentTransformer, (statement) => {
+          const [query, parameters] = statement.compile();
+          if (
+            query.includes("FROM orchestration_v2_legacy_imports") &&
+            parameters[0] === threadId
+          ) {
+            legacyLookups++;
+          }
+          return Effect.succeed(statement);
+        }),
+      );
+      assert.deepStrictEqual(summary, { importedThreadCount: 0, importedMessageCount: 0 });
+    }
+    assert.equal(legacyLookups, 1);
+    assert.deepStrictEqual(yield* projections.getThreadProjection(threadId), before);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
   it.effect("imports lightweight shells, hydrates transcripts, and remains idempotent", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
-      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const maintenance = yield* ProjectionReplay.ProjectionReplay;
       const projections = yield* ProjectionStore.ProjectionStoreV2;
       const eventSink = yield* EventSink.EventSinkV2;
       const threadId = ThreadId.make("thread:legacy-import");
@@ -718,7 +839,7 @@ it.layer(layerTest)("LegacyV1ThreadImporter", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const importer = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
-      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const maintenance = yield* ProjectionReplay.ProjectionReplay;
       const projections = yield* ProjectionStore.ProjectionStoreV2;
       const eventSink = yield* EventSink.EventSinkV2;
       const threadId = ThreadId.make("thread:legacy-metadata-upgrade");
@@ -875,7 +996,7 @@ it.layer(layerTest)("Harness V1 goal continuity", (it) => {
           importedMessageCount: 0,
         });
         yield* importer.ensureTranscript(threadId);
-        yield* (yield* ProjectionMaintenance.ProjectionMaintenanceV2).rebuild;
+        yield* (yield* ProjectionReplay.ProjectionReplay).rebuild;
         assert.deepStrictEqual(
           (yield* projections.getThreadProjection(threadId)).thread.legacyGoal,
           projection.thread.legacyGoal,
@@ -889,7 +1010,11 @@ it.layer(layerTest)("Harness V1 goal continuity", (it) => {
           providerSessionId: null,
           appThreadId: threadId,
           ownerNodeId: null,
-          nativeThreadRef: { driver: "codex", nativeId: "native:goal-import", strength: "strong" },
+          nativeThreadRef: {
+            driver: "codex",
+            nativeId: "native:goal-import",
+            strength: "strong",
+          },
           nativeConversationHeadRef: null,
           status: "idle",
           firstRunOrdinal: null,
@@ -919,12 +1044,15 @@ it.layer(layerTest)("Harness V1 goal continuity", (it) => {
           (yield* projections.getThreadShell(threadId))?.goal,
           projection.thread.legacyGoal,
         );
-        const nativeGoal = { objective: "Explicit native replacement", status: "paused" as const };
+        const nativeGoal = {
+          objective: "Explicit native replacement",
+          status: "paused" as const,
+        };
         yield* updateOwner({ ...nativeOwner, goal: nativeGoal, legacyGoalSuperseded: true });
         assert.deepStrictEqual((yield* projections.getThreadShell(threadId))?.goal, nativeGoal);
         yield* updateOwner({ ...nativeOwner, goal: null, legacyGoalSuperseded: true });
         assert.isNull((yield* projections.getThreadShell(threadId))?.goal);
-        yield* (yield* ProjectionMaintenance.ProjectionMaintenanceV2).rebuild;
+        yield* (yield* ProjectionReplay.ProjectionReplay).rebuild;
         assert.isNull((yield* projections.getThreadShell(threadId))?.goal);
       }),
   );

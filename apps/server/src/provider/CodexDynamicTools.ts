@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - the persisted tool catalog fingerprint must be synchronous and deterministic.
 import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
-import * as Data from "effect/Data";
+import * as Schema from "effect/Schema";
 import type { ThreadId, ProviderApprovalDecision, RuntimeMode } from "@t3tools/contracts";
 import type * as EffectCodexSchema from "effect-codex-app-server/schema";
 import {
@@ -210,6 +210,7 @@ export const gateDynamicToolCall = Effect.fn("CodexDynamicTools.gateDynamicToolC
     const awaitAvailability = options.awaitDynamicToolAvailability;
     if (!availability.available && availability.transient && awaitAvailability) {
       const initial = availability;
+      // @effect-diagnostics-next-line effectTryWithoutCatch:off -- A failed availability wait retains the initial observed state.
       availability = yield* Effect.tryPromise((signal) =>
         awaitAvailability(definition.name, { signal }),
       ).pipe(Effect.orElseSucceed(() => initial));
@@ -353,9 +354,10 @@ export function planDynamicToolApproval(input: {
   };
 }
 
-class CodexDynamicToolInvocationError extends Data.TaggedError("CodexDynamicToolInvocationError")<{
-  readonly cause: unknown;
-}> {}
+class CodexDynamicToolInvocationError extends Schema.TaggedError<CodexDynamicToolInvocationError>()(
+  "CodexDynamicToolInvocationError",
+  { cause: Schema.Defect() },
+) {}
 
 /**
  * Runs a dynamic tool call the gate admitted. The original failure reaches
