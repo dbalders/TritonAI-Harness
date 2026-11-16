@@ -106,6 +106,7 @@ const posix = { skip: os.platform() === "win32" };
 
 test("owns an isolated data home outside the checkout for No project threads", posix, async (t) => {
   const f = fixture(t);
+  const other = fixture(t);
   const dataHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "harness-dev-data-")));
   const overrides = { TRITONAI_HARNESS_DEV_HOME: dataHome };
   t.after(() => fs.rmSync(dataHome, { recursive: true, force: true }));
@@ -114,6 +115,10 @@ test("owns an isolated data home outside the checkout for No project threads", p
   assert.equal(started.profileRoot, path.join(dataHome, "electron"));
   assert.equal(JSON.parse(f.run("status", overrides).stdout).running, true);
   assert.equal(JSON.parse(f.run("status").stdout).running, false);
+  const ownerBefore = fs.readFileSync(path.join(dataHome, "launcher.json"), "utf8");
+  await assert.rejects(other.start("start", overrides), /Launcher exited 1/);
+  assert.equal(fs.readFileSync(path.join(dataHome, "launcher.json"), "utf8"), ownerBefore);
+  assert.equal(JSON.parse(f.run("status", overrides).stdout).running, true);
   assert.equal(f.run("stop", overrides).status, 0);
   assert.equal(JSON.parse(f.run("status", overrides).stdout).running, false);
 });

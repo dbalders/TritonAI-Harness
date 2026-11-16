@@ -144,6 +144,9 @@ else if (command === "stop") {
     console.log(JSON.stringify(current));
     process.exit(0);
   }
+  const existingOwner = readOwner();
+  if (existingOwner && existingOwner.root !== root && alive(existingOwner.pid))
+    throw new Error("This development home has a live owner from another checkout.");
   if (isOwnedBackend(current.backend))
     throw new Error(
       "A backend is still alive without an owned launcher. Stop it through this launcher first.",
