@@ -149,6 +149,8 @@ export async function generatePreparedServerCache(resourcesInput: string): Promi
     : "app.asar";
   const dist = NodePath.join(resources, archive, "apps/server/dist");
   NodeFS.mkdirSync(prepared, { recursive: true });
+  // This directory ships inside the app, including administrator-owned installs.
+  NodeFS.chmodSync(prepared, 0o755);
   const result = NodeModule.enableCompileCache({ directory: prepared, portable: true });
   if (result.status !== NodeModule.constants.compileCacheStatus.ENABLED)
     throw new Error("Cannot enable release compile cache");
@@ -169,7 +171,10 @@ export async function generatePreparedServerCache(resourcesInput: string): Promi
     .flatMap((file) => {
       const key = cacheKey(active, NodePath.join(dist, file));
       if (!NodeFS.existsSync(NodePath.join(active, key))) return [];
-      NodeFS.copyFileSync(NodePath.join(active, key), NodePath.join(prepared, key));
+      const destination = NodePath.join(prepared, key);
+      NodeFS.copyFileSync(NodePath.join(active, key), destination);
+      // Node creates private cache files; packaged resources must be readable by every user.
+      NodeFS.chmodSync(destination, 0o644);
       return [{ module: `${archive}/apps/server/dist/${file}`, file: key }];
     });
   if (![cli, server].every((file) => entries.some((entry) => entry.module.endsWith(`/${file}`))))
@@ -178,5 +183,6 @@ export async function generatePreparedServerCache(resourcesInput: string): Promi
     NodePath.join(prepared, "manifest.json"),
     JSON.stringify({ format: 1, runtime: runtimeIdentity(), entries }),
   );
+  NodeFS.chmodSync(NodePath.join(prepared, "manifest.json"), 0o644);
   NodeFS.rmSync(active, { recursive: true });
 }

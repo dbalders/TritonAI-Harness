@@ -76,6 +76,7 @@ it.each([
         require("node:assert/strict").equal(executable, ${JSON.stringify(NodePath.join(root, layout.executable))});
         return spawn(process.execPath, args, options);
       };
+      process.umask(0o077);
       Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });
       Object.defineProperty(process, "arch", { value: ${JSON.stringify(hostArch)} });
       require(${JSON.stringify(hook)})({
@@ -108,6 +109,11 @@ it.each([
       NodeFS.statSync(NodePath.join(resources, "server-compile-cache", manifest.entries[0].file))
         .size,
     ).toBeGreaterThan(0);
+    const prepared = NodePath.join(resources, "server-compile-cache");
+    expect(NodeFS.statSync(prepared).mode & 0o555).toBe(0o555);
+    for (const file of NodeFS.readdirSync(prepared)) {
+      expect(NodeFS.statSync(NodePath.join(prepared, file)).mode & 0o444).toBe(0o444);
+    }
   } finally {
     NodeFS.rmSync(root, { recursive: true, force: true });
   }

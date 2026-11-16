@@ -143,6 +143,14 @@ const decodePluginRuntimeManifest = Schema.decodeUnknownSync(
 const decodeReleasePackageManifest = Schema.decodeEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
 );
+const decodePreparedServerCacheManifest = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      format: Schema.Literals([1]),
+      entries: Schema.Array(Schema.Struct({ file: Schema.String, module: Schema.String })),
+    }),
+  ),
+);
 const decodeWorkspaceConfig = Schema.decodeEffect(fromYaml(WorkspaceConfig));
 const encodeStageWorkspaceConfig = Schema.encodeEffect(fromYaml(StageWorkspaceConfig));
 
@@ -4373,6 +4381,45 @@ const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(functio
   return count;
 });
 
+const countManifestBackedServerCacheFiles = Effect.fn(
+  "desktopArtifact.countManifestBackedServerCacheFiles",
+)(function* (resourcesDir: string, asarPath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const cacheDir = path.join(resourcesDir, "server-compile-cache");
+  const serialized = yield* fs.readFileString(path.join(cacheDir, "manifest.json"));
+  const manifest = yield* decodePreparedServerCacheManifest(serialized);
+  if (manifest.entries.length === 0) return 0;
+  const files = new Set<string>();
+  const modules = new Set<string>();
+  for (const entry of manifest.entries) {
+    if (
+      !/^[a-f0-9]{8}$/.test(entry.file) ||
+      !/^server\.asar\/apps\/server\/dist\/[^/\\]+\.mjs$/.test(entry.module) ||
+      files.has(entry.file) ||
+      modules.has(entry.module)
+    )
+      return 0;
+    const module = yield* Effect.try({
+      try: () =>
+        statFile(asarPath, path.join(...entry.module.slice("server.asar/".length).split("/"))),
+      catch: (cause) =>
+        new WindowsPackagedPayloadValidationError({
+          reason: "sidecar-invalid",
+          packagedAppDir: path.dirname(resourcesDir),
+          cause,
+        }),
+    });
+    if (!("size" in module) || (yield* fs.stat(path.join(cacheDir, entry.file))).type !== "File")
+      return 0;
+    files.add(entry.file);
+    modules.add(entry.module);
+  }
+  // Only the manifest and its unique, existing server-module cache files get
+  // an allowance. Unexpected cache files still count against the original budget.
+  return files.size + 1;
+});
+
 export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
   "desktopArtifact.verifyWindowsPrimaryFffNativeLoad",
 )(function* (input: {
@@ -4508,7 +4555,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
+  const baseFileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
   const isFile = (filePath: string) =>
     fs.stat(filePath).pipe(
       Effect.map((stat) => stat.type === "File"),
@@ -4707,6 +4754,11 @@ export const validateWindowsPackagedPayload = Effect.fn(
   }
 
   const fileCount = yield* countPayloadFiles(packagedAppDir);
+  const preparedCacheFileCount = yield* countManifestBackedServerCacheFiles(
+    resourcesDir,
+    asarPath,
+  ).pipe(Effect.orElseSucceed(() => 0));
+  const fileLimit = baseFileLimit + preparedCacheFileCount;
   if (fileCount > fileLimit) {
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "file-limit-exceeded",
@@ -4731,7 +4783,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   });
 
   yield* Effect.log(
-    `[desktop-artifact] Validated Windows payload structure (${String(fileCount)} files, ${String(unpackedFiles.length)} sidecar natives); runtime checks: Windows primary ${windowsPrimaryNativeLoad}, server sidecar ${sidecarSelfContainment}.`,
+    `[desktop-artifact] Validated Windows payload structure (${String(fileCount)} files including ${String(preparedCacheFileCount)} manifest-backed cache files, ${String(unpackedFiles.length)} sidecar natives); runtime checks: Windows primary ${windowsPrimaryNativeLoad}, server sidecar ${sidecarSelfContainment}.`,
   );
   return {
     packagedAppDir,
