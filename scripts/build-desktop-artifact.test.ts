@@ -1861,7 +1861,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           assert.instanceOf(malformed, WindowsPackagedPayloadValidationError);
           assert.equal(malformed.reason, "file-limit-exceeded");
         }),
-      ),
+      ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
 
   it.effect("rejects a Windows payload that regresses above the file-count budget", () =>
