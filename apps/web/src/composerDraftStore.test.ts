@@ -1217,6 +1217,34 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(file && composerFileNeedsReattach(file)).toBe(true);
   });
 
+  it("keeps a linked desktop file sendable after reload until its draft changes environment", () => {
+    const linkedPath = "/Users/test/Downloads/report.pdf";
+    useComposerDraftStore.getState().setProjectDraftThreadId(projectRef, draftId, { threadId });
+    useComposerDraftStore
+      .getState()
+      .addFiles(draftId, [{ ...makeFile("file-linked"), path: linkedPath }]);
+
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    useComposerDraftStore.setState(
+      merge(
+        JSON.parse(
+          JSON.stringify(partializeComposerDraftStoreState(useComposerDraftStore.getState())),
+        ),
+        useComposerDraftStore.getInitialState(),
+      ),
+    );
+    const restored = useComposerDraftStore.getState().getComposerDraft(draftId)?.files[0];
+    expect(restored).toMatchObject({ id: "file-linked", file: null, path: linkedPath });
+    expect(restored && composerFileNeedsReattach(restored)).toBe(false);
+
+    useComposerDraftStore
+      .getState()
+      .setDraftThreadContext(draftId, { projectRef: remoteProjectRef });
+    const moved = useComposerDraftStore.getState().getComposerDraft(draftId)?.files[0];
+    expect(moved?.path ?? null).toBeNull();
+    expect(moved && composerFileNeedsReattach(moved)).toBe(true);
+  });
+
   it("rechecks balancing when an empty draft is remapped to another project member", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, {

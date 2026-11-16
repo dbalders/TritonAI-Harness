@@ -182,7 +182,13 @@ export type ComposerFileAttachment = ChatFileAttachment & {
 };
 
 export function composerFileNeedsReattach(file: ComposerFileAttachment): boolean {
-  return file.file === null && file.uploadedAttachmentId === undefined;
+  return file.file === null && file.path == null && file.uploadedAttachmentId === undefined;
+}
+
+/** Host paths are only readable by the environment they were picked in. */
+function clearLinkedFilePaths(draft: ComposerThreadDraftState): ComposerThreadDraftState {
+  if (!draft.files.some((file) => file.path != null)) return draft;
+  return { ...draft, files: draft.files.map((file) => ({ ...file, path: null })) };
 }
 
 function clearStaleFileUploadMetadata(
@@ -227,6 +233,7 @@ export const PersistedComposerDraftFileAttachment = Schema.Struct({
   sizeBytes: Schema.Number,
   attachmentId: Schema.optionalKey(Schema.String),
   environmentId: Schema.optionalKey(EnvironmentId),
+  path: Schema.optionalKey(Schema.String),
   source: Schema.optional(PastedTextAttachmentSource),
 });
 export type PersistedComposerDraftFileAttachment = typeof PersistedComposerDraftFileAttachment.Type;
@@ -2141,6 +2148,7 @@ export function partializeComposerDraftStoreState(
               mimeType: file.mimeType,
               sizeBytes: file.sizeBytes,
               ...(file.source ? { source: file.source } : {}),
+              ...(file.path ? { path: file.path } : {}),
               ...(file.uploadedAttachmentId && file.uploadEnvironmentId
                 ? {
                     attachmentId: file.uploadedAttachmentId,
@@ -2434,6 +2442,7 @@ function toHydratedThreadDraft(
       sizeBytes: file.sizeBytes,
       file: null,
       ...(file.source ? { source: file.source } : {}),
+      ...(file.path !== undefined ? { path: file.path } : {}),
       ...(file.attachmentId !== undefined && file.environmentId !== undefined
         ? { uploadedAttachmentId: file.attachmentId, uploadEnvironmentId: file.environmentId }
         : {}),
@@ -2666,9 +2675,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               existingThread.environmentId !== projectRef.environmentId &&
               existingDraft !== undefined
             ) {
-              const nextDraft = clearStaleFileUploadMetadata(
-                existingDraft,
-                projectRef.environmentId,
+              const nextDraft = clearLinkedFilePaths(
+                clearStaleFileUploadMetadata(existingDraft, projectRef.environmentId),
               );
               if (nextDraft !== existingDraft) {
                 nextDraftsByThreadKey = {
@@ -2803,11 +2811,19 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             if (isUnchanged) {
               return state;
             }
+            const existingDraft = state.draftsByThreadKey[threadKey];
+            const nextDraft =
+              existingDraft && nextDraftThread.environmentId !== existing.environmentId
+                ? clearLinkedFilePaths(existingDraft)
+                : existingDraft;
             return {
               draftThreadsByThreadKey: {
                 ...state.draftThreadsByThreadKey,
                 [threadKey]: nextDraftThread,
               },
+              ...(nextDraft && nextDraft !== existingDraft
+                ? { draftsByThreadKey: { ...state.draftsByThreadKey, [threadKey]: nextDraft } }
+                : {}),
             };
           });
         },

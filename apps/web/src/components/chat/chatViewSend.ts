@@ -332,8 +332,6 @@ export function prepareTurnAttachments(input: {
   return Promise.all(
     input.attachments.map(async (attachment) => {
       if (attachment.type === "file" && attachment.path != null) {
-        if (attachment.file === null)
-          throw new Error(`File '${attachment.name}' must be attached again.`);
         return {
           type: "file" as const,
           id: attachment.id,

@@ -214,6 +214,7 @@ export const launchThread = Effect.fn("ThreadMessageIntake.launchThread")(functi
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   yield* AttachmentClaims.validateAttachmentLimits(input.initialMessage?.attachments ?? []);
   if (!input.initialMessage?.attachments.some(AttachmentClaims.attachmentIsPendingUpload)) {
+    yield* AttachmentClaims.validateReferencedFiles(input.initialMessage?.attachments ?? []);
     return yield* launches.launch(input);
   }
   if (input.threadId === undefined) {
