@@ -74,6 +74,30 @@ export const releaseClaimedAttachments = Effect.fn("AttachmentClaims.releaseClai
   },
 );
 
+/** Host-path files are read in place, so they must still be the file the user attached. */
+export const validateReferencedFiles = Effect.fn("AttachmentClaims.validateReferencedFiles")(
+  function* (attachments: ReadonlyArray<ChatAttachment>) {
+    const fs = yield* FileSystem.FileSystem;
+    for (const attachment of attachments) {
+      if (
+        attachment.type !== "file" ||
+        !("path" in attachment) ||
+        typeof attachment.path !== "string"
+      )
+        continue;
+      if (!NodePath.isAbsolute(attachment.path))
+        return yield* new AttachmentClaimError({
+          message: `File attachment '${attachment.name}' must use an absolute path.`,
+        });
+      const info = yield* fs.stat(attachment.path).pipe(Effect.orElseSucceed(() => null));
+      if (!info || info.type !== "File" || Number(info.size) !== attachment.sizeBytes)
+        return yield* new AttachmentClaimError({
+          message: `File attachment '${attachment.name}' is missing or has changed. Remove it and attach it again.`,
+        });
+    }
+  },
+);
+
 /** Copies preserve the pending retry source after failed bootstrap; the pending sweep reclaims it. */
 export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingAttachments")(
   function* (input: {
@@ -89,24 +113,7 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
         message: "Duplicate attachment ids are not allowed.",
       });
     }
-    const fs = yield* FileSystem.FileSystem;
-    for (const attachment of input.attachments) {
-      if (
-        attachment.type !== "file" ||
-        !("path" in attachment) ||
-        typeof attachment.path !== "string"
-      )
-        continue;
-      if (!NodePath.isAbsolute(attachment.path))
-        return yield* new AttachmentClaimError({
-          message: `File attachment '${attachment.name}' must use an absolute path.`,
-        });
-      const info = yield* fs.stat(attachment.path).pipe(Effect.orElseSucceed(() => null));
-      if (!info || info.type !== "File" || Number(info.size) !== attachment.sizeBytes)
-        return yield* new AttachmentClaimError({
-          message: `File attachment '${attachment.name}' is missing or has changed.`,
-        });
-    }
+    yield* validateReferencedFiles(input.attachments);
     if (!input.attachments.some(attachmentIsPendingUpload)) {
       return { attachments: input.attachments, claimedPaths: [] } satisfies ClaimedAttachments;
     }

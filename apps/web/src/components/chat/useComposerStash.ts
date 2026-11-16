@@ -500,7 +500,8 @@ export function useComposerStash(input: {
       return;
     }
     for (const file of files) {
-      if (composerFileNeedsReattach(file)) {
+      // A stash uploads bytes, which a restored linked path no longer has.
+      if (file.file === null && file.uploadedAttachmentId === undefined) {
         toastManager.add({
           type: "error",
           title: "Attach dropped files again or remove them before stashing",

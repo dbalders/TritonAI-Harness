@@ -10,6 +10,8 @@ import {
   EventId,
   GuestMessageId,
   MessageId,
+  ProjectId,
+  ProviderInstanceId,
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
@@ -32,8 +34,9 @@ import {
   OrchestratorCommandPreviouslyRejectedError,
   OrchestratorDispatchError,
 } from "./Orchestrator.ts";
+import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
-import { dispatchCommand } from "./ThreadMessageIntake.ts";
+import { dispatchCommand, launchThread } from "./ThreadMessageIntake.ts";
 
 const layerIntakeTest = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-question-intake-",
@@ -424,5 +427,48 @@ it.effect("sends a guest message with the guest's files, never ones the client n
     expect(command.attachments).toHaveLength(1);
     // The guest's file, which is already the thread's.
     expect(command.attachments).toEqual([guestFile]);
+  }).pipe(Effect.provide(layerIntakeTest)),
+);
+
+it.effect("refuses to launch a thread whose linked file moved after it was attached", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const launched: ThreadLaunchService.ThreadLaunchInput[] = [];
+    const error = yield* launchThread({
+      commandId: CommandId.make("launch-moved-linked-file"),
+      projectId: ProjectId.make("project-linked-file"),
+      title: "New thread",
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.1-codex" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      workspaceStrategy: { type: "root" },
+      initialMessage: {
+        text: "Summarize the attached file.",
+        attachments: [
+          {
+            type: "file",
+            id: ChatAttachmentId.make("linked-file"),
+            name: "notes.csv",
+            mimeType: "text/csv",
+            sizeBytes: 12,
+            path: NodePath.join(config.attachmentsDir, "moved-away", "notes.csv"),
+          },
+        ],
+      },
+      createdBy: "user",
+      creationSource: "web",
+    }).pipe(
+      Effect.provide(
+        Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+          launch: (input) => {
+            launched.push(input);
+            return Effect.die("launched");
+          },
+        }),
+      ),
+      Effect.flip,
+    );
+    expect(error.message).toContain("'notes.csv' is missing or has changed");
+    expect(launched).toEqual([]);
   }).pipe(Effect.provide(layerIntakeTest)),
 );
