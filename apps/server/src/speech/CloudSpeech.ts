@@ -97,6 +97,19 @@ function audioBody(
   return HttpClientRequest.bodyFormData(form);
 }
 
+/** The gateway URL, or null when it would send the key and audio over plain HTTP off this machine. */
+function trustedTritonAiBaseUrl(configured: string | undefined) {
+  try {
+    const url = new URL(configured?.trim() || TRITONAI_BASE_URL);
+    const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+    return url.protocol === "https:" || (url.protocol === "http:" && local)
+      ? url.href.replace(/\/+$/u, "")
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function tritonAiBody(audio: ArrayBuffer, language: string) {
   const form = new FormData();
   form.set("model", TRITONAI_SPEECH_MODEL);
@@ -212,10 +225,8 @@ export const layer = Layer.effect(
           }),
       });
       const language = effectiveSpeechLanguage(cloudSpeechLanguages, options.speechLanguage);
-      const baseUrl = (hostEnvironment.UCSD_AI_BASE_URL?.trim() || TRITONAI_BASE_URL).replace(
-        /\/+$/u,
-        "",
-      );
+      const baseUrl = trustedTritonAiBaseUrl(hostEnvironment.UCSD_AI_BASE_URL);
+      if (!baseUrl) return yield* new CloudSpeechError({ provider, reason: "unavailable" });
       const analytics = yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics;
       const request = HttpClientRequest.post(`${baseUrl}/audio/transcriptions`).pipe(
         HttpClientRequest.bearerToken(Redacted.make(key)),
