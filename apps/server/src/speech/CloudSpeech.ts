@@ -228,7 +228,8 @@ export const layer = Layer.effect(
         return yield* new CloudSpeechError({
           provider,
           reason:
-            response.status === 429
+            // The gateway answers an exhausted key budget with 422.
+            [422, 429].includes(response.status)
               ? "rate-limit"
               : [401, 403].includes(response.status)
                 ? "rejected-key"
