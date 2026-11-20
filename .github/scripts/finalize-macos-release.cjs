@@ -596,6 +596,7 @@ async function verifyPackagedBoot({
   wait = sleep,
   selectPort = availablePort,
   fetchResponse = fetch,
+  expectedPluginIds = [],
   assertAlive = (pid) => process.kill(pid, 0),
   operationTimeoutMs = 10_000,
   closeTimeoutMs = 5000,
@@ -609,6 +610,7 @@ async function verifyPackagedBoot({
   const home = path.join(scratch, "home");
   const installedApp = path.join(scratch, `${productName}.app`);
   const bootLog = `${scratch}.log`;
+  const pluginReportPath = path.join(scratch, "managed-plugins.json");
   fs.mkdirSync(home);
   let application;
   let child;
@@ -649,7 +651,11 @@ async function verifyPackagedBoot({
     });
     application = await electron.launch({
       executablePath: path.join(installedApp, "Contents", "MacOS", productName),
-      env: { ...isolatedBootEnvironment(home, env), T3CODE_PORT: String(backendPort) },
+      env: {
+        ...isolatedBootEnvironment(home, env),
+        T3CODE_PORT: String(backendPort),
+        TRITONAI_PLUGIN_BOOT_REPORT_PATH: pluginReportPath,
+      },
       cwd: home,
       timeout: 60_000,
       // executablePath skips Playwright's Electron loader, including its normal
@@ -785,8 +791,28 @@ async function verifyPackagedBoot({
     if (!stillVisible)
       throw new Error("Packaged Harness window disappeared during the boot stability check.");
     if (interruption) throw interruption;
+    let pluginIds = [];
+    if (expectedPluginIds.length > 0) {
+      if (!fs.existsSync(pluginReportPath)) {
+        throw new Error("Packaged Harness did not report its loaded managed plugins.");
+      }
+      const report = JSON.parse(fs.readFileSync(pluginReportPath, "utf8"));
+      const expected = expectedPluginIds.toSorted();
+      if (
+        report?.version !== 1 ||
+        report.pid !== result.backendPid ||
+        !Array.isArray(report.pluginIds) ||
+        !isDeepStrictEqual(report.pluginIds.toSorted(), expected)
+      ) {
+        throw new Error(
+          `Packaged Harness did not load the expected managed plugins: ${expected.join(", ")}.`,
+        );
+      }
+      pluginIds = expected;
+    }
     bootResult = {
       ...result,
+      pluginIds,
       keychain: "mock-for-isolated-boot",
       credentialStorage: "not-verified",
       healthyForMs: 5000,
@@ -993,6 +1019,7 @@ async function finalizeMacRelease({
         stageRoot,
         version,
         electron: tools.electron,
+        expectedPluginIds: composition.packages.map(({ id }) => id),
         env,
         runCommand: exec,
       });

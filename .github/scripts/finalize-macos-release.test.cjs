@@ -424,6 +424,33 @@ for (const [version, rendererUrl] of [
   });
 }
 
+test("boot gate requires the expected managed plugins from the running backend", async (t) => {
+  const f = fixture(t);
+  const boot = (pluginIds) => {
+    const mock = bootMocks(f);
+    return verifyPackagedBoot({
+      appPath: f.app,
+      stageRoot: f.stageRoot,
+      version: "0.3.4",
+      env: f.env,
+      expectedPluginIds: ["github", "n8n"],
+      ...mock,
+      wait: async () => {
+        if (pluginIds) {
+          fs.writeFileSync(
+            mock.getState().launchOptions.env.TRITONAI_PLUGIN_BOOT_REPORT_PATH,
+            JSON.stringify({ version: 1, pid: 200, pluginIds }),
+          );
+        }
+      },
+    });
+  };
+  await assert.rejects(boot(), /did not report its loaded managed plugins/);
+  await assert.rejects(boot(["github"]), /did not load the expected managed plugins/);
+  const result = await boot(["n8n", "github"]);
+  assert.deepEqual(result.pluginIds, ["github", "n8n"]);
+});
+
 test("forced cleanup repeatedly freezes detached descendants born between discovery and signaling", async (t) => {
   const f = fixture(t);
   const mock = bootMocks(f, { hungEvaluation: true, hungClose: true, forkDuringCleanup: true });
