@@ -3,8 +3,8 @@
   "kind": "tritonai-managed-plugin-catalog",
   "source": {
     "repository": "https://github.com/dbalders/TritonAI-Plugins.git",
-    "ref": "7a071acec613704df5106b954e6e18c658af4372",
-    "commit": "7a071acec613704df5106b954e6e18c658af4372"
+    "ref": "09581cb02b5574d7effd83aafb6004c8e9cfcdae",
+    "commit": "09581cb02b5574d7effd83aafb6004c8e9cfcdae"
   },
   "packages": [
     {
@@ -16,7 +16,7 @@
     {
       "pluginId": "google-workspace",
       "version": "1.1.2",
-      "digest": "c72de5a5f109a5cc5b55460aa65ec9a7907e443031bbcc985241b3d4af96d2f5",
+      "digest": "1354dcdce5f21f34d9e25175e6567d0b1b1ba7aed37f9c4834adabc85f47ead2",
       "manifestDigest": "7192be7fca2692cedeccbab519067f0fb7f6010d0ec529b227267378c4f7e4a1"
     },
     {
@@ -40,7 +40,7 @@
     {
       "pluginId": "microsoft-365",
       "version": "1.5.0",
-      "digest": "d2ab11799a157f7de1a8ba31a163672fee9ba838fd6369828d7a79d0e8f4ccbd",
+      "digest": "b9c24ca554932e33c91eae4022181f6a639498a65774426d8f733ea8e565e47d",
       "manifestDigest": "5199dea770525f8a56477f24da5970470fd9ceb0fb9ce65d30d08c84adcebda7"
     },
     {
