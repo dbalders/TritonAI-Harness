@@ -100,7 +100,6 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverStartAccountLogin]: AuthProvidersManageScope,
   [WS_METHODS.serverPollAccountLogin]: AuthProvidersManageScope,
   [WS_METHODS.serverSignOutAccount]: AuthProvidersManageScope,
-  [WS_METHODS.serverTranscribeVoice]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetTritonAiUsage]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetMemoryStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.serverStartMemorySync]: AuthProvidersManageScope,

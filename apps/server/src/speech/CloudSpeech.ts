@@ -13,6 +13,7 @@ import {
   type SpeechTranscriptionOptions,
 } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { cloudSpeechLanguages, effectiveSpeechLanguage } from "@t3tools/shared/speech";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -22,6 +23,8 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as ServerSettings from "../serverSettings.ts";
+import * as TritonAiRequestAnalytics from "../telemetry/TritonAiRequestAnalytics.ts";
+import { resolveTritonAiServiceApiKey } from "../tritonAiCredential.ts";
 import { requireSettingsSecret } from "../secrets/settingsSecretValue.ts";
 import { applySpeechAliases } from "./customWords.ts";
 import { removeSpeechFillerWords } from "./fillerWords.ts";
@@ -32,6 +35,8 @@ const endpoints = {
   xai: { url: "https://api.x.ai/v1/stt", model: "grok-voice-transcribe-2.0" },
   openrouter: { url: "https://openrouter.ai/api/v1/audio/transcriptions" },
 };
+const TRITONAI_BASE_URL = "https://tritonai-api.ucsd.edu/v1";
+const TRITONAI_SPEECH_MODEL = "api-cohere-transcribe";
 const OPENROUTER_CATALOG_URL =
   "https://openrouter.ai/api/v1/models?output_modalities=transcription&zdr=true";
 const isApiKey = Schema.is(CloudSpeechApiKey);
@@ -92,6 +97,15 @@ function audioBody(
   return HttpClientRequest.bodyFormData(form);
 }
 
+function tritonAiBody(audio: ArrayBuffer, language: string) {
+  const form = new FormData();
+  form.set("model", TRITONAI_SPEECH_MODEL);
+  if (language !== "auto") form.set("language", language);
+  form.set("response_format", "json");
+  form.set("file", new Blob([audio], { type: "audio/wav" }), "dictation.wav");
+  return HttpClientRequest.bodyFormData(form);
+}
+
 function openRouterBody(model: string, audio: ArrayBuffer, language: string) {
   return HttpClientRequest.bodyJsonUnsafe({
     model,
@@ -126,6 +140,8 @@ export const layer = Layer.effect(
     const settings = yield* ServerSettings.ServerSettingsService;
     const resolver = yield* SecretResolver.SecretResolver;
     const http = yield* HttpClient.HttpClient;
+    const hostEnvironment = yield* HostProcess.Environment;
+    const tritonAiKey = () => resolveTritonAiServiceApiKey(hostEnvironment);
     const credentials = settings.getSettings.pipe(
       Effect.map((value) => value.cloudSpeechCredentials),
     );
@@ -168,10 +184,67 @@ export const layer = Layer.effect(
       ),
       (exit) => (Exit.isSuccess(exit) ? "10 minutes" : 0),
     );
+    const finishTranscript = (
+      text: string,
+      language: string,
+      options: SpeechTranscriptionOptions,
+    ) => {
+      const corrected = applySpeechAliases(text, options.speechCustomWords);
+      return (
+        options.speechRemoveFillerWords
+          ? removeSpeechFillerWords(corrected, language, options.speechCorrectionWord)
+          : corrected
+      ).trim();
+    };
+    const transcribeTritonAi = Effect.fn("CloudSpeech.transcribeTritonAi")(function* (
+      pcm: Uint8Array,
+      options: SpeechTranscriptionOptions,
+    ) {
+      const provider = "tritonai";
+      const key = tritonAiKey();
+      if (!key) return yield* new CloudSpeechError({ provider, reason: "missing-key" });
+      const samples = yield* Effect.try({
+        try: () => decodeSpeechPcm(pcm),
+        catch: () =>
+          new SpeechInvalidAudioError({
+            byteLength: pcm.byteLength,
+            message: "Invalid PCM audio.",
+          }),
+      });
+      const language = effectiveSpeechLanguage(cloudSpeechLanguages, options.speechLanguage);
+      const baseUrl = (hostEnvironment.UCSD_AI_BASE_URL?.trim() || TRITONAI_BASE_URL).replace(
+        /\/+$/u,
+        "",
+      );
+      const analytics = yield* TritonAiRequestAnalytics.TritonAiRequestAnalytics;
+      const request = HttpClientRequest.post(`${baseUrl}/audio/transcriptions`).pipe(
+        HttpClientRequest.bearerToken(Redacted.make(key)),
+        HttpClientRequest.setHeaders(analytics.headers("voice")),
+        tritonAiBody(wave(samples), language),
+      );
+      const unavailable = () => new CloudSpeechError({ provider, reason: "unavailable" });
+      const response = yield* execute(request).pipe(Effect.mapError(unavailable));
+      if (response.status < 200 || response.status >= 300)
+        return yield* new CloudSpeechError({
+          provider,
+          reason:
+            response.status === 429
+              ? "rate-limit"
+              : [401, 403].includes(response.status)
+                ? "rejected-key"
+                : "unavailable",
+        });
+      const { text } = yield* HttpClientResponse.schemaBodyJson(
+        EnvironmentSpeechTranscriptionResult,
+      )(response).pipe(Effect.mapError(unavailable));
+      return finishTranscript(text, language, options);
+    });
     const setKey = Effect.fn("CloudSpeech.setKey")(function* (
       provider: CloudSpeechProvider,
       key: Redacted.Redacted<string> | SecretReference | null,
     ) {
+      // The TritonAI key belongs to the app's sign-in, not to Voice settings.
+      if (provider === "tritonai") return;
       yield* settings.updateSettings({
         cloudSpeechCredentials: {
           [provider]: Redacted.isRedacted(key) ? Redacted.value(key) : (key ?? ""),
@@ -185,6 +258,7 @@ export const layer = Layer.effect(
         options: SpeechTranscriptionOptions,
         model?: string,
       ) {
+        if (provider === "tritonai") return yield* transcribeTritonAi(pcm, options);
         const source = (yield* credentials)[provider];
         if (!source) return yield* new CloudSpeechError({ provider, reason: "missing-key" });
         if (provider === "openrouter" && (!model || !isModelId(model)))
@@ -238,12 +312,7 @@ export const layer = Layer.effect(
         const { text } = yield* HttpClientResponse.schemaBodyJson(
           EnvironmentSpeechTranscriptionResult,
         )(response).pipe(Effect.mapError(unavailable));
-        const corrected = applySpeechAliases(text, options.speechCustomWords);
-        return (
-          options.speechRemoveFillerWords
-            ? removeSpeechFillerWords(corrected, language, options.speechCorrectionWord)
-            : corrected
-        ).trim();
+        return finishTranscript(text, language, options);
       },
       (effect, provider) =>
         effect.pipe(

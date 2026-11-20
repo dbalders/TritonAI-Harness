@@ -1670,10 +1670,6 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => `${environmentId}:${input.instanceId}`,
       },
     }),
-    transcribeVoice: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:transcribe-voice",
-      tag: WS_METHODS.serverTranscribeVoice,
-    }),
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,

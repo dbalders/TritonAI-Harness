@@ -95,7 +95,8 @@ export const requireCloudSpeechKey = (
 ) =>
   getCloudSpeechKeys(prepared).pipe(
     Effect.flatMap((keys) =>
-      keys[provider]
+      // TritonAI uses the environment's sign-in; the server reports a missing one on transcribe.
+      provider === "tritonai" || keys[provider]
         ? Effect.void
         : Effect.fail(
             new VoiceTranscriptionError({
