@@ -3892,15 +3892,16 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     directories: {
       buildResources: "apps/desktop/resources",
     },
-    // Windows ships the server tree in its hand-packed sidecar. macOS unpacks the
-    // Harness-owned dependency tree that verified production-plugin snapshots link at runtime.
-    ...(platform === "mac" ? { asarUnpack: [...MAC_ASAR_UNPACK] } : {}),
-    // Smart unpack extracts entire native packages, including JavaScript and
-    // metadata. Windows keeps those files archived so native dependencies do
-    // not inflate the loose-file count and slow NSIS installation.
+    // macOS plugin snapshots link to the unpacked dependency tree. Windows keeps the
+    // server in its own archive and disables smart unpack to limit loose installer files.
     ...(platform === "win"
       ? { asar: { smartUnpack: false }, asarUnpack: [WINDOWS_NATIVE_ASAR_UNPACK_GLOB] }
-      : { asarUnpack: ["**/node_modules/@transcribe-cpp/**/*.{dylib,so,so.*}"] }),
+      : {
+          asarUnpack:
+            platform === "mac"
+              ? [...MAC_ASAR_UNPACK]
+              : ["**/node_modules/@transcribe-cpp/**/*.{dylib,so,so.*}"],
+        }),
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
