@@ -101,7 +101,7 @@ function audioBody(
 function trustedTritonAiBaseUrl(configured: string | undefined) {
   try {
     const url = new URL(configured?.trim() || TRITONAI_BASE_URL);
-    const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
     return url.protocol === "https:" || (url.protocol === "http:" && local)
       ? url.href.replace(/\/+$/u, "")
       : null;
