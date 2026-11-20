@@ -66,6 +66,11 @@ export function chooseAudioDestination(destination: VoiceTranscriptionDestinatio
   replaceChoice(destination ? { id: randomUUID(), destination } : "off");
 }
 
+/** Saves a default destination only for someone who has never chosen one, so "Off" stays off. */
+export function chooseDefaultAudioDestination(destination: VoiceTranscriptionDestination) {
+  if (readChoice() === null) chooseAudioDestination(destination);
+}
+
 export function pendingCloudAudioChoice(
   destination: Extract<VoiceTranscriptionDestination, { kind: "cloud" }>,
 ) {

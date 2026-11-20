@@ -35,12 +35,17 @@ import {
   useClientSettingsHydrated,
   useEnvironmentSettings,
 } from "../hooks/useSettings";
-import { useEnvironment } from "../state/environments";
+import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { useEnvironmentScope, usePreparedConnection } from "../state/session";
 import { createBrowserVoiceInputPlatform } from "./browserVoiceInput";
 import { preferredSpeechLanguages } from "./preferredSpeechLanguages";
 import { runEnvironmentSpeech } from "./runEnvironmentSpeech";
-import { bindAudioGrant, readCleanupGrant, useAudioChoice } from "./voiceConsent";
+import {
+  bindAudioGrant,
+  chooseDefaultAudioDestination,
+  readCleanupGrant,
+  useAudioChoice,
+} from "./voiceConsent";
 
 const INITIAL_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: null };
 const WAITING_STATE: VoiceInputState = { phase: "preparing", error: null, errorAction: null };
@@ -120,6 +125,22 @@ export function useVoiceTranscriptionDestination() {
   const environment = useEnvironment(environmentId);
   const connection = Option.getOrNull(usePreparedConnection(environmentId));
   const canDictate = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
+  const primary = useEnvironment(usePrimaryEnvironmentId());
+  const tritonAiDefault =
+    hydrated &&
+    choice === null &&
+    primary?.serverConfig?.environment.capabilities.tritonAiVoiceTranscription
+      ? primary.environmentId
+      : null;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- saves Harness's TritonAI default once, so the mic works without setup and each recording still binds to a saved grant
+  useEffect(() => {
+    if (tritonAiDefault)
+      chooseDefaultAudioDestination({
+        kind: "cloud",
+        environmentId: tritonAiDefault,
+        provider: "tritonai",
+      });
+  }, [tritonAiDefault]);
   const cloud = grant?.destination.kind === "cloud" ? grant.destination : undefined;
   const provider = cloud?.provider;
   const model = cloud?.provider === "openrouter" ? cloud.model : undefined;

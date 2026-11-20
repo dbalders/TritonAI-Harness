@@ -376,11 +376,6 @@ import {
 } from "./providerUsageLimits.ts";
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { AccountStatus, ServerAccountError } from "./account.ts";
-import {
-  ServerVoiceTranscribeInput,
-  ServerVoiceTranscribeResult,
-  ServerVoiceTranscriptionError,
-} from "./voice.ts";
 import { ServerTritonAiUsageError, ServerTritonAiUsageSnapshot } from "./tritonaiUsage.ts";
 import {
   ServerMemoryStatus,
@@ -595,7 +590,6 @@ export const WS_METHODS = {
   peerLinksUnlink: "peerLinks.unlink",
   peerLinksAnswerRequest: "peerLinks.answerRequest",
   serverUpdateSettings: "server.updateSettings",
-  serverTranscribeVoice: "server.transcribeVoice",
   serverGetTritonAiUsage: "server.getTritonAiUsage",
   serverGetMemoryStatus: "server.getMemoryStatus",
   serverGetProjectMemory: "server.getProjectMemory",
@@ -999,12 +993,6 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
   }),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
-});
-
-const WsServerTranscribeVoiceRpc = Rpc.make(WS_METHODS.serverTranscribeVoice, {
-  payload: ServerVoiceTranscribeInput,
-  success: ServerVoiceTranscribeResult,
-  error: Schema.Union([ServerVoiceTranscriptionError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetTritonAiUsageRpc = Rpc.make(WS_METHODS.serverGetTritonAiUsage, {
@@ -2524,7 +2512,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsPeerLinksLinkRpc,
   WsPeerLinksUnlinkRpc,
   WsPeerLinksAnswerRequestRpc,
-  WsServerTranscribeVoiceRpc,
   WsServerGetTritonAiUsageRpc,
   WsServerGetMemoryStatusRpc,
   WsServerGetProjectMemoryRpc,

@@ -3,7 +3,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
   ClientSettingsSchema,
-  DEFAULT_VOICE_INPUT_SETTINGS,
   DEFAULT_CLIENT_SETTINGS,
   type ClientSettings,
 } from "@t3tools/contracts";
@@ -72,7 +71,6 @@ const clientSettings: ClientSettings = {
   loadBalancingWeights: { "environment-1": 75, "environment-2": 0 },
   pullRequestMergeMethodOverrides: {},
   timestampFormat: "24-hour",
-  voiceInput: DEFAULT_VOICE_INPUT_SETTINGS,
   wordWrap: true,
 };
 
