@@ -17,7 +17,6 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverStartAccountLogin]: "server",
   [WS_METHODS.serverPollAccountLogin]: "server",
   [WS_METHODS.serverSignOutAccount]: "server",
-  [WS_METHODS.serverTranscribeVoice]: "server",
   [WS_METHODS.serverGetTritonAiUsage]: "server",
   [WS_METHODS.serverGetMemoryStatus]: "server",
   [WS_METHODS.serverGetProjectMemory]: "server",

@@ -14,8 +14,10 @@ import { openRouterIcon } from "@t3tools/client-runtime/provider-clients";
 import {
   AuthFilesystemReadScope,
   AuthSettingsWriteScope,
+  CLOUD_SPEECH_KEY_PROVIDERS,
   CLOUD_SPEECH_LABELS,
-  CloudSpeechProvider,
+  type CloudSpeechKeyProvider,
+  type CloudSpeechProvider,
   DEFAULT_SPEECH_POST_PROCESSING_PROMPT,
   type EnvironmentId,
   type EnvironmentSpeechModel,
@@ -34,6 +36,7 @@ import { cloudSpeechLanguages } from "@t3tools/shared/speech";
 import {
   AudioLinesIcon,
   CheckIcon,
+  CloudIcon,
   DownloadIcon,
   LanguagesIcon,
   KeyRoundIcon,
@@ -126,6 +129,7 @@ import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings"
 
 const OFF = "off";
 function CloudSpeechLogo({ provider }: { provider: CloudSpeechProvider }) {
+  if (provider === "tritonai") return <CloudIcon aria-hidden className="size-4 shrink-0" />;
   if (provider === "openrouter")
     return <ProviderPackageIcon icon={openRouterIcon} aria-hidden className="size-4 shrink-0" />;
   return (
@@ -1170,7 +1174,7 @@ export function VoiceSettingsPanel() {
   const destination = useVoiceTranscriptionDestination();
   const canManageKey = useEnvironmentScope(destination.environmentId, AuthSettingsWriteScope);
   const [pendingCloud, setPendingCloud] = useState<{
-    provider: CloudSpeechProvider;
+    provider: CloudSpeechKeyProvider;
     environmentId: EnvironmentId;
   } | null>(null);
   const { environments } = useEnvironments();
@@ -1218,7 +1222,11 @@ export function VoiceSettingsPanel() {
     )
     .map((environment) => ({
       environment,
-      choices: CloudSpeechProvider.literals.map((provider) => ({
+      // Harness servers keep campus audio on the TritonAI gateway.
+      choices: (environment.serverConfig?.environment.capabilities.tritonAiVoiceTranscription
+        ? (["tritonai"] as const)
+        : CLOUD_SPEECH_KEY_PROVIDERS
+      ).map((provider) => ({
         environment,
         provider,
         value: JSON.stringify(["cloud", environment.environmentId, provider]),
@@ -1351,6 +1359,15 @@ export function VoiceSettingsPanel() {
                 onValueChange={(value) => {
                   if (!value) return;
                   const cloud = cloudChoices.find((choice) => choice.value === value);
+                  if (cloud?.provider === "tritonai") {
+                    setPendingCloud(null);
+                    chooseAudioDestination({
+                      kind: "cloud",
+                      environmentId: cloud.environment.environmentId,
+                      provider: "tritonai",
+                    });
+                    return;
+                  }
                   if (cloud) {
                     setPendingCloud({
                       environmentId: cloud.environment.environmentId,
@@ -1446,6 +1463,7 @@ export function VoiceSettingsPanel() {
                 </SelectPopup>
               </Select>
               {destination.cloudProvider &&
+                destination.cloudProvider !== "tritonai" &&
                 chosenEnvironment &&
                 (canManageKey || destination.cloudProvider === "openrouter") && (
                   <Tooltip>
@@ -1457,7 +1475,10 @@ export function VoiceSettingsPanel() {
                           variant="ghost"
                           aria-label={manageLabel}
                           onClick={() => {
-                            if (destination.cloudProvider)
+                            if (
+                              destination.cloudProvider &&
+                              destination.cloudProvider !== "tritonai"
+                            )
                               setPendingCloud({
                                 provider: destination.cloudProvider,
                                 environmentId: chosenEnvironment.environmentId,

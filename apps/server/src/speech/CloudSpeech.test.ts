@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest";
 import { DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS, SecretProviderId } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -196,5 +197,35 @@ it.effect("removing a key while a catalog read is pending prevents the upload", 
     const exit = yield* Fiber.await(job);
     expect(uploads).toEqual([]);
     expect(exit._tag).toBe("Failure");
+  }),
+);
+
+it.effect("never sends the TritonAI key or audio to a plain-HTTP gateway off this machine", () =>
+  Effect.gen(function* () {
+    const upstream = vi.fn<typeof fetch>(async () => Response.json({ text: "hello" }));
+    const service = yield* CloudSpeech.CloudSpeech.pipe(
+      Effect.provide(
+        CloudSpeech.layer.pipe(
+          Layer.provide(FetchHttpClient.layer),
+          Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
+          Layer.provide(Layer.mock(SecretResolver.SecretResolver)({})),
+        ),
+      ),
+      Effect.provideService(HostProcess.Environment, {
+        TRITONAI_API_KEY: "campus-key",
+        UCSD_AI_BASE_URL: "http://gateway.example/v1",
+      }),
+    );
+    const failure = yield* Effect.flip(
+      service
+        .transcribe(
+          "tritonai",
+          new Uint8Array(new Float32Array([0, 0.5]).buffer),
+          DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+        )
+        .pipe(Effect.provideService(FetchHttpClient.Fetch, upstream)),
+    );
+    expect(failure._tag).toBe("CloudSpeechError");
+    expect(upstream).not.toHaveBeenCalled();
   }),
 );

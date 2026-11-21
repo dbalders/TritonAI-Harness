@@ -104,7 +104,6 @@ import * as Integrations from "./integrations/IntegrationRegistry.ts";
 import * as CodexManagement from "./provider/CodexManagement.ts";
 import { submitInstalledProviderSkillToTritonAiCommons } from "./provider/TritonAiCommonsAction.ts";
 import { getManagedPolicyDiagnostics, managedPolicyDiagnosticsChanges } from "./managedPolicy.ts";
-import { transcribeVoice } from "./voiceTranscription.ts";
 import { fetchTritonAiUsage } from "./tritonAiUsage.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
 import * as Ideas from "./ideas/Ideas.ts";
@@ -3795,7 +3794,6 @@ export const layerWsRpc = (
             ),
           ),
 
-        [WS_METHODS.serverTranscribeVoice]: (input) => transcribeVoice(input),
         [WS_METHODS.serverGetTritonAiUsage]: (_input) => fetchTritonAiUsage(),
         [WS_METHODS.serverGetAccountStatus]: (_input) => account.getStatus(currentSessionId),
         [WS_METHODS.serverStartAccountLogin]: (input) =>

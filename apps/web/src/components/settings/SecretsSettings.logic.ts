@@ -1,6 +1,6 @@
 import {
   CLOUD_SPEECH_LABELS,
-  CloudSpeechProvider,
+  CLOUD_SPEECH_KEY_PROVIDERS,
   EasDeviceHostConfig,
   isSecretReference,
   secretReferencesInSettings,
@@ -107,7 +107,7 @@ export function secretProviderUses(
     ...settings.simlockDeviceHosts.flatMap((host) =>
       uses({ settingsSchema: SimlockDeviceHostConfig }, `simlock:${host.id}`, host.label, host),
     ),
-    ...CloudSpeechProvider.literals.flatMap((provider) => {
+    ...CLOUD_SPEECH_KEY_PROVIDERS.flatMap((provider) => {
       const credential = settings.cloudSpeechCredentials[provider];
       return isSecretReference(credential) && credential.provider === providerId
         ? [{ id: `voice:${provider}`, label: `Voice · ${CLOUD_SPEECH_LABELS[provider]}` }]

@@ -3,16 +3,21 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import { DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS } from "@t3tools/contracts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpServer from "effect/http/HttpServer";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import * as ServerConfig from "../config.ts";
 import { makeCodexImageContextAnalyzer } from "../provider/CodexImageContext.ts";
-import { transcribeVoice } from "../voiceTranscription.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as CloudSpeech from "../speech/CloudSpeech.ts";
 import { TRITONAI_CLIENT_VERSION } from "../tritonAiClientHeaders.ts";
 import * as AnalyticsService from "./AnalyticsService.ts";
 import * as TritonAiRequestAnalytics from "./TritonAiRequestAnalytics.ts";
@@ -75,17 +80,26 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
             [{ description: "local image fixture", visibleText: "fixture" }],
           );
 
-          assert.deepEqual(
-            yield* transcribeVoice(
-              {
-                audioBase64: Buffer.from("synthetic audio").toString("base64"),
-                mimeType: "audio/webm",
-              },
-              {
-                env: { TRITONAI_FRONTIER_API_KEY: "frontier-test-only", UCSD_AI_BASE_URL: baseUrl },
-              },
+          const speech = yield* CloudSpeech.CloudSpeech.pipe(
+            Effect.provide(
+              CloudSpeech.layer.pipe(
+                Layer.provide(FetchHttpClient.layer),
+                Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
+                Layer.provide(Layer.mock(SecretResolver.SecretResolver)({})),
+              ),
             ),
-            { text: "local voice fixture" },
+            Effect.provideService(HostProcess.Environment, {
+              TRITONAI_FRONTIER_API_KEY: "frontier-test-only",
+              UCSD_AI_BASE_URL: baseUrl,
+            }),
+          );
+          assert.equal(
+            yield* speech.transcribe(
+              "tritonai",
+              new Uint8Array(new Float32Array(1_600).buffer),
+              DEFAULT_SPEECH_TRANSCRIPTION_OPTIONS,
+            ),
+            "local voice fixture",
           );
 
           const plausible = yield* AnalyticsService.AnalyticsService;

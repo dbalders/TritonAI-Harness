@@ -8,17 +8,27 @@ export const CloudSpeechApiKey = TrimmedNonEmptyString.check(
   Schema.isPattern(/^(?![a-z][a-z\d+.-]*:\/\/)[!-~]+$/i),
 );
 
-export const CloudSpeechProvider = Schema.Literals(["openai", "xai", "openrouter"]);
+// TritonAI: the campus gateway, authorized by the environment's own TritonAI access key.
+export const CloudSpeechProvider = Schema.Literals(["openai", "xai", "openrouter", "tritonai"]);
 export type CloudSpeechProvider = typeof CloudSpeechProvider.Type;
+/** Providers a person authorizes with their own API key. */
+export type CloudSpeechKeyProvider = Exclude<CloudSpeechProvider, "tritonai">;
+export const CLOUD_SPEECH_KEY_PROVIDERS: ReadonlyArray<CloudSpeechKeyProvider> = [
+  "openai",
+  "xai",
+  "openrouter",
+];
 export const CLOUD_SPEECH_LABELS = {
   openai: "OpenAI",
   xai: "Grok Voice Transcribe",
   openrouter: "OpenRouter",
+  tritonai: "TritonAI",
 } as const;
 export const CLOUD_SPEECH_PROVIDER_NAMES = {
   openai: "OpenAI",
   xai: "xAI",
   openrouter: "OpenRouter",
+  tritonai: "TritonAI",
 } as const;
 /** Servers that predate OpenRouter report only the first two providers. */
 export const CloudSpeechKeys = Schema.Struct({
@@ -58,6 +68,8 @@ export class CloudSpeechError extends Schema.TaggedError<CloudSpeechError>()(
 ) {
   override get message() {
     const name = CLOUD_SPEECH_PROVIDER_NAMES[this.provider];
+    if (this.provider === "tritonai" && ["missing-key", "rejected-key"].includes(this.reason))
+      return "TritonAI couldn’t verify this app’s access. Sign in to TritonAI again, then retry.";
     switch (this.reason) {
       case "missing-key":
         return `Add your ${name} API key in Settings → Voice.`;

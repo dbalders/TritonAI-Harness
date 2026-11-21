@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   connected: new Set<string>(),
   voiceCapable: new Set<string>(),
   cloudVoiceCapable: new Set<string>(),
+  tritonAiVoiceCapable: new Set<string>(),
   canDictate: new Set<string>(),
   prepared: new Map<string, unknown>(),
   primaryEnvironmentId: "primary-env",
@@ -83,6 +84,7 @@ vi.mock("../state/environments", () => ({
               capabilities: {
                 voiceTranscription: mocks.voiceCapable.has(environmentId),
                 cloudVoiceTranscription: mocks.cloudVoiceCapable.has(environmentId),
+                tritonAiVoiceTranscription: mocks.tritonAiVoiceCapable.has(environmentId),
               },
             },
           },
@@ -212,6 +214,7 @@ function setup(options: { readonly destination?: string | null } = {}) {
   mocks.connected = new Set(["primary-env", THREAD_ENV, "env-a", "env-b"]);
   mocks.voiceCapable = new Set(["primary-env", THREAD_ENV, "env-a", "env-b"]);
   mocks.cloudVoiceCapable.clear();
+  mocks.tritonAiVoiceCapable.clear();
   mocks.canDictate = new Set(mocks.voiceCapable);
   mocks.prepared.clear();
   mocks.statusRequests = [];
@@ -306,6 +309,30 @@ it.each([
   expect(mocks.voice.transcriptionEnvironmentId).toBeNull();
   expect(localStorage.getItem("t3code:voice-audio-grant:v1")).toBeNull();
 });
+
+it.each([
+  ["never chose a destination", null],
+  ["chose Off", "off"],
+] as const)(
+  "with a TritonAI primary, someone who %s gets TritonAI only when never chosen",
+  async (_, saved) => {
+    setup();
+    if (saved) chooseAudioDestination(null);
+    mocks.cloudVoiceCapable.add("primary-env");
+    mocks.tritonAiVoiceCapable.add("primary-env");
+    await using screen = await render(<Probe />);
+    await act(() => mocks.voice.start());
+    await act(() => mocks.voice.stop());
+    if (saved) {
+      expectNoAudioSent();
+      expect(mocks.voice.available).toBe(false);
+      return;
+    }
+    expect(screen.router?.state.location.pathname).not.toBe("/settings/voice");
+    expect(mocks.transcribeCalls).toEqual(["tritonai via primary-env"]);
+    expect(mocks.statusRequests).toEqual([]);
+  },
+);
 
 it.each([true, false])(
   "sends audio with silence filtering %s only to the chosen environment",
